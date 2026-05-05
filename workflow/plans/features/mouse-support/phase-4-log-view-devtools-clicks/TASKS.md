@@ -75,16 +75,16 @@ Wave 3:                                                         ▼
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-phase4-messages-and-state](tasks/01-phase4-messages-and-state.md) | Not Started | — | 1.5h | `fdemon-app` |
-| 2 | [02-tui-region-plumbing-and-devtools-tab-bar](tasks/02-tui-region-plumbing-and-devtools-tab-bar.md) | Not Started | — | 2h | `fdemon-tui` |
-| 3 | [03-log-view-click-handlers](tasks/03-log-view-click-handlers.md) | Not Started | 1 | 1h | `fdemon-app` |
-| 4 | [04-inspector-click-handlers](tasks/04-inspector-click-handlers.md) | Not Started | 1 | 1h | `fdemon-app` |
-| 5 | [05-mouse-press-devtools-dispatcher](tasks/05-mouse-press-devtools-dispatcher.md) | Not Started | — | 0.75h | `fdemon-app` |
-| 6 | [06-log-view-row-regions](tasks/06-log-view-row-regions.md) | Not Started | 1, 2 | 1.25h | `fdemon-tui` |
-| 7 | [07-inspector-tree-row-regions](tasks/07-inspector-tree-row-regions.md) | Not Started | 1, 2 | 1h | `fdemon-tui` |
-| 8 | [08-performance-frame-chart-regions](tasks/08-performance-frame-chart-regions.md) | Not Started | 2 | 1h | `fdemon-tui` |
-| 9 | [09-network-table-and-detail-tab-regions](tasks/09-network-table-and-detail-tab-regions.md) | Not Started | 2 | 1.25h | `fdemon-tui` |
-| 10 | [10-integration-and-snapshot-tests](tasks/10-integration-and-snapshot-tests.md) | Not Started | 3, 4, 5, 6, 7, 8, 9 | 1.25h | `fdemon-app`, `fdemon-tui` |
+| 1 | [01-phase4-messages-and-state](tasks/01-phase4-messages-and-state.md) | Done | — | 1.5h | `fdemon-app` |
+| 2 | [02-tui-region-plumbing-and-devtools-tab-bar](tasks/02-tui-region-plumbing-and-devtools-tab-bar.md) | Done | — | 2h | `fdemon-tui` |
+| 3 | [03-log-view-click-handlers](tasks/03-log-view-click-handlers.md) | Done | 1 | 1h | `fdemon-app` |
+| 4 | [04-inspector-click-handlers](tasks/04-inspector-click-handlers.md) | Done | 1 | 1h | `fdemon-app` |
+| 5 | [05-mouse-press-devtools-dispatcher](tasks/05-mouse-press-devtools-dispatcher.md) | Done (concern: missing middle-click test; production path correct) | — | 0.75h | `fdemon-app` |
+| 6 | [06-log-view-row-regions](tasks/06-log-view-row-regions.md) | Done | 1, 2 | 1.25h | `fdemon-tui` |
+| 7 | [07-inspector-tree-row-regions](tasks/07-inspector-tree-row-regions.md) | Done (concern: out-of-scope `MouseAction::as_emit()` helper added) | 1, 2 | 1h | `fdemon-tui` |
+| 8 | [08-performance-frame-chart-regions](tasks/08-performance-frame-chart-regions.md) | Done | 2 | 1h | `fdemon-tui` |
+| 9 | [09-network-table-and-detail-tab-regions](tasks/09-network-table-and-detail-tab-regions.md) | Done | 2 | 1.25h | `fdemon-tui` |
+| 10 | [10-integration-and-snapshot-tests](tasks/10-integration-and-snapshot-tests.md) | Done | 3, 4, 5, 6, 7, 8, 9 | 1.25h | `fdemon-app`, `fdemon-tui` |
 
 ## File Overlap Analysis
 

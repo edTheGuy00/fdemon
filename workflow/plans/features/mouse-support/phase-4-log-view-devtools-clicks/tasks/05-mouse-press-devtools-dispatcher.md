@@ -252,3 +252,35 @@ mod press_tests {
 - **Why no `tag_filter_visible` gate inside `devtools::handle_press`.** That gate already lives at the dispatcher level (`mouse/mod.rs::handle_press` line 63), set up in Phase 3.5 Task 08. DevTools mode inherits it for free.
 - **`drop(regions)` is explicit.** The guard's Drop puts the registry back; explicit drop makes the lifetime visible to readers and enforces no-overlap with the optional follow-up logic. Mirrors `normal::handle_press`.
 - **No `state.devtools_view_state.active_panel` match-on-DevToolsPanel logic.** The dispatcher does not need to know which panel is active to hit-test — the registry was populated by whichever panel rendered most recently, and only that panel's regions are present. Future phases may add per-panel gates here, but v1 keeps it simple.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | Added `handle_press` function (RAII guard, filter-input gate, hit-test pattern); added `MouseButton` import; updated module-level doc comment; added `press_tests` module with 5 unit tests |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `UiMode::DevTools => devtools::handle_press(...)` arm in `handle_press`; updated doc comment to mention Phase 4 adds DevTools; renamed `test_press_no_op_in_devtools_mode_phase_3` to `test_press_no_op_in_devtools_mode_without_regions` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test renamed instead of deleted**: The existing `test_press_no_op_in_devtools_mode_phase_3` test was preserved with a renamed identifier (`test_press_no_op_in_devtools_mode_without_regions`) since the behaviour (no regions → None) is still correct; only the Phase-3-only framing was stale.
+2. **Explicit `drop(regions)`**: Mirrors `normal::handle_press` for readability — makes the RAII guard lifetime visible to readers.
+3. **5 tests added** (task required >= 4): left-click resolves, right-click no-op, network filter-active suppresses, inspector not gated by network filter, click outside any region returns None.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib -- handler::mouse` - Passed (73 tests, all passing)
+- `cargo fmt --all` - Passed (no changes needed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo test --workspace --lib` - Passed (913 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **No busy gate in DevTools**: Per task spec, DevTools click messages are pure UI navigation (no long-running Flutter operations), so the busy gate is intentionally omitted. This is documented in the task Notes section.

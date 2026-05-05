@@ -184,3 +184,37 @@ If a `tests.rs` already exists in the touched modules, ensure no test references
 - **Why stub bodies don't `todo!()`.** A `todo!()` panic would fire during integration tests in Task 10 if the dispatch arms get hit before Tasks 03/04 land. Returning `UpdateResult::none()` is harmless — it just means the click is ignored until the body is filled in.
 - **No `Eq` derivation needed for new variants.** `Message` already does not derive `Eq` because it carries function pointers and `Box<...>`. The new variants use only `u64`, `Option<usize>`, and `usize` — they are trivially `PartialEq` if the parent enum is. Don't add `Eq` derives.
 - **`handler/log_view.rs` exists already** — the file currently houses helpers like `scroll_to_log_entry`. Append the new functions; don't create a new file.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aa97db414a9c38918
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added four new variants in `// ── Mouse Click Messages (Phase 4) ──` section: `ClickLogRow`, `ToggleStackTraceForEntry`, `DevToolsInspectorSelectRow`, `DevToolsInspectorToggleNode` |
+| `crates/fdemon-app/src/state.rs` | Added `LogClickStamp` struct (`Copy + Clone + Debug`) and `AppState::last_log_click: Option<LogClickStamp>` field; initialised to `None` in `with_settings()` |
+| `crates/fdemon-app/src/handler/update.rs` | Added four match arms for the new message variants, delegating to `log_view` and `devtools::inspector` stubs |
+| `crates/fdemon-app/src/handler/log_view.rs` | Added `handle_click_log_row` and `handle_toggle_stack_trace_for_entry` stubs returning `UpdateResult::none()` |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Added `handle_inspector_select_row` and `handle_inspector_toggle_node` stubs before the tests module |
+
+### Notable Decisions/Tradeoffs
+
+1. **Rustfmt collapsed stub signatures**: Two-parameter stubs in `inspector.rs` and `log_view.rs` were auto-collapsed to single-line form by `cargo fmt`. This matches project style (80-char line limit accommodates them) and satisfies the `--check` gate.
+2. **Dispatch arms placed adjacent to `ToggleStackTrace`**: The four new arms follow immediately after the existing `ToggleStackTrace` arm as specified, with a `// ── Mouse Click Messages (Phase 4) ──` separator comment.
+3. **`LogClickStamp` placed before `AppState`**: Defined in a dedicated section between `TagFilterUiState` and the `AppState` struct, consistent with the file's existing pattern of small state types preceding the main struct.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (4,132 tests across all crates, 0 failures)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Stubs are no-ops**: All four dispatch arms return `UpdateResult::none()`. This is intentional — bodies will be filled in by Tasks 03 and 04. Any integration tests that exercise these message variants before those tasks land will silently do nothing.

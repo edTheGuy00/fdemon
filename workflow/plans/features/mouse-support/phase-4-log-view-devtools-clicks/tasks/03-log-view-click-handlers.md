@@ -200,3 +200,35 @@ mod click_handler_tests {
 - **Why `frame_index` is unused in v1.** Clicking a stack-frame line could plausibly: (a) open the link via the existing link-highlight extraction, (b) toggle just that frame, (c) do nothing. Each choice has UX implications and overlaps with link mode. Defer to a future enhancement; carry the field through the message so the deferred work doesn't need a new variant.
 - **No new test for the `update.rs` dispatch arm.** Task 01 wired the arm to delegate; the integration test in Task 10 exercises it end-to-end via `update(&mut state, Message::ClickLogRow { ... })`.
 - **Multi-session safety.** `state.last_log_click` is a single `Option`, so switching sessions and clicking again may double-click against a stamp from the previous session. This is acceptable: the stamp's `entry_id` is checked, and entry IDs are unique across the global ID space (`LogEntry::id` is monotonic per process). A click on entry 42 in session A followed by entry 42 in session B is exceedingly unlikely; even if it happens, expanding a stack trace in session B is the user's intent, not a bug. If it becomes a real problem, scope `last_log_click` per session in a future patch.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ace6f09439977ac63
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/log_view.rs` | Replaced two stub functions with real implementations; added `DOUBLE_CLICK_WINDOW` const, imports for `Message` and `LogClickStamp`; added 6-test `click_handler_tests` module |
+
+### Notable Decisions/Tradeoffs
+
+1. **`saturating_duration_since` for time comparison**: Used as specified in the task notes — avoids panic if clock drifts backward, and returns `Duration::ZERO` which correctly falls within the window for any such drift edge case.
+2. **Stamp clearing on double-click**: The stamp is cleared (`state.last_log_click = None`) when a double-click is detected, preventing a third click from immediately re-toggling. This matches the task spec's "cadence" requirement.
+3. **Borrow ordering in `handle_toggle_stack_trace_for_entry`**: `default_collapsed` is read inside the `if let` block after `selected_mut()`, which is valid because `state.settings` is a disjoint field from `state.session_manager`. This mirrors the existing pattern in `handler/update.rs:682-690`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (clean, no warnings)
+- `cargo fmt --all -- --check` - Passed after applying `cargo fmt`
+- `cargo test -p fdemon-app click_handler` - Passed (6 tests)
+- `cargo test --workspace --lib` - Passed (all 913+ tests across workspace)
+
+### Risks/Limitations
+
+1. **No integration test for `update.rs` dispatch**: As noted in the task, end-to-end dispatch coverage is deferred to Task 10's integration tests. The dispatch arms were already wired in Task 01.
+2. **`second_click_after_window_is_treated_as_fresh_single` test uses wall clock**: The test plants a stamp at `Instant::now() - 500ms` to simulate an expired window. This is deterministic on any machine where the test runs faster than 100ms (near-certain) but is technically clock-dependent.

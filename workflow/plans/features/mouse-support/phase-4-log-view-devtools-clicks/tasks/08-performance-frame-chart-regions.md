@@ -240,3 +240,39 @@ fn frame_chart_in_compact_mode_records_no_regions() {
 - **Empty-frame-history path.** When `total_frames == 0`, `compute_visible_range` returns an empty window and the loop runs zero times — no regions registered. Correct behaviour.
 - **Selection highlight `▔`.** The selection indicator is drawn at the chart's top row only when the frame is already selected. Phase 4 click → set selected → next render draws the indicator. No interaction needed at the indicator level.
 - **`MouseCtx::as_deref_mut()` pattern.** The same single-binding-shadowing pattern from Task 02 applies inside the per-slot loop. Don't move `ctx` inside the loop body without a re-borrow.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/bars.rs` | Added `ctx: Option<&mut MouseCtx<'_>>` parameter to `render_bar_chart`; register one `MouseAction::Emit(SelectPerformanceFrame)` click region per visible frame slot inside the existing render loop. Added imports for `MouseAction`, `MouseRect`, and `MouseCtx`. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/mod.rs` | Updated `Widget::render` to pass `None` to the new `render_bar_chart` signature. Added `use crate::widgets::MouseCtx` import. Added `render_with_regions` method on `FrameChart` that mirrors `Widget::render` but forwards `ctx` to `render_bar_chart`. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Replaced the no-op `render_with_regions` stub with a full implementation that mirrors `render_content`/`Widget::render` structure exactly: clears background, routes disconnected/compact/frame-only/dual-section paths, forwarding `ctx` only into `FrameChart::render_with_regions`. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/tests.rs` | Added 5 new unit tests: `frame_chart_records_one_region_per_visible_frame`, `frame_chart_in_compact_mode_records_no_regions`, `frame_chart_region_width_is_chars_per_frame`, `frame_chart_region_height_equals_chart_height`, `frame_chart_no_regions_without_ctx`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option (A) — add parameter to existing function**: The task specified Option (A) (adding `ctx` to `render_bar_chart`) over Option (B) (new sibling function). This keeps the API surface smaller with `Widget::render` simply passing `None`.
+2. **`ctx.as_deref_mut()` re-borrow pattern**: Used inside the per-slot loop to avoid moving `ctx` through each iteration, which would prevent the second (and later) iterations from using it. This is the documented pattern for `Option<&mut T>` in loops.
+3. **rect_w computed as `CHARS_PER_FRAME.min(avail)`**: This correctly clamps the rightmost slot's click region to the available chart columns, satisfying acceptance criterion 2.
+4. **No `use_unicode()` on IconSet**: `IconSet` has no `use_unicode()` method. The FrameChart constructor takes `icons: bool`; we pass `false` consistently as all existing callers do.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib -- widgets::devtools::performance::frame_chart` - Passed (30 tests, 5 new)
+- `cargo test --workspace --lib` - Passed (918 tests)
+- `cargo fmt --all` - Passed (no changes needed)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Detail panel and memory chart not clickable**: As specified, only the bar-chart section registers regions. The detail panel (frame number labels) and memory chart are not wired. This is intentional per the task spec.
+2. **`monitoring_active` check in `render_with_regions`**: Mirrors `Widget::render`'s exact guard condition; if `monitoring_active` is false the disconnected path runs and no regions are registered (acceptance criterion 6).

@@ -272,3 +272,41 @@ fn network_disconnected_records_no_regions() {
 - **Detail-tab labels and keyboard shortcuts.** The labels `[g] General` / `[h] Headers` / `[q] Request` / `[s] Response` / `[t] Timing` already mirror keyboard shortcuts via `keys.rs`. Clicking them produces the same `NetworkSwitchDetailTab` message that the keyboard handler emits.
 - **Don't register a region on the detail-panel border / dividers.** The detail panel has a 1-cell `Borders::LEFT` block in wide layout and an implicit divider in narrow layout. Clicks on the border should be silent.
 - **Existing `Widget::render` for `RequestTable` and `NetworkMonitor`** must continue to work without ctx. Adapt by adding sister `render_with_regions` methods rather than mutating `Widget::render`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Replaced stub `render_with_regions` free fn with full dispatch body; added `render_wide_layout_with_regions`, `render_narrow_split_with_regions`, `render_table_only_with_regions` methods; existing layout methods now delegate to the `_with_regions` variants with `None` ctx. |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_table.rs` | Added `render_with_regions` public method and private `render_impl`; promoted `render_rows` to accept `Option<&mut MouseCtx<'_>>`; registers one `NetworkSelectRequest { index: Some(entry_idx) }` region per visible data row. |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | Added `render_with_regions` public method and private `render_impl`; promoted `render_tab_bar` to accept `Option<&mut MouseCtx<'_>>`; registers one `NetworkSwitchDetailTab(tab)` region per sub-tab label with correct padded widths. |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Added `region_tests` submodule with 7 new unit tests verifying: row count, absolute scroll-offset indices, 5 detail tab regions in order, disconnected/unavailable early-return registers no regions, None ctx path, and tab region widths. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Widget::render` delegates to `render_impl`**: Rather than duplicating the header+column render logic, `Widget::render` calls the private `render_impl(area, buf, None)`. This avoids the pattern where `Widget::render` called `render_with_regions` (which would make `render_with_regions` the canonical path rather than a sister function).
+
+2. **Clippy `needless_option_as_deref` vs `option_as_ref_deref`**: When `ctx` must be reborrowed for a first call and then passed by move for a second call, calling `ctx.as_deref_mut()` for the first use and `ctx` (moved) for the second is the pattern that satisfies both lints. The lints conflict when both reborrows are used.
+
+3. **`render_table_only` delegation**: `render_table_only` and `render_narrow_split` now delegate to their `_with_regions` counterparts with `None` ctx, eliminating code duplication.
+
+4. **No region on detail-panel border**: The `Borders::LEFT` block in wide layout is rendered before `render_with_regions` is called on the inner area. The border is excluded from the detail inner area so no click region is registered there.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test --workspace --lib` - Passed (920 fdemon-tui tests, all green)
+- `cargo fmt --all` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`needless_option_as_deref` is version-sensitive**: The clippy lint behavior observed required using `as_deref_mut()` for intermediate reborrows and moving `ctx` for the final consumer. Future clippy updates may produce different recommendations.
+2. **No filter-bar click regions**: Per the spec, the filter input bar does not register click regions in v1. The dispatcher (Task 05) suppresses clicks during filter input anyway.

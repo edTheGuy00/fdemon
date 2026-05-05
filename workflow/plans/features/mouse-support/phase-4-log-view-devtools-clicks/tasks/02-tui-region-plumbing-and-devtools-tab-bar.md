@@ -261,3 +261,41 @@ fn devtools_tab_bar_registers_three_click_regions() {
 - **No changes to `widgets/devtools/inspector/tree_panel.rs`, `widgets/devtools/performance/frame_chart/bars.rs`, or `widgets/devtools/network/request_table.rs` in this task** — those files belong to Tasks 07 / 08 / 09. The sister `render_with_regions` functions delegate to `Widget::render` and never thread `ctx` deeper.
 - **`MouseCtx::as_deref_mut`.** The pattern `ctx.as_deref_mut()` lets us pass `Option<&mut MouseCtx>` through multiple layers without losing ownership. If the local `ctx` shadowing reads awkwardly, factor a small helper `fn forward<'a>(ctx: &'a mut Option<&mut MouseCtx<'_>>) -> Option<&'a mut MouseCtx<'_>> { ctx.as_deref_mut() }` — but inline `ctx.as_deref_mut()` is idiomatic.
 - **`render_footer` does not get a ctx.** The footer is informational text only; no click targets. Phase 5 may revisit if any footer hint becomes a click target.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad1f58885e4f72995
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Replace `frame.render_stateful_widget(log_view, ...)` and `frame.render_widget(devtools, ...)` with `widgets::log_view::render_with_regions(...)` and `widgets::devtools::render_with_regions(...)` |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Changed `mod log_view` to `pub mod log_view` to expose the new free function |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `render_with_regions` free function (stub delegates to `StatefulWidget::render`); added `MouseCtx` import |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `MouseAction`, `MouseRect`, `Message`, `MouseCtx` imports; renamed `render_tab_bar` to `render_tab_bar_inner` with `Option<&mut MouseCtx>` param; added `render_with_regions` free function; added 3 unit tests; updated existing tests to call `render_tab_bar_inner` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Added `render_with_regions` stub + `MouseCtx` import |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Added `render_with_regions` stub + `MouseCtx` import |
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Added `render_with_regions` stub + `MouseCtx` import |
+
+### Notable Decisions/Tradeoffs
+
+1. **`ctx.as_deref_mut()` final call**: Clippy flags `ctx.as_deref_mut()` as needless when `ctx` is the last use (the type is already `Option<&mut MouseCtx<'_>>`). Fixed by passing `ctx` directly for the final Network branch dispatch.
+
+2. **Test construction**: `MouseRegionsBuilder` borrows `&mut MouseRegions`, so it must be dropped (by dropping `ctx`) before iterating. A block scope around the `builder`/`ctx` construction ensures this. `builder` need not be `mut` since `MouseCtx::new` takes ownership.
+
+3. **`pub mod log_view`**: Making the module public was required so `render::view` (in `crates/fdemon-tui/src/render/mod.rs`) could call `widgets::log_view::render_with_regions`. The module was previously private because all external consumers used re-exports. This is consistent with how `pub mod devtools`, `pub mod header`, `pub mod tabs`, etc. are already public.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (913 fdemon-tui, 0 failed; all crates 0 failed)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Stub bodies**: `render_with_regions` for `log_view`, `inspector`, `performance`, and `network` delegate to the existing `Widget::render` without recording any regions. Tasks 06–09 fill those bodies in. No behavioral regression since the function is identical to the old call path.

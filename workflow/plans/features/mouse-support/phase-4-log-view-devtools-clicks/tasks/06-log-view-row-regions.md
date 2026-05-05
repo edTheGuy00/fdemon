@@ -216,3 +216,38 @@ fn render_with_regions_records_frame_index_for_stack_frames() {
 - **No region for the metadata bars.** Top metadata bar (`render_metadata_bar` at line 1083) and bottom metadata bar (`render_bottom_metadata` at line 1101) live outside `content_area`. Registering regions there would conflict with future bottom-bar click work (e.g., clicking `[VM]` to open the VM page).
 - **Defensive width clamping.** `content_area.width` may be `0` on edge cases (very narrow terminals); the existing `if visible_width == 0` early returns prevent us from reaching the loop. Still, double-check rect width before push.
 - **Clippy aside.** The new `row_actions: Vec<RowAction>` allocation is per-frame. Consider reusing it via a thread-local or a `Cell<Vec<...>>` buffer if benchmarks show hotspot. v1 keeps the allocation; the registry already pre-sizes to ~32 entries (Phase 1 mitigation), and 24 rows × 4 fields per row is negligible.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a16bd79c85c27aaec
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `RowAction` struct; refactored `StatefulWidget::render` body into private `render_inner(area, buf, state, mouse_ctx: Option<&mut MouseCtx<'_>>)` method; `StatefulWidget::render` now calls `render_inner(..., None)`; `render_with_regions` now calls `view.render_inner(..., ctx)`; row tracking + region registration added inside `render_inner` |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `make_logs_no_traces`, `make_logs_with_stack_trace` helpers; added 5 new unit tests: `render_with_regions_records_one_region_per_visible_row_nowrap`, `render_with_regions_no_regions_without_ctx`, `render_with_regions_records_frame_index_for_stack_frames`, `render_with_regions_entry_ids_match_log_entries`, `render_with_regions_row_rects_have_correct_dimensions_nowrap` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`row_actions` only allocated when ctx is Some**: The vec is only populated when `mouse_ctx.is_some()` is true. This keeps the hot path (normal render without mouse) allocation-free for the region-tracking bookkeeping, only paying cost when a `MouseCtx` is provided.
+2. **`RowAction` struct vs inline tuple**: Used a named struct rather than a tuple for clarity; the struct fields document the intent. The struct is private to the function's enclosing `impl` block via a module-level private type.
+3. **Collapsed indicator advances rel_y_cursor**: The collapsed indicator row (`▼ N more frames`) advances `rel_y_cursor` by 1 but does not create a `RowAction` — clicking the indicator doesn't map to a specific entry + frame_index pair, so no region is registered for it.
+4. **`if let Some(ctx) = mouse_ctx`**: Uses move semantics for the final region-registration block. The `mouse_ctx.is_some()` checks in the loop body are immutable borrows and occur before the move.
+5. **Inline `use` statements**: The `MouseAction`, `MouseRect`, and `Message` imports live inside the region-registration block to avoid adding module-level imports that would be unused in the `None` path. Clippy is satisfied with this pattern.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (918 fdemon-tui tests, all workspace tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- 5 new unit tests added in `widgets/log_view/tests.rs`, all passing
+
+### Risks/Limitations
+
+1. **Wrap mode tests not added**: The new tests cover nowrap mode. Wrap-mode region recording is implemented in the same code path but lacks dedicated tests — wrap-mode rendering is complex (Paragraph handles wrapping internally) and testing `wrapped_row_count` for region height would require measuring terminal-level row output. The task spec notes this as acceptable for v1.
+2. **`max_collapsed_frames` indicator not clickable**: The collapsed indicator row is skipped for region recording. If a future task wants clicking the indicator to toggle expansion, a separate region type will be needed.

@@ -293,3 +293,32 @@ fn test_toggle_node_on_leaf_does_not_modify_expanded_set() {
 - **Refactor optionality.** If the planner notes' "extract `select_index_with_layout_fetch`" suggestion proves invasive (e.g., the borrow lifetimes become awkward when called from the existing `handle_inspector_navigate`), do not bundle the refactor into this task. Phase 5 may revisit. The two-phase borrow pattern in the current `handle_inspector_navigate` is fragile; preserving it is more important than removing duplication.
 - **Out-of-range index handling.** A click on row 5 of a tree that just shrunk to 3 rows is possible if the user clicks at the same time as the tree updates. Silent no-op is correct — emitting a `Message` would be wrong because the action wouldn't make sense.
 - **Toggle on leaf still calls `select_row`.** Per the Phase-3 last-pushed-wins contract, the glyph rect is always pushed *after* the row rect for the same row. So clicking on the glyph cell of a leaf will hit the glyph region, which emits `ToggleNode`. We don't want the click to be silently dropped — we still want the row to become selected. Hence: select first, then attempt toggle (which is a no-op for leaves).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a8424283893cd1402
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Replaced two stubs (`handle_inspector_select_row`, `handle_inspector_toggle_node`) with real implementations; added 10 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **No `select_index_with_layout_fetch` refactor**: The optional helper extraction was skipped per task guidance — the two-phase borrow pattern in `handle_inspector_navigate` is fragile. `handle_inspector_select_row` duplicates the Phase-2 layout-fetch logic from `handle_inspector_navigate` with clear block-scoped borrows. This is a deliberate copy to preserve borrow safety; the planner noted the refactor can be revisited later.
+2. **10 tests added (task required ≥ 4)**: All 6 required scenarios from the acceptance criteria are covered, plus 4 additional edge cases (stale layout cleared on row change, debounced select skips fetch, out-of-range toggle is no-op, leaf toggle still selects row).
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2048 unit tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Borrow discipline**: The two-phase borrow pattern (scope inspector borrow, release, then access session_manager) is preserved verbatim from `handle_inspector_navigate`. Any future refactor must maintain this discipline or the Rust borrow checker will reject simultaneous field borrows.

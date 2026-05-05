@@ -288,3 +288,42 @@ fn glyph_region_wins_over_row_region_at_glyph_cell() {
 - **No region for the layout / properties side panel.** The layout panel shows the selected node's geometry; clicks there do nothing in v1. Phase 5 may add interactivity (e.g., copy-to-clipboard buttons).
 - **Scroll indicator at the right edge.** The `█` thumb is render-only; not clickable in v1. Phase 5 may add drag-to-scroll.
 - **Empty-tree, error, loading, disconnected branches** all return before the loop. The early-return path doesn't push regions, which is correct — there's nothing to click.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a49db9d0db49750ea
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | Added `MouseAction::as_emit()` helper method — returns `Some(&Message)` for `Emit` variant, `None` for `EmitWithCoord`. Used in tests to inspect emitted messages without resolving coordinates. |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs` | Replaced `render_tree_panel` with `render_tree_panel_inner(…, ctx: Option<&mut MouseCtx>)`. Removed the now-unused `render_tree_panel` delegator (grep confirmed no external callers). Added row + glyph region recording inside the per-row loop. |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Replaced no-op `render_with_regions` body with full state-branch dispatch (mirrors `Widget::render` exactly). Extracted `render_tree_core` shared helper to keep `render_tree` and `render_tree_with_regions` in sync. Added `render_tree_with_regions` method on `WidgetInspector`. |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | Added `make_5_node_tree()` and `make_single_root_state()` test helpers. Added `inspector_records_row_and_glyph_regions_per_visible_row` and `glyph_region_wins_over_row_region_at_glyph_cell` tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Deleted `render_tree_panel` instead of keeping it as a wrapper**: Grep confirmed no external callers; keeping a dead wrapper would have triggered a clippy dead-code warning. `render_tree_core` (called from both `render_tree` and `render_tree_with_regions`) replaces it cleanly.
+
+2. **`render_tree_core` shared helper**: Both `render_tree` (no regions) and `render_tree_with_regions` (with regions) share the layout-split logic through `render_tree_core`. This prevents the two paths from diverging silently if layout constants change.
+
+3. **`as_emit()` added to `MouseAction`**: The task tests needed a way to filter entries by `Message` variant without resolving coordinates. The method is broadly useful for other Phase 4 tests and is a natural companion to `emit()` and `resolve()`.
+
+4. **Test area 120x24 for region count test**: Uses horizontal split (width >= 100) so tree area is left 60 cols with a clean block border → `tree_inner.x=1, tree_inner.y=1`. This avoids dependence on vertical-split layout arithmetic.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib -- widgets::devtools::inspector` — Passed (64 tests including 2 new)
+- `cargo test --workspace --lib` — Passed (915 tests)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
+
+### Risks/Limitations
+
+1. **Glyph hit-test coordinate assumption**: The test asserts the glyph is at (1, 1) for a 120x24 horizontal-split layout. This is correct given the current border conventions but would break if block border style changed (e.g., no border). The test is explicit about this assumption in a comment.
+
+2. **No region for layout panel**: As designed. Phase 5 may add clickable buttons to the layout/properties panel.
