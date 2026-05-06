@@ -725,18 +725,14 @@ fn phase5_sister_functions_record_no_regions_in_stub_state() {
     // After the render the registry must exist (guard has put it back).
     let regions = state.mouse_regions.take();
 
-    // Confirm-dialog render_with_regions is a pure stub: it calls Widget::render
-    // only and pushes nothing extra.  The registry should contain the header
-    // regions (from the always-rendered header) but nothing Phase-5-specific.
-    // We verify this by checking no region carries z_index = 1 (Phase 5 dialogs
-    // are supposed to register at z = 1 once Tasks 06-10 land, so z = 1 here
-    // would mean the stubs are accidentally writing regions).
-    for entry in regions.iter() {
-        assert_eq!(
-            entry.z_index, 0,
-            "Phase-5 stubs must not register any z_index = 1 regions before Tasks 06-10"
-        );
-    }
+    // Task 06 is now implemented: confirm-dialog render_with_regions records one
+    // region per button at z_index = 1.  ConfirmDialogState::quit_confirmation(1)
+    // produces 2 options ("Quit" and "Cancel"), so we expect exactly 2 z=1 regions.
+    let z1_count = regions.iter().filter(|e| e.z_index == 1).count();
+    assert_eq!(
+        z1_count, 2,
+        "ConfirmDialog must register exactly 2 button regions at z=1 (one per option)"
+    );
 
     // Confirm the render did not panic and the buffer is non-empty.
     let buffer = terminal.backend().buffer();
