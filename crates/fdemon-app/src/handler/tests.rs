@@ -11379,4 +11379,102 @@ mod phase4_integration_tests {
             "NetworkSelectRequest(None) must clear selected_index"
         );
     }
+
+    // ── TagFilterClickRow ────────────────────────────────────────────────────
+
+    #[test]
+    fn click_row_sets_selection_and_toggles_visibility() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+
+        // Discover three tags.
+        handle.native_tag_state.observe_tag("alpha");
+        handle.native_tag_state.observe_tag("beta");
+        handle.native_tag_state.observe_tag("gamma");
+        assert!(handle.native_tag_state.is_tag_visible("beta"));
+
+        // Click row 1 (sorted: alpha=0, beta=1, gamma=2).
+        let result = update(&mut state, Message::TagFilterClickRow { index: 1 });
+
+        let handle = state.session_manager.get(id).unwrap();
+        assert_eq!(state.tag_filter_ui.selected_index, 1);
+        assert!(
+            !handle.native_tag_state.is_tag_visible("beta"),
+            "beta toggled hidden"
+        );
+        assert!(
+            handle.native_tag_state.is_tag_visible("alpha"),
+            "alpha unchanged"
+        );
+        assert!(
+            handle.native_tag_state.is_tag_visible("gamma"),
+            "gamma unchanged"
+        );
+        assert!(result.message.is_none(), "no follow-up message");
+    }
+
+    #[test]
+    fn click_row_with_out_of_range_index_is_no_op() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+        handle.native_tag_state.observe_tag("alpha");
+
+        let initial_selected = state.tag_filter_ui.selected_index;
+        let result = update(&mut state, Message::TagFilterClickRow { index: 99 });
+
+        assert_eq!(state.tag_filter_ui.selected_index, initial_selected);
+        let handle = state.session_manager.get(id).unwrap();
+        assert!(
+            handle.native_tag_state.is_tag_visible("alpha"),
+            "alpha unchanged"
+        );
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn click_row_with_no_session_is_no_op() {
+        let mut state = AppState::new();
+        let result = update(&mut state, Message::TagFilterClickRow { index: 0 });
+        assert!(result.message.is_none());
+        // With `tag_count == 0` we return early before mutating selected_index.
+        assert_eq!(state.tag_filter_ui.selected_index, 0);
+    }
+
+    #[test]
+    fn click_row_double_toggles_back() {
+        // Two clicks on the same row toggle off, then on — proving the
+        // "single click is single toggle" semantic.
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+        handle.native_tag_state.observe_tag("alpha");
+        assert!(handle.native_tag_state.is_tag_visible("alpha"));
+
+        let _ = update(&mut state, Message::TagFilterClickRow { index: 0 });
+        assert!(!state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha"));
+
+        let _ = update(&mut state, Message::TagFilterClickRow { index: 0 });
+        assert!(state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha"));
+    }
 }

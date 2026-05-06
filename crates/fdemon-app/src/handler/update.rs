@@ -723,8 +723,47 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             crate::handler::settings_handlers::handle_settings_click_row(state, index)
         }
 
-        Message::TagFilterClickRow { index: _ } => {
-            // Stub. Body added in Phase 5 Task 04.
+        // Click on a tag row in the tag filter overlay.
+        //
+        // Sets `tag_filter_ui.selected_index = index` (so the selection follows
+        // the click target — useful if the user keyboard-arrows after the click)
+        // AND toggles the visibility of the tag at that index.
+        //
+        // Single click both navigates and toggles by design. See Phase 5 PLAN.md
+        // notes for the UX rationale (tag-filter overlay has no useful "selected
+        // but not toggled" state).
+        //
+        // `index` is clamped to the valid tag range. If the index is out of range
+        // (which shouldn't happen because the widget only registers regions for
+        // visible rows), the toggle is a no-op.
+        Message::TagFilterClickRow { index } => {
+            let tag_count = state
+                .session_manager
+                .selected()
+                .map(|h| h.native_tag_state.tag_count())
+                .unwrap_or(0);
+
+            if tag_count == 0 || index >= tag_count {
+                return UpdateResult::none();
+            }
+
+            state.tag_filter_ui.selected_index = index;
+
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    // Collect the tag name at the clicked index before mutably
+                    // borrowing the session manager. Mirrors the
+                    // `TagFilterToggleSelected` arm's pattern.
+                    let tag_name: Option<String> = handle
+                        .native_tag_state
+                        .sorted_tags()
+                        .get(index)
+                        .map(|(tag, _)| tag.to_string());
+                    if let Some(tag) = tag_name {
+                        handle.native_tag_state.toggle_tag(&tag);
+                    }
+                }
+            }
             UpdateResult::none()
         }
 
