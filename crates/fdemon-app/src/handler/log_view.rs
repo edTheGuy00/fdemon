@@ -11,10 +11,11 @@ use super::UpdateResult;
 /// Window within which two consecutive clicks on the same row count as a
 /// double click — *inclusive* of the boundary value (i.e., a click at
 /// exactly 400 ms after the previous click is still treated as a double-click).
-/// 400 ms matches the GNOME / KDE / macOS double-click defaults and is short
-/// enough that an accidental re-click doesn't trigger an unwanted stack-trace
-/// toggle.
-const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
+///
+/// Derived from the project-wide [`super::DOUBLE_CLICK_WINDOW_MS`] constant so
+/// all click surfaces share the same threshold.
+const DOUBLE_CLICK_WINDOW: std::time::Duration =
+    std::time::Duration::from_millis(super::DOUBLE_CLICK_WINDOW_MS);
 
 /// Handle select link message
 pub fn handle_select_link(state: &mut AppState, shortcut: char) -> UpdateResult {

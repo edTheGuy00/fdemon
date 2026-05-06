@@ -6,9 +6,9 @@ use crate::config::{SettingValue, SettingsTab};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::message::Message;
 use crate::settings_items::get_selected_item;
-use crate::state::AppState;
+use crate::state::{AppState, SettingsClickStamp};
 
-use super::{update, UpdateResult};
+use super::{update, UpdateResult, DOUBLE_CLICK_WINDOW_MS};
 
 /// Handle show settings message
 pub fn handle_show_settings(state: &mut AppState) -> UpdateResult {
@@ -33,18 +33,27 @@ pub fn handle_hide_settings(state: &mut AppState) -> UpdateResult {
     } else {
         state.hide_settings();
     }
+    // Clear any pending double-click pairing for hygiene (mirrors last_log_click
+    // reset behaviour on session change). The 400 ms window would naturally
+    // expire, but explicit clearing is cleaner.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
 /// Handle settings next tab message
 pub fn handle_settings_next_tab(state: &mut AppState) -> UpdateResult {
     state.settings_view_state.next_tab();
+    // Tab change invalidates any pending double-click pairing: row 5 on the
+    // Project tab and row 5 on the User tab must not be treated as a pair.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
 /// Handle settings previous tab message
 pub fn handle_settings_prev_tab(state: &mut AppState) -> UpdateResult {
     state.settings_view_state.prev_tab();
+    // Tab change invalidates any pending double-click pairing.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
@@ -52,6 +61,8 @@ pub fn handle_settings_prev_tab(state: &mut AppState) -> UpdateResult {
 pub fn handle_settings_goto_tab(state: &mut AppState, idx: usize) -> UpdateResult {
     if let Some(tab) = SettingsTab::from_index(idx) {
         state.settings_view_state.goto_tab(tab);
+        // Tab change invalidates any pending double-click pairing.
+        state.last_settings_click = None;
     }
     UpdateResult::none()
 }
@@ -374,6 +385,8 @@ pub fn handle_force_hide_settings(state: &mut AppState) -> UpdateResult {
     // Force close without saving (discard changes)
     state.settings_view_state.clear_dirty();
     state.hide_settings();
+    // Clear the stamp for hygiene — mirrors last_log_click reset on session change.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
@@ -416,9 +429,68 @@ fn get_item_count_for_tab(state: &AppState) -> usize {
     }
 }
 
-/// Stub. Body added in Phase 5 Task 03.
-pub fn handle_settings_click_row(_state: &mut AppState, _index: usize) -> UpdateResult {
-    UpdateResult::none()
+/// Handle a single click on a settings panel row.
+///
+/// Sets `settings_view_state.selected_index = index` so the row appears
+/// selected. If the same row was clicked within
+/// [`DOUBLE_CLICK_WINDOW_MS`] ms, emits a follow-up [`Message::SettingsToggleEdit`]
+/// via [`UpdateResult::message`] to enter edit mode (mirroring the Phase 4
+/// log-view double-click pattern).
+///
+/// Single click never enters edit mode. Settings panel UX requires two clicks
+/// to start editing.
+///
+/// # Edge cases
+/// - If `index` is out of range for the active tab's item list, the
+///   `selected_index` is clamped to the last valid item (or 0 if the tab is
+///   empty). The widget renderer only registers regions for visible rows, so an
+///   out-of-range index from a click is unlikely; we clamp defensively.
+/// - If `editing == true` (a previous click already entered edit mode), the
+///   click is ignored — keyboard `Esc` must close the editor first. This
+///   mirrors `handle_settings_next_item` / `handle_settings_prev_item` which
+///   also no-op while editing.
+pub fn handle_settings_click_row(state: &mut AppState, index: usize) -> UpdateResult {
+    // Don't move selection while editing — user must close the editor first.
+    if state.settings_view_state.editing {
+        return UpdateResult::none();
+    }
+
+    let item_count = get_item_count_for_tab(state);
+    let clamped = if item_count == 0 {
+        0
+    } else {
+        index.min(item_count - 1)
+    };
+
+    // Read the previous click stamp (Copy, so no `take` needed).
+    let prev = state.last_settings_click;
+    let now = std::time::Instant::now();
+
+    // Update selection.
+    state.settings_view_state.selected_index = clamped;
+
+    // Double-click detection: same row, within window.
+    let is_double_click = match prev {
+        Some(stamp) if stamp.index == clamped => {
+            let elapsed_ms = now.saturating_duration_since(stamp.at).as_millis();
+            elapsed_ms <= u128::from(DOUBLE_CLICK_WINDOW_MS)
+        }
+        _ => false,
+    };
+
+    if is_double_click {
+        // Consume the stamp so a third click within the window doesn't re-fire.
+        state.last_settings_click = None;
+        // Emit the toggle-edit follow-up.
+        UpdateResult::message(Message::SettingsToggleEdit)
+    } else {
+        // Record this click for potential future double-click pairing.
+        state.last_settings_click = Some(SettingsClickStamp {
+            index: clamped,
+            at: now,
+        });
+        UpdateResult::none()
+    }
 }
 
 #[cfg(test)]
@@ -697,6 +769,130 @@ mod tests {
             assert_ne!(
                 item.id, "launch.__add_new__",
                 "sentinel must not appear when there are no configs"
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // handle_settings_click_row — double-click detection tests (Phase 5 Task 03)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn fresh_state() -> AppState {
+        let mut s = AppState::new();
+        s.show_settings();
+        s
+    }
+
+    #[test]
+    fn single_click_sets_selected_index_and_no_follow_up() {
+        let mut s = fresh_state();
+        let result = handle_settings_click_row(&mut s, 3);
+        assert_eq!(s.settings_view_state.selected_index, 3);
+        assert!(result.message.is_none());
+        assert!(s.last_settings_click.is_some());
+    }
+
+    #[test]
+    fn second_click_same_row_within_window_emits_toggle_edit() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 2);
+        let result = handle_settings_click_row(&mut s, 2);
+        assert!(
+            matches!(result.message, Some(Message::SettingsToggleEdit)),
+            "expected SettingsToggleEdit, got {:?}",
+            result.message
+        );
+        // Stamp consumed.
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn second_click_different_row_does_not_emit_toggle_edit() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 2);
+        let result = handle_settings_click_row(&mut s, 5);
+        assert!(result.message.is_none());
+        assert_eq!(s.settings_view_state.selected_index, 5);
+    }
+
+    #[test]
+    fn second_click_outside_window_does_not_emit_toggle_edit() {
+        use crate::state::SettingsClickStamp;
+        use std::time::{Duration, Instant};
+
+        let mut s = fresh_state();
+        // Manually set a stale stamp (older than 400 ms).
+        s.last_settings_click = Some(SettingsClickStamp {
+            index: 2,
+            at: Instant::now() - Duration::from_millis(500),
+        });
+        let result = handle_settings_click_row(&mut s, 2);
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn click_while_editing_is_no_op() {
+        let mut s = fresh_state();
+        s.settings_view_state.selected_index = 1;
+        s.settings_view_state.editing = true;
+        let snapshot_before = s.settings_view_state.selected_index;
+        let result = handle_settings_click_row(&mut s, 7);
+        assert!(result.message.is_none());
+        assert_eq!(s.settings_view_state.selected_index, snapshot_before);
+    }
+
+    #[test]
+    fn tab_change_clears_click_stamp() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 3);
+        assert!(s.last_settings_click.is_some());
+        let _ = handle_settings_goto_tab(&mut s, 1);
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn tab_change_next_clears_click_stamp() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 0);
+        assert!(s.last_settings_click.is_some());
+        let _ = handle_settings_next_tab(&mut s);
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn tab_change_prev_clears_click_stamp() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 0);
+        assert!(s.last_settings_click.is_some());
+        let _ = handle_settings_prev_tab(&mut s);
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn third_click_within_window_does_not_double_fire() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 2);
+        let r2 = handle_settings_click_row(&mut s, 2);
+        assert!(
+            matches!(r2.message, Some(Message::SettingsToggleEdit)),
+            "second click should emit SettingsToggleEdit"
+        );
+        // Third click within the same window should NOT re-fire toggle.
+        let r3 = handle_settings_click_row(&mut s, 2);
+        assert!(r3.message.is_none(), "third click must not re-toggle");
+    }
+
+    #[test]
+    fn out_of_range_index_clamps_to_last_item() {
+        let mut s = fresh_state();
+        let count = get_item_count_for_tab(&s);
+        // Only meaningful when there are items to clamp to.
+        if count > 0 {
+            let too_far = count + 100;
+            let _ = handle_settings_click_row(&mut s, too_far);
+            assert_eq!(
+                s.settings_view_state.selected_index,
+                count.saturating_sub(1)
             );
         }
     }
