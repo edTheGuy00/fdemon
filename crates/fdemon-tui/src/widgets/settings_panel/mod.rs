@@ -1344,5 +1344,25 @@ impl SettingsPanel<'_> {
     }
 }
 
+/// Render `SettingsPanel` and (eventually) record clickable row regions.
+///
+/// This is a free-function sister to [`StatefulWidget::render`] that
+/// additionally accepts an optional [`crate::widgets::MouseCtx`] for region
+/// recording.  The `_ctx` parameter is unused in this stub — Phase 5 Task 10
+/// fills in the body.
+///
+/// Passing `None` produces output identical to calling
+/// `frame.render_stateful_widget(panel, area, state)`.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    view: SettingsPanel<'_>,
+    state: &mut SettingsViewState,
+    _ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    // Phase 5 Task 10 fills in the body.
+    <SettingsPanel as StatefulWidget>::render(view, area, buf, state);
+}
+
 #[cfg(test)]
 mod tests;

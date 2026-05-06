@@ -1454,6 +1454,11 @@ impl<'a> LogView<'a> {
 
         // Register click regions for all visible rows (Phase 4 Task 06).
         // Only executed when a MouseCtx was provided; no-op for the plain render path.
+        //
+        // EXCEPTION: link-highlight badge regions are recorded in Phase 5 Task 08.
+        // When `self.link_highlight_state.is_active()` is true, Task 08 will push
+        // one `MouseAction::Emit(Message::SelectLink(shortcut))` region per visible
+        // badge using the per-row `rel_y` coordinates accumulated above.
         if let Some(ctx) = mouse_ctx {
             use fdemon_app::message::Message;
             use fdemon_app::{MouseAction, MouseRect};

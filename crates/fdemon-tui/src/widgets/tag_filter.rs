@@ -148,6 +148,30 @@ pub fn render_tag_filter(
     frame.render_widget(footer, chunks[2]);
 }
 
+/// Render the tag filter overlay and (eventually) record clickable row regions.
+///
+/// This is a free-function sister to [`render_tag_filter`] that additionally
+/// accepts an optional [`crate::widgets::MouseCtx`] for region recording.
+/// The `_ctx` parameter is unused in this stub — Phase 5 Task 07 fills in
+/// the body.
+///
+/// A sister function is preferred over changing [`render_tag_filter`]'s
+/// signature because the bare function is called from several test sites that
+/// should not be forced to thread `None` through.
+///
+/// Passing `None` is identical to calling
+/// `render_tag_filter(frame, area, tag_state, ui_state)`.
+pub fn render_tag_filter_with_regions(
+    frame: &mut Frame,
+    area: Rect,
+    tag_state: &NativeTagState,
+    ui_state: &TagFilterUiState,
+    _ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    // Phase 5 Task 07 fills in the body.
+    render_tag_filter(frame, area, tag_state, ui_state);
+}
+
 /// Truncate a tag name to at most `max_len` Unicode scalar values.
 ///
 /// If the tag is longer than `max_len` characters, it is truncated and `...`

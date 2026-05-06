@@ -212,7 +212,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &icons,
             )
             .migration_banner(state.show_migration_banner);
-            frame.render_widget(dialog, area);
+            widgets::new_session_dialog::render_with_regions(
+                area,
+                frame.buffer_mut(),
+                dialog,
+                Some(&mut mouse_ctx),
+            );
         }
         // Legacy DeviceSelector removed - use NewSessionDialog instead
         UiMode::EmulatorSelector => {
@@ -228,7 +233,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Render confirmation dialog
             if let Some(ref dialog_state) = state.confirm_dialog_state {
                 let dialog = widgets::ConfirmDialog::new(dialog_state);
-                frame.render_widget(dialog, area);
+                widgets::confirm_dialog::render_with_regions(
+                    area,
+                    frame.buffer_mut(),
+                    dialog,
+                    Some(&mut mouse_ctx),
+                );
             }
         }
         UiMode::SearchInput => {
@@ -242,11 +252,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Tag filter overlay (Phase 2, Task 09) — drawn on top of normal log view.
             if state.tag_filter_visible {
                 if let Some(handle) = state.session_manager.selected() {
-                    widgets::render_tag_filter(
+                    widgets::render_tag_filter_with_regions(
                         frame,
                         areas.logs,
                         &handle.native_tag_state,
                         &state.tag_filter_ui,
+                        Some(&mut mouse_ctx),
                     );
                 }
             }
@@ -320,7 +331,13 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         UiMode::Settings => {
             // Full-screen settings panel
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
-            frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
+            widgets::settings_panel::render_with_regions(
+                area,
+                frame.buffer_mut(),
+                settings_panel,
+                &mut state.settings_view_state,
+                Some(&mut mouse_ctx),
+            );
         }
         UiMode::FlutterVersion => {
             // Render Flutter Version panel as an overlay on top of the normal log view.

@@ -27,6 +27,25 @@ impl<'a> ConfirmDialog<'a> {
     }
 }
 
+/// Render `ConfirmDialog` and (eventually) record clickable button regions.
+///
+/// This is a free-function sister to [`Widget::render`] that additionally
+/// accepts an optional [`crate::widgets::MouseCtx`] for region recording.
+/// The `_ctx` parameter is unused in this stub — Phase 5 Task 06 fills in
+/// the body.
+///
+/// Passing `None` produces output identical to calling
+/// `frame.render_widget(dialog, area)`.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    view: ConfirmDialog<'_>,
+    _ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    // Phase 5 Task 06 fills in the body.
+    <ConfirmDialog as Widget>::render(view, area, buf);
+}
+
 impl Widget for ConfirmDialog<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Fixed modal size

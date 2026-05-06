@@ -1,6 +1,6 @@
 //! Custom widget components
 
-mod confirm_dialog;
+pub mod confirm_dialog;
 pub mod devtools;
 pub mod flutter_version_panel;
 pub mod header;
@@ -21,7 +21,7 @@ pub use new_session_dialog::*;
 pub use search_input::SearchInput;
 pub use settings_panel::SettingsPanel;
 pub use tabs::SessionTabs;
-pub use tag_filter::render_tag_filter;
+pub use tag_filter::{render_tag_filter, render_tag_filter_with_regions};
 
 // Re-export state types from app layer (these are used by render/)
 pub use fdemon_app::confirm_dialog::ConfirmDialogState;

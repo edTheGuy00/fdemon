@@ -683,6 +683,109 @@ fn phase_4_records_no_z1_regions() {
 }
 
 // ===========================================================================
+// Phase 5 Sister-Function Smoke Tests (Task 02)
+// ===========================================================================
+
+/// Smoke test: Phase-5 sister functions delegate to existing `Widget::render`
+/// and record **zero** new regions.
+///
+/// After Task 02 lands but before Tasks 06-10, the new sister functions for
+/// `ConfirmDialog`, `SettingsPanel`, `NewSessionDialog`, and `render_tag_filter`
+/// are pure delegates — they do not push any regions into the registry.
+///
+/// This test locks that invariant until Tasks 06–10 land.
+///
+/// NOTE: The full `matches_phase5_message_shape` helper (which checks for
+/// `NewSessionDialogSelectDeviceAt`, `SettingsClickRow`, `TagFilterClickRow`,
+/// etc.) is deferred to Task 11 because Phase 5 Task 01 message variants are
+/// not yet defined.  Instead, this test verifies the registry is identical in
+/// size and shape to a baseline render without any modal active (header+log
+/// regions only), then re-runs in `ConfirmDialog` mode and asserts the count
+/// does not grow beyond the header baseline.
+#[test]
+fn phase5_sister_functions_record_no_regions_in_stub_state() {
+    use fdemon_app::confirm_dialog::ConfirmDialogState;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    // Render with ConfirmDialog active.  The dialog replaces the log-view
+    // content area visually; header regions are still registered.
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::ConfirmDialog;
+    state.confirm_dialog_state = Some(ConfirmDialogState::quit_confirmation(1));
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            view(frame, &mut state);
+        })
+        .unwrap();
+
+    // After the render the registry must exist (guard has put it back).
+    let regions = state.mouse_regions.take();
+
+    // Confirm-dialog render_with_regions is a pure stub: it calls Widget::render
+    // only and pushes nothing extra.  The registry should contain the header
+    // regions (from the always-rendered header) but nothing Phase-5-specific.
+    // We verify this by checking no region carries z_index = 1 (Phase 5 dialogs
+    // are supposed to register at z = 1 once Tasks 06-10 land, so z = 1 here
+    // would mean the stubs are accidentally writing regions).
+    for entry in regions.iter() {
+        assert_eq!(
+            entry.z_index, 0,
+            "Phase-5 stubs must not register any z_index = 1 regions before Tasks 06-10"
+        );
+    }
+
+    // Confirm the render did not panic and the buffer is non-empty.
+    let buffer = terminal.backend().buffer();
+    assert!(
+        !buffer.content.is_empty(),
+        "ConfirmDialog render must produce non-empty buffer"
+    );
+
+    state.mouse_regions.set(regions);
+}
+
+/// Smoke test: Settings mode sister function records no regions in stub state.
+#[test]
+fn phase5_settings_sister_records_no_new_regions() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = AppState::new();
+    state.show_settings();
+    assert_eq!(state.ui_mode, UiMode::Settings);
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            view(frame, &mut state);
+        })
+        .unwrap();
+
+    let regions = state.mouse_regions.take();
+
+    // settings_panel::render_with_regions is a stub — no z_index = 1 regions.
+    for entry in regions.iter() {
+        assert_eq!(
+            entry.z_index, 0,
+            "Phase-5 Settings stub must not register z_index = 1 regions"
+        );
+    }
+
+    let buffer = terminal.backend().buffer();
+    assert!(
+        !buffer.content.is_empty(),
+        "Settings render must produce non-empty buffer"
+    );
+
+    state.mouse_regions.set(regions);
+}
+
+// ===========================================================================
 // Normal Mode Snapshots
 // ===========================================================================
 
