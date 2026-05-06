@@ -891,6 +891,18 @@ pub struct LogClickStamp {
     pub at: std::time::Instant,
 }
 
+/// Click stamp recorded by [`handler::settings_handlers::handle_settings_click_row`]
+/// to detect double-clicks on a setting row within the 400 ms window.
+///
+/// Mirrors [`LogClickStamp`] — see Phase 4 task 01 for the precedent.
+#[derive(Debug, Clone, Copy)]
+pub struct SettingsClickStamp {
+    /// 0-based index into the active tab's `SettingItem` list.
+    pub index: usize,
+    /// Wall-clock time of the click, used for 400 ms double-click detection.
+    pub at: std::time::Instant,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
@@ -1057,6 +1069,11 @@ pub struct AppState {
     /// Set by [`crate::handler::log_view::handle_click_log_row`] and cleared
     /// when a double-click is consumed or the selected session changes.
     pub last_log_click: Option<LogClickStamp>,
+
+    /// Most recent settings-row click, used for double-click detection.
+    /// Cleared whenever a double-click is consumed or the active tab
+    /// changes.
+    pub last_settings_click: Option<SettingsClickStamp>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1118,6 +1135,7 @@ impl AppState {
             show_migration_banner: false,
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
+            last_settings_click: None,
         }
     }
 

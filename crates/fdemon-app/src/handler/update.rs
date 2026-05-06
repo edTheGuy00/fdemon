@@ -706,6 +706,28 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // ── Mouse Click Messages (Phase 5) ────────────────────────────────────
+        Message::NewSessionDialogSelectDeviceAt { index } => {
+            crate::handler::new_session::clicks::handle_select_device_at(state, index)
+        }
+
+        Message::NewSessionDialogFocusField { field } => {
+            crate::handler::new_session::clicks::handle_focus_field(state, field)
+        }
+
+        Message::NewSessionDialogFuzzySelectAt { index } => {
+            crate::handler::new_session::clicks::handle_fuzzy_select_at(state, index)
+        }
+
+        Message::SettingsClickRow { index } => {
+            crate::handler::settings_handlers::handle_settings_click_row(state, index)
+        }
+
+        Message::TagFilterClickRow { index: _ } => {
+            // Stub. Body added in Phase 5 Task 04.
+            UpdateResult::none()
+        }
+
         // ── Mouse Click Messages (Phase 4) ───────────────────────────────────
         Message::ClickLogRow {
             entry_id,

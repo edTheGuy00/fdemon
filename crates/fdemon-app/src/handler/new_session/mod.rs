@@ -8,6 +8,7 @@
 //! - fuzzy_modal: Fuzzy search modal handlers
 //! - dart_defines_modal: Key-value editor modal handlers
 
+pub mod clicks;
 mod dart_defines_modal;
 mod fuzzy_modal;
 mod launch_context;

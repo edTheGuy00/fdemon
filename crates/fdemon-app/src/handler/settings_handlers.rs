@@ -416,6 +416,11 @@ fn get_item_count_for_tab(state: &AppState) -> usize {
     }
 }
 
+/// Stub. Body added in Phase 5 Task 03.
+pub fn handle_settings_click_row(_state: &mut AppState, _index: usize) -> UpdateResult {
+    UpdateResult::none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
