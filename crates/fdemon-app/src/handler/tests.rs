@@ -11478,3 +11478,268 @@ mod phase4_integration_tests {
             .is_tag_visible("alpha"));
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5 cross-cutting integration tests (Task 11)
+//
+// These tests verify the full pipe: dispatcher → handler → state mutation for
+// Phase-5 cross-cutting contracts.  They lock in:
+//   A. Click-precedence (z-index) — modal z=1 wins over base z=0 at same cell.
+//   B. Settings double-click chain — two rapid clicks enters edit mode.
+//   C. Tag-filter click integration — click toggles tag visibility end-to-end.
+//
+// The registry is populated manually; `fdemon-app` does not depend on
+// `fdemon-tui`, so render::view cannot be called here.
+// ─────────────────────────────────────────────────────────────────────────────
+mod phase5_integration_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+    use crate::mouse_regions::{MouseAction, MouseRect};
+    use crate::state::UiMode;
+
+    // ── A. Click-precedence (z-index) ────────────────────────────────────────
+
+    /// When a z=1 region and a z=0 region overlap on the same cell, the
+    /// dispatcher must return the z=1 region's message.
+    ///
+    /// Phase 5 is the first consumer of z=1; this test locks the z-precedence
+    /// contract at the handler integration level (without going through the
+    /// TUI render layer).
+    #[test]
+    fn phase5_modal_z1_region_wins_over_base_z0_region_at_same_cell() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // z=0 base region: header `[r]` shortcut at (0,0).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 3, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        // z=1 modal region: NewSessionDialogLaunch overlapping the same cell.
+        regions.builder().click_at_z(
+            MouseRect::new(0, 0, 3, 1),
+            MouseAction::emit(Message::NewSessionDialogLaunch),
+            1,
+        );
+        state.mouse_regions.set(regions);
+
+        // Drive through the full Message::Mouse → update() path.
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 1,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // The dispatcher returns the matched message as a follow-up via
+        // UpdateResult::message so the engine can re-loop it.
+        assert!(
+            matches!(result.message, Some(Message::NewSessionDialogLaunch)),
+            "modal z=1 must win over base z=0; got {:?}",
+            result.message
+        );
+    }
+
+    // ── B. Settings double-click chain ───────────────────────────────────────
+
+    /// First click selects row; second click within the 400 ms window chains
+    /// `SettingsToggleEdit`, which when re-dispatched sets `editing = true`.
+    ///
+    /// Between the two clicks the registry is re-registered to simulate the
+    /// "registry rebuilt every frame" production contract.
+    #[test]
+    fn phase5_settings_double_click_enters_edit_mode() {
+        let mut state = AppState::new();
+        state.show_settings();
+        state.ui_mode = UiMode::Settings;
+
+        // Register a row-click region for index 3.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 5, 80, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 3 }),
+        );
+        state.mouse_regions.set(regions);
+
+        // First click: press at (0,5) → SettingsClickRow { index: 3 }.
+        let r1 = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 0,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // Process the returned SettingsClickRow message.
+        if let Some(msg) = r1.message {
+            let r1b = update(&mut state, msg);
+            assert_eq!(state.settings_view_state.selected_index, 3);
+            assert!(
+                !state.settings_view_state.editing,
+                "single click does not enter edit mode"
+            );
+            assert!(
+                r1b.message.is_none(),
+                "first click does not chain a follow-up"
+            );
+        } else {
+            panic!("first click should return SettingsClickRow message");
+        }
+
+        // Re-register the region (simulating next frame's render).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 5, 80, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 3 }),
+        );
+        state.mouse_regions.set(regions);
+
+        // Second click on the same row within the 400 ms window.
+        let r2 = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 0,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // The dispatcher returns SettingsClickRow; update dispatches it and
+        // receives a SettingsToggleEdit follow-up.
+        if let Some(msg) = r2.message {
+            let r2b = update(&mut state, msg);
+            // r2b.message should be SettingsToggleEdit (the double-click chain).
+            if let Some(toggle_msg) = r2b.message {
+                assert!(
+                    matches!(toggle_msg, Message::SettingsToggleEdit),
+                    "expected SettingsToggleEdit follow-up on double-click, got {:?}",
+                    toggle_msg
+                );
+                // Process the chained SettingsToggleEdit.
+                update(&mut state, toggle_msg);
+                assert!(
+                    state.settings_view_state.editing,
+                    "SettingsToggleEdit must set editing = true"
+                );
+            } else {
+                panic!("expected SettingsToggleEdit follow-up from double-click");
+            }
+        } else {
+            panic!("second click should return SettingsClickRow message");
+        }
+    }
+
+    // ── C. Tag-filter click integration ─────────────────────────────────────
+
+    /// A `TagFilterClickRow` click through the dispatcher toggles the tag's
+    /// visibility and updates `tag_filter_ui.selected_index`.
+    ///
+    /// This tests the full click → Message → update() → state chain:
+    /// the registry is populated with a `click_at_z` region (z=1, matching
+    /// the tag-filter overlay's modal layer), a press is dispatched, the
+    /// returned message is processed through `update()`, and the final
+    /// visibility state is asserted.
+    #[test]
+    fn phase5_tag_filter_click_toggles_visibility() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        {
+            let handle = state.session_manager.get_mut(id).unwrap();
+            handle.native_tag_state.observe_tag("alpha");
+        }
+        state.tag_filter_visible = true;
+
+        // Register a tag-row click region at z=1 (tag-filter is an overlay).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click_at_z(
+            MouseRect::new(0, 5, 40, 1),
+            MouseAction::emit(Message::TagFilterClickRow { index: 0 }),
+            1,
+        );
+        state.mouse_regions.set(regions);
+
+        let initial_visible = state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha");
+
+        // Drive the full press → update() pipe.
+        let r = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 0,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // Process the returned TagFilterClickRow message.
+        if let Some(msg) = r.message {
+            update(&mut state, msg);
+        } else {
+            panic!("tag-filter click should return TagFilterClickRow message");
+        }
+
+        let final_visible = state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha");
+
+        assert_ne!(
+            initial_visible, final_visible,
+            "tag visibility must toggle after click — initial: {}, final: {}",
+            initial_visible, final_visible
+        );
+        assert_eq!(
+            state.tag_filter_ui.selected_index, 0,
+            "selected_index must be updated to the clicked row"
+        );
+    }
+
+    // ── D. z=0 baseline: a lone z=0 region wins when no z=1 region overlaps ─
+
+    /// When only a z=0 region is registered (no modal overlay), the dispatcher
+    /// must still return that region's message.  This is the complementary
+    /// contract to `phase5_modal_z1_region_wins_over_base_z0_region_at_same_cell`:
+    /// z=1 presence is the exceptional case; z=0 must continue to win when no
+    /// higher-priority region exists.
+    #[test]
+    fn phase5_base_z0_region_wins_when_no_z1_region_overlaps() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Single z=0 region with no modal overlay.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(5, 5, 10, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 5,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        assert!(
+            matches!(result.message, Some(Message::HotReload)),
+            "z=0 region must be matched when no z=1 region is present; got {:?}",
+            result.message
+        );
+    }
+}

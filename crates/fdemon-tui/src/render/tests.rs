@@ -782,6 +782,357 @@ fn phase5_settings_sister_records_no_new_regions() {
 }
 
 // ===========================================================================
+// Phase 5 Integration Snapshot Tests (Task 11)
+//
+// These tests render each Phase-5 UI mode via the full `view()` call and
+// assert expected region counts and z-distribution.  They lock in the
+// Phase-5 contracts so that a future refactor cannot silently break the
+// click-precedence invariants or drop button/row regions.
+// ===========================================================================
+
+/// Extract the `Message` emitted by a region's left-click `MouseAction::Emit`,
+/// returning `None` for `EmitWithCoord` actions (which require runtime coords).
+///
+/// Shared by all Phase-5 snapshot tests.  If a similar helper exists in
+/// widget-level test modules it could be factored into a shared `test_utils`
+/// module; for now it lives here alongside the consumers.
+fn extract_action(entry: &fdemon_app::MouseRegionEntry) -> Option<fdemon_app::message::Message> {
+    use fdemon_app::MouseAction;
+    match entry.on_left.as_ref()? {
+        MouseAction::Emit(msg) => Some((**msg).clone()),
+        MouseAction::EmitWithCoord(_) => None,
+    }
+}
+
+/// Build a minimal one-device helper that avoids the two-argument
+/// `test_device(id, name)` call pattern used by the other helpers in this file.
+fn test_device() -> fdemon_daemon::Device {
+    crate::test_utils::test_device("d1", "iPhone")
+}
+
+/// Render the ConfirmDialog UI mode and assert:
+/// - Exactly 2 button regions are registered (Quit + Cancel).
+/// - All button regions are at `z_index = 1`.
+#[test]
+fn phase5_view_renders_expected_confirm_dialog_regions() {
+    use fdemon_app::{confirm_dialog::ConfirmDialogState, message::Message, state::UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    state.confirm_dialog_state = Some(ConfirmDialogState::quit_confirmation(2));
+    state.ui_mode = UiMode::ConfirmDialog;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let confirm_buttons = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                extract_action(e),
+                Some(Message::ConfirmQuit) | Some(Message::CancelQuit)
+            )
+        })
+        .count();
+    assert_eq!(
+        confirm_buttons, 2,
+        "ConfirmDialog must register exactly 2 button regions (ConfirmQuit + CancelQuit), got {}",
+        confirm_buttons
+    );
+    for entry in regions.iter().filter(|e| {
+        matches!(
+            extract_action(e),
+            Some(Message::ConfirmQuit) | Some(Message::CancelQuit)
+        )
+    }) {
+        assert_eq!(
+            entry.z_index, 1,
+            "confirm dialog button regions must be at z=1 (modal layer)"
+        );
+    }
+    state.mouse_regions.set(regions);
+}
+
+/// Render the Settings UI mode (100×40) and assert:
+/// - Exactly 4 tab regions (`SettingsGotoTab`).
+/// - At least one row region (`SettingsClickRow`).
+/// - All settings regions are at `z_index = 0` (full-screen, not a modal).
+#[test]
+fn phase5_view_renders_expected_settings_regions() {
+    use fdemon_app::{message::Message, state::UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    state.show_settings();
+    state.ui_mode = UiMode::Settings;
+
+    let backend = TestBackend::new(100, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let tab_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsGotoTab(_))))
+        .count();
+    let row_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsClickRow { .. })))
+        .count();
+    assert_eq!(
+        tab_count, 4,
+        "Settings panel must register exactly 4 tab regions, got {}",
+        tab_count
+    );
+    assert!(
+        row_count > 0,
+        "Settings panel must register at least one SettingsClickRow region"
+    );
+    // Settings is a full-screen mode, not a modal: all regions at z=0.
+    for entry in regions.iter() {
+        assert_eq!(
+            entry.z_index, 0,
+            "Settings regions must all be at z=0 (full-screen, not modal)"
+        );
+    }
+    state.mouse_regions.set(regions);
+}
+
+/// Render Normal mode with `tag_filter_visible = true` and two tags; assert:
+/// - Exactly 2 tag-row regions (`TagFilterClickRow`).
+/// - Exactly 2 action label regions (`ShowAllNativeTags` + `HideAllNativeTags`).
+#[test]
+fn phase5_view_renders_expected_tag_filter_regions() {
+    use fdemon_app::{message::Message, state::UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    let id = state
+        .session_manager
+        .create_session(&test_device())
+        .unwrap();
+    let handle = state.session_manager.get_mut(id).unwrap();
+    handle.native_tag_state.observe_tag("alpha");
+    handle.native_tag_state.observe_tag("beta");
+    state.tag_filter_visible = true;
+    state.ui_mode = UiMode::Normal;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let tag_rows = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::TagFilterClickRow { .. })))
+        .count();
+    let action_labels = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                extract_action(e),
+                Some(Message::ShowAllNativeTags) | Some(Message::HideAllNativeTags)
+            )
+        })
+        .count();
+    assert_eq!(
+        tag_rows, 2,
+        "tag filter with 2 tags must register exactly 2 TagFilterClickRow regions, got {}",
+        tag_rows
+    );
+    assert_eq!(
+        action_labels, 2,
+        "tag filter must register exactly 2 action-label regions (ShowAll + HideAll), got {}",
+        action_labels
+    );
+    state.mouse_regions.set(regions);
+}
+
+/// Render NewSessionDialog mode (120×40, wide terminal) with one connected
+/// device and assert:
+/// - Exactly 2 tab regions (`NewSessionDialogSwitchTab`).
+/// - Exactly 1 device row region (`NewSessionDialogSelectDeviceAt`).
+/// - At least 4 field regions (`NewSessionDialogFocusField`).
+/// - Exactly 1 launch button region (`NewSessionDialogLaunch`).
+/// - All main-dialog regions are at `z_index = 1`.
+///
+/// Note: compact (narrow-terminal) layout does not register device-row regions.
+/// This test uses a wide terminal (120 cols, ≥ 120 threshold) so the
+/// horizontal layout is used and device rows are clickable.
+#[test]
+fn phase5_view_renders_expected_new_session_dialog_regions() {
+    use fdemon_app::{message::Message, state::UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    state.ui_mode = UiMode::NewSessionDialog;
+    state
+        .new_session_dialog_state
+        .target_selector
+        .set_connected_devices(vec![test_device()]);
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let tab_count = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                extract_action(e),
+                Some(Message::NewSessionDialogSwitchTab(_))
+            )
+        })
+        .count();
+    let device_count = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                extract_action(e),
+                Some(Message::NewSessionDialogSelectDeviceAt { .. })
+            )
+        })
+        .count();
+    let field_count = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                extract_action(e),
+                Some(Message::NewSessionDialogFocusField { .. })
+            )
+        })
+        .count();
+    let launch_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::NewSessionDialogLaunch)))
+        .count();
+
+    assert_eq!(
+        tab_count, 2,
+        "NewSessionDialog must register exactly 2 tab regions, got {}",
+        tab_count
+    );
+    assert_eq!(
+        device_count, 1,
+        "NewSessionDialog with 1 device must register exactly 1 device region, got {}",
+        device_count
+    );
+    assert!(
+        field_count >= 4,
+        "NewSessionDialog must register at least 4 field regions (Config, Mode, Flavor, Entry Point), got {}",
+        field_count
+    );
+    assert_eq!(
+        launch_count, 1,
+        "NewSessionDialog must register exactly 1 Launch button region, got {}",
+        launch_count
+    );
+
+    // All main-dialog regions must be at z=1 (modal layer).
+    for entry in regions.iter().filter(|e| {
+        matches!(
+            extract_action(e),
+            Some(Message::NewSessionDialogSwitchTab(_))
+                | Some(Message::NewSessionDialogSelectDeviceAt { .. })
+                | Some(Message::NewSessionDialogFocusField { .. })
+                | Some(Message::NewSessionDialogLaunch)
+        )
+    }) {
+        assert_eq!(
+            entry.z_index, 1,
+            "NewSessionDialog regions must be at z=1 (modal layer)"
+        );
+    }
+    state.mouse_regions.set(regions);
+}
+
+/// Render LinkHighlight mode with 2 links whose display text appears in
+/// the session log, and assert at least 2 `SelectLink` regions are registered.
+///
+/// The log view registers one badge region per link whose `entry_index` matches
+/// a rendered log entry and whose `display_text` appears inside that entry's
+/// message.  We create a session with 2 log entries, each containing a file
+/// reference string, and populate the `link_highlight_state` to match.
+#[test]
+fn phase5_view_renders_expected_link_highlight_badge_regions() {
+    use fdemon_app::{
+        hyperlinks::{DetectedLink, FileReference, LinkHighlightState},
+        message::Message,
+        state::UiMode,
+    };
+    use fdemon_core::{LogEntry, LogSource};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    let id = state
+        .session_manager
+        .create_session(&test_device())
+        .unwrap();
+
+    // Add two log entries whose messages contain file reference strings.
+    let display_a = "lib/main.dart:10:1";
+    let display_b = "lib/widget.dart:20:1";
+    let entry_a = LogEntry::info(LogSource::Flutter, format!("Error at {}", display_a));
+    let entry_b = LogEntry::info(LogSource::Flutter, format!("See also {}", display_b));
+
+    {
+        let handle = state.session_manager.get_mut(id).unwrap();
+        handle.session.add_log(entry_a);
+        handle.session.add_log(entry_b);
+    }
+
+    // Build a LinkHighlightState whose links reference the two entries.
+    let mut link_state = LinkHighlightState::new();
+    {
+        let file_ref_a = FileReference::new("lib/main.dart", 10, 1);
+        let mut link_a = DetectedLink::new(file_ref_a, 0, None, '1', 0);
+        link_a.display_text = display_a.to_string();
+        link_state.add_link(link_a);
+    }
+    {
+        let file_ref_b = FileReference::new("lib/widget.dart", 20, 1);
+        let mut link_b = DetectedLink::new(file_ref_b, 1, None, '2', 1);
+        link_b.display_text = display_b.to_string();
+        link_state.add_link(link_b);
+    }
+    link_state.activate();
+
+    // Store the link state on the selected session.
+    state
+        .session_manager
+        .get_mut(id)
+        .unwrap()
+        .session
+        .link_highlight_state = link_state;
+
+    state.ui_mode = UiMode::LinkHighlight;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let link_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SelectLink(_))))
+        .count();
+    assert!(
+        link_count >= 2,
+        "expected at least 2 SelectLink badge regions, got {}",
+        link_count
+    );
+    state.mouse_regions.set(regions);
+}
+
+// ===========================================================================
 // Normal Mode Snapshots
 // ===========================================================================
 
