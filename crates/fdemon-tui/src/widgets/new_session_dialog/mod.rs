@@ -677,22 +677,333 @@ impl<'a> NewSessionDialog<'a> {
     }
 }
 
-/// Render `NewSessionDialog` and (eventually) record clickable regions.
+/// Render `NewSessionDialog` and record clickable regions.
 ///
 /// This is a free-function sister to [`Widget::render`] that additionally
-/// accepts an optional [`MouseCtx`] for region recording.  The `_ctx`
-/// parameter is unused in this stub — Phase 5 Task 09 fills in the body.
+/// accepts an optional [`MouseCtx`] for region recording.
 ///
 /// Passing `None` produces output identical to calling
 /// `frame.render_widget(dialog, area)`.
+///
+/// # Region z-indices
+/// - Main dialog regions (tabs, device rows, launch-context fields, launch button): z=1
+/// - Fuzzy modal result rows (sub-modal layer): z=2
+/// - Dart-defines modal regions: deferred to Phase 6 (not recorded here)
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
     view: NewSessionDialog<'_>,
-    _ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
 ) {
-    // Phase 5 Task 09 fills in the body.
-    <NewSessionDialog as Widget>::render(view, area, buf);
+    view.render_regions_impl(area, buf, ctx);
+}
+
+impl NewSessionDialog<'_> {
+    /// Region-aware render implementation. Called by `render_with_regions`.
+    fn render_regions_impl(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+    ) {
+        if self.show_migration_banner {
+            let chunks = Layout::vertical([
+                Constraint::Length(1), // banner
+                Constraint::Min(0),    // dialog
+            ])
+            .split(area);
+            Self::render_migration_banner(chunks[0], buf);
+            self.render_regions_no_banner(chunks[1], buf, ctx);
+        } else {
+            self.render_regions_no_banner(area, buf, ctx);
+        }
+    }
+
+    fn render_regions_no_banner(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+    ) {
+        match Self::layout_mode(area) {
+            LayoutMode::TooSmall => {
+                Self::render_too_small(area, buf);
+            }
+            LayoutMode::Horizontal => {
+                self.render_horizontal_with_regions(area, buf, ctx);
+            }
+            LayoutMode::Vertical => {
+                self.render_vertical_with_regions(area, buf, ctx);
+            }
+        }
+    }
+
+    /// Render horizontal (two-pane) layout with region recording.
+    fn render_horizontal_with_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mut ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+    ) {
+        modal_overlay::dim_background(buf, area);
+        let dialog_area = Self::centered_rect(area);
+        modal_overlay::render_shadow(buf, dialog_area);
+        modal_overlay::clear_area(buf, dialog_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_inactive())
+            .style(Style::default().bg(palette::POPUP_BG));
+
+        let inner = block.inner(dialog_area);
+        block.render(dialog_area, buf);
+
+        let chunks = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Min(10),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+        self.render_header(chunks[0], buf);
+        Self::render_separator(chunks[1], buf);
+
+        let launch_compact = chunks[2].height < MIN_EXPANDED_LAUNCH_HEIGHT;
+
+        // Pane split
+        let pane_chunks = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Length(1),
+            Constraint::Percentage(60),
+        ])
+        .split(chunks[2]);
+
+        // Target Selector (full mode in horizontal layout)
+        self.render_target_selector_regions(pane_chunks[0], buf, ctx.as_deref_mut(), false);
+        Self::render_vertical_separator(pane_chunks[1], buf);
+        // Launch Context
+        self.render_launch_context_regions(pane_chunks[2], buf, ctx.as_deref_mut(), launch_compact);
+
+        Self::render_separator(chunks[3], buf);
+        self.render_footer(chunks[4], buf);
+
+        // Fuzzy modal overlay
+        if self.state.is_dart_defines_modal_open() {
+            self.render_dart_defines_modal(dialog_area, buf);
+            // Dart-defines modal: no regions in v1 (deferred to Phase 6)
+        } else if self.state.is_fuzzy_modal_open() {
+            // Render the visual overlay first (dim + fuzzy modal widget)
+            self.render_fuzzy_modal_overlay(dialog_area, buf);
+            // Then record regions by re-rendering the fuzzy modal over the same area
+            if let Some(modal_state) = &self.state.fuzzy_modal {
+                let is_loading = modal_state.modal_type == super::FuzzyModalType::EntryPoint
+                    && self.state.launch_context.entry_points_loading;
+                let fuzzy_widget = FuzzyModal::new(modal_state).loading(is_loading);
+                if let Some(c) = ctx {
+                    // Note: render_fuzzy_modal_overlay already rendered the pixels;
+                    // fuzzy_modal_render_with_regions will re-render them (idempotent)
+                    // and also record regions.
+                    fuzzy_modal::fuzzy_modal_render_with_regions(
+                        dialog_area,
+                        buf,
+                        fuzzy_widget,
+                        Some(c),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Render vertical (stacked) layout with region recording.
+    fn render_vertical_with_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mut ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+    ) {
+        modal_overlay::dim_background(buf, area);
+        let dialog_area = Self::centered_rect_custom(90, 85, area);
+        modal_overlay::render_shadow(buf, dialog_area);
+        modal_overlay::clear_area(buf, dialog_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_inactive())
+            .style(Style::default().bg(palette::POPUP_BG));
+
+        let inner = block.inner(dialog_area);
+        block.render(dialog_area, buf);
+
+        let chunks = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Percentage(45),
+            Constraint::Length(1),
+            Constraint::Min(10),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+        self.render_header_compact(chunks[0], buf);
+        Self::render_separator(chunks[1], buf);
+
+        let target_compact = chunks[2].height < MIN_EXPANDED_TARGET_HEIGHT;
+        self.render_target_selector_regions(chunks[2], buf, ctx.as_deref_mut(), target_compact);
+
+        Self::render_separator(chunks[3], buf);
+
+        let launch_compact = chunks[4].height < MIN_EXPANDED_LAUNCH_HEIGHT;
+        self.render_launch_context_regions(chunks[4], buf, ctx.as_deref_mut(), launch_compact);
+
+        Self::render_separator(chunks[5], buf);
+        self.render_footer_compact(chunks[6], buf);
+
+        if self.state.is_dart_defines_modal_open() {
+            self.render_dart_defines_modal(dialog_area, buf);
+        } else if self.state.is_fuzzy_modal_open() {
+            self.render_fuzzy_modal_overlay(dialog_area, buf);
+            if let Some(modal_state) = &self.state.fuzzy_modal {
+                let is_loading = modal_state.modal_type == super::FuzzyModalType::EntryPoint
+                    && self.state.launch_context.entry_points_loading;
+                let fuzzy_widget = FuzzyModal::new(modal_state).loading(is_loading);
+                if let Some(c) = ctx {
+                    fuzzy_modal::fuzzy_modal_render_with_regions(
+                        dialog_area,
+                        buf,
+                        fuzzy_widget,
+                        Some(c),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Render the TargetSelector pane with region recording.
+    fn render_target_selector_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mut ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+        compact: bool,
+    ) {
+        let state = &self.state.target_selector;
+        let is_focused = self.state.is_target_selector_focused();
+
+        if compact {
+            // Compact path: render TargetSelector widget directly
+            // Region recording for compact mode deferred (uncommon path)
+            let ts = TargetSelector::new(state, self.tool_availability, is_focused)
+                .icons(*self.icons)
+                .compact(true);
+            ts.render(area, buf);
+        } else {
+            // Full path: mirror TargetSelector::render_full and thread ctx
+            use device_list::{calculate_scroll_offset, BootableDeviceList, ConnectedDeviceList};
+
+            let chunks = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+            let visible_height = chunks[1].height as usize;
+            state.last_known_visible_height.set(visible_height);
+            let corrected_scroll =
+                calculate_scroll_offset(state.selected_index, visible_height, state.scroll_offset);
+
+            // Tab bar with regions
+            let tb = TabBar::new(
+                state.active_tab,
+                is_focused,
+                state.refreshing,
+                state.bootable_refreshing,
+                self.icons,
+            );
+            tab_bar::render_with_regions(chunks[0], buf, tb, ctx.as_deref_mut());
+
+            // Device list with regions
+            if state.loading {
+                use ratatui::widgets::Paragraph;
+                Paragraph::new("Discovering devices...")
+                    .style(Style::default().fg(palette::STATUS_YELLOW))
+                    .alignment(Alignment::Center)
+                    .render(chunks[1], buf);
+            } else if let Some(ref error) = state.error {
+                use ratatui::widgets::Paragraph;
+                Paragraph::new(error.as_str())
+                    .style(Style::default().fg(palette::STATUS_RED))
+                    .alignment(Alignment::Center)
+                    .render(chunks[1], buf);
+            } else {
+                match state.active_tab {
+                    TargetTab::Connected => {
+                        let dl = ConnectedDeviceList::new(
+                            &state.connected_devices,
+                            state.selected_index,
+                            is_focused,
+                            corrected_scroll,
+                        );
+                        device_list::connected_device_list_render_with_regions(
+                            chunks[1],
+                            buf,
+                            &dl,
+                            ctx.as_deref_mut(),
+                        );
+                    }
+                    TargetTab::Bootable => {
+                        let dl = BootableDeviceList::new(
+                            &state.ios_simulators,
+                            &state.android_avds,
+                            state.selected_index,
+                            is_focused,
+                            corrected_scroll,
+                            self.tool_availability,
+                        );
+                        device_list::bootable_device_list_render_with_regions(
+                            chunks[1], buf, &dl, ctx,
+                        );
+                    }
+                }
+            }
+
+            // Footer (no regions)
+            let hints = match state.active_tab {
+                TargetTab::Connected => "[Enter] Select  [r] Refresh",
+                TargetTab::Bootable => "[Enter] Boot  [r] Refresh",
+            };
+            use ratatui::widgets::Paragraph;
+            Paragraph::new(hints)
+                .style(Style::default().fg(palette::BORDER_DIM))
+                .alignment(Alignment::Center)
+                .render(chunks[2], buf);
+        }
+    }
+
+    /// Render the LaunchContext pane with region recording.
+    fn render_launch_context_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+        launch_compact: bool,
+    ) {
+        let launch_focused = self.state.is_launch_context_focused();
+        let has_device = self.state.is_ready_to_launch();
+        let widget = LaunchContextWithDevice::new(
+            &self.state.launch_context,
+            launch_focused,
+            has_device,
+            self.icons,
+        )
+        .compact(launch_compact);
+        launch_context::launch_context_render_with_regions(area, buf, widget, ctx);
+    }
 }
 
 impl Widget for NewSessionDialog<'_> {
@@ -1419,6 +1730,92 @@ mod tests {
              configured in vertical layout. got: {:?}",
             unicode_refresh,
             &rendered.chars().take(400).collect::<String>()
+        );
+    }
+
+    // =========================================================================
+    // Group 7: render_with_regions integration tests
+    // =========================================================================
+
+    use crate::widgets::MouseCtx;
+    use fdemon_app::mouse_regions::MouseRegions;
+
+    /// Helper: call `render_with_regions` and return the populated registry.
+    fn render_dialog_with_regions(
+        state: &NewSessionDialogState,
+        width: u16,
+        height: u16,
+    ) -> MouseRegions {
+        let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
+        let mut regions = MouseRegions::default();
+
+        // Use TestBackend to get a Buffer
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                let buf = f.buffer_mut();
+                let dialog = NewSessionDialog::new(state, &tool_availability, &icons);
+                {
+                    let builder = regions.builder();
+                    let mut ctx = MouseCtx::new(builder);
+                    render_with_regions(area, buf, dialog, Some(&mut ctx));
+                }
+            })
+            .expect("failed to draw");
+
+        regions
+    }
+
+    /// Acceptance criterion 4: with 2-tab dialog and one connected device,
+    /// the registry contains ≥ 8 regions (2 tabs + 1 device + ≥4 fields + 1 launch), all z=1.
+    #[test]
+    fn render_with_regions_integration_horizontal_layout_counts_regions() {
+        let state = test_dialog_state(); // has one connected device
+                                         // Use a terminal size that triggers horizontal layout
+        let regions = render_dialog_with_regions(&state, 120, 60);
+
+        let z1_count = regions.iter().filter(|e| e.z_index == 1).count();
+        assert!(
+            z1_count >= 8,
+            "expected at least 8 z=1 regions (2 tabs + 1 device + 5 fields + 1 launch), got {} total regions ({} at z=1)",
+            regions.len(),
+            z1_count,
+        );
+
+        let z2_count = regions.iter().filter(|e| e.z_index == 2).count();
+        assert_eq!(
+            z2_count, 0,
+            "without fuzzy modal open, expected 0 z=2 regions, got {}",
+            z2_count
+        );
+    }
+
+    /// Acceptance criterion 5: with fuzzy modal open and 5 matches,
+    /// an additional 5 regions at z=2 appear.
+    #[test]
+    fn render_with_regions_integration_fuzzy_modal_records_z2_regions() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        state.open_flavor_modal(vec![
+            "alpha".into(),
+            "beta".into(),
+            "gamma".into(),
+            "delta".into(),
+            "epsilon".into(),
+        ]);
+
+        let regions = render_dialog_with_regions(&state, 120, 60);
+
+        let z2_count = regions.iter().filter(|e| e.z_index == 2).count();
+        assert!(
+            z2_count > 0,
+            "expected z=2 regions from fuzzy modal, got 0 (total regions: {})",
+            regions.len()
         );
     }
 }

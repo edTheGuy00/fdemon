@@ -10,6 +10,8 @@ use ratatui::{
 
 use super::state::FuzzyModalState;
 use crate::theme::{palette, styles};
+use fdemon_app::message::Message;
+use fdemon_app::{MouseAction, MouseRect};
 
 /// Fuzzy search modal widget
 pub struct FuzzyModal<'a> {
@@ -32,7 +34,7 @@ impl<'a> FuzzyModal<'a> {
     }
 
     /// Calculate modal area (bottom 45% of screen)
-    fn modal_rect(area: Rect) -> Rect {
+    pub fn modal_rect(area: Rect) -> Rect {
         // In narrow terminals, use more of the width and height
         let width_percent = if area.width < 60 { 95 } else { 80 };
         let height_percent = if area.height < 30 { 70 } else { 50 };
@@ -173,39 +175,82 @@ impl<'a> FuzzyModal<'a> {
 
 impl Widget for FuzzyModal<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let modal_area = Self::modal_rect(area);
+        fuzzy_modal_render_with_regions(area, buf, self, None);
+    }
+}
 
-        // Clear and draw modal background
-        Clear.render(modal_area, buf);
+/// Render [`FuzzyModal`] and record clickable result-row regions.
+///
+/// Each visible match row is registered as a left-click region at
+/// `z_index = 2` (sub-modal layer, above the main dialog's z=1).
+/// Passing `None` for `ctx` produces output identical to `Widget::render`.
+pub fn fuzzy_modal_render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    modal: FuzzyModal<'_>,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    let modal_area = FuzzyModal::modal_rect(area);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(styles::border_inactive())
-            .style(Style::default().bg(palette::POPUP_BG));
+    // Clear and draw modal background
+    Clear.render(modal_area, buf);
 
-        let inner = block.inner(modal_area);
-        block.render(modal_area, buf);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(styles::border_inactive())
+        .style(Style::default().bg(palette::POPUP_BG));
 
-        // Layout: search input | list | hints
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // Search input
-            Constraint::Length(1), // Separator
-            Constraint::Min(3),    // List
-            Constraint::Length(1), // Hints
-        ])
-        .split(inner);
+    let inner = block.inner(modal_area);
+    block.render(modal_area, buf);
 
-        self.render_search_input(chunks[0], buf);
+    // Layout: search input | separator | list | hints
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // Search input
+        Constraint::Length(1), // Separator
+        Constraint::Min(3),    // List
+        Constraint::Length(1), // Hints
+    ])
+    .split(inner);
 
-        // Separator line
-        let sep = "─".repeat(chunks[1].width as usize);
-        Paragraph::new(sep)
-            .style(Style::default().fg(palette::BORDER_DIM))
-            .render(chunks[1], buf);
+    modal.render_search_input(chunks[0], buf);
 
-        self.render_list(chunks[2], buf);
-        self.render_hints(chunks[3], buf);
+    // Separator line
+    let sep = "─".repeat(chunks[1].width as usize);
+    Paragraph::new(sep)
+        .style(Style::default().fg(palette::BORDER_DIM))
+        .render(chunks[1], buf);
+
+    modal.render_list(chunks[2], buf);
+    modal.render_hints(chunks[3], buf);
+
+    // Record click regions for visible result rows (z=2, sub-modal layer)
+    if let Some(c) = ctx {
+        if !modal.loading && modal.state.has_results() {
+            let list_area = chunks[2];
+            let visible_height = list_area.height as usize;
+            let start = modal.state.scroll_offset;
+            let end = (start + visible_height).min(modal.state.filtered_indices.len());
+
+            for screen_row in 0..(end - start) {
+                let abs_index = start + screen_row;
+                let rect = MouseRect::new(
+                    list_area.x,
+                    list_area.y + screen_row as u16,
+                    list_area.width,
+                    1,
+                );
+                if !rect.is_empty() {
+                    c.click_at_z(
+                        rect,
+                        MouseAction::emit(Message::NewSessionDialogFuzzySelectAt {
+                            index: abs_index,
+                        }),
+                        2,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -439,5 +484,107 @@ mod widget_tests {
         // Should show normal title, not loading title
         assert!(term.buffer_contains("Select Configuration"));
         assert!(!term.buffer_contains("discovering"));
+    }
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+    use crate::widgets::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::mouse_regions::MouseRegions;
+    use fdemon_app::new_session_dialog::FuzzyModalType;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    #[test]
+    fn fuzzy_modal_regions_recorded_at_z2() {
+        // 5 match items → expect 5 regions at z=2
+        let items: Vec<String> = (0..5).map(|i| format!("item{}", i)).collect();
+        let state = FuzzyModalState::new(FuzzyModalType::Flavor, items);
+
+        let modal = FuzzyModal::new(&state);
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            fuzzy_modal_render_with_regions(area, &mut buf, modal, Some(&mut ctx));
+        }
+
+        // All registered regions must be at z=2
+        assert!(!regions.is_empty(), "expected result-row regions");
+        for entry in regions.iter() {
+            assert_eq!(entry.z_index, 2, "fuzzy modal rows must be at z=2");
+        }
+
+        // Check that FuzzySelectAt messages are emitted
+        let has_select = regions.iter().any(|e| {
+            e.on_left
+                .as_ref()
+                .and_then(|a| a.as_emit())
+                .map(|m| matches!(m, Message::NewSessionDialogFuzzySelectAt { .. }))
+                .unwrap_or(false)
+        });
+        assert!(has_select, "expected NewSessionDialogFuzzySelectAt regions");
+    }
+
+    #[test]
+    fn fuzzy_modal_regions_preserve_abs_index_with_scroll() {
+        // 10 items, scroll offset = 3, visible area = 5 rows → indices 3..8
+        let items: Vec<String> = (0..10).map(|i| format!("opt{}", i)).collect();
+        let mut state = FuzzyModalState::new(FuzzyModalType::Config, items);
+        state.scroll_offset = 3;
+
+        let modal = FuzzyModal::new(&state);
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            fuzzy_modal_render_with_regions(area, &mut buf, modal, Some(&mut ctx));
+        }
+
+        let indices: Vec<usize> = regions
+            .iter()
+            .filter_map(|e| {
+                e.on_left.as_ref()?.as_emit().and_then(|m| {
+                    if let Message::NewSessionDialogFuzzySelectAt { index } = m {
+                        Some(*index)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        assert!(
+            indices.iter().all(|&i| i >= 3),
+            "all abs_indices must be >= scroll_offset 3, got {:?}",
+            indices
+        );
+    }
+
+    #[test]
+    fn fuzzy_modal_no_regions_when_loading() {
+        let items = vec!["lib/main.dart".into()];
+        let state = FuzzyModalState::new(FuzzyModalType::EntryPoint, items);
+
+        // loading=true suppresses the list and its regions
+        let modal = FuzzyModal::new(&state).loading(true);
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            fuzzy_modal_render_with_regions(area, &mut buf, modal, Some(&mut ctx));
+        }
+
+        assert!(
+            regions.is_empty(),
+            "loading modal must not register result regions"
+        );
     }
 }

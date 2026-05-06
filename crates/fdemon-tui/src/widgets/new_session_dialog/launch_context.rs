@@ -679,6 +679,9 @@ mod tests {
 
 use super::state::LaunchContextState;
 use fdemon_app::config::ConfigSource;
+use fdemon_app::message::Message;
+use fdemon_app::new_session_dialog::LaunchContextField;
+use fdemon_app::{MouseAction, MouseRect};
 
 // ============================================================================
 // Shared Helper Functions
@@ -1173,6 +1176,126 @@ impl LaunchContextWithDevice<'_> {
 
         let paragraph = Paragraph::new(Line::from(mode_str));
         paragraph.render(area, buf);
+    }
+}
+
+// ============================================================================
+// render_with_regions helpers
+// ============================================================================
+
+/// Register click regions for the expanded (full) layout fields.
+///
+/// Expanded layout chunks (indices from `calculate_fields_layout`):
+///   [1] Config  [3] Mode  [5] Flavor  [7] Entry Point  [9] Dart Defines  [11] Launch button
+fn register_full_layout_regions(chunks: &[Rect; 13], ctx: &mut crate::widgets::MouseCtx<'_>) {
+    let fields: &[(usize, LaunchContextField)] = &[
+        (1, LaunchContextField::Config),
+        (3, LaunchContextField::Mode),
+        (5, LaunchContextField::Flavor),
+        (7, LaunchContextField::EntryPoint),
+        (9, LaunchContextField::DartDefines),
+    ];
+    for &(idx, field) in fields {
+        let r = chunks[idx];
+        if r.width > 0 && r.height > 0 {
+            ctx.click_at_z(
+                MouseRect::new(r.x, r.y, r.width, r.height),
+                MouseAction::emit(Message::NewSessionDialogFocusField { field }),
+                1,
+            );
+        }
+    }
+    // Launch button
+    let btn = button_render_area(chunks[LAUNCH_BUTTON_SLOT]);
+    if btn.width > 0 && btn.height > 0 {
+        ctx.click_at_z(
+            MouseRect::new(btn.x, btn.y, btn.width, btn.height),
+            MouseAction::emit(Message::NewSessionDialogLaunch),
+            1,
+        );
+    }
+}
+
+/// Register click regions for the compact layout field rows.
+///
+/// Compact layout (7 chunks from inner area split):
+///   [0] Config  [1] Mode  [2] Flavor  [3] Entry Point  [4] Dart Defines  [5] Spacer  [6] Launch button
+fn register_compact_layout_regions(chunks: &[Rect], ctx: &mut crate::widgets::MouseCtx<'_>) {
+    let fields: &[(usize, LaunchContextField)] = &[
+        (0, LaunchContextField::Config),
+        (1, LaunchContextField::Mode),
+        (2, LaunchContextField::Flavor),
+        (3, LaunchContextField::EntryPoint),
+        (4, LaunchContextField::DartDefines),
+    ];
+    for &(idx, field) in fields {
+        let r = chunks[idx];
+        if r.width > 0 && r.height > 0 {
+            ctx.click_at_z(
+                MouseRect::new(r.x, r.y, r.width, r.height),
+                MouseAction::emit(Message::NewSessionDialogFocusField { field }),
+                1,
+            );
+        }
+    }
+    // Launch button at chunk[6]
+    if chunks.len() > 6 {
+        let btn = chunks[6];
+        if btn.width > 0 && btn.height > 0 {
+            ctx.click_at_z(
+                MouseRect::new(btn.x, btn.y, btn.width, btn.height),
+                MouseAction::emit(Message::NewSessionDialogLaunch),
+                1,
+            );
+        }
+    }
+}
+
+/// Render [`LaunchContextWithDevice`] and record clickable field regions.
+///
+/// Field rects + the Launch button rect are each registered as left-click
+/// regions at `z_index = 1` (main dialog layer). Passing `None` for `ctx`
+/// produces output identical to calling `Widget::render`.
+pub fn launch_context_render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    view: LaunchContextWithDevice<'_>,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    let compact = view.compact;
+    // Use the existing Widget::render path for the actual pixel output
+    <LaunchContextWithDevice as Widget>::render(view, area, buf);
+
+    // Then record regions by re-computing the layout (cheap; no realloc)
+    if let Some(c) = ctx {
+        if compact {
+            // Compact path: must derive inner area from the block border
+            let border_style = Style::default(); // border style doesn't affect layout
+            let block = Block::default()
+                .title(" Launch Context ")
+                .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Plain)
+                .border_style(border_style);
+            let inner = block.inner(area);
+
+            let chunks = Layout::vertical([
+                Constraint::Length(1), // Config
+                Constraint::Length(1), // Mode
+                Constraint::Length(1), // Flavor
+                Constraint::Length(1), // Entry Point
+                Constraint::Length(1), // Dart Defines
+                Constraint::Length(1), // Spacer
+                Constraint::Length(3), // Launch button
+                Constraint::Min(0),    // Rest
+            ])
+            .split(inner);
+
+            register_compact_layout_regions(&chunks, c);
+        } else {
+            // Full (expanded) path
+            let chunks = calculate_fields_layout(area);
+            register_full_layout_regions(&chunks, c);
+        }
     }
 }
 
@@ -2058,5 +2181,113 @@ mod launch_context_tests {
         let widget = LaunchContext::new(&state, false, &icons);
         widget.render(area, &mut buf);
         // Ratatui's Buffer panics on OOB writes — reaching here proves no overflow
+    }
+
+    // ─── render_with_regions tests ───────────────────────────────────────────
+
+    use crate::widgets::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::mouse_regions::MouseRegions;
+    use fdemon_app::new_session_dialog::LaunchContextField;
+
+    fn extract_field(
+        entry: &fdemon_app::mouse_regions::MouseRegionEntry,
+    ) -> Option<LaunchContextField> {
+        entry.on_left.as_ref()?.as_emit().and_then(|m| {
+            if let Message::NewSessionDialogFocusField { field } = m {
+                Some(*field)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn is_launch_btn(entry: &fdemon_app::mouse_regions::MouseRegionEntry) -> bool {
+        entry
+            .on_left
+            .as_ref()
+            .and_then(|a| a.as_emit())
+            .map(|m| matches!(m, Message::NewSessionDialogLaunch))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn launch_context_full_mode_registers_all_fields_and_launch_button_at_z1() {
+        // Use a height that triggers expanded (full) layout
+        let area = Rect::new(0, 0, 60, 35);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = IconSet::new(IconMode::Unicode);
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(false);
+
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        // Expect: Config, Mode, Flavor, EntryPoint, DartDefines (5 fields) + 1 Launch = 6
+        assert!(
+            regions.len() >= 6,
+            "expected at least 6 regions (5 fields + 1 launch), got {}",
+            regions.len()
+        );
+
+        for entry in regions.iter() {
+            assert_eq!(
+                entry.z_index, 1,
+                "all launch-context regions must be at z=1"
+            );
+        }
+
+        let has_launch = regions.iter().any(is_launch_btn);
+        assert!(has_launch, "expected a Launch button region");
+
+        let field_variants = [
+            LaunchContextField::Config,
+            LaunchContextField::Mode,
+            LaunchContextField::Flavor,
+            LaunchContextField::EntryPoint,
+            LaunchContextField::DartDefines,
+        ];
+        for variant in field_variants {
+            let found = regions.iter().any(|e| extract_field(e) == Some(variant));
+            assert!(found, "expected region for field {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn launch_context_compact_mode_registers_fields_and_launch_button_at_z1() {
+        let area = Rect::new(0, 0, 60, 15);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = IconSet::new(IconMode::Unicode);
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(true);
+
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        // Compact mode: 5 inline field rows + 1 launch button = 6
+        assert!(
+            regions.len() >= 6,
+            "expected at least 6 regions in compact mode, got {}",
+            regions.len()
+        );
+
+        for entry in regions.iter() {
+            assert_eq!(entry.z_index, 1, "all compact regions must be at z=1");
+        }
+
+        assert!(
+            regions.iter().any(is_launch_btn),
+            "expected Launch button region"
+        );
     }
 }

@@ -15,7 +15,9 @@ use super::device_groups::{
     flatten_groups, group_bootable_devices, group_connected_devices, DeviceListItem,
     GroupedBootableDevice,
 };
+use fdemon_app::message::Message;
 use fdemon_app::{config::IconMode, AndroidAvd, Device, IosSimulator, ToolAvailability};
+use fdemon_app::{MouseAction, MouseRect};
 
 use crate::theme::{icons::IconSet, palette};
 
@@ -199,29 +201,66 @@ impl<'a> ConnectedDeviceList<'a> {
 
 impl Widget for ConnectedDeviceList<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let groups = group_connected_devices(self.devices);
-        let items = flatten_groups(&groups);
+        connected_device_list_render_with_regions(area, buf, &self, None);
+    }
+}
 
-        // Calculate visible range
-        let visible_height = area.height as usize;
-        let start = self.scroll_offset.min(items.len().saturating_sub(1));
-        let end = (start + visible_height).min(items.len());
+/// Render [`ConnectedDeviceList`] and record clickable device-row regions.
+///
+/// One rect per visible *device* row (headers are skipped) is registered at
+/// `z_index = 1`. The `abs_index` recorded is the flat-list index (headers
+/// included), matching `TargetSelectorState::selected_index`.
+pub fn connected_device_list_render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    list: &ConnectedDeviceList<'_>,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    let groups = group_connected_devices(list.devices);
+    let items = flatten_groups(&groups);
 
-        // Create list items only for visible range
-        let list_items: Vec<ListItem> = items[start..end]
-            .iter()
-            .enumerate()
-            .map(|(visible_idx, item)| {
-                let actual_idx = start + visible_idx;
-                self.render_item(item, actual_idx, area.width)
-            })
-            .collect();
+    // Calculate visible range
+    let visible_height = area.height as usize;
+    let start = list.scroll_offset.min(items.len().saturating_sub(1));
+    let end = (start + visible_height).min(items.len());
 
-        let list = List::new(list_items);
-        list.render(area, buf);
+    // Create list items only for visible range
+    let list_items: Vec<ListItem> = items[start..end]
+        .iter()
+        .enumerate()
+        .map(|(visible_idx, item)| {
+            let actual_idx = start + visible_idx;
+            list.render_item(item, actual_idx, area.width)
+        })
+        .collect();
 
-        // Render scroll indicators
-        self.render_scroll_indicators(area, buf, start, end, items.len());
+    let rendered_list = List::new(list_items);
+    rendered_list.render(area, buf);
+
+    // Render scroll indicators
+    list.render_scroll_indicators(area, buf, start, end, items.len());
+
+    // Record click regions for device rows (skip headers)
+    if let Some(c) = ctx {
+        for screen_row in 0..visible_height {
+            let abs_index = start + screen_row;
+            if abs_index >= items.len() {
+                break;
+            }
+            // Only record regions for device rows, not headers
+            if matches!(items[abs_index], DeviceListItem::Device(_)) {
+                let rect = MouseRect::new(area.x, area.y + screen_row as u16, area.width, 1);
+                if !rect.is_empty() {
+                    c.click_at_z(
+                        rect,
+                        MouseAction::emit(Message::NewSessionDialogSelectDeviceAt {
+                            index: abs_index,
+                        }),
+                        1,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -393,51 +432,86 @@ impl<'a> BootableDeviceList<'a> {
 
 impl Widget for BootableDeviceList<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Check if any tools are unavailable
-        let ios_unavailable = !self.tool_availability.xcrun_simctl;
-        let android_unavailable = !self.tool_availability.android_emulator;
+        bootable_device_list_render_with_regions(area, buf, &self, None);
+    }
+}
 
-        // If both are unavailable, show message
-        if ios_unavailable && android_unavailable {
-            self.render_unavailable_message(area, buf);
-            return;
+/// Render [`BootableDeviceList`] and record clickable device-row regions.
+///
+/// One rect per visible *device* row (headers are skipped) is registered at
+/// `z_index = 1`. The `abs_index` recorded is the flat-list index (headers
+/// included), matching `TargetSelectorState::selected_index`.
+pub fn bootable_device_list_render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    list: &BootableDeviceList<'_>,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    // Check if any tools are unavailable
+    let ios_unavailable = !list.tool_availability.xcrun_simctl;
+    let android_unavailable = !list.tool_availability.android_emulator;
+
+    // If both are unavailable, show message (no regions)
+    if ios_unavailable && android_unavailable {
+        list.render_unavailable_message(area, buf);
+        return;
+    }
+
+    let groups = group_bootable_devices(list.ios_simulators, list.android_avds);
+    let items = flatten_groups(&groups);
+
+    if items.is_empty() {
+        use ratatui::layout::Alignment;
+        use ratatui::widgets::Paragraph;
+
+        let msg = Paragraph::new("No bootable devices found")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(palette::TEXT_MUTED));
+        msg.render(area, buf);
+        return;
+    }
+
+    // Calculate visible range
+    let visible_height = area.height as usize;
+    let start = list.scroll_offset.min(items.len().saturating_sub(1));
+    let end = (start + visible_height).min(items.len());
+
+    // Create list items only for visible range
+    let list_items: Vec<ListItem> = items[start..end]
+        .iter()
+        .enumerate()
+        .map(|(visible_idx, item)| {
+            let actual_idx = start + visible_idx;
+            list.render_item(item, actual_idx, area.width)
+        })
+        .collect();
+
+    let rendered_list = List::new(list_items);
+    rendered_list.render(area, buf);
+
+    // Render scroll indicators
+    list.render_scroll_indicators(area, buf, start, end, items.len());
+
+    // Record click regions for device rows (skip headers)
+    if let Some(c) = ctx {
+        for screen_row in 0..visible_height {
+            let abs_index = start + screen_row;
+            if abs_index >= items.len() {
+                break;
+            }
+            if matches!(items[abs_index], DeviceListItem::Device(_)) {
+                let rect = MouseRect::new(area.x, area.y + screen_row as u16, area.width, 1);
+                if !rect.is_empty() {
+                    c.click_at_z(
+                        rect,
+                        MouseAction::emit(Message::NewSessionDialogSelectDeviceAt {
+                            index: abs_index,
+                        }),
+                        1,
+                    );
+                }
+            }
         }
-
-        let groups = group_bootable_devices(self.ios_simulators, self.android_avds);
-        let items = flatten_groups(&groups);
-
-        if items.is_empty() {
-            // No devices found
-            use ratatui::layout::Alignment;
-            use ratatui::widgets::Paragraph;
-
-            let msg = Paragraph::new("No bootable devices found")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(palette::TEXT_MUTED));
-            msg.render(area, buf);
-            return;
-        }
-
-        // Calculate visible range
-        let visible_height = area.height as usize;
-        let start = self.scroll_offset.min(items.len().saturating_sub(1));
-        let end = (start + visible_height).min(items.len());
-
-        // Create list items only for visible range
-        let list_items: Vec<ListItem> = items[start..end]
-            .iter()
-            .enumerate()
-            .map(|(visible_idx, item)| {
-                let actual_idx = start + visible_idx;
-                self.render_item(item, actual_idx, area.width)
-            })
-            .collect();
-
-        let list = List::new(list_items);
-        list.render(area, buf);
-
-        // Render scroll indicators
-        self.render_scroll_indicators(area, buf, start, end, items.len());
     }
 }
 
@@ -665,4 +739,109 @@ mod tests {
     }
 
     // Removed test_device_list_styles_default - DeviceListStyles struct was removed in theme migration
+
+    // ─── render_with_regions tests ───────────────────────────────────────────
+
+    use crate::widgets::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::mouse_regions::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    #[test]
+    fn connected_device_list_regions_device_rows_only() {
+        // 2 connected iOS devices → flat list: 1 header + 2 devices
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "iPhone 16", "ios", false),
+        ];
+
+        let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+        let area = Rect::new(0, 0, 50, 10);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            connected_device_list_render_with_regions(area, &mut buf, &list, Some(&mut ctx));
+        }
+
+        // Flat list: [Header("ios devices"), Device("iPhone 15"), Device("iPhone 16")]
+        // Headers are skipped — expect 2 device regions
+        assert_eq!(
+            regions.len(),
+            2,
+            "expected 2 device regions (headers skipped)"
+        );
+
+        for entry in regions.iter() {
+            assert_eq!(entry.z_index, 1, "device regions must be at z=1");
+        }
+
+        // Check that indices are the flat-list positions (1 and 2 for the two devices)
+        let indices: Vec<usize> = regions
+            .iter()
+            .filter_map(|e| {
+                e.on_left.as_ref()?.as_emit().and_then(|m| {
+                    if let Message::NewSessionDialogSelectDeviceAt { index } = m {
+                        Some(*index)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        assert!(
+            indices.contains(&1),
+            "expected flat-list index 1 (first device)"
+        );
+        assert!(
+            indices.contains(&2),
+            "expected flat-list index 2 (second device)"
+        );
+    }
+
+    #[test]
+    fn connected_device_list_regions_scroll_offset_preserved() {
+        // 5 devices, scroll offset = 2 → visible rows start at flat-list index 2
+        // flat list: [Header(ios), D0, D1, D2, D3, D4]  (indices 0..5 where 0=header)
+        let devices: Vec<Device> = (0..5)
+            .map(|i| test_device_full(&format!("id{}", i), &format!("Dev{}", i), "ios", false))
+            .collect();
+
+        let list = ConnectedDeviceList::new(&devices, 0, true, 2); // scroll_offset = 2
+        let area = Rect::new(0, 0, 50, 3); // 3 visible rows
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            connected_device_list_render_with_regions(area, &mut buf, &list, Some(&mut ctx));
+        }
+
+        // Visible range: items[2..5] = [D1, D2, D3] — all devices, abs indices 2, 3, 4
+        let indices: Vec<usize> = regions
+            .iter()
+            .filter_map(|e| {
+                e.on_left.as_ref()?.as_emit().and_then(|m| {
+                    if let Message::NewSessionDialogSelectDeviceAt { index } = m {
+                        Some(*index)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        assert_eq!(
+            regions.len(),
+            3,
+            "3 visible device rows should produce 3 regions"
+        );
+        // The absolute indices must start at 2 (scroll_offset) and increase
+        assert!(
+            indices.iter().all(|&i| i >= 2),
+            "all abs_indices must be >= scroll_offset 2, got {:?}",
+            indices
+        );
+    }
 }
