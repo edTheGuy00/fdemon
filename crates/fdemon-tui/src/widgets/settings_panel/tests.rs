@@ -5,6 +5,15 @@ use fdemon_app::config::{FlutterMode, LaunchConfig, SettingValue};
 use ratatui::{backend::TestBackend, Terminal};
 use tempfile::tempdir;
 
+// ─────────────────────────────────────────────────────────
+// Helpers for render_with_regions tests
+// ─────────────────────────────────────────────────────────
+
+/// Extract the `Message` from a region entry's left-click action, if any.
+fn extract_action(e: &fdemon_app::MouseRegionEntry) -> Option<fdemon_app::message::Message> {
+    e.on_left.as_ref().and_then(|a| a.as_emit()).cloned()
+}
+
 #[test]
 fn test_settings_panel_renders() {
     let settings = Settings::default();
@@ -1642,4 +1651,217 @@ fn test_render_extra_args_modal_shows_item() {
         content.contains("--trace-startup"),
         "'--trace-startup' must be visible in the extra args modal"
     );
+}
+
+// ─────────────────────────────────────────────────────────
+// Phase 5 Task 10: render_with_regions tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn render_with_regions_records_four_tab_headers() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let panel = SettingsPanel::new(&settings, project_path);
+    let mut state = SettingsViewState::default();
+
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
+    let mut regions = MouseRegions::default();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            ratatui::layout::Rect::new(0, 0, 100, 40),
+            &mut buf,
+            panel,
+            &mut state,
+            Some(&mut ctx),
+        );
+    }
+
+    let tab_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsGotoTab(_))))
+        .count();
+    assert_eq!(tab_count, 4, "expected 4 tab-header regions");
+
+    // All regions register at z=0 (full-screen panel).
+    for entry in regions.iter() {
+        assert_eq!(entry.z_index, 0);
+    }
+}
+
+#[test]
+fn render_with_regions_records_one_region_per_visible_setting_row() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    // Render with the Project tab active. Count SettingsClickRow regions —
+    // must equal the number of items returned by project_settings_items().
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let panel = SettingsPanel::new(&settings, project_path);
+    // Project tab is the default — no need to set active_tab explicitly.
+    let mut state = SettingsViewState::default();
+
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 60));
+    let mut regions = MouseRegions::default();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            ratatui::layout::Rect::new(0, 0, 100, 60),
+            &mut buf,
+            panel,
+            &mut state,
+            Some(&mut ctx),
+        );
+    }
+
+    let row_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsClickRow { .. })))
+        .count();
+    let expected = project_settings_items(&settings).len();
+    // Allow row_count <= expected because some rows may scroll off-screen.
+    assert!(row_count > 0 && row_count <= expected);
+}
+
+#[test]
+fn render_with_regions_indices_match_item_positions() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    // Click the third item — expect SettingsClickRow { index: 2 }.
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let panel = SettingsPanel::new(&settings, project_path);
+    let mut state = SettingsViewState::default();
+
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 60));
+    let mut regions = MouseRegions::default();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            ratatui::layout::Rect::new(0, 0, 100, 60),
+            &mut buf,
+            panel,
+            &mut state,
+            Some(&mut ctx),
+        );
+    }
+
+    // Collect the recorded indices in registration order.
+    let indices: Vec<usize> = regions
+        .iter()
+        .filter_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index }) => Some(index),
+            _ => None,
+        })
+        .collect();
+    // Indices must be strictly increasing AND start at 0.
+    assert!(indices.first() == Some(&0));
+    for window in indices.windows(2) {
+        assert!(window[0] < window[1]);
+    }
+}
+
+#[test]
+fn render_with_regions_section_headers_are_not_clickable() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    // Verify that the row count of registered click regions equals the
+    // number of items, NOT items + section headers.
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let panel = SettingsPanel::new(&settings, project_path);
+    // Project tab is the default — no need to set active_tab explicitly.
+    let mut state = SettingsViewState::default();
+
+    // Use a tall buffer so all rows are visible.
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 80));
+    let mut regions = MouseRegions::default();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            ratatui::layout::Rect::new(0, 0, 100, 80),
+            &mut buf,
+            panel,
+            &mut state,
+            Some(&mut ctx),
+        );
+    }
+
+    let row_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsClickRow { .. })))
+        .count();
+    let expected = project_settings_items(&settings).len();
+    assert_eq!(
+        row_count, expected,
+        "all items registered, no section-header regions"
+    );
+}
+
+#[test]
+fn render_with_regions_visual_output_unchanged() {
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let mut state_a = SettingsViewState::default();
+    let mut state_b = SettingsViewState::default();
+
+    let mut buf_widget = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
+    let mut buf_with_regions =
+        ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
+
+    let panel_a = SettingsPanel::new(&settings, project_path);
+    ratatui::widgets::StatefulWidget::render(
+        panel_a,
+        ratatui::layout::Rect::new(0, 0, 100, 40),
+        &mut buf_widget,
+        &mut state_a,
+    );
+
+    let panel_b = SettingsPanel::new(&settings, project_path);
+    let mut regions = MouseRegions::default();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            ratatui::layout::Rect::new(0, 0, 100, 40),
+            &mut buf_with_regions,
+            panel_b,
+            &mut state_b,
+            Some(&mut ctx),
+        );
+    }
+
+    assert_eq!(buf_widget, buf_with_regions);
+}
+
+#[test]
+fn render_with_regions_none_ctx_produces_same_output_as_widget_render() {
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let mut state_a = SettingsViewState::default();
+    let mut state_b = SettingsViewState::default();
+
+    let area = ratatui::layout::Rect::new(0, 0, 100, 40);
+    let mut buf_widget = ratatui::buffer::Buffer::empty(area);
+    let mut buf_no_ctx = ratatui::buffer::Buffer::empty(area);
+
+    let panel_a = SettingsPanel::new(&settings, project_path);
+    ratatui::widgets::StatefulWidget::render(panel_a, area, &mut buf_widget, &mut state_a);
+
+    let panel_b = SettingsPanel::new(&settings, project_path);
+    super::render_with_regions(area, &mut buf_no_ctx, panel_b, &mut state_b, None);
+
+    assert_eq!(buf_widget, buf_no_ctx);
 }

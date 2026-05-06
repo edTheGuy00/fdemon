@@ -1344,24 +1344,223 @@ impl SettingsPanel<'_> {
     }
 }
 
-/// Render `SettingsPanel` and (eventually) record clickable row regions.
+/// Render `SettingsPanel` and record clickable row regions.
 ///
 /// This is a free-function sister to [`StatefulWidget::render`] that
 /// additionally accepts an optional [`crate::widgets::MouseCtx`] for region
-/// recording.  The `_ctx` parameter is unused in this stub — Phase 5 Task 10
-/// fills in the body.
+/// recording.
+///
+/// When `ctx` is `Some`, this function registers:
+/// - Four tab-header click regions (`z_index = 0`) emitting
+///   [`fdemon_app::message::Message::SettingsGotoTab(i)`].
+/// - One click region per visible setting row (`z_index = 0`) emitting
+///   [`fdemon_app::message::Message::SettingsClickRow { index }`] where
+///   `index` is the flat item index (section-header rows are skipped).
 ///
 /// Passing `None` produces output identical to calling
 /// `frame.render_stateful_widget(panel, area, state)`.
+///
+/// # Sub-modal note
+///
+/// When `state.dart_defines_modal` or `state.extra_args_modal` is open, the
+/// underlying tab + row regions are still registered. The dispatcher's editing
+/// gate (Task 05) handles click suppression for the modal case. Sub-modal
+/// regions (dart-defines, extra-args) are deferred to Phase 6.
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
     view: SettingsPanel<'_>,
     state: &mut SettingsViewState,
-    _ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
 ) {
-    // Phase 5 Task 10 fills in the body.
+    // 1. Delegate rendering to StatefulWidget::render (visual output unchanged).
+    // We keep a copy of relevant layout references for region recording below.
+    let settings = view.settings;
+    let project_path = view.project_path;
+
     <SettingsPanel as StatefulWidget>::render(view, area, buf, state);
+
+    // 2. If no context, we are done.
+    let ctx = match ctx {
+        Some(c) => c,
+        None => return,
+    };
+
+    // ── Mirror the layout from StatefulWidget::render ────────────────────────
+
+    // Main vertical layout (same constraints as in render()):
+    //   chunks[0] = header (height 5)
+    //   chunks[1] = content (min 5)
+    //   chunks[2] = footer (height 3)
+    let chunks = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(5),
+        ratatui::layout::Constraint::Min(5),
+        ratatui::layout::Constraint::Length(3),
+    ])
+    .split(area);
+
+    let header_area = chunks[0];
+    let content_area = chunks[1];
+
+    // ── Tab bar regions ───────────────────────────────────────────────────────
+
+    // Mirror render_header / render_tab_bar layout:
+    //   header_block has Borders::ALL (rounded) → inner shrinks by 1 on each side
+    //   title_y = inner.top()
+    //   tab_y   = inner.top() + 2
+    //   tab_area = Rect::new(inner.left() + 1, tab_y, inner.width - 2, 1)
+    let header_inner_x = header_area.x.saturating_add(1);
+    let header_inner_y = header_area.y.saturating_add(1);
+    let header_inner_width = header_area.width.saturating_sub(2);
+
+    let tab_y = header_inner_y.saturating_add(2);
+    let tab_area_x = header_inner_x.saturating_add(1);
+    let tab_area_width = header_inner_width.saturating_sub(2);
+
+    let tab_width: u16 = 12;
+    let gap: u16 = 1;
+
+    let mut x = tab_area_x;
+    for i in 0..4usize {
+        if x + tab_width > tab_area_x + tab_area_width {
+            break;
+        }
+        let rect = fdemon_app::MouseRect::new(x, tab_y, tab_width, 1);
+        if !rect.is_empty() {
+            ctx.click(
+                rect,
+                fdemon_app::MouseAction::emit(fdemon_app::message::Message::SettingsGotoTab(i)),
+            );
+        }
+        x = x.saturating_add(tab_width + gap);
+    }
+
+    // ── Setting row regions ───────────────────────────────────────────────────
+
+    // Mirror content layout: content_block has Borders::LEFT | Borders::RIGHT
+    // → inner shrinks by 1 on left and right only (no top/bottom offset).
+    let inner_x = content_area.x.saturating_add(1);
+    let inner_y = content_area.y;
+    let inner_width = content_area.width.saturating_sub(2);
+    let inner_bottom = content_area.bottom();
+
+    // Build the item list and starting Y offset for each tab, mirroring the
+    // per-tab render functions exactly (section-header skip logic must match).
+    match state.active_tab {
+        SettingsTab::Project => {
+            let items = project_settings_items(settings);
+            register_setting_row_regions(ctx, &items, inner_x, inner_y, inner_width, inner_bottom);
+        }
+        SettingsTab::UserPrefs => {
+            let items = user_prefs_items(&state.user_prefs, settings);
+            // User prefs tab renders a 4-row info banner above the items.
+            let banner_height: u16 = 4;
+            let content_y = inner_y.saturating_add(banner_height);
+            let content_bottom = inner_bottom;
+            register_setting_row_regions(
+                ctx,
+                &items,
+                inner_x,
+                content_y,
+                inner_width,
+                content_bottom,
+            );
+        }
+        SettingsTab::LaunchConfig => {
+            use fdemon_app::config::launch::load_launch_configs;
+
+            let configs = load_launch_configs(project_path);
+            if !configs.is_empty() {
+                let mut all_items: Vec<fdemon_app::config::SettingItem> = Vec::new();
+                for (idx, resolved) in configs.iter().enumerate() {
+                    all_items.extend(launch_config_items(&resolved.config, idx));
+                }
+                register_setting_row_regions(
+                    ctx,
+                    &all_items,
+                    inner_x,
+                    inner_y,
+                    inner_width,
+                    inner_bottom,
+                );
+            }
+        }
+        SettingsTab::VSCodeConfig => {
+            use fdemon_app::config::load_vscode_configs;
+
+            let configs = load_vscode_configs(project_path);
+            if !configs.is_empty() {
+                // VSCode tab renders a 4-row info banner above the items.
+                let banner_height: u16 = 4;
+                let content_y = inner_y.saturating_add(banner_height);
+                let content_bottom = inner_bottom;
+
+                let mut all_items: Vec<fdemon_app::config::SettingItem> = Vec::new();
+                for (idx, resolved) in configs.iter().enumerate() {
+                    all_items.extend(vscode_config_items(&resolved.config, idx));
+                }
+                register_setting_row_regions(
+                    ctx,
+                    &all_items,
+                    inner_x,
+                    content_y,
+                    inner_width,
+                    content_bottom,
+                );
+            }
+        }
+    }
+}
+
+/// Register one left-click region per visible setting row, mirroring the
+/// section-header skip logic used by the per-tab renderers.
+///
+/// `items` is the flat `Vec<SettingItem>` for the active tab.  Section
+/// headers consume one `y` row each (plus a one-row spacer between sections)
+/// but are **not** registered as click regions.  The `index` stored in each
+/// [`Message::SettingsClickRow`] is the flat item index into `items`.
+fn register_setting_row_regions(
+    ctx: &mut crate::widgets::MouseCtx<'_>,
+    items: &[fdemon_app::config::SettingItem],
+    x: u16,
+    start_y: u16,
+    width: u16,
+    bottom: u16,
+) {
+    let mut current_section = String::new();
+    let mut y = start_y;
+
+    for (idx, item) in items.iter().enumerate() {
+        if y >= bottom {
+            break;
+        }
+
+        // Section header — mirrors the renderer's section-skip logic.
+        if item.section != current_section {
+            if !current_section.is_empty() {
+                y = y.saturating_add(1); // spacer row between sections
+            }
+            if y < bottom {
+                // Section header row — NOT clickable, just advance y.
+                y = y.saturating_add(1);
+            }
+            current_section = item.section.clone();
+        }
+
+        // Setting row — register as clickable.
+        if y < bottom {
+            let rect = fdemon_app::MouseRect::new(x, y, width, 1);
+            if !rect.is_empty() {
+                ctx.click(
+                    rect,
+                    fdemon_app::MouseAction::emit(fdemon_app::message::Message::SettingsClickRow {
+                        index: idx,
+                    }),
+                );
+            }
+            y = y.saturating_add(1);
+        }
+    }
 }
 
 #[cfg(test)]
