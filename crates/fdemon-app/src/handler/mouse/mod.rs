@@ -4,12 +4,14 @@
 //! concrete [`Message`] based on the current [`UiMode`]. Phase 2 wires
 //! per-mode scroll routing; Phase 3+ adds click hit-testing.
 
+mod confirm_dialog; // Phase 5 task 05
 mod devtools;
 mod flutter_version;
 mod link_highlight;
 mod new_session;
 mod normal;
 mod settings;
+mod tag_filter; // Phase 5 task 05
 
 use crate::input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
 use crate::message::Message;
@@ -46,15 +48,17 @@ pub fn handle_mouse(state: &mut AppState, input: MouseInput) -> Option<Message> 
 
 /// Route a button press to the appropriate per-mode handler.
 ///
-/// The tag-filter overlay is checked first — when it is visible, all click
-/// input is absorbed here before any per-mode handler is reached. This mirrors
-/// the keyboard handler at `handler/keys.rs:105-126` which intercepts all
-/// key events at the `handle_key_normal` entry point when `tag_filter_visible`
-/// is set. Lifting the gate here means future per-mode handlers (Phase 4/5)
-/// for Settings and dialog modes inherit it for free.
+/// The tag-filter overlay routes to its own per-mode handler when visible —
+/// see [`tag_filter::handle_press`]. (Earlier phases short-circuited press
+/// to `None` here; Phase 5 task 05 lifted that gate so the overlay's tag
+/// rows become clickable.) The keyboard handler at `handler/keys.rs:105-126`
+/// continues to intercept ALL keys when the overlay is visible — only the
+/// mouse path is reworked.
 ///
 /// Phase 3 wires [`UiMode::Normal`]. Phase 4 adds [`UiMode::DevTools`].
-/// Settings/dialog modes are wired in Phase 5 — they return `None` until then.
+/// Phase 5 wires Settings, NewSessionDialog/Startup, ConfirmDialog, and
+/// LinkHighlight. Remaining modes (`EmulatorSelector`, `Loading`,
+/// `SearchInput`, `FlutterVersion`) remain no-op for press in v1.
 fn handle_press(
     state: &mut AppState,
     x: u16,
@@ -62,17 +66,25 @@ fn handle_press(
     button: MouseButton,
     mods: KeyModSet,
 ) -> Option<Message> {
-    // Tag-filter overlay intercepts all click input regardless of underlying UiMode.
-    // Mirrors the keyboard handler at `handler/keys.rs:105-126`.
+    // Tag-filter overlay routes to its own handler regardless of underlying ui_mode.
     if state.tag_filter_visible {
-        return None;
+        return tag_filter::handle_press(state, x, y, button, mods);
     }
 
     match state.ui_mode {
         UiMode::Normal => normal::handle_press(state, x, y, button, mods),
         UiMode::DevTools => devtools::handle_press(state, x, y, button, mods),
-        // Phase 5 wires Settings/dialog modes; for now, no-op.
-        _ => None,
+        UiMode::ConfirmDialog => confirm_dialog::handle_press(state, x, y, button, mods),
+        UiMode::Settings => settings::handle_press(state, x, y, button, mods),
+        UiMode::Startup | UiMode::NewSessionDialog => {
+            new_session::handle_press(state, x, y, button, mods)
+        }
+        UiMode::LinkHighlight => link_highlight::handle_press(state, x, y, button, mods),
+        // No clickable surface in v1.
+        UiMode::EmulatorSelector
+        | UiMode::Loading
+        | UiMode::SearchInput
+        | UiMode::FlutterVersion => None,
     }
 }
 
@@ -144,37 +156,30 @@ mod tests {
         );
     }
 
-    /// When `tag_filter_visible` is `true`, the dispatcher short-circuits
-    /// before consulting `ui_mode` — no click reaches any per-mode handler
-    /// regardless of which mode is active or what regions are registered.
-    ///
-    /// This test is the re-targeted version of `normal.rs::press_when_tag_filter_visible_is_no_op`,
-    /// relocated here after the gate was lifted to the dispatcher in task 08.
+    /// When `tag_filter_visible` is `true`, the dispatcher routes press events to
+    /// `tag_filter::handle_press`, regardless of the underlying `ui_mode`. This
+    /// test replaces the old `dispatcher_press_tag_filter_visible_is_no_op` test
+    /// which asserted the *negative* (press suppressed). Phase 5 task 05 changes
+    /// the contract: press now routes to the tag_filter handler and can return a
+    /// message when a region is registered.
     #[test]
-    fn dispatcher_press_tag_filter_visible_is_no_op() {
+    fn dispatcher_press_tag_filter_visible_routes_to_tag_filter_handler() {
         use crate::mouse_regions::{MouseAction, MouseRect};
 
         for mode in [
             UiMode::Normal,
             UiMode::DevTools,
             UiMode::Settings,
-            UiMode::Startup,
             UiMode::NewSessionDialog,
-            UiMode::LinkHighlight,
-            UiMode::FlutterVersion,
-            UiMode::SearchInput,
-            UiMode::ConfirmDialog,
-            UiMode::EmulatorSelector,
-            UiMode::Loading,
         ] {
             let mut state = state_in_mode(mode);
             state.tag_filter_visible = true;
 
-            // Register a region that would produce HotReload if the gate were absent.
+            // Register a tag-row click region that the tag_filter handler should hit.
             let mut regions = state.mouse_regions.take();
             regions.builder().click(
                 MouseRect::new(0, 0, 10, 1),
-                MouseAction::emit(crate::message::Message::HotReload),
+                MouseAction::emit(Message::TagFilterClickRow { index: 0 }),
             );
             state.mouse_regions.set(regions);
 
@@ -188,9 +193,10 @@ mod tests {
                 },
             );
             assert!(
-                result.is_none(),
-                "tag_filter_visible should suppress press in {:?} mode",
-                mode
+                matches!(result, Some(Message::TagFilterClickRow { index: 0 })),
+                "tag_filter_visible should route press to tag_filter handler in {:?} mode, got {:?}",
+                mode,
+                result
             );
         }
     }

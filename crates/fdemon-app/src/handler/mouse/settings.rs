@@ -1,12 +1,64 @@
-//! Scroll routing for `UiMode::Settings`.
+//! Mouse event handlers for `UiMode::Settings`.
 //!
-//! Mirrors the modal-routing precedence of [`crate::handler::keys::handle_key_settings`]:
+//! **Scroll** mirrors the modal-routing precedence of
+//! [`crate::handler::keys::handle_key_settings`]:
 //! dart-defines modal first → extra-args modal next → editing inline → main list.
+//!
+//! **Press** hit-tests against the per-frame region registry with an editing
+//! gate: when the user is typing into an inline setting field (`editing == true`),
+//! clicks are suppressed so selection cannot move while text is being entered.
 
-use crate::input_mouse::{KeyModSet, ScrollDir};
+use crate::input_mouse::{KeyModSet, MouseButton, ScrollDir};
 use crate::message::Message;
 use crate::new_session_dialog::DartDefinesPane;
 use crate::state::AppState;
+
+/// Hit-test a left/middle click in `UiMode::Settings` against the per-frame
+/// region registry. Returns the matched region's resolved [`Message`].
+///
+/// **Editing gate.** When `state.settings_view_state.editing` is `true` (the
+/// user is typing into an inline setting field), clicks are suppressed so
+/// selection cannot move mid-edit. This mirrors [`handle_scroll`]'s editing gate.
+///
+/// **Right-click reserved.** Right-click returns `None` for future context-menu
+/// support, matching the convention established in [`normal::handle_press`].
+///
+/// [`normal::handle_press`]: super::normal::handle_press
+pub(super) fn handle_press(
+    state: &mut AppState,
+    x: u16,
+    y: u16,
+    button: MouseButton,
+    _mods: KeyModSet,
+) -> Option<Message> {
+    if button == MouseButton::Right {
+        return None;
+    }
+
+    // Edit-mode gate — mirrors `handle_scroll`'s `state.settings_view_state.editing`
+    // gate. Click while editing must not move selection.
+    //
+    // Exception: clicks on dart-defines/extra-args sub-modal buttons (when
+    // they are wired in Phase 6) need to land. For v1 we keep the gate
+    // strict — sub-modals are deferred — and revisit when sub-modals get
+    // their click regions.
+    if state.settings_view_state.editing {
+        return None;
+    }
+
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    let regions = state.mouse_regions.take_guard();
+    let action_opt = regions.hit_test(x, y, button).and_then(|entry| {
+        let action = match button {
+            MouseButton::Left => entry.on_left.as_ref(),
+            MouseButton::Middle => entry.on_middle.as_ref(),
+            MouseButton::Right => None,
+        };
+        action.map(|a| a.resolve(x, y))
+    });
+    drop(regions);
+    action_opt
+}
 
 pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, _mods: KeyModSet) -> Option<Message> {
     // Dart-defines modal takes top priority (matches keys.rs:597-599).
@@ -199,5 +251,55 @@ mod tests {
             Some(FuzzyModalState::new(FuzzyModalType::ExtraArgs, vec![]));
         assert!(handle_scroll(&s, ScrollDir::Left, KeyModSet::NONE).is_none());
         assert!(handle_scroll(&s, ScrollDir::Right, KeyModSet::NONE).is_none());
+    }
+
+    // ── handle_press tests ───────────────────────────────────────────────
+
+    #[test]
+    fn press_no_region_returns_none() {
+        let mut s = fresh_state();
+        assert!(handle_press(&mut s, 0, 0, MouseButton::Left, KeyModSet::NONE).is_none());
+    }
+
+    #[test]
+    fn press_registered_region_returns_message() {
+        use crate::mouse_regions::{MouseAction, MouseRect};
+        let mut s = fresh_state();
+        let mut regions = s.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 0 }),
+        );
+        s.mouse_regions.set(regions);
+        let r = handle_press(&mut s, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        assert!(matches!(r, Some(Message::SettingsClickRow { index: 0 })));
+    }
+
+    #[test]
+    fn press_right_click_is_no_op() {
+        use crate::mouse_regions::{MouseAction, MouseRect};
+        let mut s = fresh_state();
+        let mut regions = s.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 0 }),
+        );
+        s.mouse_regions.set(regions);
+        assert!(handle_press(&mut s, 0, 0, MouseButton::Right, KeyModSet::NONE).is_none());
+    }
+
+    #[test]
+    fn click_while_editing_returns_none() {
+        use crate::mouse_regions::{MouseAction, MouseRect};
+        let mut s = fresh_state();
+        s.settings_view_state.editing = true;
+        let mut regions = s.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 0 }),
+        );
+        s.mouse_regions.set(regions);
+        let r = handle_press(&mut s, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        assert!(r.is_none(), "click while editing must be a no-op");
     }
 }

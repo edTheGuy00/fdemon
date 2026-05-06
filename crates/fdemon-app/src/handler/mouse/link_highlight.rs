@@ -1,11 +1,47 @@
-//! Scroll routing for `UiMode::LinkHighlight`.
+//! Mouse event handlers for `UiMode::LinkHighlight`.
 //!
-//! Mirrors `handle_key_link_highlight` (keys.rs:361-383): plain wheel scrolls
-//! the log view; Shift+wheel does page scroll. Same messages as Normal mode.
+//! **Scroll** mirrors `handle_key_link_highlight` (keys.rs:361-383): plain wheel
+//! scrolls the log view; Shift+wheel does page scroll. Same messages as Normal mode.
+//!
+//! **Press** hit-tests against the per-frame region registry. Link badge regions
+//! emit `Message::SelectLink(c)` carrying the link character.
 
-use crate::input_mouse::{KeyModSet, ScrollDir};
+use crate::input_mouse::{KeyModSet, MouseButton, ScrollDir};
 use crate::message::Message;
 use crate::state::AppState;
+
+/// Hit-test a left/middle click in `UiMode::LinkHighlight` against the per-frame
+/// region registry. Returns the matched region's resolved [`Message`].
+///
+/// Link badge regions emit `Message::SelectLink(c)` carrying the link character.
+///
+/// **Right-click reserved.** Right-click returns `None` for future context-menu
+/// support, matching the convention established in [`normal::handle_press`].
+///
+/// [`normal::handle_press`]: super::normal::handle_press
+pub(super) fn handle_press(
+    state: &mut AppState,
+    x: u16,
+    y: u16,
+    button: MouseButton,
+    _mods: KeyModSet,
+) -> Option<Message> {
+    if button == MouseButton::Right {
+        return None;
+    }
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    let regions = state.mouse_regions.take_guard();
+    let action_opt = regions.hit_test(x, y, button).and_then(|entry| {
+        let action = match button {
+            MouseButton::Left => entry.on_left.as_ref(),
+            MouseButton::Middle => entry.on_middle.as_ref(),
+            MouseButton::Right => None,
+        };
+        action.map(|a| a.resolve(x, y))
+    });
+    drop(regions);
+    action_opt
+}
 
 pub(super) fn handle_scroll(_state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     if mods.is_shift_only() {
@@ -77,5 +113,40 @@ mod tests {
         let s = AppState::new();
         assert!(handle_scroll(&s, ScrollDir::Left, KeyModSet::NONE).is_none());
         assert!(handle_scroll(&s, ScrollDir::Right, KeyModSet::NONE).is_none());
+    }
+
+    // ── handle_press tests ───────────────────────────────────────────────
+
+    #[test]
+    fn press_no_region_returns_none() {
+        let mut s = AppState::new();
+        assert!(handle_press(&mut s, 0, 0, MouseButton::Left, KeyModSet::NONE).is_none());
+    }
+
+    #[test]
+    fn press_link_badge_returns_select_link() {
+        use crate::mouse_regions::{MouseAction, MouseRect};
+        let mut s = AppState::new();
+        let mut regions = s.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(5, 3, 3, 1),
+            MouseAction::emit(Message::SelectLink('a')),
+        );
+        s.mouse_regions.set(regions);
+        let r = handle_press(&mut s, 5, 3, MouseButton::Left, KeyModSet::NONE);
+        assert!(matches!(r, Some(Message::SelectLink('a'))));
+    }
+
+    #[test]
+    fn press_right_click_is_no_op() {
+        use crate::mouse_regions::{MouseAction, MouseRect};
+        let mut s = AppState::new();
+        let mut regions = s.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 5, 1),
+            MouseAction::emit(Message::SelectLink('b')),
+        );
+        s.mouse_regions.set(regions);
+        assert!(handle_press(&mut s, 0, 0, MouseButton::Right, KeyModSet::NONE).is_none());
     }
 }
