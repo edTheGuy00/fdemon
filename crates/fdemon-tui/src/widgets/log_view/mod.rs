@@ -240,6 +240,59 @@ impl<'a> LogView<'a> {
             .add_modifier(Modifier::UNDERLINED)
     }
 
+    /// Return true if `span` is a link badge `[<c>]` (3-char content, ACCENT background).
+    ///
+    /// Used during badge-region recording to locate the badge span within a rendered
+    /// line without re-running the full link-detection logic.
+    fn is_link_badge_span(span: &Span<'_>) -> bool {
+        let c = &span.content;
+        if c.len() < 3 {
+            return false;
+        }
+        let chars: Vec<char> = c.chars().collect();
+        if chars.len() != 3 {
+            return false;
+        }
+        if chars[0] != '[' || chars[2] != ']' {
+            return false;
+        }
+        span.style.bg == Some(crate::theme::palette::ACCENT)
+    }
+
+    /// Extract the shortcut character from a badge span `[<c>]`.
+    ///
+    /// Returns `None` if the span content does not have exactly 3 chars in `[X]` form.
+    fn badge_span_shortcut(span: &Span<'_>) -> Option<char> {
+        let chars: Vec<char> = span.content.chars().collect();
+        if chars.len() == 3 && chars[0] == '[' && chars[2] == ']' {
+            Some(chars[1])
+        } else {
+            None
+        }
+    }
+
+    /// Walk `spans` and push a [`BadgeAction`] for each badge span found.
+    ///
+    /// `rel_y` is the row's Y coordinate (relative to `content_area.y`).
+    /// This is called only when `link_highlight_state.is_active()` and a
+    /// `MouseCtx` is present.
+    fn collect_badge_actions(spans: &[Span<'_>], rel_y: u16, out: &mut Vec<BadgeAction>) {
+        let mut col: u16 = 0;
+        for span in spans {
+            let width = span.content.chars().count() as u16;
+            if Self::is_link_badge_span(span) {
+                if let Some(shortcut) = Self::badge_span_shortcut(span) {
+                    out.push(BadgeAction {
+                        rel_y,
+                        col_offset: col,
+                        shortcut,
+                    });
+                }
+            }
+            col = col.saturating_add(width);
+        }
+    }
+
     /// Insert a link badge into spans at the position of a file reference.
     ///
     /// This finds the span containing the display_text and splits it to insert
@@ -1056,6 +1109,21 @@ struct RowAction {
     frame_index: Option<usize>,
 }
 
+/// Per-badge metadata accumulated during the render loop for link-badge region recording.
+///
+/// Collected when `link_highlight_state.is_active()` and a `MouseCtx` is present.
+/// Each badge is a 3-cell `[<shortcut>]` span; its click region emits
+/// `Message::SelectLink(shortcut)` at `z_index = 0`.
+struct BadgeAction {
+    /// Y position relative to `content_area.y` (same coordinate as `RowAction::rel_y`).
+    rel_y: u16,
+    /// X column offset from the start of the line (0 = leftmost cell of the content area).
+    /// In nowrap mode, subtract `h_offset` and skip if the badge is off-screen left.
+    col_offset: u16,
+    /// The shortcut character embedded in the badge (`[<shortcut>]`).
+    shortcut: char,
+}
+
 impl<'a> LogView<'a> {
     /// Core rendering implementation shared by [`StatefulWidget::render`] and
     /// [`render_with_regions`].
@@ -1169,6 +1237,9 @@ impl<'a> LogView<'a> {
         // Parallel list tracking entry identity and position for click-region recording.
         // Only populated when `mouse_ctx` is `Some` (no allocation otherwise).
         let mut row_actions: Vec<RowAction> = Vec::new();
+        // Badge-region actions (Phase 5 Task 08): one entry per link badge visible in this frame.
+        // Populated only when `mouse_ctx` is `Some` AND `link_highlight_state.is_active()`.
+        let mut badge_actions: Vec<BadgeAction> = Vec::new();
         // Running Y cursor for row_actions (relative to content_area.y).
         let mut rel_y_cursor: u16 = 0;
         let mut units_added = 0;
@@ -1185,6 +1256,9 @@ impl<'a> LogView<'a> {
         // `rel_y_cursor` and `row_actions`, preventing reads of `rel_y_cursor` at
         // call sites and the direct advance for the collapsed-indicator row.
         let has_mouse_ctx = mouse_ctx.is_some();
+        // Gate flag: badge-region recording fires only in link-highlight mode.
+        let has_link_badges =
+            has_mouse_ctx && self.link_highlight_state.is_some_and(|s| s.is_active());
 
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
@@ -1245,6 +1319,10 @@ impl<'a> LogView<'a> {
                     1u16
                 };
                 if has_mouse_ctx {
+                    // Collect badge regions (Phase 5 Task 08) before advancing rel_y_cursor.
+                    if has_link_badges {
+                        Self::collect_badge_actions(&line.spans, rel_y_cursor, &mut badge_actions);
+                    }
                     row_actions.push(RowAction {
                         rel_y: rel_y_cursor,
                         height: row_h,
@@ -1300,6 +1378,14 @@ impl<'a> LogView<'a> {
                             1u16
                         };
                         if has_mouse_ctx {
+                            // Collect badge regions (Phase 5 Task 08) before advancing rel_y_cursor.
+                            if has_link_badges {
+                                Self::collect_badge_actions(
+                                    &line.spans,
+                                    rel_y_cursor,
+                                    &mut badge_actions,
+                                );
+                            }
                             row_actions.push(RowAction {
                                 rel_y: rel_y_cursor,
                                 height: row_h,
@@ -1352,6 +1438,14 @@ impl<'a> LogView<'a> {
                             1u16
                         };
                         if has_mouse_ctx {
+                            // Collect badge regions (Phase 5 Task 08) before advancing rel_y_cursor.
+                            if has_link_badges {
+                                Self::collect_badge_actions(
+                                    &line.spans,
+                                    rel_y_cursor,
+                                    &mut badge_actions,
+                                );
+                            }
                             row_actions.push(RowAction {
                                 rel_y: rel_y_cursor,
                                 height: row_h,
@@ -1452,13 +1546,9 @@ impl<'a> LogView<'a> {
             scrollbar.render(area, buf, &mut scrollbar_state);
         }
 
-        // Register click regions for all visible rows (Phase 4 Task 06).
+        // Register click regions for all visible rows (Phase 4 Task 06) and
+        // link-highlight badge regions (Phase 5 Task 08).
         // Only executed when a MouseCtx was provided; no-op for the plain render path.
-        //
-        // EXCEPTION: link-highlight badge regions are recorded in Phase 5 Task 08.
-        // When `self.link_highlight_state.is_active()` is true, Task 08 will push
-        // one `MouseAction::Emit(Message::SelectLink(shortcut))` region per visible
-        // badge using the per-row `rel_y` coordinates accumulated above.
         if let Some(ctx) = mouse_ctx {
             use fdemon_app::message::Message;
             use fdemon_app::{MouseAction, MouseRect};
@@ -1511,6 +1601,61 @@ impl<'a> LogView<'a> {
                         frame_index: r.frame_index,
                     }),
                 );
+            }
+
+            // Phase 5 Task 08: register one SelectLink region per visible badge.
+            //
+            // Badges are pushed *after* row regions, so they win over row regions on
+            // overlapping cells (last-pushed-wins at equal z_index — see mouse_regions.rs).
+            // z_index = 0: link mode is in-place, not modal.
+            for b in &badge_actions {
+                // Apply the same top-clip / bottom-clip logic as for row_actions.
+                if b.rel_y.saturating_add(1) <= wio {
+                    continue; // entirely above the viewport
+                }
+                let visible_y = b.rel_y.saturating_sub(wio);
+                if visible_y >= content_area.height {
+                    continue; // below the content area
+                }
+
+                // Compute the rendered x of the badge in the buffer.
+                // In nowrap mode, horizontal scroll shifts the line left by `h_offset`.
+                // Skip badges that are entirely scrolled off the left edge.
+                let badge_x = if self.wrap_mode {
+                    // Wrap mode: no horizontal scroll; column offset maps directly.
+                    content_area.x.saturating_add(b.col_offset)
+                } else {
+                    // Nowrap mode: account for horizontal scroll offset.
+                    let h_off = state.h_offset as u16;
+                    if b.col_offset < h_off {
+                        continue; // badge start is off-screen left
+                    }
+                    let local_x = b.col_offset - h_off;
+                    if local_x >= content_area.width {
+                        continue; // badge start is off-screen right
+                    }
+                    content_area.x.saturating_add(local_x)
+                };
+
+                // Badge is always 3 cells wide and 1 cell tall.
+                // Clip to content area width (a badge at the very right edge may overflow).
+                let badge_w = 3u16.min(
+                    content_area
+                        .x
+                        .saturating_add(content_area.width)
+                        .saturating_sub(badge_x),
+                );
+                if badge_w == 0 {
+                    continue;
+                }
+
+                let rect = MouseRect::new(
+                    badge_x,
+                    content_area.y.saturating_add(visible_y),
+                    badge_w,
+                    1,
+                );
+                ctx.click(rect, MouseAction::emit(Message::SelectLink(b.shortcut)));
             }
         }
     }

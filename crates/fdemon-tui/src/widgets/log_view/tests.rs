@@ -3,6 +3,7 @@
 use super::*;
 use crate::theme::icons::IconSet;
 use fdemon_app::config::IconMode;
+use fdemon_app::hyperlinks::LinkHighlightState;
 use fdemon_app::session::CollapseState;
 use fdemon_core::stack_trace::ParsedStackTrace;
 use fdemon_core::{FilterState, LogLevelFilter, LogSourceFilter, SearchState};
@@ -1930,4 +1931,281 @@ fn wrap_mode_intra_offset_top_skipped_row_dropped() {
     // B starts at top of content_area: rect.y = 3, height = 2.
     assert_eq!(rect_b.y, 3, "B must align to content_area top (y=3)");
     assert_eq!(rect_b.height, 2, "B must show its full 2 wrapped rows");
+}
+
+// ── Phase 5 Task 08: link-highlight badge region tests ────────────────────────
+
+/// Build a `LinkHighlightState` from a list of (entry_index, frame_index, shortcut,
+/// display_text) tuples. The state is set to active.
+fn make_link_state(links: &[(usize, Option<usize>, char, &str)]) -> LinkHighlightState {
+    use fdemon_app::hyperlinks::{DetectedLink, FileReference};
+
+    let mut state = LinkHighlightState::new();
+    for (i, &(entry_index, frame_index, shortcut, display_text)) in links.iter().enumerate() {
+        // Construct a FileReference whose display matches display_text.
+        // We need display_text == path:line:col so parse it naively.
+        // For test purposes, create any FileReference and override the display via
+        // DetectedLink directly (display_text is a stored field, not recomputed on access).
+        let file_ref = FileReference::new(display_text, 1, 1);
+        let mut link = DetectedLink::new(file_ref, entry_index, frame_index, shortcut, i);
+        // Override display_text to match exactly what's in the log message.
+        link.display_text = display_text.to_string();
+        state.add_link(link);
+    }
+    state.activate();
+    state
+}
+
+/// Helper: extract SelectLink shortcuts from recorded regions.
+fn collect_badge_shortcuts(regions: &fdemon_app::MouseRegions) -> Vec<char> {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseAction;
+
+    regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::SelectLink(c) => Some(c),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Helper: extract badge regions (rect + shortcut) from recorded regions.
+fn collect_badge_regions(
+    regions: &fdemon_app::MouseRegions,
+) -> Vec<(fdemon_app::MouseRect, char, u8)> {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseAction;
+
+    regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::SelectLink(c) => Some((e.rect, c, e.z_index)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// When `link_highlight_state` is not set on the `LogView`, zero badge regions
+/// must be recorded even when a `MouseCtx` is provided.
+#[test]
+fn render_with_regions_records_no_badges_when_link_mode_inactive() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // One entry with a file reference in the message — badge would be rendered
+    // if link mode were active, but it isn't here.
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "Error at lib/main.dart:10:1",
+    )]);
+    let mut state = LogViewState::new();
+    // No link_highlight_state set on the view.
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_count = collect_badge_shortcuts(&regions).len();
+    assert_eq!(
+        badge_count, 0,
+        "no badge regions expected when link mode is inactive"
+    );
+}
+
+/// When `link_highlight_state` is active with N links, exactly N badge regions
+/// must be recorded (one per link badge rendered in the log view).
+#[test]
+fn render_with_regions_records_one_badge_per_link_when_active() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // Three entries each with a distinct file reference in the message.
+    let logs = logs_from(vec![
+        make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "see lib/a.dart:1:1 for details",
+        ),
+        make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "see lib/b.dart:2:1 for details",
+        ),
+        make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "see lib/c.dart:3:1 for details",
+        ),
+    ]);
+
+    let link_state = make_link_state(&[
+        (0, None, '1', "lib/a.dart:1:1"),
+        (1, None, '2', "lib/b.dart:2:1"),
+        (2, None, '3', "lib/c.dart:3:1"),
+    ]);
+
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        3,
+        "expected 3 badge regions (one per link), got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+
+    // Each badge rect must be exactly 3 cells wide, 1 cell tall, at z_index = 0.
+    for (rect, _shortcut, z_index) in &badge_regions {
+        assert_eq!(rect.width, 3, "badge rect must be 3 cells wide");
+        assert_eq!(rect.height, 1, "badge rect must be 1 cell tall");
+        assert_eq!(*z_index, 0, "badge regions must be at z_index = 0");
+    }
+
+    // Shortcuts must match links in order.
+    let shortcuts: Vec<char> = badge_regions.iter().map(|(_, c, _)| *c).collect();
+    assert_eq!(
+        shortcuts,
+        vec!['1', '2', '3'],
+        "shortcuts must match links in order"
+    );
+}
+
+/// Badge regions must be pushed *after* the row regions so they win on
+/// overlapping cells (last-pushed-wins at equal z_index).
+#[test]
+fn render_with_regions_badges_pushed_after_row_regions() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "see lib/x.dart:5:1 here",
+    )]);
+
+    let link_state = make_link_state(&[(0, None, 'a', "lib/x.dart:5:1")]);
+
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    // Find the positions of ClickLogRow and SelectLink entries in the push order.
+    let all: Vec<_> = regions.iter().collect();
+    let row_pos = all.iter().position(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ClickLogRow { .. })
+        )
+    });
+    let badge_pos = all.iter().position(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::SelectLink(_))
+        )
+    });
+
+    assert!(row_pos.is_some(), "expected a ClickLogRow region");
+    assert!(badge_pos.is_some(), "expected a SelectLink region");
+    assert!(
+        badge_pos.unwrap() > row_pos.unwrap(),
+        "badge region must be pushed after row region so it wins on overlap"
+    );
+}
+
+/// Links whose entries are scrolled out of the visible window must not produce
+/// any badge regions (the badge is not rendered, so no rect is registered).
+#[test]
+fn render_with_regions_off_screen_links_not_recorded() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 5 entries, but we render a small area that only shows ~1 entry.
+    // The entries at indices 2-4 will be scrolled off screen.
+    let mut entries = Vec::new();
+    for i in 0..5 {
+        entries.push(make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            &format!("see lib/file{i}.dart:{i}:1 here"),
+        ));
+    }
+    let logs = logs_from(entries);
+
+    // Links for entries 2-4 only (entries 0-1 have no badge).
+    let link_state = make_link_state(&[
+        (2, None, '1', "lib/file2.dart:2:1"),
+        (3, None, '2', "lib/file3.dart:3:1"),
+        (4, None, '3', "lib/file4.dart:4:1"),
+    ]);
+
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // offset = 0: only entries 0 and 1 fit in a 6-row area
+    // (border=2 + metadata=1 + gap=1 + content=2 rows visible).
+
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    // Small area: only 2 content rows visible.
+    let area = Rect::new(0, 0, 80, 6);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_count = collect_badge_shortcuts(&regions).len();
+    assert_eq!(
+        badge_count, 0,
+        "no badge regions expected: links are for entries scrolled off screen"
+    );
 }
