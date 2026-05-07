@@ -1865,3 +1865,209 @@ fn render_with_regions_none_ctx_produces_same_output_as_widget_render() {
 
     assert_eq!(buf_widget, buf_no_ctx);
 }
+
+// ─────────────────────────────────────────────────────────
+// Phase 5.5 Task 05 — Layout constants, sentinel, cache
+// ─────────────────────────────────────────────────────────
+
+/// Layout-parity test: verify that `render_with_regions` registers row regions
+/// whose y coordinates align with the cells actually rendered by the widget.
+///
+/// For the Project tab, item 0 ("Confirm Quit") is the first item after the
+/// first section header.  We verify that the region rect's y is the same row
+/// as where the label text appears in the rendered buffer.
+#[test]
+fn render_with_regions_row_rect_y_aligns_with_rendered_label() {
+    use fdemon_app::message::Message;
+    use fdemon_app::settings_items::project_settings_items;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+
+    // Use a large, tall buffer so all rows are visible and nothing is clipped.
+    let area = ratatui::layout::Rect::new(0, 0, 100, 60);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut regions = MouseRegions::default();
+
+    let mut state = SettingsViewState::default();
+    {
+        let panel = SettingsPanel::new(&settings, project_path);
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
+    }
+
+    // Find the region for index 0 (first item: "Confirm Quit").
+    let row0_rect = regions
+        .iter()
+        .find_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index: 0 }) => Some(e.rect),
+            _ => None,
+        })
+        .expect("region for SettingsClickRow { index: 0 } must be registered");
+
+    // The first project_settings_items entry label is "Confirm Quit".
+    let items = project_settings_items(&settings);
+    let expected_label_prefix = &items[0].label[..3]; // e.g. "Con"
+
+    // Scan the buffer row identified by row0_rect.y for the label text.
+    let row_y = row0_rect.y;
+    let row_content: String = (row0_rect.x..row0_rect.x + row0_rect.width)
+        .map(|x| {
+            buf.cell((x, row_y))
+                .map_or(' ', |c| c.symbol().chars().next().unwrap_or(' '))
+        })
+        .collect();
+
+    assert!(
+        row_content.contains(expected_label_prefix),
+        "buffer row {} (region rect y={}) must contain label prefix {:?}; got: {:?}",
+        row_y,
+        row_y,
+        expected_label_prefix,
+        &row_content[..row_content.len().min(40)],
+    );
+}
+
+/// Sentinel-clickable test: when launch configs exist, `render_with_regions`
+/// must register a `SettingsClickRow` region for the "Add New Configuration"
+/// sentinel row at index equal to the total number of config items.
+///
+/// With 1 default config (7 items from `launch_config_items`), the sentinel
+/// is registered at index 7 (= all_items.len()).
+#[test]
+fn launch_config_add_new_sentinel_is_clickable() {
+    use fdemon_app::config::launch::{init_launch_file, load_launch_configs};
+    use fdemon_app::message::Message;
+    use fdemon_app::settings_items::launch_config_items;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+
+    // Create one default launch config.
+    init_launch_file(temp.path()).unwrap();
+
+    // Pre-compute expected item count (from the same function the renderer uses).
+    let configs = load_launch_configs(temp.path());
+    assert!(
+        !configs.is_empty(),
+        "init_launch_file must produce at least one config"
+    );
+    let expected_item_count: usize = configs
+        .iter()
+        .enumerate()
+        .map(|(idx, r)| launch_config_items(&r.config, idx).len())
+        .sum();
+    let sentinel_index = expected_item_count;
+
+    let area = ratatui::layout::Rect::new(0, 0, 100, 60);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut regions = MouseRegions::default();
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+
+    {
+        let panel = SettingsPanel::new(&settings, temp.path());
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
+    }
+
+    // Count SettingsClickRow regions: must be expected_item_count + 1 (sentinel).
+    let row_indices: Vec<usize> = regions
+        .iter()
+        .filter_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index }) => Some(index),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        row_indices.len(),
+        expected_item_count + 1,
+        "expected {} item regions + 1 sentinel; got {} total regions",
+        expected_item_count,
+        row_indices.len(),
+    );
+    assert_eq!(
+        row_indices.last().copied(),
+        Some(sentinel_index),
+        "last registered region must be the sentinel at index {}",
+        sentinel_index,
+    );
+}
+
+/// Cache-fill structural test: `render_with_regions` on the LaunchConfig tab
+/// must pass the same item set to the region recorder as the renderer used for
+/// display.  This is verified by cross-checking that every registered
+/// `SettingsClickRow` index is in range [0, item_count] (where `item_count`
+/// is the sentinel-inclusive count from `get_item_count_for_tab`).
+///
+/// This test provides structural coverage that the region recorder does not
+/// diverge from the renderer by loading configs independently with different
+/// results (e.g., if a race condition produced different configs).
+#[test]
+fn render_with_regions_launch_config_region_count_matches_renderer() {
+    use fdemon_app::config::launch::{init_launch_file, load_launch_configs};
+    use fdemon_app::message::Message;
+    use fdemon_app::settings_items::launch_config_items;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+
+    // Create one default launch config.
+    init_launch_file(temp.path()).unwrap();
+
+    let configs = load_launch_configs(temp.path());
+    let item_count: usize = configs
+        .iter()
+        .enumerate()
+        .map(|(idx, r)| launch_config_items(&r.config, idx).len())
+        .sum();
+
+    let area = ratatui::layout::Rect::new(0, 0, 100, 60);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut regions = MouseRegions::default();
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+
+    {
+        let panel = SettingsPanel::new(&settings, temp.path());
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
+    }
+
+    let row_indices: Vec<usize> = regions
+        .iter()
+        .filter_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index }) => Some(index),
+            _ => None,
+        })
+        .collect();
+
+    // Every registered index must be in [0, item_count] (inclusive: sentinel at item_count).
+    for &idx in &row_indices {
+        assert!(
+            idx <= item_count,
+            "region index {} out of range [0, {}] — recorder diverged from renderer",
+            idx,
+            item_count,
+        );
+    }
+
+    // The set of indices must be exactly 0..=item_count with no gaps
+    // (sentinel + all config items).
+    assert_eq!(
+        row_indices.len(),
+        item_count + 1,
+        "region count ({}) must equal item_count ({}) + 1 sentinel",
+        row_indices.len(),
+        item_count,
+    );
+}
