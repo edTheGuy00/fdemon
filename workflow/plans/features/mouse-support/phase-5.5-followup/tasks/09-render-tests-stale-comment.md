@@ -54,3 +54,29 @@ Phase 5 has landed. The 120×24 Normal-mode render path is unaffected by Phase 5
 - T01 may have added new tests to this file for modal-precedence coverage. T01's writes go to `handler/tests.rs`, not `render/tests.rs` — verify.
 - T01 ↔ T09: no overlap. T01 writes `handler/tests.rs`; T09 writes `render/tests.rs`.
 - T05 may also touch `widgets/settings_panel/tests.rs` — also no overlap with T09.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/tests.rs` | Replaced stale Phase-5-pending comment with accurate post-Phase-5 note; reformatted `assert_eq!` to multi-line form for rustfmt compliance |
+
+### Notable Decisions/Tradeoffs
+
+1. **Multi-line assert_eq!**: The updated assertion message string caused the single-line `assert_eq!` to exceed rustfmt's default line width (100 chars). Reformatted to the three-argument multi-line form to satisfy `cargo fmt --all -- --check`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui render::tests` - Passed (26 tests)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+None — comment-only change with formatting fix.

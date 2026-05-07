@@ -87,3 +87,37 @@ Three small hygiene fixes inside `crates/fdemon-app/src/handler/settings_handler
 - T01 does not modify `handler/settings_handlers.rs`. T07 owns this file exclusively in 5.5.
 - T07 ↔ T08: T08 modifies `handler/new_session/{clicks,mod}.rs`. No overlap with `handler/settings_handlers.rs`.
 - If the cycle/increment stubs have ever been wired up in any caller (search for `cycle_enum_next` / `increment`), removing `mark_dirty()` may regress that caller's UX. Audit before removing.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ac4bab763db25268e
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Extracted `save_active_tab` helper, updated both public save handlers to delegate to it; renamed 10 non-conforming test functions; removed `mark_dirty()` from 3 stub functions |
+
+### Notable Decisions/Tradeoffs
+
+1. **Return type for `save_active_tab`**: The task's pseudocode used `crate::error::Result<()>` which doesn't resolve in `fdemon-app`. Used `fdemon_core::error::Result<()>` directly, matching how the config module's `Result` type is sourced. This is consistent with the crate's import patterns.
+
+2. **`second_click_different_row_does_not_emit_toggle_edit`**: This test was not in the task's explicit rename list but was non-conforming. Per the task's directive ("any non-conforming name in this file's tests should be fixed"), it was renamed to `test_handle_settings_click_row_second_click_different_row_no_toggle`.
+
+3. **`click_row_with_no_session_is_no_op` rename**: Mentioned in the task but didn't exist in the file — skipped (no test to rename).
+
+4. **Stub function parameter naming**: Changed `state: &mut AppState` to `_state: &mut AppState` in the three stub functions since the parameter is now unused after removing `mark_dirty()`, avoiding unused variable warnings.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app handler::settings_handlers` — Passed (22/22 tests)
+- `cargo test --workspace` — Passed (all suites green)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (exit code 0)
+
+### Risks/Limitations
+
+1. **Cycle/increment UX**: Removing `mark_dirty()` from the three stub functions is correct since they don't mutate values. However, when these are eventually implemented, the implementer must add `mark_dirty()` back alongside the actual mutation logic.

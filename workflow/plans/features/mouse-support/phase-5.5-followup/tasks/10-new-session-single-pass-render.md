@@ -85,3 +85,36 @@ The fix is to ensure that when a `MouseCtx` is present, only the `_render_with_r
 - T02 fixes the underflow in `fuzzy_modal.rs` itself. T10 modifies only call sites in `mod.rs`. **No file overlap with T02.**
 - If the audit in step 1 reveals that `fuzzy_modal_render_with_regions` does NOT paint the full modal (e.g., relies on a prior `Clear` from `render_fuzzy_modal_overlay`), then T10's scope expands to also update `fuzzy_modal_render_with_regions` to paint everything. In that case, T10 would write `fuzzy_modal.rs` and conflict with T02 — escalate to the orchestrator (sequential T02 → T10) or merge T10 into T02. The cleanest path forward is to keep this task narrow: only re-arrange call sites in `mod.rs`. If `fuzzy_modal_render_with_regions` needs widening, file as a separate task.
 - The "double render" cost in absolute terms is small (modal is typically ~30 rows × ~40 cols = ~1200 cells ≈ ~1ms re-paint). At 60fps that's 60ms/sec of needless work. Worth fixing but not urgent.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a96dff9a9e5020ee9
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Refactored `render_horizontal_with_regions` and `render_vertical_with_regions` to use single-pass fuzzy modal rendering when ctx is `Some`; added `fuzzy_modal_renders_once_per_frame_in_with_regions_path` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Audit of `fuzzy_modal_render_with_regions`**: The function does NOT include `modal_overlay::dim_background` — it only clears + renders the modal widget. So we cannot fully drop `render_fuzzy_modal_overlay`. The fix keeps `render_fuzzy_modal_overlay` for the `ctx=None` path (unchanged), and for `ctx=Some` calls `dim_background` directly + `fuzzy_modal_render_with_regions` in a single pass — no change to `fuzzy_modal.rs` (no T02 overlap).
+
+2. **`launch_context` double-render**: Audited `launch_context_render_with_regions` — it already calls `Widget::render` internally (single function handles paint + regions). The call site in `render_launch_context_regions` does not precede it with a separate render call. No changes needed for launch_context.
+
+3. **Test approach**: The single-pass invariant test renders with `Some(ctx)` and `None` (Widget::render) separately into identical-sized buffers, then compares them byte-by-byte. A mismatch would indicate the refactored path is no longer painting correctly.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui widgets::new_session_dialog` — Passed (225 tests including new test)
+- `cargo test --workspace` — Passed (all tests)
+- `cargo fmt --all -- --check` — Passed (clean)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (clean, exit 0)
+
+### Risks/Limitations
+
+1. **No fuzzy_modal.rs changes**: The dim step is handled at the call site in mod.rs rather than inside `fuzzy_modal_render_with_regions`. If someone later moves call sites and forgets the dim step, they'll lose the dim effect. A comment in the code explains this.
+2. **launch_context already clean**: No changes needed; `launch_context_render_with_regions` was already a single-pass function (renders + records regions in one call).

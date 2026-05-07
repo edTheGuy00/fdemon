@@ -101,3 +101,37 @@ The fallback collides with `[a]` at column 0. Failure cannot occur in practice (
 - **`ListState::offset()` API:** verify this method exists on the version of ratatui in `Cargo.toml`. If not, use the `state.offset` public field directly (older ratatui exposes it as a `pub` field on `ListState`).
 - The existing weak test `render_with_regions_scrolled_indices_are_absolute` (asserting `max >= 25`) should be replaced or strengthened, not just left in place. If it's strictly weaker than the new tests, delete it; otherwise update its assertions.
 - T01 may have already promoted tag_filter regions to z=1 (no change there — they were always z=1 per Phase 5). Coordinate trivially.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a10d948b34d031a70
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `last_known_scroll_offset: Cell<usize>` field to `TagFilterUiState` with doc comment explaining its purpose |
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | Added `N_ACTION_OFFSET` const; write-back `list_state.offset()` in `render_tag_filter`; updated `render_tag_filter_with_regions` to read from `last_known_scroll_offset`; deleted `compute_scroll_offset`; replaced `unwrap_or(0)` with `N_ACTION_OFFSET`; replaced/strengthened tests |
+| `docs/REVIEW_FOCUS.md` | Documented `TagFilterUiState::last_known_scroll_offset` as a new Cell render-hint exception |
+
+### Notable Decisions/Tradeoffs
+
+1. **Replaced `render_with_regions_scrolled_indices_are_absolute`**: The old test only asserted `max_index >= 25`, which did not catch sub-row drift. The new `render_with_regions_uses_liststate_offset_writeback` test supersedes it by asserting the exact alignment between `last_known_scroll_offset` and the `abs_index` of the first recorded row region.
+
+2. **`render_tag_filter` also writes back**: The write-back to `last_known_scroll_offset` happens inside `render_tag_filter`, not `render_tag_filter_with_regions`. Since `render_tag_filter_with_regions` calls `render_tag_filter` first, both paths update the Cell before regions are recorded — this satisfies the acceptance criterion for "both functions write the current offset."
+
+3. **Fresh `ListState` each frame**: Because the code reconstructs `ListState::default().with_selected(Some(selected_index))` every render, ratatui recomputes the scroll offset from scratch. This means `last_known_scroll_offset` always reflects what was actually drawn, not a stale value from a prior frame.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui widgets::tag_filter` — PASS (23 tests)
+- `cargo test --workspace` — PASS (all test suites, 0 failed)
+- `cargo fmt --all -- --check` — PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+
+### Risks/Limitations
+
+1. **Fresh ListState per frame**: The code cannot carry `ListState` across frames, so ratatui never has a chance to apply its "keep prior offset stable" behavior. This is intentional — the prior `compute_scroll_offset` also reconstructed from scratch. If future work needs smooth scroll persistence, the `ListState` would need to be stored outside the render function.

@@ -45,16 +45,16 @@ The five major findings cover Settings sub-modal click leaks, wrap-mode link-bad
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-modal-precedence-and-submodal-gates](tasks/01-modal-precedence-and-submodal-gates.md) | Not Started | — | 2.5h | `fdemon-app` |
-| 2 | [02-fuzzy-modal-underflow-guard](tasks/02-fuzzy-modal-underflow-guard.md) | Not Started | — | 0.5h | `fdemon-tui` |
-| 3 | [03-wrap-mode-link-badge-y-position](tasks/03-wrap-mode-link-badge-y-position.md) | Not Started | — | 1.5h | `fdemon-tui` |
-| 4 | [04-confirm-dialog-render-consolidation](tasks/04-confirm-dialog-render-consolidation.md) | Not Started | — | 1.25h | `fdemon-tui`, `fdemon-app` |
-| 5 | [05-settings-panel-layout-and-cache](tasks/05-settings-panel-layout-and-cache.md) | Not Started | — | 2.0h | `fdemon-tui` |
-| 6 | [06-tag-filter-scroll-and-const-fix](tasks/06-tag-filter-scroll-and-const-fix.md) | Not Started | — | 1.5h | `fdemon-tui`, `fdemon-app` |
-| 7 | [07-settings-handlers-hygiene](tasks/07-settings-handlers-hygiene.md) | Not Started | — | 1.0h | `fdemon-app` |
-| 8 | [08-new-session-handler-hygiene](tasks/08-new-session-handler-hygiene.md) | Not Started | — | 0.5h | `fdemon-app` |
-| 9 | [09-render-tests-stale-comment](tasks/09-render-tests-stale-comment.md) | Not Started | — | 0.25h | `fdemon-tui` |
-| 10 | [10-new-session-single-pass-render](tasks/10-new-session-single-pass-render.md) | Not Started | — | 1.0h | `fdemon-tui` |
+| 1 | [01-modal-precedence-and-submodal-gates](tasks/01-modal-precedence-and-submodal-gates.md) | Done | — | 2.5h | `fdemon-app` |
+| 2 | [02-fuzzy-modal-underflow-guard](tasks/02-fuzzy-modal-underflow-guard.md) | Done | — | 0.5h | `fdemon-tui` |
+| 3 | [03-wrap-mode-link-badge-y-position](tasks/03-wrap-mode-link-badge-y-position.md) | Done | — | 1.5h | `fdemon-tui` |
+| 4 | [04-confirm-dialog-render-consolidation](tasks/04-confirm-dialog-render-consolidation.md) | Done | — | 1.25h | `fdemon-tui`, `fdemon-app` |
+| 5 | [05-settings-panel-layout-and-cache](tasks/05-settings-panel-layout-and-cache.md) | Done | — | 2.0h | `fdemon-tui` |
+| 6 | [06-tag-filter-scroll-and-const-fix](tasks/06-tag-filter-scroll-and-const-fix.md) | Done | — | 1.5h | `fdemon-tui`, `fdemon-app` |
+| 7 | [07-settings-handlers-hygiene](tasks/07-settings-handlers-hygiene.md) | Done | — | 1.0h | `fdemon-app` |
+| 8 | [08-new-session-handler-hygiene](tasks/08-new-session-handler-hygiene.md) | Done | — | 0.5h | `fdemon-app` |
+| 9 | [09-render-tests-stale-comment](tasks/09-render-tests-stale-comment.md) | Done | — | 0.25h | `fdemon-tui` |
+| 10 | [10-new-session-single-pass-render](tasks/10-new-session-single-pass-render.md) | Done | — | 1.0h | `fdemon-tui` |
 
 ## File Overlap Analysis
 

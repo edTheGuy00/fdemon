@@ -107,3 +107,34 @@ The flat list includes group headers (e.g., `DeviceListItem::ConnectedHeader`, `
 - This is a small task (~30min). The header-guard fix is defensive — the renderer already guards against the case, but defending in depth at the handler layer makes the function correct in isolation.
 - T01 does not touch `handler/new_session/mod.rs` or `clicks.rs`. T08 owns both files in 5.5.
 - The `DeviceListItem` enum may have variants beyond `Device` and the two headers — audit before writing the `matches!` pattern.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/clicks.rs` | Added `DeviceListItem` import; added header guard in `handle_select_device_at`; added regression test `handle_select_device_at_with_header_index_is_noop`; updated comment on existing clamp test |
+| `crates/fdemon-app/src/handler/new_session/mod.rs` | Changed `pub mod clicks` to `pub(crate) mod clicks` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DeviceListItem` enum has only two variants**: Audited `device_groups.rs` — the enum is `Header(String)` and `Device(T)`. No additional variants exist, so `matches!(..., Some(DeviceListItem::Device(_)))` is exhaustive and correct.
+2. **Borrow ordering for cached flat list**: `flat_list()` takes `&mut self` to populate the cache. Both calls (for `len()` and for `.get(clamped)`) release their borrows before `target.selected_index` is mutated, which Rust's NLL handles correctly.
+3. **Existing clamp test still passes**: With 2 connected devices the flat list is `[Header, Device, Device]`, so clamping 999 lands on index 2 (a Device row), and `DeviceSelect` still fires as expected. Added a clarifying comment to the test.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app handler::new_session::clicks` - Passed (10 tests, 1 new)
+- `cargo test --workspace` - Passed (all result lines showed 0 failed)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: Both changes are purely defensive/hygienic; no behavior change for the renderer-driven normal path.

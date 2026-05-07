@@ -106,3 +106,39 @@ Additionally, both `Widget::render` (lines 200-267) and `render_with_regions` (l
 - T01 (modal-precedence) does NOT modify `confirm_dialog.rs` (widget) or `fdemon-app/src/confirm_dialog.rs` (state). T04 owns both.
 - Do NOT change the `options: Vec<(String, Message)>` shape — Phase 5's action-coupled buttons rely on it.
 - If callers construct `ConfirmDialogState` via struct-literal syntax `ConfirmDialogState { ... }` (not via constructors), use a `#[non_exhaustive]` attribute or provide a `..Default::default()` fallback. Decide based on what the codebase currently does.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/confirm_dialog.rs` | Added `warning: Option<String>` field to `ConfirmDialogState`; updated `new()` to set `warning: None`; added `with_warning()` builder method; updated `quit_confirmation()` to set `warning: Some("All Flutter processes will be terminated.")` |
+| `crates/fdemon-tui/src/widgets/confirm_dialog.rs` | Consolidated `Widget::render` to delegate to `render_with_regions(area, buf, self, None)`; deleted duplicated layout/paint code; updated warning line to read from `state.warning` (conditional render); replaced button row `Paragraph::Alignment::Center` with `Buffer::set_line` at manually computed `start_x`; added 6 new tests; updated 1 existing test (`test_confirm_dialog_rendering`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Widget::render delegation (Option A)**: `Widget::render` now simply calls `render_with_regions(area, buf, self, None)`. The full duplicated layout-and-paint body was deleted. This is clean with no lifetime juggling needed.
+
+2. **Buffer::set_line over Alignment::Center**: The button row now uses `buf.set_line(start_x, ...)` with the same integer-division `start_x` used for click region rects. This eliminates any parity mismatch between painted text and region boundaries when `(width - total_width)` is odd.
+
+3. **warning: None default via `new()`**: The `new()` constructor sets `warning: None` by default. The `with_warning()` builder allows callers who need a warning to set it fluently. No `#[non_exhaustive]` was needed because all construction sites use the constructor functions, not struct-literal syntax.
+
+4. **modal_height = 9 unchanged**: The warning row is always allocated in the layout (keeping `modal_height = 9`), and simply renders blank when `warning` is `None`. This avoids recomputing all layout constants.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui confirm_dialog` — Passed (24/24 tests)
+- `cargo test -p fdemon-app` — Passed (2116 tests)
+- `cargo test --workspace` — Passed (all test suites)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No off-by-one regression in centering**: The new `Buffer::set_line` approach makes the position authoritative. The test `render_with_regions_three_button_centering_alignment_odd_width` verifies that region rects align with the `[` character in the buffer, confirming parity correctness.

@@ -143,3 +143,38 @@ If any of those drift in the renderer (e.g., a longer localized tab label requir
 - **Existing tests in `tests.rs`:** T01 plans to update existing tests to assert `z_index == 1`. T05 adds NEW tests. To minimize merge friction, place T05's new test functions at the END of `tests.rs` (no overlap with T01's edits).
 - **Cache invariant**: `RefCell` requires care — `borrow()` and `borrow_mut()` cannot overlap. If `render_*_tab` holds a `borrow_mut()` while calling sub-functions that also borrow, panic at runtime. Audit the call graph. Threading the `Vec` via a parameter avoids this entirely if feasible.
 - This task is the largest in 5.5 (~2h). Split into a separate refactor task if it grows beyond that during implementation.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-afb34cd1ed0bd96a8
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Added 4 module-level constants; updated `render_tab_bar`, `render_user_prefs_tab`, `render_vscode_tab`, and `render_with_regions` to use them; restructured `render_content` to load configs once and thread to tab renderers; added `configs` parameter to `render_launch_tab` and `render_vscode_tab`; added sentinel region registration in `render_with_regions` LaunchConfig branch; changed `register_setting_row_regions` to return final y value |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Added 3 new tests: `render_with_regions_row_rect_y_aligns_with_rendered_label`, `launch_config_add_new_sentinel_is_clickable`, `render_with_regions_launch_config_region_count_matches_renderer` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Config threading via parameter rather than `RefCell`**: Changed `render_launch_tab` and `render_vscode_tab` signatures to accept `&[ResolvedLaunchConfig]`. `render_content` loads configs once and passes them down. The region recorder in `render_with_regions` also loads once (independent call). This is 2 total loads per frame (1 in `StatefulWidget::render` path, 1 in `render_with_regions` region recorder) — reduced from the previous 4 loads (2 per renderer + 2 per region recorder). No `RefCell` or new state fields needed.
+
+2. **Sentinel z=0**: The sentinel region uses `ctx.click()` (z=0) matching existing settings row regions. T01 will sweep all settings regions to z=1 if that task lands.
+
+3. **`register_setting_row_regions` return value**: Changed return type from `()` to `u16` (final y after last item) to allow callers to compute the sentinel's y position. The returned y value exactly mirrors the y tracking in `render_launch_tab`.
+
+4. **Sentinel guard matches renderer**: The sentinel is only registered if `after_items_y.saturating_add(2) < inner_bottom`, which mirrors the renderer's `y + 2 < area.bottom()` guard.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- widgets::settings_panel` — 77 passed (74 existing + 3 new)
+- `cargo test --workspace` — All pass (5285+ tests across crates)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Double disk load**: The region recorder in `render_with_regions` still calls `load_launch_configs` once separately from `StatefulWidget::render`. Total is 2 loads/frame (down from 4). Full 1-load elimination would require either `RefCell` on `SettingsViewState` or making `render_with_regions` not call `StatefulWidget::render` as a black box — deferred as a future optimization if profiling shows it necessary.

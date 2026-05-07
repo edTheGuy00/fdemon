@@ -138,3 +138,42 @@ For the sub-modal leak (Major #3), a small additional gate goes at the top of `s
 - **Verify the existing `mouse_ctx` borrow shape:** the current `view()` body uses `Some(&mut mouse_ctx)` repeatedly. Switching to a conditional `Option` may run into borrow-checker friction. If pure conditional ergonomics fail, an alternative is to take `&mut mouse_ctx` once into a binding and pass `None` for the suppressed branches. Or factor the modal/non-modal split into a helper.
 - The renderer-level gate is the right Phase-5.5 fix. It does NOT prevent base-UI keyboard events from being intercepted (those are routed through `handler/keys.rs` which already has its own modal-aware logic). Mouse and keyboard remain symmetric: base UI is unreachable while a modal is open.
 - **Coordinate with T03:** T03 modifies `widgets/log_view/mod.rs` (badge regions). When T01's renderer change passes `None` for the LogView ctx in modal mode, the badge code (which checks `ctx.is_some()` before recording) automatically skips. No T03 changes needed for compatibility — verify by reading T03's plan.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Added `is_modal_ui_mode()` helper; added `in_modal` flag; MainHeader and LogView now receive `None` ctx when in modal mode or tag_filter_visible |
+| `crates/fdemon-app/src/handler/mouse/settings.rs` | Added `has_modal_open()` early-return gate before the editing gate in `handle_press` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `phase5_5_modal_precedence_tests` module with 3 new tests |
+| `crates/fdemon-tui/src/render/tests.rs` | Added 3 renderer-invariant tests; updated 2 stale comments from pre-5.5 behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Borrow choreography**: Used local bindings `header_ctx` and `log_ctx` of type `Option<&mut MouseCtx<'_>>` with `if in_modal { None } else { Some(&mut mouse_ctx) }`. NLL handles this correctly since each borrow ends before the next call site. No need to juggle two overlapping borrows or restructure the function.
+
+2. **`is_modal_ui_mode` excludes `LinkHighlight`**: Per the task spec, link badges overlay the log view and the user expects both to remain interactive. Verified against the existing `phase5_view_renders_expected_link_highlight_badge_regions` test which still passes.
+
+3. **Stale test comment updates**: `view_header_regions_present_in_settings_mode_because_header_always_renders` and `phase5_sister_functions_record_no_regions_in_stub_state` had comments stating "header regions are still registered" — updated to reflect Phase-5.5 reality. The assertions themselves still hold because Settings panel registers its own regions.
+
+4. **Settings UiMode in `is_modal_ui_mode`**: Settings is included even though it is a full-screen replacement (not a dialog). The reason is that the header IS rendered visually in Settings mode, but we don't want header shortcuts to fire while the Settings panel is up. Including Settings in the modal gate prevents this.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all tests, no regressions)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- New tests verified individually with `cargo test -- phase5_5` (6/6 pass)
+- Existing phase5 tests verified with `cargo test -- phase5` (all pass)
+
+### Risks/Limitations
+
+1. **T09 comment edit**: T09 plans to edit comments at `render/tests.rs:87-92`. This task updated comments in a different location (the ConfirmDialog smoke test and Settings probe test). Line numbers shifted due to added Phase-5.5 tests — T09 should verify its target line range against the current file before applying changes.

@@ -116,3 +116,39 @@ The current Phase-5 production code does not reset `scroll_offset` when the quer
 - This is a 2-3-line production fix plus 1 regression test. Total task scope is intentionally narrow.
 - T10 modifies the *call site* of `fuzzy_modal_render_with_regions` in `new_session_dialog/mod.rs` (single-pass refactor, Minor #14). T10 does NOT modify `fuzzy_modal.rs` itself. Parallel-safe.
 - If, while reading the surrounding code, you discover that `set_query` *should* reset `scroll_offset` (root-cause fix vs. defensive guard), surface that observation in the Completion Summary but do not act on it in this task — file a follow-up.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-acaeeae3b469c165f
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/fuzzy_modal.rs` | Added `start = scroll_offset.min(total)` clamp in both `render_list` and `fuzzy_modal_render_with_regions`; added two regression tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fixed both sites**: The underflow exists in two places: `render_list` (which slices `filtered_indices[start..end]` — would panic on out-of-bounds slice) and the region registration loop in `fuzzy_modal_render_with_regions` (which computes `end - start` — would underflow usize). Both received the same `start = scroll_offset.min(total)` guard.
+
+2. **Two regression tests instead of one**: Added `render_with_regions_no_panic_when_filter_clears_results_while_scrolled` (the exact case from the task: scroll=30, filtered=0) and `render_with_regions_no_panic_when_filter_shrinks_results_below_scroll_offset` (scroll=30, filtered=5, the non-zero case where `has_results()` is `true` but `end < start`). The second test covers the more realistic crash path.
+
+3. **Root-cause observation**: `FuzzyModalState::update_filter_placeholder()` and `update_filter()` both reset `scroll_offset = 0` on every query change, so the normal keyboard input path is safe. The underflow risk is real for mouse wheel scroll when the filter is updated asynchronously (e.g., entry point discovery sets `filtered_indices` after a delay while the user has already scrolled). The defensive guard is still correct.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui fuzzy_modal` - Passed (25 tests, 0 failures)
+- `cargo test --workspace` - Passed (all test suites, 0 failures)
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No UX improvement**: Per task scope, `scroll_offset` is not reset when filter shrinks. When scroll_offset exceeds the filtered count, the list renders empty (0 visible rows), which may confuse users who have scrolled far into a list and then filtered. This is a separate UX issue (explicitly deferred by the task).
+
+### Doc Updates Needed
+
+None — this is a purely defensive rendering fix with no new public API or architectural changes.
