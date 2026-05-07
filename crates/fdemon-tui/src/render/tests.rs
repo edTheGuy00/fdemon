@@ -84,10 +84,16 @@ fn view_populates_header_shortcut_regions_at_120x24() {
     // Expected order: HotReload, HotRestart, CloseCurrentSession,
     // EnterDevToolsMode, ToggleDap, RequestQuit — matching SHORTCUTS_DEF
     // in widgets/header.rs.
-    // Phase 5: modal overlay regions (tag-filter, Settings panel internals) may push
-    // additional entries into the registry. Update this exact-count assertion to
-    // `>= 6` (or split into per-source counts) when those regions land.
-    assert_eq!(shortcut_msgs.len(), 6, "exactly six shortcut regions");
+    // 120×24 Normal mode renders: header brackets `[r] [d] [D] [s] [c] [q]`
+    // (six z=0 regions) + log-row regions if any logs exist. Modal regions
+    // (NewSessionDialog z=1, ConfirmDialog z=1, TagFilter overlay z=1, Settings
+    // z=1) are NOT in this registry — they are only registered when the
+    // corresponding `UiMode` is active. Phase 5/5.5 do not change this baseline.
+    assert_eq!(
+        shortcut_msgs.len(),
+        6,
+        "exactly six shortcut regions in 120×24 Normal mode"
+    );
     assert!(shortcut_msgs[0].contains("HotReload"));
     assert!(shortcut_msgs[1].contains("HotRestart"));
     assert!(shortcut_msgs[2].contains("CloseCurrentSession"));
