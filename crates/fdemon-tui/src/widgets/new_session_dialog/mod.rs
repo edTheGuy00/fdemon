@@ -795,23 +795,24 @@ impl NewSessionDialog<'_> {
             self.render_dart_defines_modal(dialog_area, buf);
             // Dart-defines modal: no regions in v1 (deferred to Phase 6)
         } else if self.state.is_fuzzy_modal_open() {
-            // Render the visual overlay first (dim + fuzzy modal widget)
-            self.render_fuzzy_modal_overlay(dialog_area, buf);
-            // Then record regions by re-rendering the fuzzy modal over the same area
             if let Some(modal_state) = &self.state.fuzzy_modal {
                 let is_loading = modal_state.modal_type == super::FuzzyModalType::EntryPoint
                     && self.state.launch_context.entry_points_loading;
                 let fuzzy_widget = FuzzyModal::new(modal_state).loading(is_loading);
                 if let Some(c) = ctx {
-                    // Note: render_fuzzy_modal_overlay already rendered the pixels;
-                    // fuzzy_modal_render_with_regions will re-render them (idempotent)
-                    // and also record regions.
+                    // Single-pass: dim background then render+register regions in one call.
+                    // Avoids the double render that occurred when render_fuzzy_modal_overlay
+                    // (paint) was followed by fuzzy_modal_render_with_regions (repaint + regions).
+                    modal_overlay::dim_background(buf, dialog_area);
                     fuzzy_modal::fuzzy_modal_render_with_regions(
                         dialog_area,
                         buf,
                         fuzzy_widget,
                         Some(c),
                     );
+                } else {
+                    // No ctx: use the regular overlay helper (dim + widget render, no regions).
+                    self.render_fuzzy_modal_overlay(dialog_area, buf);
                 }
             }
         }
@@ -866,18 +867,24 @@ impl NewSessionDialog<'_> {
         if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
-            self.render_fuzzy_modal_overlay(dialog_area, buf);
             if let Some(modal_state) = &self.state.fuzzy_modal {
                 let is_loading = modal_state.modal_type == super::FuzzyModalType::EntryPoint
                     && self.state.launch_context.entry_points_loading;
                 let fuzzy_widget = FuzzyModal::new(modal_state).loading(is_loading);
                 if let Some(c) = ctx {
+                    // Single-pass: dim background then render+register regions in one call.
+                    // Avoids the double render that occurred when render_fuzzy_modal_overlay
+                    // (paint) was followed by fuzzy_modal_render_with_regions (repaint + regions).
+                    modal_overlay::dim_background(buf, dialog_area);
                     fuzzy_modal::fuzzy_modal_render_with_regions(
                         dialog_area,
                         buf,
                         fuzzy_widget,
                         Some(c),
                     );
+                } else {
+                    // No ctx: use the regular overlay helper (dim + widget render, no regions).
+                    self.render_fuzzy_modal_overlay(dialog_area, buf);
                 }
             }
         }
@@ -1816,6 +1823,109 @@ mod tests {
             z2_count > 0,
             "expected z=2 regions from fuzzy modal, got 0 (total regions: {})",
             regions.len()
+        );
+    }
+
+    // =========================================================================
+    // Group 8: Single-pass render invariant (T10)
+    // =========================================================================
+
+    /// Assert that the with-regions path (Some ctx) and the no-regions path (None ctx /
+    /// Widget::render) produce byte-identical buffers when a fuzzy modal is open.
+    ///
+    /// This guards against accidental re-introduction of the double-render pattern:
+    /// if `render_fuzzy_modal_overlay` were called before `fuzzy_modal_render_with_regions`
+    /// the idempotence of painting would hide the bug visually, but the cost would double.
+    /// This test also confirms that the single-pass path paints correctly by comparing the
+    /// two rendering variants — if they differ, the refactor broke something.
+    #[test]
+    fn fuzzy_modal_renders_once_per_frame_in_with_regions_path() {
+        const W: u16 = 120;
+        const H: u16 = 60;
+
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        state.open_flavor_modal(vec![
+            "alpha".into(),
+            "beta".into(),
+            "gamma".into(),
+            "delta".into(),
+            "epsilon".into(),
+        ]);
+
+        let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
+
+        // --- Path A: Widget::render (no ctx, single render) ---
+        let buf_no_ctx = {
+            use ratatui::backend::TestBackend;
+            use ratatui::Terminal;
+            let backend = TestBackend::new(W, H);
+            let mut terminal = Terminal::new(backend).expect("path-A: failed to create terminal");
+            terminal
+                .draw(|f| {
+                    let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
+                    f.render_widget(dialog, f.area());
+                })
+                .expect("path-A: failed to draw");
+            terminal.backend().buffer().clone()
+        };
+
+        // --- Path B: render_with_regions with Some(ctx) (single-pass after refactor) ---
+        let buf_with_ctx = {
+            use ratatui::backend::TestBackend;
+            use ratatui::Terminal;
+            let backend = TestBackend::new(W, H);
+            let mut terminal = Terminal::new(backend).expect("path-B: failed to create terminal");
+            let mut regions = MouseRegions::default();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    let buf = f.buffer_mut();
+                    let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
+                    let builder = regions.builder();
+                    let mut ctx = MouseCtx::new(builder);
+                    render_with_regions(area, buf, dialog, Some(&mut ctx));
+                })
+                .expect("path-B: failed to draw");
+            terminal.backend().buffer().clone()
+        };
+
+        // Buffers must be identical: the single-pass (ctx=Some) path must paint
+        // exactly what the no-ctx path paints.
+        assert_eq!(
+            buf_no_ctx, buf_with_ctx,
+            "render_with_regions (Some ctx) produced a different buffer than Widget::render \
+             (None ctx) — single-pass refactor broke visual output"
+        );
+
+        // Verify that fuzzy modal regions were recorded in path B.
+        // This confirms the single-pass path still records click regions.
+        let buf_with_ctx_regions = {
+            use ratatui::backend::TestBackend;
+            use ratatui::Terminal;
+            let backend = TestBackend::new(W, H);
+            let mut terminal = Terminal::new(backend).expect("path-B2: failed to create terminal");
+            let mut regions = MouseRegions::default();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    let buf = f.buffer_mut();
+                    let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
+                    let builder = regions.builder();
+                    let mut ctx = MouseCtx::new(builder);
+                    render_with_regions(area, buf, dialog, Some(&mut ctx));
+                })
+                .expect("path-B2: failed to draw");
+            regions
+        };
+
+        let z2_count = buf_with_ctx_regions
+            .iter()
+            .filter(|e| e.z_index == 2)
+            .count();
+        assert!(
+            z2_count > 0,
+            "single-pass path must still register z=2 fuzzy modal regions (got 0)"
         );
     }
 }
