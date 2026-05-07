@@ -117,8 +117,11 @@ impl<'a> FuzzyModal<'a> {
         }
 
         let visible_height = area.height as usize;
-        let start = self.state.scroll_offset;
-        let end = (start + visible_height).min(self.state.filtered_indices.len());
+        let total = self.state.filtered_indices.len();
+        // `scroll_offset` may exceed `total` if a previously-scrolled list is filtered
+        // down by a query change. Clamp `start` to `total` so the slice is always valid.
+        let start = self.state.scroll_offset.min(total);
+        let end = (start + visible_height).min(total);
 
         // Calculate available width for items (accounting for indicator)
         let max_item_width = (area.width as usize).saturating_sub(4); // "▶ " + padding
@@ -229,8 +232,12 @@ pub fn fuzzy_modal_render_with_regions(
         if !modal.loading && modal.state.has_results() {
             let list_area = chunks[2];
             let visible_height = list_area.height as usize;
-            let start = modal.state.scroll_offset;
-            let end = (start + visible_height).min(modal.state.filtered_indices.len());
+            let total = modal.state.filtered_indices.len();
+            // `scroll_offset` may exceed `total` if a previously-scrolled list is filtered
+            // down by a query change. Clamp `start` to `total` so the loop bound is
+            // non-negative and the range `[start..end]` is always valid.
+            let start = modal.state.scroll_offset.min(total);
+            let end = (start + visible_height).min(total);
 
             for screen_row in 0..(end - start) {
                 let abs_index = start + screen_row;
@@ -585,6 +592,83 @@ mod region_tests {
         assert!(
             regions.is_empty(),
             "loading modal must not register result regions"
+        );
+    }
+
+    /// Regression test: scroll_offset > filtered_indices.len() must not panic.
+    ///
+    /// This reproduces the usize underflow that occurs when the user has scrolled
+    /// to row 30 and then types a query that filters the list down to 0 (or fewer
+    /// than 30) results. In debug builds, `end - start` would underflow; in
+    /// release builds, it would wrap to ~usize::MAX and freeze the TUI.
+    #[test]
+    fn render_with_regions_no_panic_when_filter_clears_results_while_scrolled() {
+        // Start with 40 items so we can scroll to offset 30.
+        let items: Vec<String> = (0..40).map(|i| format!("item{}", i)).collect();
+        let mut state = FuzzyModalState::new(FuzzyModalType::Flavor, items);
+
+        // Simulate the user scrolling far into the list…
+        state.scroll_offset = 30;
+
+        // …then typing a query that filters all results out (empty filtered_indices).
+        // `has_results()` returns false when filtered_indices is empty, so the region
+        // loop is guarded. But if just a few results remain (< scroll_offset), the
+        // loop would still run with an underflowing bound.  Use 0 to cover both cases.
+        state.filtered_indices.clear();
+
+        let modal = FuzzyModal::new(&state);
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            // Must not panic.
+            fuzzy_modal_render_with_regions(area, &mut buf, modal, Some(&mut ctx));
+        }
+
+        // No regions should be registered when filtered_indices is empty.
+        assert!(
+            regions.is_empty(),
+            "no regions expected when filtered_indices is empty, got {} entries",
+            regions.len()
+        );
+    }
+
+    /// Regression test: scroll_offset > non-zero filtered_indices.len() must not panic.
+    ///
+    /// If the list was scrolled to offset 30 and then filtered down to just 5 results,
+    /// `has_results()` returns `true`, so the region loop runs — but `end < start`
+    /// causes a usize underflow.  The clamp on `start` must prevent this.
+    #[test]
+    fn render_with_regions_no_panic_when_filter_shrinks_results_below_scroll_offset() {
+        // Start with 40 items, scroll offset = 30.
+        let items: Vec<String> = (0..40).map(|i| format!("item{}", i)).collect();
+        let mut state = FuzzyModalState::new(FuzzyModalType::Config, items);
+        state.scroll_offset = 30;
+
+        // Simulate a query that narrows the results to only 5 items (indices 0..5).
+        // scroll_offset (30) > filtered_indices.len() (5) → underflow without the guard.
+        state.filtered_indices = vec![0, 1, 2, 3, 4];
+
+        let modal = FuzzyModal::new(&state);
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            // Must not panic.
+            fuzzy_modal_render_with_regions(area, &mut buf, modal, Some(&mut ctx));
+        }
+
+        // After clamping start to total (5), the visible window [5..5] is empty,
+        // so no regions should be registered.
+        assert!(
+            regions.is_empty(),
+            "no visible rows when scroll_offset exceeds filtered count; \
+             got {} regions",
+            regions.len()
         );
     }
 }
