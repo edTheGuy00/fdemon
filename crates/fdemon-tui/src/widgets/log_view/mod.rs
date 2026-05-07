@@ -1609,11 +1609,33 @@ impl<'a> LogView<'a> {
             // overlapping cells (last-pushed-wins at equal z_index — see mouse_regions.rs).
             // z_index = 0: link mode is in-place, not modal.
             for b in &badge_actions {
+                // Compute the screen-space (dx, dy) of the badge.
+                //
+                // In nowrap mode `col_offset` maps directly to x (minus h_offset).
+                // In wrap mode `col_offset` is an absolute character position within
+                // the unwrapped line; when it exceeds `visible_width` the badge renders
+                // on a subsequent wrapped sub-row. Convert with modular arithmetic:
+                //   dx = col_offset % visible_width  (x within the sub-row)
+                //   dy = col_offset / visible_width  (extra rows from wrapping)
+                // The badge's "all_lines-space" row is then `b.rel_y + dy`.
+                let (dx, dy) = if self.wrap_mode && content_area.width > 0 {
+                    let vw = content_area.width as usize;
+                    let dx = (b.col_offset as usize % vw) as u16;
+                    let dy = (b.col_offset as usize / vw) as u16;
+                    (dx, dy)
+                } else {
+                    // Nowrap mode: dy is always 0; dx is handled below with h_offset.
+                    (b.col_offset, 0u16)
+                };
+
+                // The badge's row in "all_lines space" (incorporating wrap sub-row offset).
+                let badge_all_lines_y = b.rel_y.saturating_add(dy);
+
                 // Apply the same top-clip / bottom-clip logic as for row_actions.
-                if b.rel_y.saturating_add(1) <= wio {
+                if badge_all_lines_y.saturating_add(1) <= wio {
                     continue; // entirely above the viewport
                 }
-                let visible_y = b.rel_y.saturating_sub(wio);
+                let visible_y = badge_all_lines_y.saturating_sub(wio);
                 if visible_y >= content_area.height {
                     continue; // below the content area
                 }
@@ -1622,15 +1644,15 @@ impl<'a> LogView<'a> {
                 // In nowrap mode, horizontal scroll shifts the line left by `h_offset`.
                 // Skip badges that are entirely scrolled off the left edge.
                 let badge_x = if self.wrap_mode {
-                    // Wrap mode: no horizontal scroll; column offset maps directly.
-                    content_area.x.saturating_add(b.col_offset)
+                    // Wrap mode: no horizontal scroll; dx is already the sub-row position.
+                    content_area.x.saturating_add(dx)
                 } else {
                     // Nowrap mode: account for horizontal scroll offset.
                     let h_off = state.h_offset as u16;
-                    if b.col_offset < h_off {
+                    if dx < h_off {
                         continue; // badge start is off-screen left
                     }
-                    let local_x = b.col_offset - h_off;
+                    let local_x = dx - h_off;
                     if local_x >= content_area.width {
                         continue; // badge start is off-screen right
                     }

@@ -2209,3 +2209,233 @@ fn render_with_regions_off_screen_links_not_recorded() {
         "no badge regions expected: links are for entries scrolled off screen"
     );
 }
+
+// ── Phase 5.5 Task 03: wrap-mode badge y-position fix ────────────────────────
+
+/// Regression: in wrap mode, a badge whose `col_offset` fits on the first
+/// wrapped sub-row (col_offset < visible_width) must record a rect at the
+/// correct screen-y with dx = col_offset, dy = 0.
+///
+/// Layout (area 22×10, visible_width=20):
+///   content_area: x=1, y=3, width=20, height=6
+///   col_offset=10 → dx=10, dy=0 → rect (11, 3, 3, 1)
+#[test]
+fn wrap_mode_badge_on_first_wrapped_row_records_at_correct_y() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 10-char prefix so badge lands at col_offset=10.
+    let prefix = "A".repeat(10);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'a', display_text)]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    // area width=22 → content_area.width=20 (visible_width=20).
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        1,
+        "expected exactly 1 badge region, got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+    let (rect, shortcut, _z) = badge_regions[0];
+    assert_eq!(shortcut, 'a');
+    // content_area: x=1, y=3, width=20.
+    // col_offset=10 → dx=10, dy=0 → badge_x=11, screen_y=3.
+    assert_eq!(
+        rect.x, 11,
+        "badge x should be content_area.x + dx (1+10=11)"
+    );
+    assert_eq!(rect.y, 3, "badge y should be content_area.y + 0 (dy=0)");
+    assert_eq!(rect.width, 3, "badge width should be 3");
+    assert_eq!(rect.height, 1, "badge height should be 1");
+}
+
+/// Regression: in wrap mode, a badge whose `col_offset` exceeds `visible_width`
+/// renders on a wrapped sub-row. The rect must use modular arithmetic:
+///   dx = col_offset % visible_width
+///   dy = col_offset / visible_width
+///
+/// Layout (area 22×10, visible_width=20):
+///   content_area: x=1, y=3, width=20, height=6
+///   col_offset=25 → dx=5, dy=1 → rect (6, 4, 3, 1)
+#[test]
+fn wrap_mode_badge_on_second_wrapped_row_records_at_correct_y() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 25-char prefix so badge lands at col_offset=25.
+    let prefix = "A".repeat(25);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'b', display_text)]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        1,
+        "expected exactly 1 badge region, got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+    let (rect, shortcut, _z) = badge_regions[0];
+    assert_eq!(shortcut, 'b');
+    // col_offset=25, visible_width=20 → dx=25%20=5, dy=25/20=1.
+    // badge_x = content_area.x + dx = 1 + 5 = 6.
+    // screen_y = content_area.y + (rel_y + dy - wio) = 3 + (0+1-0) = 4.
+    assert_eq!(
+        rect.x, 6,
+        "badge x should be content_area.x + (col_offset % 20) = 1+5=6"
+    );
+    assert_eq!(rect.y, 4, "badge y should be content_area.y + dy = 3+1=4");
+    assert_eq!(rect.width, 3, "badge width should be 3");
+    assert_eq!(rect.height, 1, "badge height should be 1");
+}
+
+/// Regression: a badge at the last column of a wrapped sub-row (dx + badge_w > visible_width)
+/// must be clipped to fit within the content area rather than overflowing.
+///
+/// Layout (area 22×10, visible_width=20):
+///   content_area: x=1, y=3, width=20, height=6
+///   col_offset=19 → dx=19, dy=0 → badge_x=20, badge_w=min(3, right_edge-badge_x)=min(3,1)=1
+#[test]
+fn wrap_mode_badge_clipped_at_right_edge() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 19-char prefix so badge lands at col_offset=19 (last column of first sub-row).
+    let prefix = "A".repeat(19);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'c', display_text)]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        1,
+        "expected exactly 1 badge region (clipped), got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+    let (rect, shortcut, _z) = badge_regions[0];
+    assert_eq!(shortcut, 'c');
+    // col_offset=19 → dx=19, dy=0. badge_x=1+19=20.
+    // content right edge = 1+20=21. badge_w = min(3, 21-20) = 1.
+    assert_eq!(
+        rect.x, 20,
+        "badge x should be 20 (content_area.x + dx = 1+19)"
+    );
+    assert_eq!(rect.y, 3, "badge y should be content_area.y (dy=0)");
+    assert_eq!(
+        rect.width, 1,
+        "badge width should be clipped to 1 (only 1 cell before right edge)"
+    );
+    assert_eq!(rect.height, 1, "badge height should be 1");
+}
+
+/// Regression: a badge whose computed `screen_y >= content_area.height` after
+/// wrap-offset adjustment must be silently dropped — no panic, no region recorded.
+///
+/// Layout (area 22×10, visible_width=20, content_area.height=6):
+///   col_offset=120 → dy=6 → screen_y=6 >= 6 → dropped.
+#[test]
+fn wrap_mode_badge_off_screen_dropped() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 120-char prefix → col_offset=120, dy=120/20=6 which equals content_area.height.
+    let prefix = "A".repeat(120);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'd', display_text)]);
+    let mut state = LogViewState::new();
+    // Keep offset=0 so wio=0 and badge_all_lines_y=dy=6 >= content_area.height=6.
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        0,
+        "badge at screen_y >= content_area.height must be dropped, got: {badge_regions:?}"
+    );
+}
