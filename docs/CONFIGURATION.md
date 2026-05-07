@@ -325,7 +325,7 @@ enable_mouse = true             # Capture mouse events for clickable UI; restart
 | `theme` | `string` | `"default"` | Color theme name. Currently only `"default"` is supported. |
 | `stack_trace_collapsed` | `boolean` | `true` | If `true`, stack traces start collapsed showing only the first few frames. |
 | `stack_trace_max_frames` | `integer` | `3` | Number of stack trace frames to show when collapsed. Press `Enter` to expand. |
-| `enable_mouse` | `boolean` | `true` | Enables terminal mouse capture for clickable UI elements (header shortcuts, tabs, log view, DevTools panels). When `false`, fdemon does not emit mouse-capture escape sequences, leaving native terminal behavior (text selection, wheel scrollback) intact. **Restart required after changing.** See [MOUSE.md](MOUSE.md) for per-mode wheel behavior, modifier reference, and platform caveats. |
+| `enable_mouse` | `boolean` | `true` | Enables terminal mouse capture for clickable UI elements throughout the TUI (see [MOUSE.md](MOUSE.md) for the full surface map). When `false`, fdemon does not emit mouse-capture escape sequences, leaving native terminal behavior (text selection, wheel scrollback) intact. **Restart required after changing.** See [MOUSE.md](MOUSE.md) for per-mode wheel behavior, modifier reference, and platform caveats. |
 
 > **Environment variable override:** Set `FDEMON_ICONS=unicode` or `FDEMON_ICONS=nerd_fonts` to override the config file setting for the current session.
 
