@@ -144,13 +144,14 @@ fn view_populates_tab_regions_with_three_sessions() {
 
 /// Probe: document registry contents when the Settings panel is active.
 ///
-/// The header IS rendered in Settings mode (it is painted before the modal
-/// overlay match in `render::view`), so shortcut regions ARE registered.
-/// The Settings panel overlays the content area but does not interact with
-/// the mouse registry in Phase 3 — panel-internal clicks are wired in Phase 5.
+/// Phase 5.5 Task 01 introduced a modal-gate in `render::view()`: when
+/// `UiMode::Settings` is active the header receives `None` ctx, so header
+/// shortcut regions are **not** registered.  However the Settings panel itself
+/// is rendered with `Some(&mut mouse_ctx)` and registers its own tab + row
+/// regions — so the registry remains non-empty.
 ///
-/// This test locks in the observed behavior: the registry is non-empty in
-/// Settings mode because the header is always rendered.
+/// This test locks in the Phase-5.5 invariant: the registry is non-empty in
+/// Settings mode because the Settings panel registers its own regions.
 #[test]
 fn view_header_regions_present_in_settings_mode_because_header_always_renders() {
     use fdemon_app::state::UiMode;
@@ -167,14 +168,11 @@ fn view_header_regions_present_in_settings_mode_because_header_always_renders() 
 
     let regions = state.mouse_regions.take();
 
-    // The header IS rendered in Settings mode (before the modal overlay).
-    // Shortcut regions are therefore present at 120 cols.
-    // Phase 5: when the Settings panel wires its internal regions, update this
-    // assertion to also verify that panel regions exist alongside header regions
-    // (e.g. split into per-source counts or check specific panel-region entries).
+    // Settings panel registers tab + row regions (Phase 5) — registry is non-empty
+    // even though header shortcut regions are suppressed by the Phase-5.5 modal gate.
     assert!(
         !regions.is_empty(),
-        "header is rendered in Settings mode — registry must be non-empty at 120 cols"
+        "Settings mode must produce a non-empty registry (settings panel regions) at 120 cols"
     );
 }
 
@@ -709,7 +707,8 @@ fn phase5_sister_functions_record_no_regions_in_stub_state() {
     use ratatui::Terminal;
 
     // Render with ConfirmDialog active.  The dialog replaces the log-view
-    // content area visually; header regions are still registered.
+    // content area visually.  Phase 5.5 Task 01: the header receives None ctx
+    // so header shortcut regions are NOT registered while the dialog is up.
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
     state.confirm_dialog_state = Some(ConfirmDialogState::quit_confirmation(1));
@@ -1130,6 +1129,129 @@ fn phase5_view_renders_expected_link_highlight_badge_regions() {
         link_count
     );
     state.mouse_regions.set(regions);
+}
+
+// ===========================================================================
+// Phase 5.5 Renderer-Invariant Tests (Task 01)
+//
+// These tests verify that `render::view()` does NOT thread `Some(&mut mouse_ctx)`
+// into `MainHeader` or `LogView` when a modal `UiMode` is active (or when
+// `tag_filter_visible` is true).  They do this by rendering via `view()` and
+// then inspecting the resulting registry for the absence of header-shortcut
+// regions (e.g. `HotReload` from `[r]`), which are z=0 regions registered by
+// `MainHeader` only when it receives a non-`None` ctx.
+// ===========================================================================
+
+/// Helper: count how many `HotReload` regions are in the registry after a
+/// render.  Used by the modal-gate invariant tests below.
+fn count_hot_reload_regions(state: &AppState) -> usize {
+    let regions = state.mouse_regions.take();
+    let n = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.on_left.as_ref().and_then(|a| a.as_emit()),
+                Some(fdemon_app::message::Message::HotReload)
+            )
+        })
+        .count();
+    // Put the registry back so state is not left inconsistent.
+    state.mouse_regions.set(regions);
+    n
+}
+
+/// In `ConfirmDialog` mode the renderer must NOT register header shortcut
+/// regions (e.g. `HotReload` from `[r]`).
+///
+/// Before Phase 5.5 Task 01, `render::view()` called
+/// `render_main_header(..., Some(&mut mouse_ctx))` unconditionally, so a click
+/// that fell outside the dialog's z=1 rects would hit the underlying z=0 header
+/// region and fire `HotReload`.  After the fix, `None` is passed for the header
+/// ctx when `in_modal` is true, so no header regions are registered.
+#[test]
+fn phase5_5_renderer_invariant_modal_modes_register_no_main_header_regions() {
+    use fdemon_app::confirm_dialog::ConfirmDialogState;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    state.ui_mode = fdemon_app::state::UiMode::ConfirmDialog;
+    state.confirm_dialog_state = Some(ConfirmDialogState::quit_confirmation(1));
+
+    // Use a wide terminal so that, if the gate were missing, the header WOULD
+    // register shortcuts at this width (as verified by the Phase-3 test above).
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let hot_reload_count = count_hot_reload_regions(&state);
+    assert_eq!(
+        hot_reload_count, 0,
+        "ConfirmDialog mode must not register HotReload (header z=0) regions; \
+         found {} — the modal gate in render::view() may be missing",
+        hot_reload_count
+    );
+}
+
+/// In `Normal` mode with `tag_filter_visible = true` the renderer must NOT
+/// register header shortcut regions.
+///
+/// The tag-filter overlay is "modal" for click purposes even though `ui_mode`
+/// stays `Normal`.  The `in_modal` flag in `render::view()` ORs
+/// `is_modal_ui_mode` with `state.tag_filter_visible`, so both sources of
+/// modal state suppress base-UI region recording.
+#[test]
+fn phase5_5_renderer_invariant_normal_mode_with_tag_filter_registers_no_main_header_regions() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    state.ui_mode = fdemon_app::state::UiMode::Normal;
+    state.tag_filter_visible = true;
+    // Create a session so the tag filter overlay has something to render.
+    state
+        .session_manager
+        .create_session(&crate::test_utils::test_device("d1", "iPhone"))
+        .unwrap();
+
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let hot_reload_count = count_hot_reload_regions(&state);
+    assert_eq!(
+        hot_reload_count, 0,
+        "Normal mode with tag_filter_visible=true must not register HotReload \
+         (header z=0) regions; found {} — check the tag_filter_visible OR-clause \
+         in render::view()",
+        hot_reload_count
+    );
+}
+
+/// `LinkHighlight` mode must NOT suppress base-UI regions (negative gate test).
+///
+/// Links are overlaid on top of the log view and the user expects the log view
+/// and header to remain interactive (scrolling, clicking links).  The
+/// `is_modal_ui_mode` function intentionally excludes `LinkHighlight`, so the
+/// header shortcut regions ARE registered in that mode.
+#[test]
+fn phase5_5_renderer_invariant_link_highlight_keeps_main_header_regions() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = fdemon_app::state::AppState::new();
+    state.ui_mode = fdemon_app::state::UiMode::LinkHighlight;
+
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let hot_reload_count = count_hot_reload_regions(&state);
+    assert!(
+        hot_reload_count > 0,
+        "LinkHighlight mode must keep header (base-UI) regions registered \
+         (it is NOT modal for the renderer gate); found 0 HotReload regions at 120 cols"
+    );
 }
 
 // ===========================================================================

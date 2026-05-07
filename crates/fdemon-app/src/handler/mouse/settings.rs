@@ -35,6 +35,16 @@ pub(super) fn handle_press(
         return None;
     }
 
+    // Sub-modal gate — when a dart-defines or extra-args modal is open, suppress
+    // all clicks on the underlying settings panel.  The sub-modals do not change
+    // `ui_mode` (they are rendered on top of the Settings panel), so the
+    // renderer-level modal gate in `render::view` cannot cover them.  This early
+    // return ensures that clicks outside the sub-modal's click regions (which are
+    // not yet wired in v1) do not accidentally route to the underlying tab or row.
+    if state.settings_view_state.has_modal_open() {
+        return None;
+    }
+
     // Edit-mode gate — mirrors `handle_scroll`'s `state.settings_view_state.editing`
     // gate. Click while editing must not move selection.
     //

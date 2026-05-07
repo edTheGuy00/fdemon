@@ -96,6 +96,34 @@ fn render_search_overlay(
     }
 }
 
+/// Returns `true` when the current UI mode is a modal overlay that should
+/// suppress base-UI (header + log view) mouse-region recording.
+///
+/// When a modal is active, z=0 regions registered by `MainHeader` and
+/// `LogView` would be reachable via `hit_test` for clicks that fall outside
+/// the modal's z=1 rects.  By passing `None` instead of `Some(&mut mouse_ctx)`
+/// to those widgets we prevent spurious z=0 hits while the modal is up.
+///
+/// `UiMode::LinkHighlight` is intentionally excluded: links are overlaid on
+/// top of the log view and the user expects both the log view and the badge
+/// regions to remain interactive (scrolling, clicking links).
+///
+/// `UiMode::Settings` renders a full-screen panel that *replaces* the log
+/// view entirely — the header is not rendered in Settings mode.  Settings
+/// regions are at z=0 and rely on the full-screen panel, so we suppress the
+/// underlying header/log-view base-UI regions there too.
+fn is_modal_ui_mode(mode: &UiMode) -> bool {
+    matches!(
+        mode,
+        UiMode::Startup
+            | UiMode::NewSessionDialog
+            | UiMode::ConfirmDialog
+            | UiMode::Settings
+            | UiMode::FlutterVersion
+            | UiMode::EmulatorSelector
+    )
+}
+
 /// Render the complete UI (View function in TEA)
 ///
 /// This is a pure rendering function - it should not modify state
@@ -115,6 +143,13 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // is dropped, after which the guard's Drop puts the registry back.
     let mut mouse_ctx = MouseCtx::new(regions.builder());
 
+    // Determine whether a modal overlay is active.  When `in_modal` is true
+    // we suppress base-UI (header + log view) region recording by passing
+    // `None` instead of `Some(&mut mouse_ctx)` to those widgets.  The
+    // tag-filter overlay (`tag_filter_visible`) is also "modal" for click
+    // purposes even though `ui_mode` remains `Normal`.
+    let in_modal = is_modal_ui_mode(&state.ui_mode) || state.tag_filter_visible;
+
     // Fill entire terminal with deepest background color
     let bg_block = Block::default().style(Style::default().bg(palette::DEEPEST_BG));
     frame.render_widget(bg_block, area);
@@ -126,17 +161,19 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     let icons = IconSet::new(state.settings.ui.icons);
 
     // Main header with project name and session tabs inside.
-    // Pass `&mut mouse_ctx` so header shortcut regions are registered (Task 06).
+    // Pass `Some(&mut mouse_ctx)` so header shortcut regions are registered
+    // (Task 06), but only when no modal overlay is active.  When a modal is
+    // up (`in_modal = true`) we pass `None` so that clicking header shortcuts
+    // while a modal is displayed cannot fire base-UI actions.
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
         .with_sessions(&state.session_manager);
-    widgets::header::render_main_header(
-        areas.header,
-        frame.buffer_mut(),
-        &header,
-        Some(&mut mouse_ctx),
-    );
+    let header_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
+    widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, header_ctx);
 
-    // Log view - use selected session's logs or show empty state
+    // Log view - use selected session's logs or show empty state.
+    // Same modal-gate as the header: pass `None` when a modal overlay is active
+    // so that clicks that miss the modal's z=1 rects cannot fall through to the
+    // underlying log-view z=0 regions.
     if let Some(handle) = state.session_manager.selected_mut() {
         let mut log_view = widgets::LogView::new(&handle.session.logs, icons)
             .filter_state(&handle.session.filter_state)
@@ -178,24 +215,26 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         };
         log_view = log_view.with_status(status_info);
 
+        let log_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
         widgets::log_view::render_with_regions(
             areas.logs,
             frame.buffer_mut(),
             &mut handle.session.log_view_state,
             log_view,
-            Some(&mut mouse_ctx),
+            log_ctx,
         );
     } else {
         // No session selected - show empty log view
         let empty_logs: VecDeque<LogEntry> = VecDeque::new();
         let log_view = widgets::LogView::new(&empty_logs, icons);
         let mut empty_state = LogViewState::new();
+        let log_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
         widgets::log_view::render_with_regions(
             areas.logs,
             frame.buffer_mut(),
             &mut empty_state,
             log_view,
-            Some(&mut mouse_ctx),
+            log_ctx,
         );
     }
 

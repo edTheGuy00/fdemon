@@ -11743,3 +11743,170 @@ mod phase5_integration_tests {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5.5 modal-precedence and sub-modal gate tests (Task 01)
+//
+// These tests verify:
+//   A. Settings sub-modal early-return: when dart_defines or extra_args modal
+//      is open, `settings::handle_press` returns None regardless of regions.
+//   B. Right-click universal coverage: all major UiMode variants return None
+//      for right-click presses, locking the "right-click reserved" convention.
+//
+// The renderer-level gate (suppressing base-UI z=0 regions in modal modes) is
+// tested in `crates/fdemon-tui/src/render/tests.rs` because it requires
+// calling `render::view()` which lives in `fdemon-tui`.
+// ─────────────────────────────────────────────────────────────────────────────
+mod phase5_5_modal_precedence_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+    use crate::mouse_regions::{MouseAction, MouseRect};
+    use crate::state::UiMode;
+
+    // ── A. Settings sub-modal gate ────────────────────────────────────────
+
+    /// When the dart-defines sub-modal is open, `settings::handle_press` must
+    /// return `None` even if a z=0 settings tab region is registered at the
+    /// clicked coordinate.
+    ///
+    /// This locks the sub-modal gate added in Phase 5.5 Task 01.  Without it,
+    /// a click outside the sub-modal's UI (which has no registered regions in
+    /// v1) would fall through to the underlying settings tab row.
+    #[test]
+    fn phase5_5_settings_dispatcher_with_dart_defines_modal_open_returns_none() {
+        use crate::new_session_dialog::{DartDefine, DartDefinesModalState};
+
+        let mut state = AppState::new();
+        state.show_settings();
+        state.ui_mode = UiMode::Settings;
+
+        // Open the dart-defines sub-modal.
+        state.settings_view_state.dart_defines_modal =
+            Some(DartDefinesModalState::new(vec![DartDefine::new("K", "V")]));
+
+        // Register a z=0 settings tab region at (10, 4) — the kind that
+        // would normally route to SettingsGotoTab.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(10, 4, 20, 1),
+            MouseAction::emit(Message::SettingsGotoTab(0)),
+        );
+        state.mouse_regions.set(regions);
+
+        // Drive through the full Message::Mouse → update() path.
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 10,
+                y: 4,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        assert!(
+            result.message.is_none(),
+            "settings click must be suppressed when dart-defines modal is open; got {:?}",
+            result.message
+        );
+    }
+
+    /// When the extra-args sub-modal is open, `settings::handle_press` must
+    /// return `None` even if a z=0 settings row region is registered at the
+    /// clicked coordinate.
+    #[test]
+    fn phase5_5_settings_dispatcher_with_extra_args_modal_open_returns_none() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.show_settings();
+        state.ui_mode = UiMode::Settings;
+
+        // Open the extra-args sub-modal.
+        state.settings_view_state.extra_args_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::ExtraArgs, vec![]));
+
+        // Register a z=0 settings row region at (5, 8).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(5, 8, 40, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 2 }),
+        );
+        state.mouse_regions.set(regions);
+
+        // Drive through the full Message::Mouse → update() path.
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 5,
+                y: 8,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        assert!(
+            result.message.is_none(),
+            "settings click must be suppressed when extra-args modal is open; got {:?}",
+            result.message
+        );
+    }
+
+    // ── B. Right-click universal coverage (Minor #19) ─────────────────────
+
+    /// Right-click must be a no-op in every major UI mode.
+    ///
+    /// This test iterates over all `UiMode` variants that have per-mode press
+    /// handlers and asserts that dispatching a right-click always returns
+    /// `None`.  It locks the "right-click reserved for future context-menu"
+    /// convention across every mode simultaneously.
+    ///
+    /// Modes without click handlers (`EmulatorSelector`, `Loading`,
+    /// `SearchInput`, `FlutterVersion`) return `None` unconditionally for any
+    /// press (handled by the `None` arm in `mouse::handle_press`), so they are
+    /// included in the assertion too.
+    #[test]
+    fn phase5_5_right_click_is_no_op_in_all_ui_modes() {
+        let modes = [
+            UiMode::Normal,
+            UiMode::DevTools,
+            UiMode::ConfirmDialog,
+            UiMode::Settings,
+            UiMode::NewSessionDialog,
+            UiMode::Startup,
+            UiMode::LinkHighlight,
+            UiMode::Loading,
+            UiMode::EmulatorSelector,
+            UiMode::SearchInput,
+            UiMode::FlutterVersion,
+        ];
+
+        for mode in modes {
+            let mut state = AppState::new();
+            state.ui_mode = mode;
+
+            // Register a z=0 region at (0,0) so that if a right-click were
+            // accidentally routed to the hit-test it could theoretically match.
+            let mut regions = state.mouse_regions.take();
+            regions.builder().click(
+                MouseRect::new(0, 0, 80, 24),
+                MouseAction::emit(Message::HotReload),
+            );
+            state.mouse_regions.set(regions);
+
+            let result = update(
+                &mut state,
+                Message::Mouse(MouseInput::Press {
+                    x: 5,
+                    y: 5,
+                    button: MouseButton::Right,
+                    modifiers: KeyModSet::NONE,
+                }),
+            );
+            assert!(
+                result.message.is_none(),
+                "right-click must be a no-op in {:?} mode; got {:?}",
+                mode,
+                result.message
+            );
+        }
+    }
+}
