@@ -7,7 +7,7 @@
 
 use crate::handler::UpdateResult;
 use crate::message::Message;
-use crate::new_session_dialog::LaunchContextField;
+use crate::new_session_dialog::{DeviceListItem, LaunchContextField};
 use crate::state::AppState;
 
 /// Set the selected device on the active tab and emit a follow-up
@@ -26,8 +26,19 @@ pub fn handle_select_device_at(state: &mut AppState, index: usize) -> UpdateResu
         return UpdateResult::none();
     }
     let clamped = index.min(list_len - 1);
-    target.selected_index = clamped;
 
+    // Guard: only select if the clamped index is a device row, not a header.
+    // The renderer already prevents header-row regions from being registered, but
+    // we defend in depth here so the function is correct in isolation.
+    let is_device = matches!(
+        target.flat_list().get(clamped),
+        Some(DeviceListItem::Device(_))
+    );
+    if !is_device {
+        return UpdateResult::none();
+    }
+
+    target.selected_index = clamped;
     UpdateResult::message(Message::NewSessionDialogDeviceSelect)
 }
 
@@ -133,6 +144,8 @@ mod tests {
             .set_connected_devices(vec![test_device("a"), test_device("b")]);
 
         // Pass a large index — should be clamped to last flat-list position.
+        // With 2 connected devices the flat list is [Header, Device, Device],
+        // so the last index (flat_len - 1 = 2) is a Device row and DeviceSelect fires.
         let flat_len = state
             .new_session_dialog_state
             .target_selector
@@ -150,6 +163,42 @@ mod tests {
             result.message,
             Some(Message::NewSessionDialogDeviceSelect)
         ));
+    }
+
+    #[test]
+    fn handle_select_device_at_with_header_index_is_noop() {
+        // With 1 connected device the flat list is [Header, Device].
+        // Index 0 is a header row. Clicking it must not update selection
+        // and must not emit NewSessionDialogDeviceSelect.
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_selector.active_tab = TargetTab::Connected;
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(vec![test_device("a")]);
+
+        // Place the cursor on the device (index 1) first.
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+        let initial_index = state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index;
+
+        // Click on index 0, which is the header row.
+        let result = handle_select_device_at(&mut state, 0);
+
+        // Selection must be unchanged and no DeviceSelect emitted.
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .selected_index,
+            initial_index
+        );
+        assert!(result.message.is_none());
     }
 
     #[test]
