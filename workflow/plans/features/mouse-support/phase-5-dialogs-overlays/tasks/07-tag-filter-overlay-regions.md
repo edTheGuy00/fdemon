@@ -372,3 +372,33 @@ fn extract_action(entry: &fdemon_app::MouseRegionEntry) -> Option<Message> {
 - **Why `compute_scroll_offset` is reimplemented locally.** Ratatui's `ListState` doesn't expose its scroll math. The simple "keep selected visible" formula matches Ratatui's default behaviour for `with_selected` and is verified by the scrolled-indices test above.
 - **Why the rect width spans the full `list_chunk.width`.** Clicks anywhere on a row should select that row — narrower rects (e.g., just over the checkbox or just over the tag name) would create dead zones and confuse users.
 - **Why `z_index = 1`.** Tag-filter overlay is a primary modal (covers the log view, intercepts all input). Same z as ConfirmDialog, NewSessionDialog. Sub-modals (none in v1) would be z=2.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | Added `fdemon_app::message::Message` and `mouse_regions::{MouseAction, MouseRect}` imports; replaced stub body of `render_tag_filter_with_regions` with real implementation; added `compute_scroll_offset` private helper; added 4 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import path corrections**: The task file's test snippets used `fdemon_app::MouseCtx` and `fdemon_app::NativeTagState` which do not exist at crate root. Fixed to `crate::widgets::MouseCtx` (re-exported from `crate::render::MouseCtx`) and `fdemon_app::session::NativeTagState` respectively.
+2. **`compute_scroll_offset` as private module function**: No existing scroll-offset helper was found in the codebase, so the 7-line helper from the task was added as a private `fn` in the same file.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui -- tag_filter` - Passed (21 tests: 17 pre-existing + 4 new)
+- `cargo test --workspace` - Passed (all crates, no failures)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Scroll offset math**: The `compute_scroll_offset` function implements a simple "keep selected visible" heuristic that matches Ratatui's default `with_selected` behaviour. If Ratatui changes its scrolling algorithm in a future version, the scroll offset could diverge causing incorrect absolute indices to be registered. The `render_with_regions_scrolled_indices_are_absolute` test guards against regressions.

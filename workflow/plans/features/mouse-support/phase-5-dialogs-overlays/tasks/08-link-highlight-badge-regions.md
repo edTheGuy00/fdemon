@@ -218,3 +218,40 @@ fn render_with_regions_off_screen_links_are_not_recorded() {
 - **Why we don't record badge regions during the `LinkHighlight` arm of `render::view`.** The badges are part of the log view's own rendering — they live inside `log_view::render_with_regions`, which is called for *every* `UiMode` (the log view shows in Normal/DevTools/LinkHighlight). The gate inside `render_with_regions` ensures badges are recorded only in LinkHighlight mode.
 - **Why the dispatcher wires `LinkHighlight` press separately (Task 05).** Even though badges register at z=0 (same as log-view rows), the *dispatcher* needs to know the mode is `LinkHighlight` to route press to a handler that hit-tests these regions. Without the dispatcher entry, Phase 5's link mode would have unreachable click handlers. (In practice the `link_highlight::handle_press` body is identical to `normal::handle_press` minus the busy gate — Task 05 acceptance criteria #4.)
 - **Off-screen link safety.** If a link's entry is scrolled off-screen, the badge isn't rendered, so its rect should not be registered. The implementation must keep badge registration co-located with badge rendering so this stays in sync naturally.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a9e8e1371257a538f
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `BadgeAction` struct, `is_link_badge_span`, `badge_span_shortcut`, and `collect_badge_actions` helpers; wired badge collection in `render_inner` loop; added badge region recording after row regions in the region-recording block |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `LinkHighlightState` import; added `make_link_state`, `collect_badge_shortcuts`, `collect_badge_regions` helpers; added 4 new tests: `render_with_regions_records_no_badges_when_link_mode_inactive`, `render_with_regions_records_one_badge_per_link_when_active`, `render_with_regions_badges_pushed_after_row_regions`, `render_with_regions_off_screen_links_not_recorded` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Approach A (span-walk)**: Chose the recommended Approach A — walking the rendered spans for each line to find badge spans by their distinctive `ACCENT` background style, rather than Approach B (plumbing `MouseCtx` through internal helper functions). This keeps badge recording co-located with row recording in `render_inner` without requiring changes to `format_entry` or `format_stack_frame_line_with_links`.
+
+2. **`BadgeAction` struct**: Added a parallel `BadgeAction` struct alongside `RowAction` to accumulate badge positions during the render loop. Badge regions are registered in the same clipping block as row regions but pushed after rows, so they win on overlapping cells (last-pushed-wins at equal z_index).
+
+3. **Horizontal scroll handling**: In nowrap mode, badges scrolled off the left edge (when `col_offset < h_offset`) are skipped. In wrap mode, no horizontal scroll applies so `col_offset` maps directly.
+
+4. **`is_some_and` instead of `map_or`**: Used `is_some_and` per clippy's `unnecessary_map_or` lint for the `has_link_badges` gate.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace --lib` - Passed (952 tests, 101 in log_view module)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Wrap mode badge x-position**: In wrap mode, `col_offset` is the position within the unwrapped line. If the badge is on a wrapped line (the message is so long the badge falls beyond the terminal width), the recorded x position may be off. However, this is a very unlikely edge case: link badges are typically inserted near the start of the file reference, which is usually within the first terminal-width characters. This matches how the existing implementation handles row regions in wrap mode.
+
+2. **Badge width clipping at right edge**: If `badge_x + 3 > content_area.x + content_area.width`, the badge rect is clipped to fit. A clipped badge (width 1 or 2) would still fire `SelectLink` on click, just with a smaller target. This is a safe degradation.

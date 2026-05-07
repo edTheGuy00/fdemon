@@ -384,3 +384,46 @@ Record the smoke test result in the task's completion summary. If any step fails
 - **Why the manual smoke test is in this task.** Phase 5 touches every Phase-5 surface; the cross-cutting walk-through belongs at the end. Per-task smoke tests (in Tasks 03/04/06–10) would each be a narrow slice; this task's smoke test is the wide integration check.
 - **`Message` `Clone` requirement.** `Message` already derives `Clone` (used by Phase 3's `MouseAction::emit(msg)`). No changes to `message.rs` for testability.
 - **If a snapshot test fails because of a layout calculation mismatch (region rect doesn't land where the renderer drew it):** treat that as a real bug, not a flaky test. The renderer and the region recorder must use the same layout math; if they diverge, the click would silently land on the wrong row.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `phase5_integration_tests` module with 4 tests: z=1 wins over z=0 (A), Settings double-click chain (B), tag-filter click toggle (C), z=0 baseline when no modal present (D/extra) |
+| `crates/fdemon-tui/src/render/tests.rs` | Added `extract_action` helper + `test_device` helper + 5 Phase-5 snapshot tests: ConfirmDialog buttons, Settings regions, tag filter regions, NewSessionDialog regions, LinkHighlight badge regions |
+
+### Notable Decisions/Tradeoffs
+
+1. **Adapted `Link` → `DetectedLink`**: The task spec used a pseudo-code `Link` struct. The actual type is `DetectedLink` with `FileReference`, `viewport_line`, etc. The link highlight badge test uses `DetectedLink::new()` + `add_link()` + `activate()` (matching the log_view test helpers pattern).
+
+2. **Settings double-click test routes through `Message::Mouse`**: The spec showed a simplified `handle_mouse()` call, but the actual production path is `Message::Mouse(MouseInput::Press{..})` → `update()` → returns `SettingsClickRow` follow-up → second `update()` call dispatches it → returns `SettingsToggleEdit`. The test mirrors this two-stage dispatch.
+
+3. **9th test added**: Task spec explicitly describes 8 tests (1 A + 1 B + 1 C + 5 D), but acceptance criterion requires ≥ 9. Added `phase5_base_z0_region_wins_when_no_z1_region_overlaps` as the 9th test to lock the complementary z-index contract.
+
+4. **`extract_action` helper added to render/tests.rs**: Rather than adding to a shared `test_utils` module (which would require a module reorganization), it was added locally to `render/tests.rs` where it's the only consumer. The widget-level helpers in `settings_panel/tests.rs` and `tag_filter.rs` are identical but in separate modules with no cross-module visibility.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo fmt --all -- --check` - Passed
+- `cargo test --workspace --lib` - Passed (fdemon-app: 2116 tests, fdemon-tui: 982 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-app --lib -- phase5` - 4 tests pass
+- `cargo test -p fdemon-tui --lib -- phase5` - 7 tests pass (5 new + 2 pre-existing Task 02)
+
+### Manual Smoke Test
+
+Not performed (no attached Flutter project available in CI environment). The automated tests cover all the Phase 5 contracts specified.
+
+### Risks/Limitations
+
+1. **LinkHighlight badge test requires matching display_text**: The badge is only rendered when `display_text` from `DetectedLink` appears in the log entry's message text. The test carefully constructs entries whose messages contain the exact display strings. If the rendering logic changes (e.g. case-sensitivity), the badge test may need adjustment.
+
+2. **NewSessionDialog device-row test is layout-sensitive**: At 120×40 (wide terminal) the horizontal layout is used and device rows are clickable. Compact vertical layout does not register device-row regions (as noted in the task context). The test uses 120 cols to exercise the horizontal path.

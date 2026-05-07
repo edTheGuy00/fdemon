@@ -247,3 +247,42 @@ fn phase5_sister_functions_record_no_regions_in_stub_state() {
 - **No changes to the `Widget`/`StatefulWidget` impls.** Same as Phase 4 — the impls stay for tests, and the sister function is the click-aware variant.
 - **No changes to the `LinkHighlight` `render::view` arm.** The instruction bar at the bottom of the log view has no click target. Badge rects are recorded inside `widgets/log_view/mod.rs::render_with_regions` (Task 08), which is already called earlier in `render::view` regardless of `UiMode`. The active-session check + `link_highlight_state.is_active()` check inside `render_with_regions` gates badge recording to only fire in `LinkHighlight` mode. The `UiMode::LinkHighlight` arm in `render::view` only renders the instruction bar, which is informational.
 - **No changes to `widgets/mod.rs`'s public re-exports unless required.** If callers reference `widgets::render_tag_filter_with_regions` (without the module path), a `pub use tag_filter::render_tag_filter_with_regions;` re-export is added; otherwise the canonical `widgets::tag_filter::render_tag_filter_with_regions(...)` path is fine.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a19b2b53dbde29248
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Replaced `frame.render_widget` / `frame.render_stateful_widget` / `widgets::render_tag_filter` calls with the four new sister-function calls for `NewSessionDialog`, `ConfirmDialog`, `SettingsPanel`, and `render_tag_filter_with_regions` |
+| `crates/fdemon-tui/src/render/tests.rs` | Added two Phase-5 smoke tests: `phase5_sister_functions_record_no_regions_in_stub_state` and `phase5_settings_sister_records_no_new_regions` |
+| `crates/fdemon-tui/src/widgets/confirm_dialog.rs` | Added `pub fn render_with_regions(...)` stub; made module public in `widgets/mod.rs` |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `pub fn render_with_regions(...)` stub (delegates to `<NewSessionDialog as Widget>::render`) |
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Added `pub fn render_with_regions(...)` stub (delegates to `<SettingsPanel as StatefulWidget>::render`) |
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | Added `pub fn render_tag_filter_with_regions(...)` sister function (delegates to `render_tag_filter`) |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `// EXCEPTION: link-highlight badge regions are recorded in Phase 5 Task 08` comment in `render_inner` |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Made `confirm_dialog` a public module; re-exported `render_tag_filter_with_regions` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`confirm_dialog` module made public**: The task spec calls `widgets::confirm_dialog::render_with_regions(...)` from `render/mod.rs`. Since the module was private (`mod confirm_dialog;`), it was changed to `pub mod confirm_dialog;` to allow the path-based access from the render layer. This matches the precedent of `pub mod devtools;` / `pub mod log_view;`.
+
+2. **Smoke test deferred partial variant**: The task spec's full `matches_phase5_message_shape` helper requires Phase 5 Task 01 message variants (`NewSessionDialogSelectDeviceAt`, `SettingsClickRow`, `TagFilterClickRow`, etc.) which do not exist yet. The smoke tests instead verify the weaker but still meaningful invariant: no `z_index = 1` regions are pushed in stub state (since Phase 5 region-recording tasks will use z=1 for dialog overlays).
+
+3. **`render_tag_filter_with_regions` re-exported from `widgets::mod`**: Since `render::view` uses the path `widgets::render_tag_filter_with_regions(...)` (matching the existing `render_tag_filter` re-export pattern), the function is re-exported at the top level alongside `render_tag_filter`.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all 0 new failures; 2 new smoke tests passing)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Smoke test uses z_index heuristic**: The smoke test for "no Phase 5 regions" checks that `z_index != 1` rather than matching specific Phase 5 message variants. This is because Task 01 hasn't landed yet. Task 11 will add the definitive `matches_phase5_message_shape` helper once all Phase 5 message variants exist.

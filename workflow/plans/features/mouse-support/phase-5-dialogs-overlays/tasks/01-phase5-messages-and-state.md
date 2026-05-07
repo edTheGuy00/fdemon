@@ -222,3 +222,37 @@ If a `tests.rs` exists in any touched module, ensure no test references the new 
 - **Why stubs don't `todo!()`.** `todo!()` panics during integration tests in Task 11 if the dispatch arms get hit before Tasks 03 / 04 / 09 land. Returning `UpdateResult::none()` is harmless — it just means the click is silently ignored until the body is filled in.
 - **No `Eq` derivation needed for new variants.** `Message` already does not derive `Eq`. The new variants use only `usize` and an `enum`-typed `LaunchContextField` — they are trivially `PartialEq` if the parent enum is. Don't add `Eq` derives.
 - **`LaunchContextField` is already in `crate::new_session_dialog`** (re-exported from the app layer). Confirm with a `Cargo check` that the import resolves; if it doesn't, the module's `pub use` declaration may need a one-line addition.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added 5 new `Message` variants in a new `// ── Mouse Click Messages (Phase 5) ──` section: `NewSessionDialogSelectDeviceAt`, `NewSessionDialogFocusField`, `NewSessionDialogFuzzySelectAt`, `SettingsClickRow`, `TagFilterClickRow` |
+| `crates/fdemon-app/src/state.rs` | Added `SettingsClickStamp` struct (Copy+Clone+Debug) immediately after `LogClickStamp`; added `last_settings_click: Option<SettingsClickStamp>` field to `AppState`; initialized to `None` in `with_settings()` |
+| `crates/fdemon-app/src/handler/update.rs` | Added 5 new dispatch arms in Phase 5 section adjacent to Phase 4 mouse-click arms |
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Added stub `pub fn handle_settings_click_row` before the `#[cfg(test)]` module |
+| `crates/fdemon-app/src/handler/new_session/mod.rs` | Added `pub mod clicks;` declaration |
+| `crates/fdemon-app/src/handler/new_session/clicks.rs` | New file with 3 stub click handlers: `handle_select_device_at`, `handle_focus_field`, `handle_fuzzy_select_at` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`pub mod clicks` vs `mod clicks`**: Used `pub mod clicks` so `update.rs` can call `crate::handler::new_session::clicks::*` — the module path must be publicly reachable through the crate root.
+2. **Blank line removal in fmt**: `cargo fmt` removed blank lines after `// ── Mouse Click Messages (Phase 5) ──` section headers and the single-brace import. Applied fixes before committing.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed
+- `cargo test --workspace` - Passed (all test suites pass, no regressions)
+
+### Risks/Limitations
+
+1. **Stub bodies**: All three `new_session/clicks.rs` functions and `handle_settings_click_row` return `UpdateResult::none()`. They are intentional stubs for Tasks 03, 04, and 09 to fill in.

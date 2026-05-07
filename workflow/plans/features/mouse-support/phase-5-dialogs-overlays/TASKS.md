@@ -77,17 +77,17 @@ Wave 3:                                                         ▼
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-phase5-messages-and-state](tasks/01-phase5-messages-and-state.md) | Not Started | — | 1.5h | `fdemon-app` |
-| 2 | [02-tui-region-plumbing-for-dialogs-and-overlays](tasks/02-tui-region-plumbing-for-dialogs-and-overlays.md) | Not Started | — | 1.75h | `fdemon-tui` |
-| 3 | [03-settings-click-row-handler-body](tasks/03-settings-click-row-handler-body.md) | Not Started | 1 | 1h | `fdemon-app` |
-| 4 | [04-tag-filter-click-row-handler-body](tasks/04-tag-filter-click-row-handler-body.md) | Not Started | 1 | 0.5h | `fdemon-app` |
-| 5 | [05-mouse-press-dispatchers-multi-mode](tasks/05-mouse-press-dispatchers-multi-mode.md) | Not Started | 1 | 1.75h | `fdemon-app` |
-| 6 | [06-confirm-dialog-button-regions](tasks/06-confirm-dialog-button-regions.md) | Not Started | 1, 2 | 1h | `fdemon-tui` |
-| 7 | [07-tag-filter-overlay-regions](tasks/07-tag-filter-overlay-regions.md) | Not Started | 1, 2 | 1h | `fdemon-tui` |
-| 8 | [08-link-highlight-badge-regions](tasks/08-link-highlight-badge-regions.md) | Not Started | 1, 2 | 1h | `fdemon-tui` |
-| 9 | [09-new-session-dialog-regions](tasks/09-new-session-dialog-regions.md) | Not Started | 1, 2 | 2h | `fdemon-tui` |
-| 10 | [10-settings-panel-regions](tasks/10-settings-panel-regions.md) | Not Started | 1, 2 | 1.25h | `fdemon-tui` |
-| 11 | [11-integration-and-snapshot-tests](tasks/11-integration-and-snapshot-tests.md) | Not Started | 3, 4, 5, 6, 7, 8, 9, 10 | 1.5h | `fdemon-app`, `fdemon-tui` |
+| 1 | [01-phase5-messages-and-state](tasks/01-phase5-messages-and-state.md) | Done ✅ | — | 1.5h | `fdemon-app` |
+| 2 | [02-tui-region-plumbing-for-dialogs-and-overlays](tasks/02-tui-region-plumbing-for-dialogs-and-overlays.md) | Done ✅ | — | 1.75h | `fdemon-tui` |
+| 3 | [03-settings-click-row-handler-body](tasks/03-settings-click-row-handler-body.md) | Done ✅ | 1 | 1h | `fdemon-app` |
+| 4 | [04-tag-filter-click-row-handler-body](tasks/04-tag-filter-click-row-handler-body.md) | Done ✅ | 1 | 0.5h | `fdemon-app` |
+| 5 | [05-mouse-press-dispatchers-multi-mode](tasks/05-mouse-press-dispatchers-multi-mode.md) | Done ✅ | 1 | 1.75h | `fdemon-app` |
+| 6 | [06-confirm-dialog-button-regions](tasks/06-confirm-dialog-button-regions.md) | Done ✅ | 1, 2 | 1h | `fdemon-tui` |
+| 7 | [07-tag-filter-overlay-regions](tasks/07-tag-filter-overlay-regions.md) | Done ✅ | 1, 2 | 1h | `fdemon-tui` |
+| 8 | [08-link-highlight-badge-regions](tasks/08-link-highlight-badge-regions.md) | Done ✅ | 1, 2 | 1h | `fdemon-tui` |
+| 9 | [09-new-session-dialog-regions](tasks/09-new-session-dialog-regions.md) | Done ⚠️ (Concern: compact-vertical TargetSelector regions deferred to Phase 6) | 1, 2 | 2h | `fdemon-tui` |
+| 10 | [10-settings-panel-regions](tasks/10-settings-panel-regions.md) | Done ✅ | 1, 2 | 1.25h | `fdemon-tui` |
+| 11 | [11-integration-and-snapshot-tests](tasks/11-integration-and-snapshot-tests.md) | Done ✅ | 3, 4, 5, 6, 7, 8, 9, 10 | 1.5h | `fdemon-app`, `fdemon-tui` |
 
 ## File Overlap Analysis
 

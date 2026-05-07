@@ -325,3 +325,46 @@ fn handle_fuzzy_select_at_sets_index_and_emits_confirm() {
 - **Why field-clicking emits `Focus` then `Activate` (chained), not just `FocusField`.** Most users clicking a field expect it to *activate* (open the picker, start editing). Chaining `Activate` after `Focus` matches the keyboard sequence (arrow-key to field, then Enter). Fields that don't activate on Enter (only the Mode field's Left/Right cycler) gracefully no-op the activate follow-up.
 - **Why `NewSessionDialogSelectDeviceAt` chains `NewSessionDialogDeviceSelect` instead of being a self-contained "set + select" arm.** The existing `NewSessionDialogDeviceSelect` arm already handles all the side effects (connection probing, error display, etc.) — duplicating that logic in `handle_select_device_at` would be drift-prone. Chaining keeps the click flow trivially equivalent to keyboard "arrow N times then Enter".
 - **`MouseRect::from(rect)` helper.** If a `From<ratatui::layout::Rect> for MouseRect` impl already exists (likely from Phase 3), use it. If not, the conversion is `MouseRect::new(rect.x, rect.y, rect.width, rect.height)`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ae9adbfd5b0691004
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/clicks.rs` | Replaced all three stub bodies with real implementations; added 9 unit tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/tab_bar.rs` | Extracted `render_with_regions` free function from `Widget::render`; added 2 region tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/device_list.rs` | Added `connected_device_list_render_with_regions` and `bootable_device_list_render_with_regions`; `Widget::render` delegates to them; added 2 region tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Added `launch_context_render_with_regions` + two helpers (`register_full_layout_regions`, `register_compact_layout_regions`); `Widget::render` preserved; added 2 region tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/fuzzy_modal.rs` | Added `fuzzy_modal_render_with_regions`; made `modal_rect` pub; `Widget::render` delegates; added 3 region tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Filled in `render_with_regions` stub; added impl methods for horizontal/vertical layout + target-selector/launch-context sub-helpers; added 2 integration tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Target selector threading via impl methods**: Rather than a standalone `target_selector::render_with_regions` function (which the task scope listed but didn't include in Files Modified), the NewSessionDialog's impl methods inline the TargetSelector layout math and call tab_bar/device_list sub-functions directly. This avoids modifying `target_selector.rs` and keeps the scope tight.
+
+2. **`handle_select_device_at` uses the flat list index**: `TargetSelectorState` has a single `selected_index` that maps into the flat list (headers + devices). The region recording skips header rows but records flat-list indices, so clicking a device row sets `selected_index` to the correct flat-list position and the existing `NewSessionDialogDeviceSelect` handler navigates to the right device.
+
+3. **`launch_context_render_with_regions` renders then re-computes layout**: Rather than duplicating all render code, it calls the existing `Widget::render` path for pixel output and then re-computes the layout (cheap) to record regions. This keeps render logic in one place.
+
+4. **Fuzzy modal regions re-render over already-rendered pixels**: The horizontal/vertical helpers call `render_fuzzy_modal_overlay` first (which renders the visual overlay), then call `fuzzy_modal_render_with_regions` again to also record regions. Re-rendering is idempotent and the overhead is negligible.
+
+5. **No `From<Rect> for MouseRect` impl found**: Used `MouseRect::new(r.x, r.y, r.width, r.height)` throughout, consistent with other Phase 5 tasks.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace --lib` - PASS (959 tests, +9 handler tests + 13 region/integration tests)
+- `cargo fmt --all -- --check` - PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
+### Risks/Limitations
+
+1. **Compact TargetSelector regions deferred**: When the dialog uses vertical layout and `target_compact=true`, the TargetSelector renders via the existing `TargetSelector::render` widget (no region recording). This affects narrow terminals only — the full horizontal path has complete region coverage.
+
+2. **Dart-defines modal deferred to Phase 6**: As specified in the task, clicking inside the dart-defines modal is not recorded.

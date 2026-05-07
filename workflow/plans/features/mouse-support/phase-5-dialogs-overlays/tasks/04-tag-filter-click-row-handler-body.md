@@ -164,3 +164,35 @@ fn click_row_double_toggles_back() {
 - **Why we set `selected_index` even though the toggle effect is what the user wanted.** Keyboard navigation after a click should resume from the clicked row, not from wherever the keyboard was last. Mirrors how clicking a list row in any IDE moves the focus.
 - **Why we don't `UpdateResult::message(Message::TagFilterToggleSelected)` as a follow-up.** It would work, but adds an extra round-trip through the message bus and an extra render frame between the index-set and the toggle. Inline implementation keeps the click visually atomic.
 - **Why no test for "select_index defaults to 0 when tag_count == 0 and we click index 0".** That path is the no-op early-return — `selected_index` is *not* updated when `tag_count == 0`, even for `index = 0`. Locked in by the third test above.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Replaced stub `Message::TagFilterClickRow { index: _ } => UpdateResult::none()` with full implementation: range guard, `selected_index` update, tag name lookup via `sorted_tags()`, and `toggle_tag()` call. |
+| `crates/fdemon-app/src/handler/tests.rs` | Added four unit tests in the `phase4_integration_tests` module: `click_row_sets_selection_and_toggles_visibility`, `click_row_with_out_of_range_index_is_no_op`, `click_row_with_no_session_is_no_op`, `click_row_double_toggles_back`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test module placement**: The tests were appended into the existing `phase4_integration_tests` module (the one at the bottom of `tests.rs`) rather than creating a new named module. This matches the style established by the settings-click-row tests added in task 03 which are also in the same module.
+
+2. **Implementation fidelity**: The arm exactly mirrors `TagFilterToggleSelected` but substitutes the clicked `index` for `tag_filter_ui.selected_index`, then also sets `selected_index` before the toggle — matching the task spec.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app click_row` - Passed (4 tests)
+- `cargo test --workspace` - Passed (all suites, zero failures)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None. The implementation is self-contained within a single match arm and is guarded by the same range check pattern as the existing `TagFilterToggleSelected` arm.

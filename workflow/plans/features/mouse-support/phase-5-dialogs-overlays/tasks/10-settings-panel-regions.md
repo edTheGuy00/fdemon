@@ -302,3 +302,44 @@ fn render_with_regions_visual_output_unchanged() {
 - **Why footer hints are not clickable.** Footer hints (`Tab: Switch tabs`, `j/k: Navigate`, `Enter: Edit`, `Ctrl+S: Save Changes`) are reminders, not interactive elements. Each hint references a keyboard shortcut; mouse interaction with these would be redundant with the actual settings rows + dedicated buttons. Phase 6 may revisit `Save Changes` as a clickable button.
 - **Why we don't auto-suppress clicks when a sub-modal is open.** v1 accepts the inconsistency: with a sub-modal open, the visible non-modal area covers the rendered modal background (dimmed cells), and the sub-modal itself doesn't have click regions yet. A click on a still-recorded underlying row would fire `SettingsClickRow`, but the dispatcher's editing-gate (Task 05) returns `None` when `editing == true`. Sub-modal-open is not `editing` — so this gap exists. Phase 6 fixes it by either: (a) skipping underlying registration when a sub-modal is open, or (b) registering sub-modal regions at z=1 to shadow.
 - **Why we mirror the renderer's section-skip logic.** The renderer at `render_project_tab` walks `items` and inserts a `y += 1` row before each new section. The region-recording walk must do the same to keep `y` in sync with where rows actually land in the buffer. If the row-y miscounts, click rects fire on the wrong row — confusing and hard to debug. The flat `index` into `items` (which the registry stores) matches what the keyboard handler `SettingsNextItem`/`SettingsPrevItem` operates on, so click → keyboard parity is preserved.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-af79e441bfd890388
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Replaced stub `render_with_regions` body with real implementation. Added private `register_setting_row_regions` helper. |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Added `extract_action` helper and 5 new unit tests covering: 4 tab headers, row count, index ordering, no-section-headers, visual identity, and None-ctx parity. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Layout mirroring via manual constant arithmetic**: The `render_with_regions` function re-derives the layout (header inner, tab_area, content inner) using the same constants as `render()` rather than making private methods public. This keeps the implementation self-contained with zero visual side effects — we call `StatefulWidget::render` first (preserving visual identity) then walk the layout independently to register regions.
+
+2. **`register_setting_row_regions` private helper**: Extracted the section-header-skip walk into a shared helper function called by all 4 tab branches. This avoids code duplication and ensures the section-header logic is only written once, reducing the risk of drift between rendering and region recording.
+
+3. **LaunchConfig and VSCodeConfig item generation**: Both tabs generate items from disk (via `load_launch_configs` / `load_vscode_configs`). The `render_with_regions` function re-generates the same items in its region-recording pass. This is acceptable because `render_with_regions` already calls `StatefulWidget::render` which does the same work — disk loading is already unavoidable per-frame.
+
+4. **VSCode tab's info banner offset**: The UserPrefs and VSCode tabs render a 4-row info banner above items. The region-recording walk accounts for this by setting `content_y = inner_y + 4`, matching what `render_user_prefs_tab` and `render_vscode_tab` do.
+
+5. **Redundant `active_tab = Project` removed from tests**: Clippy flagged post-Default assignments to fields that already have the default value. Since `SettingsViewState::default()` sets `active_tab` to `Project`, the two test functions that set it explicitly were updated.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui settings_panel` - Passed (74 existing + 5 new = 79 total)
+- `cargo test -p fdemon-tui render_with_regions` - Passed (15 total, 5 new settings_panel tests)
+- `cargo test --workspace` - Passed (all suites, 0 failed)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Layout constant coupling**: The tab bar y-coordinate and content inner x/y are derived from constants (`Borders::ALL` → 1px shrink, tab bar at `inner.top() + 2`, etc). If `render_header` or `render_content` change their layout, `render_with_regions` must be updated in sync. A comment in the code documents this coupling.
+
+2. **LaunchConfig/VSCode disk reads per frame**: For tabs with file-backed configs, `render_with_regions` triggers one extra disk read (in addition to the one inside `StatefulWidget::render`). This matches the existing rendering approach and is not a new bottleneck, but worth noting for Phase 6 if caching is introduced.

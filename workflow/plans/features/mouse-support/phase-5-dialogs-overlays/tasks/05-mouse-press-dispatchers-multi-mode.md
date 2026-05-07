@@ -438,3 +438,39 @@ fn click_while_editing_returns_none() {
 - **Why `Settings::handle_press` has an editing gate but `new_session::handle_press` doesn't.** Settings has inline edit mode (text-buffer typing on a row). NewSessionDialog has no inline editing — the dart-defines modal is a full-screen overlay that handles its own input. So the gate is unnecessary there.
 - **Why no busy-gate in any Phase-5 handler.** None of the Phase-5 click messages are gated by `any_session_busy()`. Hot-reload-while-busy is the only such gate (Phase 3 task 06), and that's only on header `[r]`/`[R]`/`[x]` clicks in `Normal` mode.
 - **`tag_filter_visible` interaction with the underlying mode.** The keyboard handler intercepts all keys when `tag_filter_visible` (gating at `handler/keys.rs:105-126`); the mouse handler now intercepts presses. Scroll routing in `handle_scroll` is unchanged — it already routes to `TagFilterMoveUp/Down` when visible.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `mod confirm_dialog` and `mod tag_filter`; replaced `tag_filter_visible` short-circuit with positive route to `tag_filter::handle_press`; added arms for `Settings`, `Startup|NewSessionDialog`, `ConfirmDialog`, `LinkHighlight`; replaced `dispatcher_press_tag_filter_visible_is_no_op` test with `dispatcher_press_tag_filter_visible_routes_to_tag_filter_handler` |
+| `crates/fdemon-app/src/handler/mouse/confirm_dialog.rs` | NEW: `handle_press` with right-click guard + hit-test pattern; 4 tests |
+| `crates/fdemon-app/src/handler/mouse/tag_filter.rs` | NEW: `handle_press` with right-click guard + hit-test pattern; 4 tests |
+| `crates/fdemon-app/src/handler/mouse/settings.rs` | Added `handle_press` with editing gate; updated imports; 4 new tests |
+| `crates/fdemon-app/src/handler/mouse/new_session.rs` | Added `handle_press` with z-index modal precedence via registry; updated imports; 3 new tests |
+| `crates/fdemon-app/src/handler/mouse/link_highlight.rs` | Added `handle_press` with right-click guard + hit-test pattern; updated imports; 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test replacement over refactoring**: Deleted `dispatcher_press_tag_filter_visible_is_no_op` as specified — the old test locked in a negative contract that Phase 5 explicitly removes. Replaced with `dispatcher_press_tag_filter_visible_routes_to_tag_filter_handler` which asserts positive routing across multiple modes.
+2. **Settings editing gate position**: Gate is checked before hit-test (early return), matching the task spec and mirroring `handle_scroll`'s gate position. Sub-modal interactions deferred to Phase 6.
+3. **Module-level imports**: Added `MouseButton` to the imports of `settings.rs`, `new_session.rs`, and `link_highlight.rs` — `ScrollDir` stays to avoid removing unused-import warnings.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all tests pass, 0 failed)
+- `cargo test -p fdemon-app handler::mouse` - Passed (93 tests)
+- `cargo fmt --all -- --check` - Passed (after formatting fix for long arm)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Sub-modal click regions not yet registered**: `settings::handle_press` and `new_session::handle_press` will route hits, but the corresponding widget recording tasks (06-10) haven't been completed yet — clicks will return `None` until those tasks populate the registry.
