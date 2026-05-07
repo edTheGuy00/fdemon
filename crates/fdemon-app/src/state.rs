@@ -840,10 +840,11 @@ impl DapStatus {
 /// Lives on `AppState` so the TUI render function can read it without reaching
 /// into session state.
 ///
-/// `last_known_visible_height` uses `Cell<usize>` interior mutability and is
-/// written by the renderer each frame as a render-hint feedback channel. It must
-/// not be used as a correctness input to business logic or participate in state
-/// equality comparisons. See `docs/CODE_STANDARDS.md` "Principle 3" for rationale.
+/// `last_known_visible_height` and `last_known_scroll_offset` use `Cell<usize>`
+/// interior mutability and are written by the renderer each frame as render-hint
+/// feedback channels. They must not be used as correctness inputs to business
+/// logic or participate in state equality comparisons. See `docs/CODE_STANDARDS.md`
+/// "Principle 3" for rationale.
 #[derive(Debug, Clone, Default)]
 pub struct TagFilterUiState {
     /// Currently selected index in the tag list.
@@ -852,6 +853,12 @@ pub struct TagFilterUiState {
     /// Defaults to 0, which signals "not yet rendered — use fallback".
     /// Written by the renderer; not mutated by message handlers.
     pub last_known_visible_height: Cell<usize>,
+    /// Render-hint: the `ListState.offset()` value from the last rendered
+    /// frame, i.e., the absolute index of the topmost visible tag row.
+    /// Written by the renderer after `render_stateful_widget`; read by the
+    /// region recorder to convert screen-row numbers to absolute tag indices.
+    /// Defaults to 0 — safe fallback when no render has occurred yet.
+    pub last_known_scroll_offset: Cell<usize>,
 }
 
 impl TagFilterUiState {

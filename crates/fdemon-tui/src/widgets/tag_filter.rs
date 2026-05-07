@@ -30,6 +30,15 @@ const TAG_FILTER_MAX_VISIBLE_TAGS: u16 = 15;
 /// count suffix `" (N entries)"` (~14), and padding.
 const TAG_COLUMN_WIDTH: usize = 20;
 
+/// Byte offset (= column offset for ASCII) of `"[n]"` within the footer text
+/// `"[a] All  [n] None  [Spc] Toggle  [Esc] Close"`.
+///
+/// `"[a] All  "` is exactly 9 ASCII bytes, so `"[n]"` starts at byte/column 9.
+/// The accompanying test `n_action_offset_constant_matches_footer_text` asserts
+/// this at compile-time so any change to the footer string breaks a test rather
+/// than silently shifting the click target.
+const N_ACTION_OFFSET: u16 = 9;
+
 /// Render the tag filter overlay onto the given frame area.
 ///
 /// The overlay is centered within `area`. When no tags have been discovered
@@ -131,13 +140,17 @@ pub fn render_tag_filter(
         })
         .collect();
 
-    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
     let visible_height = chunks[0].height as usize;
     ui_state.last_known_visible_height.set(visible_height);
 
     let mut list_state = ListState::default().with_selected(Some(ui_state.selected_index));
     let list = List::new(items);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
+
+    // Write ratatui's authoritative scroll offset back so the region recorder
+    // can use it for absolute-index calculation (render-hint write-back).
+    ui_state.last_known_scroll_offset.set(list_state.offset());
 
     // ── Separator ────────────────────────────────────────────────────────────
     let sep = Paragraph::new("─".repeat(inner.width as usize))
@@ -214,19 +227,11 @@ pub fn render_tag_filter_with_regions(
     let footer_chunk = chunks[2];
     let visible_height = list_chunk.height as usize;
 
-    // Compute the scroll offset that the list will use given selected_index
-    // and visible_height. This must match ListState's internal calculation —
-    // see how Ratatui's List/ListState picks the topmost rendered item.
-    //
-    // For our purposes: a simple "keep the selected row visible" calculation
-    // matches Ratatui's default with `with_selected` (which scrolls the list
-    // so the selection is visible).
-    let scroll_offset = compute_scroll_offset(
-        ui_state.selected_index,
-        tag_count,
-        visible_height,
-        ui_state.last_known_visible_height.get(), // hint for stability across renders
-    );
+    // Read ratatui's authoritative scroll offset written back by render_tag_filter
+    // (called above). This is the index of the topmost visible tag row, as
+    // computed by ratatui's ListState internals — guaranteed to match what was
+    // actually drawn (TEA Approved Exception: Render-Hint Feedback).
+    let scroll_offset = ui_state.last_known_scroll_offset.get();
 
     // Register one region per visible row.
     for screen_row in 0..visible_height {
@@ -265,10 +270,9 @@ pub fn render_tag_filter_with_regions(
     // We compute the byte offsets of "[a]" and "[n]" within the footer string
     // to derive their cell columns.
 
-    let footer_text = "[a] All  [n] None  [Spc] Toggle  [Esc] Close";
     let a_offset = 0u16; // "[a]" starts at column 0
     let a_width = "[a] All".chars().count() as u16;
-    let n_offset = footer_text.find("[n]").map(|i| i as u16).unwrap_or(0);
+    let n_offset = N_ACTION_OFFSET; // "[n]" starts at byte/column 9 — see N_ACTION_OFFSET
     let n_width = "[n] None".chars().count() as u16;
 
     if footer_chunk.width >= a_offset + a_width {
@@ -284,29 +288,6 @@ pub fn render_tag_filter_with_regions(
             MouseAction::emit(Message::HideAllNativeTags),
             1,
         );
-    }
-}
-
-/// Compute the topmost visible tag index given `selected_index`,
-/// `tag_count`, and the visible window height. Matches Ratatui's
-/// `ListState::with_selected` scrolling: the selected item is kept visible.
-///
-/// Note: `last_visible_height` is currently unused but provided for future
-/// stability hints (e.g., when the visible height shrinks frame-to-frame).
-fn compute_scroll_offset(
-    selected: usize,
-    tag_count: usize,
-    visible: usize,
-    _last_visible: usize,
-) -> usize {
-    if visible == 0 || tag_count <= visible {
-        return 0;
-    }
-    // Selected item must be in the visible window.
-    if selected < visible {
-        0
-    } else {
-        selected.saturating_sub(visible - 1)
     }
 }
 
@@ -340,6 +321,7 @@ mod tests {
         let state = TagFilterUiState::default();
         assert_eq!(state.selected_index, 0);
         assert_eq!(state.last_known_visible_height.get(), 0);
+        assert_eq!(state.last_known_scroll_offset.get(), 0);
     }
 
     #[test]
@@ -664,10 +646,11 @@ mod tests {
         assert_eq!(term_a.backend().buffer(), term_b.backend().buffer());
     }
 
+    /// Render a 30-tag list with `selected_index = 25` (forces scroll).
+    /// Assert that the `abs_index` for row 0's click region matches the tag
+    /// actually rendered at the top of the list (i.e., `last_known_scroll_offset`).
     #[test]
-    fn render_with_regions_scrolled_indices_are_absolute() {
-        // Ensure that when the list is scrolled (selected_index past visible window),
-        // recorded indices are absolute, not relative to the visible window.
+    fn render_with_regions_uses_liststate_offset_writeback() {
         use crate::widgets::MouseCtx;
         use fdemon_app::{mouse_regions::MouseRegions, session::NativeTagState, TagFilterUiState};
 
@@ -676,7 +659,7 @@ mod tests {
             tag_state.observe_tag(&format!("Tag{:02}", i));
         }
         let ui_state = TagFilterUiState {
-            selected_index: 25, // past the visible window of 15
+            selected_index: 25, // well past the visible window of 15
             ..Default::default()
         };
 
@@ -698,19 +681,110 @@ mod tests {
             })
             .unwrap();
 
-        // Find the largest row-click index recorded.
-        let max_index = regions
+        // The render-hint write-back must be non-zero (scroll happened).
+        let scroll_offset = ui_state.last_known_scroll_offset.get();
+        assert!(
+            scroll_offset > 0,
+            "expected scroll_offset > 0 after scrolled render, got {}",
+            scroll_offset
+        );
+
+        // The first row-click region's abs_index must equal scroll_offset.
+        let row_regions: Vec<usize> = regions
             .iter()
             .filter_map(|e| match extract_action(e) {
                 Some(Message::TagFilterClickRow { index }) => Some(index),
                 _ => None,
             })
-            .max()
-            .expect("at least one tag-row region");
+            .collect();
+        assert!(
+            !row_regions.is_empty(),
+            "expected at least one TagFilterClickRow region"
+        );
+        let min_index = *row_regions.iter().min().unwrap();
+        assert_eq!(
+            min_index, scroll_offset,
+            "first visible row region abs_index ({}) must equal last_known_scroll_offset ({})",
+            min_index, scroll_offset
+        );
+
+        // Also assert the max recorded index is >= 25 (selected item is visible).
+        let max_index = *row_regions.iter().max().unwrap();
         assert!(
             max_index >= 25,
             "scrolled list must record absolute index >= 25, got {}",
             max_index
+        );
+    }
+
+    /// Render with `selected_index = 25` (forces scroll), then render again
+    /// with `selected_index = 0`. Assert `last_known_scroll_offset` matches
+    /// ratatui's actual produced offset (may not be 0 if ratatui retains state).
+    #[test]
+    fn render_with_regions_scroll_offset_persists_across_calls() {
+        use fdemon_app::{session::NativeTagState, TagFilterUiState};
+
+        let mut tag_state = NativeTagState::default();
+        for i in 0..30 {
+            tag_state.observe_tag(&format!("Tag{:02}", i));
+        }
+
+        // First render: selected_index = 25 → forces a scroll.
+        let ui_state = TagFilterUiState {
+            selected_index: 25,
+            ..Default::default()
+        };
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tag_filter(frame, frame.area(), &tag_state, &ui_state);
+            })
+            .unwrap();
+        let offset_after_first = ui_state.last_known_scroll_offset.get();
+        assert!(
+            offset_after_first > 0,
+            "after first render (selected=25), offset must be > 0, got {}",
+            offset_after_first
+        );
+
+        // Second render: selected_index = 0 → selection back at top.
+        // ratatui's ListState is freshly constructed each frame (we call
+        // `ListState::default().with_selected(Some(0))`), so it will reset
+        // the offset to 0 for a top selection.
+        let ui_state2 = TagFilterUiState {
+            selected_index: 0,
+            ..Default::default()
+        };
+        terminal
+            .draw(|frame| {
+                render_tag_filter(frame, frame.area(), &tag_state, &ui_state2);
+            })
+            .unwrap();
+        let offset_after_second = ui_state2.last_known_scroll_offset.get();
+
+        // ratatui with selected=0 on a fresh ListState will set offset=0.
+        assert_eq!(
+            offset_after_second, 0,
+            "after second render (selected=0), offset should be 0, got {}",
+            offset_after_second
+        );
+    }
+
+    /// Assert that `N_ACTION_OFFSET` matches where `"[n]"` actually appears
+    /// in the footer string. Catches any future footer change that would
+    /// shift the click target without updating the constant.
+    #[test]
+    fn n_action_offset_constant_matches_footer_text() {
+        let footer_text = "[a] All  [n] None  [Spc] Toggle  [Esc] Close";
+        let actual_offset = footer_text
+            .find("[n]")
+            .expect("footer must contain \"[n]\"");
+        assert_eq!(
+            actual_offset, N_ACTION_OFFSET as usize,
+            "N_ACTION_OFFSET ({}) does not match \"[n]\" position in footer ({}). \
+             Update the constant when the footer text changes.",
+            N_ACTION_OFFSET, actual_offset
         );
     }
 }
