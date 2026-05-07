@@ -807,12 +807,24 @@ The mouse region registry (`fdemon-app/mouse_regions.rs`) is a per-frame, z-inde
 
 **Per-click lifecycle (handler path):**
 
-On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, `handler/mouse/mod.rs::handle_press` routes to the per-mode handler. For `UiMode::Normal`, `handler/mouse/normal.rs::handle_press` uses the same `take_guard()` pattern: a guard wraps the hit-test, ensuring the registry is restored even if the hit-test path panics. Other `UiMode` variants return `None` until later phases wire their click handlers.
+On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, `handler/mouse/mod.rs::handle_press` routes to the per-mode handler. Each per-mode handler (`normal`, `devtools`, `confirm_dialog`, `settings`, `new_session`, `link_highlight`, `tag_filter`) uses the `take_guard()` pattern: a guard wraps the hit-test, ensuring the registry is restored even if the hit-test path panics. Modes without a wired click surface (`EmulatorSelector`, `Loading`, `SearchInput`, `FlutterVersion`) return `None`.
 
-Two gate checks sit above the hit-test:
+Two gate checks sit above the per-mode dispatch in `handle_press`:
 
-- **Tag-filter overlay gate** (`handler/mouse/normal.rs`): when `state.tag_filter_visible`, clicks in Normal mode are silently dropped — the overlay does not register regions until a later phase, so forwarding clicks would surprise the user.
+- **Tag-filter overlay gate** (`handler/mouse/mod.rs`): when `state.tag_filter_visible`, press events route directly to `tag_filter::handle_press` regardless of the underlying `ui_mode`. The overlay's row regions are registered by the tag-filter widget and resolved through the same `hit_test` path.
 - **Busy gate** (`handler/mouse/normal.rs`): `HotReload`, `HotRestart`, and `StopApp` messages resolved from click regions are suppressed when `any_session_busy()` returns `true`, mirroring the equivalent check in `handler/keys.rs`.
+
+**Modal Precedence and Sub-Modal Gates:**
+
+When a modal `UiMode` is active (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `FlutterVersion`, `EmulatorSelector`) or when `tag_filter_visible` is set, `render::view()` passes `None` (instead of `Some(&mut mouse_ctx)`) to `MainHeader` and `LogView`. Base-UI z=0 regions are therefore not registered during modal frames. Per-mode dispatchers calling `regions.hit_test(x, y, button)` see only the modal widget's own regions — explicit `z_index` filtering at the dispatcher level is unnecessary.
+
+`UiMode::LinkHighlight` is intentionally excluded from the modal gate: links are overlaid on top of the log view, and both the log-view scroll regions and the link-badge regions are expected to be interactive simultaneously.
+
+`UiMode::Settings` renders a full-screen panel that replaces the log view entirely. Its regions are at z=0; suppressing the underlying header/log-view regions prevents ghost clicks.
+
+The `is_modal_ui_mode()` helper that encodes this logic lives in `fdemon-tui/src/render/mod.rs`.
+
+**Sub-modal gate (Settings):** Two modals (`dart_defines_modal`, `extra_args_modal`) can open on top of the Settings panel without changing `ui_mode`. Because `render::view()` cannot detect these sub-modals via `is_modal_ui_mode()`, `settings::handle_press` (`handler/mouse/settings.rs`) short-circuits to `None` when `state.settings_view_state.has_modal_open()` returns `true`. This prevents clicks outside the sub-modal's area from accidentally routing to underlying settings rows or tabs.
 
 **Panic safety:**
 
