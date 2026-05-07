@@ -163,6 +163,9 @@ pub struct NewSessionDialog<'a> {
     /// When `true`, a one-line migration banner is rendered above the dialog
     /// informing the user that cache-driven auto-launch is now opt-in.
     show_migration_banner: bool,
+    /// When `true`, `TargetSelector` will show a hint in compact mode indicating
+    /// that mouse device-row clicks are not available at this terminal width.
+    enable_mouse: bool,
 }
 
 impl<'a> NewSessionDialog<'a> {
@@ -182,12 +185,21 @@ impl<'a> NewSessionDialog<'a> {
             tool_availability,
             icons,
             show_migration_banner: false,
+            enable_mouse: false,
         }
     }
 
     /// Set whether to render the migration banner above the dialog.
     pub fn migration_banner(mut self, show: bool) -> Self {
         self.show_migration_banner = show;
+        self
+    }
+
+    /// Set whether mouse support is enabled.  When `true`, `TargetSelector`
+    /// renders a hint in compact mode indicating that device rows are not
+    /// clickable at this terminal width.
+    pub fn enable_mouse(mut self, enable: bool) -> Self {
+        self.enable_mouse = enable;
         self
     }
 
@@ -565,7 +577,8 @@ impl<'a> NewSessionDialog<'a> {
             target_focused,
         )
         .icons(*self.icons)
-        .compact(target_compact);
+        .compact(target_compact)
+        .enable_mouse(self.enable_mouse);
         target_selector.render(chunks[2], buf);
 
         // Render separator line
@@ -906,7 +919,8 @@ impl NewSessionDialog<'_> {
             // Region recording for compact mode deferred (uncommon path)
             let ts = TargetSelector::new(state, self.tool_availability, is_focused)
                 .icons(*self.icons)
-                .compact(true);
+                .compact(true)
+                .enable_mouse(self.enable_mouse);
             ts.render(area, buf);
         } else {
             // Full path: mirror TargetSelector::render_full and thread ctx
