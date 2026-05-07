@@ -79,7 +79,7 @@ pub fn Configuration() -> impl IntoView {
 
             // ── UI Settings ──────────────────────────────────────────
             <Section title="UI Settings">
-                <CodeBlock language="toml" code="[ui]\nlog_buffer_size = 10000         # Max log entries in memory\nshow_timestamps = true          # Display timestamps\ncompact_logs = false            # Collapse similar entries\ntheme = \"default\"               # Color theme\nstack_trace_collapsed = true    # Start stack traces collapsed\nstack_trace_max_frames = 3     # Frames shown when collapsed" />
+                <CodeBlock language="toml" code="[ui]\nlog_buffer_size = 10000         # Max log entries in memory\nshow_timestamps = true          # Display timestamps\ncompact_logs = false            # Collapse similar entries\ntheme = \"default\"               # Color theme\nstack_trace_collapsed = true    # Start stack traces collapsed\nstack_trace_max_frames = 3     # Frames shown when collapsed\nenable_mouse = true             # Capture mouse events for clickable UI; restart required" />
                 <SettingsTable entries=vec![
                     ("log_buffer_size", "integer", "10000", "Max log entries to retain. Older entries are discarded"),
                     ("show_timestamps", "boolean", "true", "Display timestamps for each log entry"),
@@ -87,7 +87,16 @@ pub fn Configuration() -> impl IntoView {
                     ("theme", "string", "\"default\"", "Color theme name"),
                     ("stack_trace_collapsed", "boolean", "true", "Stack traces start collapsed by default"),
                     ("stack_trace_max_frames", "integer", "3", "Frames to show when collapsed. Press Enter to expand"),
+                    ("enable_mouse", "boolean", "true", "Enables terminal mouse capture for clickable UI surfaces. When false, fdemon does not emit mouse-capture escape sequences, leaving native terminal behavior (text selection, wheel scrollback) intact. Restart required after changing."),
                 ] />
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm">
+                    <p class="font-medium mb-1">"Mouse capture ("<code class="text-blue-300">"enable_mouse"</code>")"</p>
+                    <p>
+                        "Most modern terminals pass "<code class="text-blue-300">"Shift+drag"</code>" through to native text selection even when capture is on, so the default "<code class="text-blue-300">"true"</code>" works for most users. "
+                        "Disable if your terminal does not support "<code class="text-blue-300">"Shift+drag"</code>" for native selection, or if you prefer native wheel scrollback over fdemon\u{2019}s in-app scrolling. "
+                        "See the "<a href="/docs/mouse" class="text-blue-400 hover:underline">"Mouse reference"</a>" for per-mode wheel behavior, modifier keys, and platform caveats."
+                    </p>
+                </div>
             </Section>
 
             // ── DevTools Settings ────────────────────────────────────
