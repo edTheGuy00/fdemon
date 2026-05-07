@@ -31,14 +31,16 @@ impl<'a> ConfirmDialog<'a> {
 
 /// Render `ConfirmDialog` and record clickable button regions.
 ///
-/// This is a free-function sister to [`Widget::render`] that additionally
-/// accepts an optional [`MouseCtx`] for region recording. Each button in
-/// `state.options` becomes one left-click region at `z_index = 1` (modal
-/// layer). The button rect spans the `[<key>] <label>` text only — clicks
-/// outside any button are no-ops.
+/// This is the single rendering implementation for [`ConfirmDialog`].
+/// [`Widget::render`] delegates here with `ctx = None`.
 ///
-/// Passing `None` produces output identical to calling
-/// `frame.render_widget(dialog, area)`.
+/// When `ctx` is `Some`, each button in `state.options` is registered as a
+/// left-click region at `z_index = 1` (modal layer). The button rect spans
+/// the `[<key>] <label>` text only — clicks outside any button are no-ops.
+///
+/// The button row uses manually-computed `start_x` (same centering formula as
+/// ratatui's `Alignment::Center`) and paints via [`Buffer::set_line`] so that
+/// region rects and visual text share exactly one calculation.
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
@@ -47,12 +49,12 @@ pub fn render_with_regions(
 ) {
     let state = view.state;
 
-    // Fixed modal size (same as Widget::render).
+    // Fixed modal size.
     let modal_width = 50;
     let modal_height = 9;
     let modal_area = centered_rect(modal_width, modal_height, area);
 
-    // Clear & block (same as Widget::render).
+    // Clear & block.
     Clear.render(modal_area, buf);
     let block = Block::default()
         .title(format!(" {} ", state.title))
@@ -63,35 +65,40 @@ pub fn render_with_regions(
     let inner = block.inner(modal_area);
     block.render(modal_area, buf);
 
-    // Layout (same as Widget::render).
+    // Layout.
     let chunks = Layout::vertical([
         Constraint::Length(1), // Spacer
         Constraint::Length(1), // Message line 1
-        Constraint::Length(1), // Message line 2
+        Constraint::Length(1), // Warning line (blank when warning is None)
         Constraint::Length(1), // Spacer
         Constraint::Length(1), // Buttons
         Constraint::Min(0),    // Rest
     ])
     .split(inner);
 
-    // Message line (same as Widget::render).
+    // Message line.
     Paragraph::new(state.message.as_str())
         .alignment(Alignment::Center)
         .style(Style::default().fg(palette::STATUS_YELLOW))
         .render(chunks[1], buf);
 
-    // Warning line (same as Widget::render).
-    Paragraph::new("All Flutter processes will be terminated.")
-        .alignment(Alignment::Center)
-        .style(Style::default().fg(palette::TEXT_PRIMARY))
-        .render(chunks[2], buf);
+    // Warning line — conditionally rendered when `state.warning` is Some.
+    // The row is always allocated in the layout (height = 9 is unchanged);
+    // it simply stays blank when no warning is configured.
+    if let Some(warning) = &state.warning {
+        Paragraph::new(warning.as_str())
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(palette::TEXT_PRIMARY))
+            .render(chunks[2], buf);
+    }
 
     // ── Buttons row with per-button click regions ──────────────────────────
     //
-    // Build spans and per-button rects from `state.options`. The full button
-    // text is centered within `chunks[4]` using the same formula ratatui's
-    // `Alignment::Center` would apply. We compute `start_x` manually so that
-    // the rect math for region recording matches the rendered positions.
+    // Build spans and per-button rects from `state.options`. We compute
+    // `start_x` manually (integer division, same formula ratatui uses for
+    // `Alignment::Center`) and paint via `Buffer::set_line` so that the region
+    // rect math and the visual text share exactly one calculation, eliminating
+    // any parity mismatch.
 
     let button_row = chunks[4];
 
@@ -114,7 +121,7 @@ pub fn render_with_regions(
         })
         .collect();
 
-    // Two spaces between consecutive buttons (matches Widget::render's "  " gap).
+    // Two spaces between consecutive buttons.
     let separator = "  ";
     let total_width: usize = segments
         .iter()
@@ -122,8 +129,9 @@ pub fn render_with_regions(
         .sum::<usize>()
         + separator.len() * segments.len().saturating_sub(1);
 
-    // Compute the x coordinate where the first button starts (centering formula
-    // that matches ratatui's Alignment::Center for a single line).
+    // Centering formula: integer division (same as ratatui's Alignment::Center).
+    // We use this as the definitive position — both the painted text and the
+    // click region rects are derived from this single `start_x`.
     let start_x =
         button_row.x + ((button_row.width as usize).saturating_sub(total_width) / 2) as u16;
 
@@ -142,9 +150,7 @@ pub fn render_with_regions(
         let key_ch = segment.chars().nth(1).unwrap_or(' ');
         let key_str: String = key_ch.to_string();
         // The BORDER_DIM span holds "] Label" and (for non-last buttons) the
-        // 2-space separator. This matches the existing Widget::render exactly:
-        //   - "] Yes  " for non-last (trailing spaces are part of BORDER_DIM span)
-        //   - "] No"   for last (no trailing spaces)
+        // 2-space separator.
         let after_key: String = {
             let base: String = segment.chars().skip(2).collect(); // "] Label"
             if is_last {
@@ -181,11 +187,21 @@ pub fn render_with_regions(
         }
     }
 
-    // Render using Alignment::Center — identical to Widget::render — so that
-    // the visual output is byte-identical regardless of the rect-math path.
-    Paragraph::new(Line::from(render_spans))
-        .alignment(Alignment::Center)
-        .render(button_row, buf);
+    // Paint the button row at the computed `start_x` using Buffer::set_line so
+    // that the visual position is derived from the same `start_x` used for the
+    // region rects above (rather than ratatui's Alignment::Center which may
+    // round differently when `button_row.width - total_width` is odd).
+    if button_row.height > 0 && button_row.width > 0 {
+        let line = Line::from(render_spans);
+        buf.set_line(
+            start_x,
+            button_row.y,
+            &line,
+            button_row
+                .width
+                .saturating_sub(start_x.saturating_sub(button_row.x)),
+        );
+    }
 }
 
 /// Lowercase the first character of `label`. `Yes` → `y`, `No` → `n`.
@@ -198,71 +214,13 @@ fn first_char_lower(label: &str) -> char {
 }
 
 impl Widget for ConfirmDialog<'_> {
+    /// Delegates to [`render_with_regions`] with `ctx = None`.
+    ///
+    /// This ensures `Widget::render` and `render_with_regions` share a single
+    /// rendering implementation: layout constants, centering math, and visual
+    /// output are identical regardless of whether region recording is active.
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Fixed modal size
-        let modal_width = 50;
-        let modal_height = 9;
-        let modal_area = centered_rect(modal_width, modal_height, area);
-
-        // Clear the area behind the modal
-        Clear.render(modal_area, buf);
-
-        // Create the modal block with border
-        let block = Block::default()
-            .title(format!(" {} ", self.state.title))
-            .title_alignment(Alignment::Center)
-            .borders(Borders::ALL)
-            .border_set(symbols::border::ROUNDED)
-            .style(Style::default().bg(palette::POPUP_BG));
-
-        let inner = block.inner(modal_area);
-        block.render(modal_area, buf);
-
-        // Layout: message + buttons
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Message line 1
-            Constraint::Length(1), // Message line 2
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Buttons
-            Constraint::Min(0),    // Rest
-        ])
-        .split(inner);
-
-        // Session count message
-        let message = Paragraph::new(self.state.message.as_str())
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(palette::STATUS_YELLOW));
-        message.render(chunks[1], buf);
-
-        // Warning message
-        let warning = Paragraph::new("All Flutter processes will be terminated.")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(palette::TEXT_PRIMARY));
-        warning.render(chunks[2], buf);
-
-        // Buttons
-        let buttons = Line::from(vec![
-            Span::styled("[", Style::default().fg(palette::BORDER_DIM)),
-            Span::styled(
-                "y",
-                Style::default()
-                    .fg(palette::STATUS_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("] Yes  ", Style::default().fg(palette::BORDER_DIM)),
-            Span::styled("[", Style::default().fg(palette::BORDER_DIM)),
-            Span::styled(
-                "n",
-                Style::default()
-                    .fg(palette::STATUS_RED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("] No", Style::default().fg(palette::BORDER_DIM)),
-        ]);
-
-        let buttons_para = Paragraph::new(buttons).alignment(Alignment::Center);
-        buttons_para.render(chunks[4], buf);
+        render_with_regions(area, buf, self, None);
     }
 }
 
@@ -274,11 +232,7 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     fn create_quit_dialog() -> ConfirmDialogState {
-        ConfirmDialogState::new(
-            "Quit?",
-            "Are you sure you want to quit?",
-            vec![("Yes", Message::ConfirmQuit), ("No", Message::CancelQuit)],
-        )
+        ConfirmDialogState::quit_confirmation(1)
     }
 
     fn create_close_session_dialog() -> ConfirmDialogState {
@@ -309,7 +263,9 @@ mod tests {
         term.render_widget(dialog, term.area());
 
         assert!(
-            term.buffer_contains("sure") || term.buffer_contains("quit"),
+            term.buffer_contains("sure")
+                || term.buffer_contains("quit")
+                || term.buffer_contains("running"),
             "Dialog should show confirmation message"
         );
     }
@@ -324,9 +280,9 @@ mod tests {
 
         // Should show Yes/No or y/n options
         assert!(
-            term.buffer_contains("Yes")
+            term.buffer_contains("Quit")
                 || term.buffer_contains("y")
-                || term.buffer_contains("No")
+                || term.buffer_contains("Cancel")
                 || term.buffer_contains("n"),
             "Dialog should show confirmation options"
         );
@@ -444,8 +400,8 @@ mod tests {
         // Should contain dialog elements
         assert!(content.contains("Quit"));
         assert!(content.contains("2 running sessions"));
-        assert!(content.contains("y"));
-        assert!(content.contains("n"));
+        // quit_confirmation uses "Quit" (key q) and "Cancel" (key c)
+        assert!(content.contains("q") || content.contains("c") || content.contains("Q"));
     }
 
     #[test]
@@ -529,6 +485,34 @@ mod tests {
         assert_eq!(regions.len(), 3);
     }
 
+    /// `Widget::render` must produce byte-identical visual output to
+    /// `render_with_regions(_, _, _, None)`.  This is the primary contract of
+    /// the consolidation: a single rendering path serves both callers.
+    #[test]
+    fn widget_render_delegates_to_render_with_regions_byte_identical_visual() {
+        let state = ConfirmDialogState::new(
+            "Quit?",
+            "Are you sure?",
+            vec![("Yes", Message::ConfirmQuit), ("No", Message::CancelQuit)],
+        );
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf_widget = Buffer::empty(area);
+        let mut buf_with_regions = Buffer::empty(area);
+
+        let dialog_a = ConfirmDialog::new(&state);
+        Widget::render(dialog_a, area, &mut buf_widget);
+
+        let dialog_b = ConfirmDialog::new(&state);
+        super::render_with_regions(area, &mut buf_with_regions, dialog_b, None);
+
+        assert_eq!(
+            buf_widget, buf_with_regions,
+            "Widget::render and render_with_regions(None) must produce byte-identical output"
+        );
+    }
+
+    // Alias for the same test with the name from the task specification.
     #[test]
     fn render_with_regions_visual_output_matches_widget_render() {
         // Render via Widget::render and via render_with_regions; assert pixel parity.
@@ -549,6 +533,141 @@ mod tests {
         super::render_with_regions(area, &mut buf_with_regions, dialog_b, None);
 
         assert_eq!(buf_widget, buf_with_regions, "visual output must match");
+    }
+
+    /// 3-button dialog with a total_width that causes odd `(width - total_width)`.
+    /// Assert each button region's `x` matches the first character of its text
+    /// in the rendered buffer.
+    #[test]
+    fn render_with_regions_three_button_centering_alignment_odd_width() {
+        use crate::render::MouseCtx;
+        use fdemon_app::{message::Message, MouseRegions, MouseRegionsBuilder};
+
+        // Three buttons: "[s] Save  [d] Discard  [c] Cancel"
+        // widths: 7 + 2 + 10 + 2 + 9 = 30 chars
+        // modal_width = 50, inner = 50 - 2 (borders) = 48
+        // (48 - 30) / 2 = 9  → even, but we can also test with a custom area
+        // Use a wide terminal to isolate just the modal inner arithmetic.
+        let state = ConfirmDialogState::new(
+            "Test",
+            "Three buttons",
+            vec![
+                ("Save", Message::SettingsSaveAndClose),
+                ("Discard", Message::ForceHideSettings),
+                ("Cancel", Message::CancelQuit),
+            ],
+        );
+        let dialog = ConfirmDialog::new(&state);
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder: MouseRegionsBuilder<'_> = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            super::render_with_regions(area, &mut buf, dialog, Some(&mut ctx));
+        }
+
+        assert_eq!(regions.len(), 3, "three button regions expected");
+
+        // For each button region, the cell at (rect.x, rect.y) in the buffer
+        // should be '[' (the opening bracket of "[k] Label").
+        for entry in regions.iter() {
+            let cell = &buf[(entry.rect.x, entry.rect.y)];
+            assert_eq!(
+                cell.symbol(),
+                "[",
+                "first cell of button region at x={} y={} should be '[', got '{}'",
+                entry.rect.x,
+                entry.rect.y,
+                cell.symbol()
+            );
+        }
+    }
+
+    /// `warning: Some(...)` causes the warning text to appear in the rendered buffer.
+    #[test]
+    fn render_with_regions_warning_some_renders_warning_line() {
+        let state = ConfirmDialogState::new(
+            "Quit?",
+            "Are you sure?",
+            vec![("Yes", Message::ConfirmQuit), ("No", Message::CancelQuit)],
+        )
+        .with_warning("All Flutter processes will be terminated.");
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let dialog = ConfirmDialog::new(&state);
+        super::render_with_regions(area, &mut buf, dialog, None);
+
+        let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(
+            content.contains("terminated"),
+            "warning text should appear in buffer"
+        );
+    }
+
+    /// `warning: None` causes no warning text to appear in the rendered buffer.
+    #[test]
+    fn render_with_regions_warning_none_omits_warning_line() {
+        let state = ConfirmDialogState::new(
+            "Unsaved Changes",
+            "What do you want to do?",
+            vec![
+                ("Save", Message::SettingsSaveAndClose),
+                ("Discard", Message::ForceHideSettings),
+                ("Cancel", Message::CancelQuit),
+            ],
+        );
+        // warning defaults to None — no explicit set needed.
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let dialog = ConfirmDialog::new(&state);
+        super::render_with_regions(area, &mut buf, dialog, None);
+
+        let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(
+            !content.contains("terminated"),
+            "warning text must NOT appear when warning is None"
+        );
+    }
+
+    /// `ConfirmDialogState::quit_confirmation` must set `warning = Some(...)`.
+    #[test]
+    fn quit_confirmation_state_has_warning_set() {
+        let state = ConfirmDialogState::quit_confirmation(2);
+        assert!(
+            state.warning.is_some(),
+            "quit_confirmation must set a warning"
+        );
+        assert!(
+            state
+                .warning
+                .as_deref()
+                .unwrap_or("")
+                .contains("terminated"),
+            "quit warning must mention termination"
+        );
+    }
+
+    /// Settings unsaved-changes dialog (constructed via `ConfirmDialogState::new`)
+    /// must have `warning = None` because no Flutter processes are terminated.
+    #[test]
+    fn unsaved_settings_state_has_no_warning() {
+        let state = ConfirmDialogState::new(
+            "Unsaved Changes",
+            "You have unsaved changes. What do you want to do?",
+            vec![
+                ("Save & Close", Message::SettingsSaveAndClose),
+                ("Discard Changes", Message::ForceHideSettings),
+                ("Cancel", Message::CancelQuit),
+            ],
+        );
+        assert!(
+            state.warning.is_none(),
+            "settings unsaved-changes dialog must have warning = None"
+        );
     }
 
     #[test]

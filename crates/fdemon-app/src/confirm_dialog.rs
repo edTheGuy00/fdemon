@@ -11,10 +11,19 @@ pub struct ConfirmDialogState {
     pub message: String,
     pub session_count: usize,
     pub options: Vec<(String, Message)>,
+    /// Optional warning text shown below the message line (rendered in a
+    /// muted/primary colour). Set to `Some(...)` only when the action has
+    /// irreversible side-effects (e.g. quitting terminates all Flutter
+    /// processes). `None` suppresses the warning row entirely.
+    pub warning: Option<String>,
 }
 
 impl ConfirmDialogState {
-    /// Create a generic confirmation dialog
+    /// Create a generic confirmation dialog.
+    ///
+    /// `warning` defaults to `None`; use
+    /// [`ConfirmDialogState::with_warning`] or set the field directly when
+    /// the action has side effects that deserve a prominent notice.
     pub fn new(
         title: impl Into<String>,
         message: impl Into<String>,
@@ -28,10 +37,20 @@ impl ConfirmDialogState {
                 .into_iter()
                 .map(|(label, msg)| (label.to_string(), msg))
                 .collect(),
+            warning: None,
         }
     }
 
-    /// Create a quit confirmation dialog state
+    /// Builder-style method to attach an optional warning string.
+    pub fn with_warning(mut self, warning: impl Into<String>) -> Self {
+        self.warning = Some(warning.into());
+        self
+    }
+
+    /// Create a quit confirmation dialog state.
+    ///
+    /// The warning "All Flutter processes will be terminated." is set because
+    /// quitting terminates every running Flutter process.
     pub fn quit_confirmation(session_count: usize) -> Self {
         Self {
             title: "Quit Flutter Demon?".to_string(),
@@ -45,6 +64,7 @@ impl ConfirmDialogState {
                 ("Quit".to_string(), Message::ConfirmQuit),
                 ("Cancel".to_string(), Message::CancelQuit),
             ],
+            warning: Some("All Flutter processes will be terminated.".to_string()),
         }
     }
 }
