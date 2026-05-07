@@ -116,6 +116,14 @@ behavior anyway when capture does not work).
 Set `enable_mouse = false` in `.fdemon/config.toml` to opt out cleanly and avoid any
 side effects from sending capture sequences to a terminal that ignores them.
 
+### Compact NewSessionDialog — mouse not available at narrow widths
+
+When the terminal is between 40–69 columns wide and 20–21 rows tall, the New Session
+Dialog falls back to a compact-vertical layout that does not register device-row click
+regions. In this size range fdemon shows a small hint line (e.g. `"Resize for mouse"`);
+device selection remains fully functional via the keyboard. Resize the terminal wider
+than 70 columns to restore mouse coverage.
+
 ---
 
 ## Disabling Mouse Capture
@@ -202,10 +210,97 @@ the same `is_busy` gate (e.g., `[r]` is a no-op during a hot-reload in progress)
 
 ---
 
+## Phase 5: Dialogs and Overlays
+
+Phase 5 extended the per-frame region registry to cover every remaining clickable
+surface. After Phase 5, every visible UI element that has a keyboard activator also
+responds to left-click.
+
+### NewSessionDialog
+
+- **Click `[1] Connected` / `[2] Bootable` tab headers** → switches the device list to
+  the corresponding tab. Equivalent to `1` / `2` keyboard shortcuts.
+- **Click a device row** → selects that device (single click sets the selection).
+  Then click `Launch` to start the session.
+- **Click a launch-context field** (`Configuration` / `Mode` / `Flavor` / `Entry Point`
+  / `Dart Defines`) → focuses the field and activates it, mirroring the keyboard
+  `Enter` press on that field.
+- **Click `Launch` button** → launches the selected Flutter session.
+- **Inside the fuzzy modal, click a visible result row** → selects and confirms the
+  entry in a single click (equivalent to `↑`/`↓` + `Enter`).
+- **The dart-defines modal inside `NewSessionDialog` is keyboard-only in v1.** No
+  clickable rows are registered for the dart-defines sub-modal.
+
+### ConfirmDialog
+
+- **Click `[y] Yes`** → emits the action stored at the Yes button's index in
+  `state.confirm_dialog_state.actions` (typically `ConfirmQuit`, but the registry
+  reads from state so all confirm dialogs — quit, unsaved-settings, etc. — are
+  clickable generically).
+- **Click `[n] No`** → emits the corresponding No action (typically `CancelQuit`).
+- The clickable rect covers the bracket + label only (`[y] Yes` / `[n] No`).
+  Clicks elsewhere on the modal are no-ops.
+
+### TagFilter Overlay (open with `T`)
+
+- **Click a tag row** → sets the selected index **and** toggles the tag's visibility
+  in a single click. There is no separate "select then toggle" two-click flow —
+  one click both navigates and toggles.
+- **Click `[a] All`** → shows all tags (equivalent to the `a` keyboard shortcut).
+- **Click `[n] None`** → hides all tags (equivalent to the `n` keyboard shortcut).
+
+### LinkHighlight Badges (visible after `Shift+L`)
+
+- **Click a badge `[<char>]`** → emits `Message::SelectLink(<char>)`, following the
+  link associated with that character. Equivalent to pressing the character key.
+- The clickable rect is exactly the three-cell badge span (`[`, character, `]`).
+  Clicks on the adjacent link text are not clickable in v1 — intentionally narrow
+  to prevent accidental activation during scroll gestures.
+
+### Settings Panel
+
+- **Click a tab header** (`1. PROJECT` / `2. USER` / `3. LAUNCH` / `4. VSCODE`) →
+  switches to that settings tab. Equivalent to the `1`–`4` keyboard shortcuts.
+- **Click a setting row** → selects it (sets `selected_index`). Single click does not
+  enter edit mode.
+- **Double-click the same row within 400 ms** → enters edit mode (equivalent to
+  `Enter`). This mirrors the Phase 4 log-view double-click pattern.
+- **The Settings dart-defines and extra-args sub-modals are keyboard-only in v1.**
+
+---
+
+## Modal Precedence and Sub-Modal Gates
+
+When a modal is open (`NewSessionDialog`, `ConfirmDialog`, `TagFilter`, `FlutterVersion`,
+`Settings`, `LinkHighlight`), the renderer does not register base-UI click regions
+(header brackets, log-view rows, session tabs) for the underlying surface. Clicks that
+land outside the modal's own rects are silently dropped — they do **not** activate the
+underlying base-UI region. This guarantees, for example, that clicking on header `[r]`
+while a `ConfirmDialog` is shown does not fire a hot reload.
+
+The z-index convention is:
+
+| z-index | Layer |
+|---------|-------|
+| 0 | Base UI (header, tabs, log view, DevTools panels) |
+| 1 | Primary modals (NewSessionDialog, ConfirmDialog, TagFilter, FlutterVersion) |
+| 2 | Sub-modals layered atop a primary modal (NewSessionDialog fuzzy modal) |
+
+**Sub-modal gates** narrow this further for Settings: when a dart-defines or extra-args
+sub-modal is open inside `Settings`, `settings::handle_press` returns `None` for any
+click, preventing leaks to the underlying Settings rows. The Settings panel does not
+change `UiMode` when sub-modals open (they render on top), so the renderer-level modal
+gate cannot cover them — the explicit gate inside the Settings press dispatcher closes
+the gap.
+
+---
+
 ## Future Work
 
-- Dialogs and overlays: NewSessionDialog device rows, ConfirmDialog Yes/No buttons,
-  TagFilter overlay rows, LinkHighlight badges, Settings panel rows.
 - Drag-to-select for log lines.
-- Horizontal-scroll consumers (log timeline panning, DevTools secondary axis).
-- First-launch hint for users who did not realize mouse capture is active.
+- Drag-to-resize panel splits.
+- Hover tooltips.
+- Project-selector mouse support.
+- Right-click context menus.
+- Horizontal-scroll consumers (log timeline panning, DevTools secondary-axis navigation).
+
