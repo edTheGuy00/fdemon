@@ -146,3 +146,37 @@ fn test_target_selector_wide_no_hint_even_when_mouse_enabled() {
 - If you find that `target_selector.rs` already has structural issues that block adding the hint cleanly (e.g. the chunks vector is fixed-size and inflexible), keep the fix minimal — add the hint inside an existing chunk if possible, rather than restructuring the file.
 - The hint is **not localized**. The project does not have a localization framework; English-only is the existing convention.
 - Do not modify the wide render path. Even if you notice incidental cleanup opportunities, leave them for a separate task.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a218fc45291dc099a
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Added `enable_mouse: bool` field, `enable_mouse(bool)` builder method, conditional 3-chunk layout in `render_compact` with hint `Paragraph`, and 4 new tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `enable_mouse: bool` field and `enable_mouse(bool)` builder method to `NewSessionDialog`; threaded value into all compact-path `TargetSelector` construction sites (vertical Widget::render path + `render_target_selector_regions` compact branch) |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `.enable_mouse(state.settings.ui.enable_mouse)` to `NewSessionDialog` construction in the `Startup | NewSessionDialog` UI mode branch |
+
+### Notable Decisions/Tradeoffs
+
+1. **Conditional 3-chunk layout**: When `enable_mouse=true`, `render_compact` builds a `Length(1) + Min(1) + Length(1)` layout instead of the previous `Length(1) + Min(1)` layout. This keeps the hint row allocation clean and avoids painting into an already-used chunk. The `last_known_visible_height` is derived from `chunks[1]` in both cases, so the scroll-correction logic is unaffected.
+2. **`palette::TEXT_MUTED` for hint color**: Matches the existing dim-text convention in the codebase (used in `render_footer` and in `NewSessionDialog`'s footer spans). The task allowed `Color::DarkGray` but the project uses an RGB muted palette constant.
+3. **No `MouseCtx` call in hint**: Compliant with the task's explicit out-of-scope constraint.
+4. **Hint copy "Resize wider for mouse"**: Chosen from the task's suggested options; 22 chars, fits narrow terminals.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui target_selector` — 50 passed (all prior + 4 new tests)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — clean
+- `cargo fmt --all -- --check` — clean
+- `cargo test --workspace` — all test suites pass (0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+
+### Risks/Limitations
+
+1. **Compact visible-height change with mouse enabled**: When `enable_mouse=true` in compact mode, the device-list area loses 1 row to the hint. This is by design and expected. The bonus test `test_target_selector_compact_mouse_hint_visible_height_with_hint` locks in the new height (16 rows at terminal height 20).

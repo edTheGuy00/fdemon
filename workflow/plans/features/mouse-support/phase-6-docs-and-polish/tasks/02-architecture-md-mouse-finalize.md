@@ -59,3 +59,26 @@ grep -n "Modal Precedence" docs/ARCHITECTURE.md
 - If you find that `crates/fdemon-tui/src/render/mod.rs` does not in fact suppress base-UI MouseCtx as Phase 5.5 Task 01 promised, halt the task and surface a defect — do not paper over it in docs.
 - Follow content boundaries strictly — see `~/.claude/skills/doc-standards/schemas.md`.
 - Make targeted edits, do not rewrite the surrounding sections.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Updated "Per-click lifecycle (handler path)" to reflect Phase 5 per-mode dispatcher wiring and correct tag-filter gate description; added "Modal Precedence and Sub-Modal Gates" subsection inside the Mouse Region Registry section |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **`LinkHighlight` excluded from modal list**: The task description mentioned `LinkHighlight` as a modal mode, but the source (`is_modal_ui_mode()` in `render/mod.rs`) intentionally excludes it. The doc accurately reflects the code with an explanation (links overlay the log view; both surfaces remain interactive). `EmulatorSelector` is included as it appears in the actual function.
+2. **Sub-modal gate in Settings section kept separate**: The sub-modal gate (`has_modal_open()`) is documented as a distinct bold entry rather than folded into the main modal gate paragraph, matching the two-level architecture (renderer gate vs. handler gate).

@@ -60,16 +60,16 @@ When Phase 6 lands, anyone reading the docs in isolation understands what mouse 
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area | Agent |
 |---|------|--------|------------|------------|--------------|-------|
-| 1 | [01-mouse-md-phase5-coverage](tasks/01-mouse-md-phase5-coverage.md) | Not Started | — | 1.25h | `docs/` | implementor |
-| 2 | [02-architecture-md-mouse-finalize](tasks/02-architecture-md-mouse-finalize.md) | Not Started | — | 0.5h | `docs/` | doc_maintainer |
-| 3 | [03-code-standards-region-registry-pattern](tasks/03-code-standards-region-registry-pattern.md) | Not Started | — | 0.75h | `docs/` | doc_maintainer |
-| 4 | [04-keybindings-and-ideas-cross-link](tasks/04-keybindings-and-ideas-cross-link.md) | Not Started | — | 0.25h | `docs/` | implementor |
-| 5 | [05-configuration-md-verify](tasks/05-configuration-md-verify.md) | Not Started | — | 0.25h | `docs/` | implementor |
-| 6 | [06-website-marketing-copy-softening](tasks/06-website-marketing-copy-softening.md) | Not Started | — | 0.5h | `website/` | implementor |
-| 7 | [07-website-mouse-docs-page](tasks/07-website-mouse-docs-page.md) | Not Started | — | 1.5h | `website/` | implementor |
-| 8 | [08-website-keybindings-mouse-section](tasks/08-website-keybindings-mouse-section.md) | Not Started | — | 0.75h | `website/` | implementor |
-| 9 | [09-website-configuration-and-architecture](tasks/09-website-configuration-and-architecture.md) | Not Started | — | 0.75h | `website/` | implementor |
-| 10 | [10-compact-new-session-dialog-mouse-hint](tasks/10-compact-new-session-dialog-mouse-hint.md) | Not Started | — | 1.5h | `fdemon-tui` | implementor |
+| 1 | [01-mouse-md-phase5-coverage](tasks/01-mouse-md-phase5-coverage.md) | Done | — | 1.25h | `docs/` | implementor |
+| 2 | [02-architecture-md-mouse-finalize](tasks/02-architecture-md-mouse-finalize.md) | Done (CONCERN: criterion-1 modal list was stale; impl matched render/mod.rs reality) | — | 0.5h | `docs/` | doc_maintainer |
+| 3 | [03-code-standards-region-registry-pattern](tasks/03-code-standards-region-registry-pattern.md) | Done | — | 0.75h | `docs/` | doc_maintainer |
+| 4 | [04-keybindings-and-ideas-cross-link](tasks/04-keybindings-and-ideas-cross-link.md) | Done | — | 0.25h | `docs/` | implementor |
+| 5 | [05-configuration-md-verify](tasks/05-configuration-md-verify.md) | Done | — | 0.25h | `docs/` | implementor |
+| 6 | [06-website-marketing-copy-softening](tasks/06-website-marketing-copy-softening.md) | Done | — | 0.5h | `website/` | implementor |
+| 7 | [07-website-mouse-docs-page](tasks/07-website-mouse-docs-page.md) | Done | — | 1.5h | `website/` | implementor |
+| 8 | [08-website-keybindings-mouse-section](tasks/08-website-keybindings-mouse-section.md) | Done | — | 0.75h | `website/` | implementor |
+| 9 | [09-website-configuration-and-architecture](tasks/09-website-configuration-and-architecture.md) | Done | — | 0.75h | `website/` | implementor |
+| 10 | [10-compact-new-session-dialog-mouse-hint](tasks/10-compact-new-session-dialog-mouse-hint.md) | Done | — | 1.5h | `fdemon-tui` | implementor |
 
 ## File Overlap Analysis
 

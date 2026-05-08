@@ -107,3 +107,39 @@ cd website && trunk serve --open
 - The page is Phase 5-aware. If you find that `docs/MOUSE.md` does not yet have Phase 5 content (Task 01 still in flight), add the Phase 5 sections to the website page anyway based on `phase-5-dialogs-overlays/TASKS.md` — both surfaces will land together in Phase 6.
 - Do not touch `website/src/pages/home.rs`, `website/src/pages/docs/introduction.rs`, `website/src/pages/docs/keybindings.rs`, `website/src/pages/docs/configuration.rs`, or `website/src/pages/docs/architecture.rs`. Those are owned by other Phase 6 tasks.
 - Do not add backend API calls, fetch logic, or markdown-rendering libraries — the content is hand-coded in JSX-style Leptos `view!` blocks, matching the rest of the site.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/mouse.rs` | **Created** — 330-line Leptos component with all 9 required sections (Scroll Behavior by Mode, Modifier Key Rules, Phase 3 Header/Tabs, Phase 4 Log View/DevTools, Phase 5 Dialogs/Overlays, Modal Precedence, Compact NewSessionDialog, Platform Caveats, Disabling Mouse Capture) |
+| `website/src/pages/docs/mod.rs` | Added `pub mod mouse;` declaration; added `MousePointer` to icon imports; added `DocItem` entry for `/docs/mouse` positioned between Keybindings and DevTools |
+| `website/src/lib.rs` | Added `use pages::docs::mouse::Mouse;` import; added `<Route path=path!("/mouse") view=Mouse />` alongside other `/docs/*` routes |
+| `website/src/components/icons.rs` | Added `MousePointer` icon using Lucide mouse-pointer SVG path via the existing `lucide_icon!` macro |
+
+### Notable Decisions/Tradeoffs
+
+1. **MousePointer icon**: No mouse-specific icon existed in `icons.rs`. Added `MousePointer` using Lucide's mouse-pointer path (diagonal arrow with click indicator). This is a one-path icon that uses the same `lucide_icon!` macro pattern as all other icons.
+2. **`ScrollRow` helper component**: Added a private `ScrollRow` component to avoid repeating table row markup for the 18-row scroll-mode table, matching the pattern of other table-heavy pages (e.g. `KeybindingSectionView` in keybindings.rs).
+3. **Section component**: Defined inline (same pattern as `configuration.rs`) using the `bg-blue-500` accent bar, matching the established page style exactly.
+4. **Phase 5 content**: MOUSE.md does not yet have Phase 5 content (Task 01 still in flight). Phase 5 section was added to the website page based on `phase-5-dialogs-overlays/TASKS.md` as instructed, covering NewSessionDialog, ConfirmDialog, TagFilter, LinkHighlight badges, and Settings panel rows.
+5. **`cargo check` worktree limitation**: The website crate cannot be checked with `cargo check` from this git worktree because the outer workspace root `/Users/ed/Dev/zabin/flutter-demon/Cargo.toml` is found first and its `exclude = ["website"]` pattern does not match the worktree path. This is a known worktree infrastructure limitation (all prior website tasks had the same constraint). The main workspace `cargo check --workspace --all-targets` passes cleanly; `rustfmt --check` on `mouse.rs` passes with no issues.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed (no formatting issues in workspace)
+- `cargo check --workspace --all-targets` — Passed (workspace compiles cleanly)
+- `rustfmt --edition 2021 --check website/src/pages/docs/mouse.rs` — Passed (file is correctly formatted)
+- `cd website && cargo check` — Cannot run from worktree (pre-existing infrastructure limitation, not a code issue)
+
+### Risks/Limitations
+
+1. **Phase 5 content not yet in MOUSE.md**: The website page pre-emptively documents Phase 5 click surfaces based on task descriptions. When MOUSE.md Task 01 lands, verify the website copy matches the canonical doc text and update if needed.
+2. **Worktree cargo check**: Full website build verification requires running from the main checkout (`cargo check -p flutter-demon-website` from `/Users/ed/Dev/zabin/flutter-demon/`), not from this worktree.

@@ -73,3 +73,33 @@ grep -A 3 "MOUSE.md" docs/KEYBINDINGS.md
 - Do not preserve the "Mouse Support" entry as a struck-through placeholder. The PLAN.md success criteria explicitly says IDEAS.md "no longer lists Mouse Support as deferred."
 - Do not add a "Mouse Support" entry to a "Shipped Features" or "Completed" section unless one already exists in IDEAS.md. Inventing such a section is out of scope.
 - The callout's link uses a relative path (`MOUSE.md`), not a full URL, so it works both on GitHub-rendered markdown and on local file viewers.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad74a8bdc6a940992
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Added blockquote callout pointing to MOUSE.md after the intro paragraph and before the first `##` section |
+| `docs/IDEAS.md` | Removed entire "### 2. Mouse Support" entry; renumbered "Remote Development" to 2, "Plugin System" to 3 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Tight renumbering**: IDEAS.md uses tight sequential numbering (1, 2, 3...), so after removing entry 2 (Mouse Support), Remote Development was renumbered to 2 and Plugin System to 3. This keeps the document internally consistent.
+2. **Callout placement**: The blockquote is placed between the intro paragraph and the `---` horizontal rule that precedes the Table of Contents, which satisfies "after the `#` heading and before the first `##` section" per the acceptance criteria.
+
+### Testing Performed
+
+- `grep -ni "mouse" docs/IDEAS.md` - Returns no output (mouse entry fully removed)
+- `grep -A 3 "MOUSE.md" docs/KEYBINDINGS.md` - Shows the new blockquote callout
+- `grep -i "mouse" docs/KEYBINDINGS.md` - Returns only the new callout lines
+- `grep "^### [0-9]" docs/IDEAS.md` - Shows 1, 2, 3 tight sequence
+
+### Risks/Limitations
+
+1. **Documentation-only changes**: No Rust code was modified; cargo quality gate is not applicable to this task.

@@ -98,3 +98,31 @@ grep -n "MOUSE.md\|enable_mouse" docs/CONFIGURATION.md docs/MOUSE.md
 - Keep section headings stable — Tasks 07/08/09 (website) read MOUSE.md to mirror content. If you rename a heading, leave a note for the website tasks (or land Task 01 first; the orchestrator may run all in parallel).
 - Do not document anything that is not yet implemented. If a check against the source reveals a gap, file a follow-up — do not paper over it in docs.
 - This task does **not** edit `docs/ARCHITECTURE.md`, `docs/CODE_STANDARDS.md`, `docs/CONFIGURATION.md`, `docs/IDEAS.md`, or `docs/KEYBINDINGS.md`. Those are separate Phase 6 tasks.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/MOUSE.md` | Added "Phase 5: Dialogs and Overlays" section (NewSessionDialog, ConfirmDialog, TagFilter, LinkHighlight badges, Settings panel); added "Modal Precedence and Sub-Modal Gates" section with z-index table; added "Compact NewSessionDialog" caveat under Platform Caveats; updated "Future Work" to remove shipped items (dialogs/overlays) and keep only unimplemented items. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Compact NewSessionDialog caveat placement**: Placed under existing "Platform Caveats" section (as a new `###` sub-section alongside Windows caveats) rather than creating a standalone section, since it is a platform/layout restriction rather than a behavioral feature.
+2. **Future Work retained**: The task required removing shipped items and keeping unshipped items. Added drag-to-resize and hover tooltips (from Phase 5.5 TASKS.md out-of-scope notes) to make the list more complete.
+3. **Section heading stability**: No existing headings were renamed. Phase 3 and Phase 4 content is untouched.
+
+### Testing Performed
+
+- Cross-link check: `grep -n "MOUSE.md\|enable_mouse" docs/CONFIGURATION.md docs/MOUSE.md` — Passed (all 7 references intact)
+- Manual review of document structure — Passed (no broken markdown, table column alignment preserved)
+
+### Risks/Limitations
+
+1. **Heading stability for website tasks**: Section headings are unchanged from the pre-existing document. Tasks 07/08/09 (website mirror tasks) should be able to find the "Phase 5" and "Modal Precedence" headings without modification.

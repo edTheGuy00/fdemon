@@ -91,3 +91,27 @@ grep -n "Approved TEA Exception" docs/REVIEW_FOCUS.md
 - Do not duplicate ARCHITECTURE.md content. The two docs are siblings: ARCHITECTURE describes structure; CODE_STANDARDS prescribes usage.
 - The `// EXCEPTION:` annotation language is enforced — match the existing style verbatim where possible.
 - Follow content boundaries strictly — see `~/.claude/skills/doc-standards/schemas.md`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CODE_STANDARDS.md` | Added "Region Registry Pattern (Approved TEA Exception)" subsection (~65 lines) after the Principle 3 TEA exception note, before Principle 4. Covers: what the pattern is, why approved, `take_guard()` RAII requirement, `MouseCtx` thread-through, modal-precedence renderer-level approach, annotation requirement, four anti-patterns, and cross-references. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement adjacent to Principle 3**: The new subsection sits directly after the Principle 3 TEA exception note (line 481), before Principle 4, making the `Cell<usize>` → `Cell<MouseRegions>` progression immediately obvious to readers.
+2. **Annotation style**: Used `// EXCEPTION (TEA):` to distinguish this richer annotation from the shorter `// EXCEPTION:` in the `Cell<usize>` block, matching the actual comment seen in `render/mod.rs` line 135.
+3. **Architecture detail withheld**: Type definitions (`MouseRect`, hit-test algorithm, RAII guard internals) were deliberately not repeated here — the cross-reference to ARCHITECTURE.md covers those.

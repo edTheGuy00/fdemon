@@ -86,3 +86,30 @@ cd website && trunk serve --open
 - Do not edit the keybindings page renderer file — that is owned by Task 07 only if it ever needs modification (it likely does not).
 - If you find an existing keyboard binding has drifted from `docs/KEYBINDINGS.md`, do not silently fix it in this task — file a separate small drift task and stay scoped.
 - The mouse section's row count is bounded by readability. Aim for ≤ 20 rows in Option A; Option B's two-section split exists for cases where the table feels too long.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-abad90a9107b7c15a
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/data.rs` | Appended a new "Mouse Interactions" `KeybindingSection` with 17 bindings, using `bg-pink-500` / `text-pink-400` color theme |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (single section)**: Used the single-section approach as the simpler default. 17 rows is within the ≤ 20 target.
+2. **Color selection**: Used `bg-pink-500` / `text-pink-400`. All other colors (blue, cyan, green, orange, purple, red) were already taken by existing sections.
+3. **Description quality**: All `description` fields are non-empty with useful context about timing windows, platform caveats, or equivalences to keyboard shortcuts.
+
+### Testing Performed
+
+- `cd website && cargo check` — Passed (1 pre-existing dead_code warning in debugging.rs, unrelated to this change)
+
+### Risks/Limitations
+
+1. **Trunk visual smoke test not run**: The task's trunk smoke test (`trunk serve --open`) was not run in this automated context. The `cargo check` pass confirms structural correctness; visual rendering depends on Tailwind's pink-500/pink-400 utility classes being present in the generated CSS — which they will be since Tailwind scans source files for class names at build time.

@@ -100,3 +100,33 @@ cd website && cargo check
 - Do not rewrite the surrounding card grid layout or paragraph structure. The change is text-only.
 - Do not add a new feature card titled "Mouse Support" on the introduction page — that surface is sold through the keybindings/mouse docs page (Tasks 07/08), not the marketing intro grid. The `Keyboard-First` card is correctly positioned to mention mouse-as-opt-in in its body text.
 - Tailwind classes and the `FeatureCard` component shape stay identical.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/home.rs` | Replaced `"Designed for power users who prefer the keyboard over the mouse."` with `"Designed for keyboard-first power users — mouse support is opt-in."` |
+| `website/src/pages/docs/introduction.rs` | Replaced `"Vim-style navigation, search, and controls. Never reach for the mouse."` with `"Vim-style navigation, search, and controls. Mouse support is opt-in."` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Replacement copy chosen**: Used the task's suggested shorter form `"Mouse support is opt-in."` for the `FeatureCard` text (concise, matches card style) and the task's `"Designed for keyboard-first power users — mouse support is opt-in."` for `home.rs` (preserves keyboard-first identity, references mouse as supported).
+
+### Testing Performed
+
+- `grep -n "Never reach for the mouse" website/src/` — zero results (AC1 passed)
+- `grep -n "prefer the keyboard over the mouse" website/src/` — zero results (AC2 passed)
+- `grep -ni "mouse" website/src/pages/home.rs website/src/pages/docs/introduction.rs` — shows only the two new neutral lines
+- `cargo check` (from `/Users/ed/Dev/zabin/flutter-demon/website`) — Passed (1 pre-existing unrelated warning)
+- Diff verified: exactly 2 single-line string changes, no layout or structural modifications
+
+### Risks/Limitations
+
+1. **Website worktree cargo check**: Running `cargo check` from inside the worktree directory fails due to workspace membership detection. Must run from the main repo's website directory. This is a worktree tooling limitation, not a code issue — the website compiles cleanly.
