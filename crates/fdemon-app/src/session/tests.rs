@@ -1798,4 +1798,118 @@ mod tests {
             "buffered_frames should be capped at ring buffer capacity"
         );
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DevToolsEndpoint tests (browser-devtools-dds-registration Task 04)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    use crate::session::DevToolsEndpoint;
+    use std::time::Instant;
+
+    /// Verify the basic URL encoding for a standard ws:// URI.
+    #[test]
+    fn devtools_endpoint_url_encodes_ws_uri() {
+        let ep = DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        };
+        let url = ep.url("ws://127.0.0.1:1234/abc=/ws");
+        assert_eq!(
+            url,
+            "http://127.0.0.1:9100?uri=ws%3A%2F%2F127.0.0.1%3A1234%2Fabc%3D%2Fws"
+        );
+    }
+
+    /// DDS-integrated DevTools base URL (auth token in path) — no slash added.
+    #[test]
+    fn devtools_endpoint_url_dds_integrated_base_url() {
+        let ep = DevToolsEndpoint {
+            base_url: "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools".into(),
+            served_at: Instant::now(),
+        };
+        let url = ep.url("ws://127.0.0.1:59123/tbrR0DzW2j8=/ws");
+        // base_url preserved as-is, ?uri= appended directly
+        assert!(
+            url.starts_with("http://127.0.0.1:59123/tbrR0DzW2j8=/devtools?uri="),
+            "DDS-style base_url should be preserved verbatim (got: {url})"
+        );
+        assert!(
+            url.contains("ws%3A%2F%2F"),
+            "ws:// scheme must be percent-encoded (got: {url})"
+        );
+    }
+
+    /// wss:// URI gets properly percent-encoded.
+    #[test]
+    fn devtools_endpoint_url_encodes_wss_uri() {
+        let ep = DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        };
+        let url = ep.url("wss://127.0.0.1:9999/auth=/ws");
+        assert!(
+            url.starts_with("http://127.0.0.1:9100?uri=wss%3A%2F%2F"),
+            "wss:// scheme must be encoded as wss%3A%2F%2F (got: {url})"
+        );
+    }
+
+    /// URI with `/ws` suffix is encoded correctly.
+    #[test]
+    fn devtools_endpoint_url_encodes_ws_suffix() {
+        let ep = DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        };
+        let url = ep.url("ws://127.0.0.1:8181/ws");
+        assert_eq!(
+            url,
+            "http://127.0.0.1:9100?uri=ws%3A%2F%2F127.0.0.1%3A8181%2Fws"
+        );
+    }
+
+    /// Colons and slashes in the ws_uri are percent-encoded.
+    #[test]
+    fn devtools_endpoint_url_no_raw_colons_or_slashes_in_encoded_part() {
+        let ep = DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        };
+        let url = ep.url("ws://127.0.0.1:12345/some=/path/ws");
+        // After `?uri=` there should be no raw colons or slashes from the ws_uri.
+        let encoded_part = url.split("?uri=").nth(1).expect("should have ?uri=");
+        assert!(
+            !encoded_part.contains(':'),
+            "encoded part must not contain raw ':' (got: {url})"
+        );
+        assert!(
+            !encoded_part.contains('/'),
+            "encoded part must not contain raw '/' (got: {url})"
+        );
+    }
+
+    /// Unreserved characters (letters, digits, `-`, `_`, `.`, `~`) pass through.
+    #[test]
+    fn devtools_endpoint_url_unreserved_chars_not_encoded() {
+        let ep = DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        };
+        // The URI portion with only unreserved chars (hypothetical)
+        let url = ep.url("abc-def_ghi.jkl~mno");
+        assert_eq!(url, "http://127.0.0.1:9100?uri=abc-def_ghi.jkl~mno");
+    }
+
+    /// Session initialises with `devtools_endpoint = None` and `devtools_serve_pending = false`.
+    #[test]
+    fn session_devtools_fields_default_to_none_and_false() {
+        let session = Session::new("d".into(), "Device".into(), "android".into(), false);
+        assert!(
+            session.devtools_endpoint.is_none(),
+            "devtools_endpoint should start as None"
+        );
+        assert!(
+            !session.devtools_serve_pending,
+            "devtools_serve_pending should start as false"
+        );
+    }
 }

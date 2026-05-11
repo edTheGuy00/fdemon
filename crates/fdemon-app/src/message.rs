@@ -893,6 +893,34 @@ pub enum Message {
     /// Open Flutter DevTools in the system browser.
     OpenBrowserDevTools,
 
+    /// DevTools server is ready for the given session.
+    ///
+    /// Populated from the `app.devTools` daemon event (primary path) or from a
+    /// `devtools.serve` RPC response (fallback). The `base_url` is the raw
+    /// DevTools server URL without any `?uri=` query parameter.
+    ///
+    /// The handler stores a [`crate::session::DevToolsEndpoint`] on the session
+    /// and clears `devtools_serve_pending`.
+    DevToolsServed {
+        session_id: SessionId,
+        /// Base DevTools server URL (e.g. `http://127.0.0.1:9100` or
+        /// `http://127.0.0.1:59123/<auth-token>/devtools`).
+        base_url: String,
+    },
+
+    /// DevTools server could not be started for the given session.
+    ///
+    /// Emitted when the `devtools.serve` RPC returns an error or null host/port,
+    /// or when the daemon reports that DevTools is unavailable.
+    /// The handler clears `devtools_serve_pending` and may show a toast.
+    DevToolsServeFailed {
+        session_id: SessionId,
+        /// Human-readable reason for the failure (e.g. "Method not supported on
+        /// this Flutter SDK — update Flutter to ≥ 1.22 or run `dart devtools`
+        /// manually").
+        reason: String,
+    },
+
     /// Request a widget tree refresh from the VM Service.
     RequestWidgetTree { session_id: SessionId },
 

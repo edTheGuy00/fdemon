@@ -1874,6 +1874,32 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
 
+        Message::DevToolsServed {
+            session_id,
+            base_url,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
+                    base_url,
+                    served_at: std::time::Instant::now(),
+                });
+                handle.session.devtools_serve_pending = false;
+            }
+            UpdateResult::none()
+        }
+
+        Message::DevToolsServeFailed { session_id, reason } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.devtools_serve_pending = false;
+            }
+            tracing::warn!(
+                session_id = session_id,
+                reason = %reason,
+                "DevTools serve failed"
+            );
+            UpdateResult::none()
+        }
+
         Message::RequestWidgetTree { session_id } => {
             // Cooldown: suppress rapid refreshes while loading or within 2 seconds
             // of the last fetch. This prevents RPC spam when the user holds `r`.
