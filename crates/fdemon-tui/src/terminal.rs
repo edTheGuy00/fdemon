@@ -7,13 +7,25 @@
 //!   `AtomicBool` so disable is a no-op when enable was never called or
 //!   failed (works around crossterm issue #613 on Windows).
 
-use std::io::stdout;
+use std::io::{stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use fdemon_core::prelude::*;
 use tracing::warn;
+
+/// OSC 22 sequence to request the `default` (arrow) mouse pointer shape.
+/// Supported by kitty, xterm, Ghostty, Foot, opt-in Alacritty.
+/// Silently ignored by terminals that do not implement OSC 22
+/// (iTerm2, macOS Terminal.app, Windows Terminal, GNOME Terminal).
+/// See: https://sw.kovidgoyal.net/kitty/pointer-shapes/
+const OSC22_POINTER_DEFAULT: &[u8] = b"\x1b]22;default\x1b\\";
+
+/// OSC 22 sequence to reset the pointer shape to the terminal default.
+/// An empty shape parameter signals "restore". Same support matrix as
+/// `OSC22_POINTER_DEFAULT`.
+const OSC22_POINTER_RESET: &[u8] = b"\x1b]22;\x1b\\";
 
 /// Tracks whether [`enable_mouse_capture`] succeeded. Read by
 /// [`disable_mouse_capture`] to skip the call entirely when capture was
@@ -38,6 +50,16 @@ static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// (e.g. from two different entry-point runners), only the first call installs
 /// the hook. Subsequent calls return immediately without wrapping the hook a
 /// second time.
+///
+/// # Ordering
+///
+/// This MUST be called after `ratatui::init()`. Both functions install
+/// panic hooks via the standard "take + wrap" pattern; whichever installs
+/// last wraps the other. fdemon's hook must wrap ratatui's so that on
+/// panic the order is: disable_mouse_capture → ratatui::restore. Calling
+/// in the reverse order causes mouse DECRST sequences to be written to
+/// the primary screen after LeaveAlternateScreen, where they may render
+/// as visible bytes.
 pub fn install_panic_hook() {
     // Idempotency guard: each entry-point runner calls this; multiple calls
     // in one process would chain duplicate mouse-disable / ratatui-restore
@@ -52,13 +74,16 @@ pub fn install_panic_hook() {
         // would be silently lost anyway because ratatui::restore() is also
         // best-effort.
         //
-        // disable_mouse_capture() must run before ratatui::restore() so the
+        // disable_mouse_capture() runs before ratatui::restore() so that
         // DECRST sequences are emitted while the alt screen is still active.
-        // In practice, DECSET/DECRST mouse modes are connection-global (not
-        // alt-screen-scoped) so the ordering doesn't matter for cleanup
-        // correctness today — but this is a load-bearing assumption about
-        // ratatui's restore() implementation. Keep the disable-then-restore
-        // order to avoid coupling to that assumption changing.
+        // This ordering is guaranteed by the install-order invariant: this
+        // hook wraps ratatui's hook (because install_panic_hook() is called
+        // after ratatui::init()), so on panic hooks fire LIFO and our cleanup
+        // runs first. In practice, DECSET/DECRST mouse modes are
+        // connection-global (not alt-screen-scoped), so the ordering doesn't
+        // affect cleanup correctness today — but keeping disable-then-restore
+        // order makes the invariant explicit and guards against future changes
+        // in ratatui's restore() implementation.
         disable_mouse_capture();
         ratatui::restore();
         original_hook(panic_info);
@@ -71,6 +96,13 @@ pub fn install_panic_hook() {
 /// by `crossterm::event::EnableMouseCapture`). On success, sets the
 /// `MOUSE_CAPTURE_ON` flag so the matching [`disable_mouse_capture`] call
 /// later actually runs.
+///
+/// Also emits an OSC 22 sequence (`ESC]22;default ESC\\`) to request the
+/// arrow mouse cursor shape on supporting terminals (kitty, xterm, Ghostty,
+/// Foot, opt-in Alacritty). This is best-effort: terminals that do not
+/// implement OSC 22 silently discard the sequence. Errors from the write
+/// are logged at `warn` and swallowed — cursor shape is a polish item and
+/// must not prevent capture from succeeding.
 ///
 /// Returns an [`Error`] if the underlying `execute!` fails (terminal
 /// doesn't support mouse, or stdout write failed). The caller should log
@@ -87,6 +119,11 @@ pub fn enable_mouse_capture() -> Result<()> {
         warn!("failed to enable mouse capture: {e}");
         Error::terminal(format!("EnableMouseCapture failed: {e}"))
     })?;
+    // Emit OSC 22 to set the arrow cursor shape. Best-effort: unsupported
+    // terminals silently discard OSC sequences with unknown numbers.
+    if let Err(e) = stdout().write_all(OSC22_POINTER_DEFAULT) {
+        warn!("failed to set OSC 22 pointer shape: {e}");
+    }
     // Release ordering: pairs with the Acquire swap in disable_mouse_capture.
     // Ensures the execute! terminal writes happen-before the flag is visible
     // as true to another thread deciding whether to call DisableMouseCapture.
@@ -110,6 +147,12 @@ pub fn disable_mouse_capture() {
     if !MOUSE_CAPTURE_ON.swap(false, Ordering::AcqRel) {
         return;
     }
+    // Emit OSC 22 reset before disabling capture so the cursor shape reverts
+    // while the alt screen is still active and raw mode is still on. The reset
+    // must run before ratatui::restore() — which is guaranteed by the teardown
+    // order established in runner.rs (disable_mouse_capture runs first).
+    // Best-effort: errors are silently swallowed so we never block exit.
+    let _ = stdout().write_all(OSC22_POINTER_RESET);
     if let Err(e) = execute!(stdout(), DisableMouseCapture) {
         // Use eprintln when in a panic context? No — we must not write to
         // stdout in a panic; tracing is fine because it goes to the file
@@ -180,6 +223,18 @@ mod tests {
         disable_mouse_capture();
         // Acquire ordering: pairs with any Release store from production code.
         assert!(!MOUSE_CAPTURE_ON.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_osc22_pointer_default_byte_sequence() {
+        // ESC ] 2 2 ; d e f a u l t ESC backslash
+        assert_eq!(OSC22_POINTER_DEFAULT, b"\x1b]22;default\x1b\\");
+    }
+
+    #[test]
+    fn test_osc22_pointer_reset_byte_sequence() {
+        // ESC ] 2 2 ; ESC backslash  (empty shape parameter = restore)
+        assert_eq!(OSC22_POINTER_RESET, b"\x1b]22;\x1b\\");
     }
 
     #[test]

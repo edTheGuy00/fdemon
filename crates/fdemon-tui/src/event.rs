@@ -131,6 +131,33 @@ pub fn key_event_to_input(key: KeyEvent) -> Option<InputKey> {
     }
 }
 
+/// Drain pending terminal events for up to `timeout`, discarding them.
+///
+/// Used during exit to consume any mouse SGR reports that the terminal
+/// emitted before `DisableMouseCapture` took effect — without draining,
+/// those reports remain in the kernel TTY queue and leak to the shell
+/// after fdemon exits.
+///
+/// Returns when no event is available within a single poll slice or when
+/// the cumulative elapsed time exceeds `timeout`. Errors from
+/// `crossterm::event::poll` / `read` are silently swallowed — this is
+/// best-effort cleanup; we must not block exit indefinitely.
+pub fn drain_input(timeout: Duration) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        // Cap each poll slice so a stuck terminal cannot block the full timeout.
+        let slice = remaining.min(Duration::from_millis(10));
+        match event::poll(slice) {
+            Ok(true) => {
+                let _ = event::read();
+            }
+            Ok(false) => return,
+            Err(_) => return,
+        }
+    }
+}
+
 /// Poll the terminal for the next available event with a short timeout.
 ///
 /// Returns:
@@ -452,5 +479,25 @@ mod tests {
         };
         let input = mouse_event_to_input(ev).unwrap();
         assert_eq!(input.position(), (42, 7));
+    }
+
+    /// Verify that `drain_input` returns quickly when no events are pending.
+    ///
+    /// In non-TTY CI environments `crossterm::event::poll` returns immediately
+    /// with `Ok(false)`, so the function should return well within the given
+    /// timeout. The test is marked `#[ignore]` so it is skipped in environments
+    /// where stdin is not a real TTY and poll behaviour is unpredictable.
+    #[test]
+    #[ignore]
+    fn test_drain_input_returns_quickly_with_no_pending_events() {
+        let start = std::time::Instant::now();
+        drain_input(Duration::from_millis(100));
+        // Should return in under 50ms when no events are pending (first poll
+        // slice returns Ok(false) immediately in a quiet terminal).
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "drain_input took too long: {:?}",
+            start.elapsed()
+        );
     }
 }

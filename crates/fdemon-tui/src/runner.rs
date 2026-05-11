@@ -20,14 +20,17 @@ use crate::{event, render, startup, terminal};
 
 /// Run the TUI application with a Flutter project
 pub async fn run_with_project(project_path: &Path) -> Result<()> {
-    // Install panic hook for terminal restoration
-    terminal::install_panic_hook();
-
     // Create the engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
+
+    // Install panic hook AFTER ratatui::init() so fdemon's hook wraps
+    // ratatui's. Both use the "take + wrap" set_hook pattern; whichever
+    // installs last wraps the other. Hooks fire LIFO on panic, so this
+    // order guarantees: disable_mouse_capture → ratatui::restore.
+    terminal::install_panic_hook();
 
     // Enable mouse capture if the user has it on (default true). Failures are
     // logged and ignored so the rest of the TUI still works.
@@ -55,13 +58,19 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);
 
-    // Shutdown engine (stops watcher, cleans up sessions)
-    engine.shutdown().await;
-
-    // Disable mouse capture before restoring the terminal so the user's shell
-    // does not inherit raw mouse-reporting state. Safe to call unconditionally
-    // — the AtomicBool guard makes it a no-op when capture was never enabled.
+    // Disable mouse capture FIRST: stops the terminal from generating new
+    // SGR mouse reports before we drain the TTY queue.
     terminal::disable_mouse_capture();
+
+    // Drain any mouse SGR reports that were already buffered in the kernel
+    // TTY queue before DisableMouseCapture took effect. Without this drain,
+    // those bytes remain in the queue and the shell reads them after exit,
+    // printing garbage on the command line.
+    event::drain_input(std::time::Duration::from_millis(50));
+
+    // Shutdown engine (stops watcher, cleans up sessions). Safe to call now —
+    // no new SGR sequences will queue because capture is already disabled.
+    engine.shutdown().await;
 
     // Restore terminal (TUI-specific)
     ratatui::restore();
@@ -89,9 +98,6 @@ pub async fn run_with_project_and_dap(
     dap_port: Option<u16>,
     dap_config: Option<fdemon_app::config::ParentIde>,
 ) -> Result<()> {
-    // Install panic hook for terminal restoration
-    terminal::install_panic_hook();
-
     // Create the engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
@@ -122,6 +128,12 @@ pub async fn run_with_project_and_dap(
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
+    // Install panic hook AFTER ratatui::init() so fdemon's hook wraps
+    // ratatui's. Both use the "take + wrap" set_hook pattern; whichever
+    // installs last wraps the other. Hooks fire LIFO on panic, so this
+    // order guarantees: disable_mouse_capture → ratatui::restore.
+    terminal::install_panic_hook();
+
     // Enable mouse capture if the user has it on (default true). Failures are
     // logged and ignored so the rest of the TUI still works.
     if engine.settings.ui.enable_mouse {
@@ -148,13 +160,19 @@ pub async fn run_with_project_and_dap(
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);
 
-    // Shutdown engine (stops watcher, cleans up sessions)
-    engine.shutdown().await;
-
-    // Disable mouse capture before restoring the terminal so the user's shell
-    // does not inherit raw mouse-reporting state. Safe to call unconditionally
-    // — the AtomicBool guard makes it a no-op when capture was never enabled.
+    // Disable mouse capture FIRST: stops the terminal from generating new
+    // SGR mouse reports before we drain the TTY queue.
     terminal::disable_mouse_capture();
+
+    // Drain any mouse SGR reports that were already buffered in the kernel
+    // TTY queue before DisableMouseCapture took effect. Without this drain,
+    // those bytes remain in the queue and the shell reads them after exit,
+    // printing garbage on the command line.
+    event::drain_input(std::time::Duration::from_millis(50));
+
+    // Shutdown engine (stops watcher, cleans up sessions). Safe to call now —
+    // no new SGR sequences will queue because capture is already disabled.
+    engine.shutdown().await;
 
     // Restore terminal (TUI-specific)
     ratatui::restore();
@@ -164,8 +182,6 @@ pub async fn run_with_project_and_dap(
 
 /// Run TUI without Flutter (for testing/demo)
 pub async fn run() -> Result<()> {
-    terminal::install_panic_hook();
-
     // Create engine with dummy path
     let dummy_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut engine = Engine::new(dummy_path);
@@ -173,6 +189,10 @@ pub async fn run() -> Result<()> {
     // Demo mode does not enable mouse capture — settings are dummy values
     // and the path is not a user-facing entry point.
     let mut term = ratatui::init();
+
+    // Install panic hook AFTER ratatui::init() for consistent ordering with
+    // the other entry points (see run_with_project for full rationale).
+    terminal::install_panic_hook();
 
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);
