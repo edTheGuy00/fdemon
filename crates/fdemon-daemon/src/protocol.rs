@@ -146,7 +146,75 @@ fn parse_event(event: &str, params: serde_json::Value) -> DaemonMessage {
         "device.removed" => serde_json::from_value(params.clone())
             .map(DaemonMessage::DeviceRemoved)
             .unwrap_or_else(|_| unknown_event(event, params)),
+        "app.devTools" => {
+            let app_id = params
+                .get("appId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let base_url = params
+                .get("uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if base_url.is_empty() {
+                unknown_event(event, params)
+            } else {
+                DaemonMessage::DevToolsServed { app_id, base_url }
+            }
+        }
         _ => unknown_event(event, params),
+    }
+}
+
+/// Parse the result/error payload from a `devtools.serve` JSON-RPC response.
+///
+/// Call this when you have already matched a response to a `devtools.serve`
+/// request (e.g. via [`RequestTracker`] or explicit request-ID tracking).
+///
+/// # Parameters
+/// * `result` – The `"result"` field of the response, if present.
+/// * `error`  – The `"error"` field of the response, if present.
+///
+/// # Returns
+/// * `DevToolsServed { app_id: "", base_url }` on success with non-null host + port.
+/// * `DevToolsServeFailed { reason }` on null host/port, `-32601`, or other errors.
+/// * `None` when neither `result` nor `error` is present (malformed).
+pub fn parse_devtools_serve_response(
+    result: Option<&serde_json::Value>,
+    error: Option<&serde_json::Value>,
+) -> Option<DaemonMessage> {
+    if let Some(err) = error {
+        let code = err.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        let message = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        let reason = if code == -32601 {
+            "Method not supported on this Flutter SDK".to_string()
+        } else {
+            format!("devtools.serve failed: {} (code {})", message, code)
+        };
+        return Some(DaemonMessage::DevToolsServeFailed { reason });
+    }
+
+    if let Some(res) = result {
+        let host = res.get("host").and_then(|v| v.as_str());
+        let port = res.get("port").and_then(|v| v.as_u64());
+        match (host, port) {
+            (Some(h), Some(p)) if !h.is_empty() => {
+                let base_url = format!("http://{}:{}", h, p);
+                Some(DaemonMessage::DevToolsServed {
+                    app_id: String::new(),
+                    base_url,
+                })
+            }
+            _ => Some(DaemonMessage::DevToolsServeFailed {
+                reason: "DevTools server unavailable".to_string(),
+            }),
+        }
+    } else {
+        None
     }
 }
 
@@ -1147,6 +1215,153 @@ mod tests {
         let (level, msg) = parse_flutter_log("flutter: ", true);
         assert_eq!(level, fdemon_core::LogLevel::Error);
         assert_eq!(msg, "", "Error empty line should produce empty message");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // DevTools Event and Response Tests (Task 03)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_app_devtools_event() {
+        // Primary path: app.devTools event fired automatically during flutter run --machine
+        let json = r#"{"event":"app.devTools","params":{"appId":"8e5e5e3c-f5a3-4b6e-b3d1-123456789abc","uri":"http://127.0.0.1:9100"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServed { app_id, base_url } => {
+                assert_eq!(app_id, "8e5e5e3c-f5a3-4b6e-b3d1-123456789abc");
+                assert_eq!(base_url, "http://127.0.0.1:9100");
+            }
+            other => panic!("Expected DevToolsServed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_app_devtools_event_bracketed() {
+        // Flutter daemon wraps messages in square brackets
+        let json = r#"[{"event":"app.devTools","params":{"appId":"abc123","uri":"http://127.0.0.1:59123/tbrR0DzW2j8=/devtools"}}]"#;
+        let msg = parse_daemon_message(json).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServed { app_id, base_url } => {
+                assert_eq!(app_id, "abc123");
+                // DDS-integrated DevTools URL with auth token path segment
+                assert_eq!(base_url, "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools");
+            }
+            other => panic!("Expected DevToolsServed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_app_devtools_event_missing_uri_falls_back_to_unknown() {
+        // If uri is absent, fall back to UnknownEvent rather than producing a useless DevToolsServed
+        let json = r#"{"event":"app.devTools","params":{"appId":"abc123"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        assert!(
+            matches!(msg, DaemonMessage::UnknownEvent { .. }),
+            "Missing uri should fall back to UnknownEvent"
+        );
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_success() {
+        // devtools.serve success response: result with non-null host + port
+        let result = serde_json::json!({"host": "127.0.0.1", "port": 9100});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServed { app_id, base_url } => {
+                assert_eq!(
+                    app_id, "",
+                    "Fallback RPC response carries empty app_id sentinel"
+                );
+                assert_eq!(base_url, "http://127.0.0.1:9100");
+            }
+            other => panic!("Expected DevToolsServed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_null_host_port() {
+        // Soft failure: result with null host and null port (DevTools bundle unavailable)
+        let result = serde_json::json!({"host": null, "port": null});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServeFailed { reason } => {
+                assert!(
+                    reason.contains("unavailable"),
+                    "Null host/port should report DevTools server unavailable, got: {:?}",
+                    reason
+                );
+            }
+            other => panic!("Expected DevToolsServeFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_method_not_found() {
+        // Hard failure: -32601 Method not found (Flutter < 1.22.0)
+        let error = serde_json::json!({"code": -32601, "message": "Method not found"});
+        let msg = parse_devtools_serve_response(None, Some(&error)).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServeFailed { reason } => {
+                assert!(
+                    reason.contains("Method not supported"),
+                    "Expected 'Method not supported' in reason, got: {:?}",
+                    reason
+                );
+            }
+            other => panic!("Expected DevToolsServeFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_other_error() {
+        // Other error code: generic failure
+        let error = serde_json::json!({"code": -32000, "message": "DevTools failed to start"});
+        let msg = parse_devtools_serve_response(None, Some(&error)).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServeFailed { reason } => {
+                assert!(
+                    reason.contains("DevTools failed to start"),
+                    "Other error should include daemon's error message, got: {:?}",
+                    reason
+                );
+                assert!(
+                    reason.contains("-32000"),
+                    "Other error should include error code, got: {:?}",
+                    reason
+                );
+            }
+            other => panic!("Expected DevToolsServeFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_neither_result_nor_error() {
+        // Malformed response with no result and no error → None
+        assert!(
+            parse_devtools_serve_response(None, None).is_none(),
+            "Malformed response should return None"
+        );
+    }
+
+    #[test]
+    fn test_app_devtools_event_app_id_helper() {
+        // DevToolsServed should be returned by app_id() helper
+        let json = r#"{"event":"app.devTools","params":{"appId":"my-session","uri":"http://127.0.0.1:9100"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        assert_eq!(msg.app_id(), Some("my-session"));
+    }
+
+    #[test]
+    fn test_app_devtools_event_summary() {
+        let json =
+            r#"{"event":"app.devTools","params":{"appId":"x","uri":"http://127.0.0.1:9100"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        let summary = msg.summary();
+        assert!(
+            summary.contains("http://127.0.0.1:9100"),
+            "Summary should mention the DevTools URL, got: {:?}",
+            summary
+        );
     }
 
     #[test]
