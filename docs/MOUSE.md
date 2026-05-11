@@ -116,6 +116,32 @@ behavior anyway when capture does not work).
 Set `enable_mouse = false` in `.fdemon/config.toml` to opt out cleanly and avoid any
 side effects from sending capture sequences to a terminal that ignores them.
 
+### Pointer shape (OSC 22)
+
+While the TUI is active, fdemon requests the `default` (arrow) OS-level pointer shape
+via the OSC 22 escape sequence, and resets it on exit. This keeps the cursor from
+staying as a text I-beam while hovering over buttons and clickable regions.
+
+OSC 22 support is best-effort and depends on your terminal emulator:
+
+| Terminal | OSC 22 Support |
+|----------|---------------|
+| kitty | Supported |
+| Ghostty | Supported |
+| Foot | Supported |
+| xterm | Supported |
+| Alacritty | Requires `terminal.osc22 = true` in Alacritty config |
+| iTerm2 | Silently ignored — I-beam remains |
+| macOS Terminal.app | Silently ignored — I-beam remains |
+| Windows Terminal | Silently ignored — I-beam remains |
+| GNOME Terminal | Silently ignored — I-beam remains |
+
+Terminals that do not support OSC 22 silently ignore the escape sequence; there is no
+functional regression, only a cosmetic one (the pointer shape stays as an I-beam).
+
+- Pointer-shapes reference: <https://sw.kovidgoyal.net/kitty/pointer-shapes/>
+- Terminal compatibility table: <https://can-i-use-terminal.github.io/features/osc22.html>
+
 ### Compact NewSessionDialog — mouse not available at narrow widths
 
 When the terminal is between 40–69 columns wide and 20–21 rows tall, the New Session

@@ -272,6 +272,20 @@ Fix all warnings before committing:
 cargo clippy --fix --allow-dirty
 ```
 
+### Mouse Exit Leak Verification
+
+If you are working on the terminal teardown path (`runner.rs`,
+`terminal.rs`), manually verify after exit:
+
+1. Launch fdemon in a terminal with mouse support enabled.
+2. Move the mouse rapidly while pressing `Q` to quit.
+3. The shell prompt must come back cleanly — no `0;NN;NN m` /
+   `NN;NN;NN M` SGR mouse-report bytes should appear.
+
+A regression in the disable-then-shutdown ordering will reintroduce the
+leak. See `workflow/plans/bugs/mouse-support-followup/BUG.md` Bug 3 for
+the failure mode.
+
 ### Windows: `flutter devices` Fails With "The system cannot find the path specified."
 
 This error occurs when the Flutter SDK is installed via a package manager shim (Chocolatey, scoop, winget) or to a non-standard location that fdemon cannot resolve automatically.
