@@ -70,3 +70,28 @@ the failure mode.
   links resolve and headings nest correctly.
 - The `doc-standards` skill, if applicable, validates the changes against
   the documentation schema.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/MOUSE.md` | Added "Pointer shape (OSC 22)" subsection under Platform Caveats with terminal compatibility table and links |
+| `docs/DEVELOPMENT.md` | Added "Mouse Exit Leak Verification" entry under Common Issues |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement in MOUSE.md**: Added the OSC 22 subsection under "Platform Caveats" (between the Windows caveats and the Compact NewSessionDialog caveat) — this is the natural location for a per-terminal compatibility caveat, keeping all platform-specific limitations together.
+2. **Placement in DEVELOPMENT.md**: Added the Mouse Exit Leak Verification entry immediately before the Windows SDK issue entry in the "Common Issues" section, consistent with the task's "around line 256" guidance.
+3. **Content boundary compliance**: Both changes stay within their correct document types — MOUSE.md receives user-facing platform caveat content; DEVELOPMENT.md receives a developer-facing manual verification procedure (DEVELOPMENT.md is the correct home per schemas.md for "Troubleshooting / common issues").

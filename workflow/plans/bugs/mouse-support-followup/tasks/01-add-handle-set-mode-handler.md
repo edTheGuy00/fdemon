@@ -52,3 +52,33 @@ context handler) cycle the mode but cannot set a specific mode by value.
   helpers.
 
 - `cargo clippy -p fdemon-app -- -D warnings` passes.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a4646d8443e6618f2
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Added `pub fn handle_set_mode(state, mode)` with doc comment; added 5 unit tests in the `tests` module |
+| `crates/fdemon-app/src/handler/update.rs` | Removed `NewSessionDialogSetMode { .. }` from no-op catch-all arm; added `Message::NewSessionDialogSetMode { mode } => new_session::handle_set_mode(state, mode)` arm after `NewSessionDialogModePrev` |
+
+### Notable Decisions/Tradeoffs
+
+1. **No current-mode equality guard**: The task explicitly says not to short-circuit when mode equals the current mode; clicking the already-selected button is valid to focus the field. This is idempotent and cheap.
+2. **Focus side-effect**: `handle_set_mode` always sets `focused_pane = LaunchContext` and `focused_field = Mode` when the field is editable, matching the row-level `FocusField` region effect.
+3. **No extra `FlutterMode` import at file top**: The existing pattern in this file uses `crate::config::FlutterMode` inline; the new function follows the same pattern via the argument type spelled out at the call site.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app -- handler::new_session::launch_context` - Passed (39 tests: 5 new + 34 existing)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None significant**: The new function is a straightforward sibling to `handle_mode_next`/`handle_mode_prev` and follows the same pattern. The route is now live and ready for Task 02's click regions to use it.

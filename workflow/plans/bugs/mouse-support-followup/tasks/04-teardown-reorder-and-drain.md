@@ -153,3 +153,36 @@ for consistency.
 - Manual: launch fdemon, trigger a panic (e.g. an unexpected state path,
   or temporarily insert `panic!()` in dev). Confirm the terminal is
   restored cleanly without DECRST bytes leaking to the primary screen.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support (worktree-agent-a3984e7ed0387cdbd)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/event.rs` | Added `drain_input(timeout: Duration)` helper function and `test_drain_input_returns_quickly_with_no_pending_events` unit test (marked `#[ignore]` for non-TTY CI) |
+| `crates/fdemon-tui/src/runner.rs` | Reordered teardown in all three entry points (`run_with_project`, `run_with_project_and_dap`, `run`): moved `install_panic_hook()` to after `ratatui::init()`, moved `disable_mouse_capture()` and added `drain_input(50ms)` before `engine.shutdown().await` |
+| `crates/fdemon-tui/src/terminal.rs` | Added `# Ordering` section to `install_panic_hook` doc comment; updated hook closure comment to reflect install-order invariant |
+
+### Notable Decisions/Tradeoffs
+
+1. **`drain_input` placed before the existing `poll()` function in `event.rs`**: Follows module organization — all public I/O-adjacent functions grouped together.
+2. **`#[ignore]` on `test_drain_input_returns_quickly_with_no_pending_events`**: CI environments have non-TTY stdin where `crossterm::event::poll` behaviour is unpredictable; ignoring avoids false failures while preserving the test for local TTY runs.
+3. **`run()` demo entry point also updated**: Although it doesn't enable mouse capture, moving `install_panic_hook()` after `ratatui::init()` keeps the pattern consistent across all three entry points.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (1007 tests, 1 ignored)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`drain_input` is best-effort**: If the terminal takes more than 50ms to flush buffered events after `DisableMouseCapture`, residual bytes could still leak. 50ms is well above typical terminal latency in practice.
+2. **Idempotency guard in `install_panic_hook`**: Because the guard uses a global `AtomicBool`, the ordering fix only applies when `install_panic_hook()` is called for the first time. If called before `ratatui::init()` from some external path, the guard would prevent the post-init wrapping. Current callers are all in runner entry points, which now consistently call after init.

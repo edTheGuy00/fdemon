@@ -6,21 +6,21 @@ See [BUG.md](BUG.md) for symptom analysis and root-cause traces.
 
 ### Worktree A — Bug 1 (Mode buttons not clickable)
 
-- [ ] [Task 01](tasks/01-add-handle-set-mode-handler.md): Add `handle_set_mode` handler and wire `Message::NewSessionDialogSetMode` route
-- [ ] [Task 02](tasks/02-register-mode-button-regions.md): Register per-button click regions in `launch_context.rs` *(depends on 01)*
+- [x] [Task 01](tasks/01-add-handle-set-mode-handler.md): Add `handle_set_mode` handler and wire `Message::NewSessionDialogSetMode` route — Done, validator PASS, merged in `c6e9c77`
+- [x] [Task 02](tasks/02-register-mode-button-regions.md): Register per-button click regions in `launch_context.rs` *(depends on 01)* — Done, validator PASS, merged in `c6e9c77`
 
 ### Worktree B — Bugs 2 & 3 (both touch `terminal.rs`)
 
-- [ ] [Task 04](tasks/04-teardown-reorder-and-drain.md): Reorder teardown, move panic-hook install, add `drain_input` helper
-- [ ] [Task 03](tasks/03-osc22-pointer-shape.md): Emit OSC 22 pointer-shape sequences in `terminal.rs` *(depends on 04 — both touch `terminal.rs`)*
+- [x] [Task 04](tasks/04-teardown-reorder-and-drain.md): Reorder teardown, move panic-hook install, add `drain_input` helper — Done, validator PASS, merged in `f24fa48`
+- [x] [Task 03](tasks/03-osc22-pointer-shape.md): Emit OSC 22 pointer-shape sequences in `terminal.rs` *(depends on 04 — both touch `terminal.rs`)* — Done, validator PASS, merged in `f24fa48`
 
 ### Worktree C — Docs (independent)
 
-- [ ] [Task 05](tasks/05-docs-mouse-followup.md): Document OSC 22 caveat and manual mouse-exit verification step
+- [x] [Task 05](tasks/05-docs-mouse-followup.md): Document OSC 22 caveat and manual mouse-exit verification step — Done, validator PASS, merged in `3cc6a08`
 
 ## Wave 2: Build Verification
 
-- [ ] [Task 06](tasks/06-build-verification.md): Full workspace `fmt --check`, `check`, `test`, `clippy` *(depends on all)*
+- [x] [Task 06](tasks/06-build-verification.md): Full workspace `fmt --check`, `check`, `test`, `clippy` *(depends on all)* — Done, validator PASS (4,327 tests passed / 0 failed / 105 ignored)
 
 ---
 

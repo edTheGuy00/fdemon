@@ -80,3 +80,35 @@ Crossterm has no API for OSC 22. We emit raw bytes via `write!`.
   confirm the cursor reverts.
 - Manual on iTerm2 / Terminal.app: launch fdemon, confirm no visible
   garbage appears (the unsupported terminal must silently discard the OSC).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support (worktree-agent-a3984e7ed0387cdbd)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/terminal.rs` | Added `OSC22_POINTER_DEFAULT` and `OSC22_POINTER_RESET` byte-string constants; updated `use std::io` import to include `Write`; emitted `OSC22_POINTER_DEFAULT` in `enable_mouse_capture()` after `execute!` succeeds; emitted `OSC22_POINTER_RESET` in `disable_mouse_capture()` before `DisableMouseCapture`; updated `enable_mouse_capture` doc comment; added two unit tests for byte constants |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reset emitted with `let _ = ...` (silent)**: The task spec called for best-effort reset in `disable_mouse_capture`. Using `let _ =` (rather than `if let Err(e)`) avoids any tracing call from inside what may be a panic context, consistent with the existing pattern in that function body.
+2. **OSC 22 emitted after `execute!` but before `MOUSE_CAPTURE_ON.store`**: Ensures the pointer-shape emission only happens when capture actually succeeded; if `execute!` returns Err, neither the flag nor the OSC 22 are set.
+3. **`use std::io::{stdout, Write}`**: `Write` is needed for `.write_all()`. Alphabetical ordering enforced by rustfmt.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (1009 tests, 1 ignored; +2 new constant tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- `cargo check --workspace --all-targets` - Passed
+
+### Risks/Limitations
+
+1. **OSC 22 support is terminal-dependent**: kitty, xterm, Ghostty, Foot support it; iTerm2, macOS Terminal.app, Windows Terminal, GNOME Terminal silently discard it. No user-visible impact on unsupported terminals.
+2. **`disable_mouse_capture` is called from panic context**: The OSC 22 reset write is best-effort with silent error suppression (`let _ = ...`), consistent with the existing design — no panicking, no tracing in panic path.
