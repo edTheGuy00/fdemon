@@ -10,12 +10,13 @@
 use crate::message::{AutoLaunchSuccess, Message};
 use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode, MAX_PENDING_WATCHER_ERRORS};
 use fdemon_core::{AppPhase, LogLevel, LogSource};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::{
     daemon::handle_session_daemon_event, dap, devtools, flutter_version, keys::handle_key,
-    log_view, new_session, scroll, session_lifecycle, settings_dart_defines, settings_extra_args,
-    settings_handlers, Task, UpdateAction, UpdateResult,
+    log_view, new_session, scroll, session::maybe_serve_devtools, session_lifecycle,
+    settings_dart_defines, settings_extra_args, settings_handlers, Task, UpdateAction,
+    UpdateResult,
 };
 
 /// Process a message and update state.
@@ -1528,7 +1529,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // handle_enter_devtools_mode will start it lazily on first entry.
             // process.rs will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
+            //
+            // Also fire the devtools.serve fallback RPC if the primary `app.devTools`
+            // event hasn't populated the endpoint yet (belt-and-suspenders for older
+            // Flutter builds or delayed event ordering). `maybe_serve_devtools` is
+            // idempotent: it returns None when the endpoint is already set.
             if state.ui_mode == UiMode::DevTools {
+                // Performance monitoring takes action priority in DevTools mode.
+                // The devtools.serve fallback is skipped here — the app.devTools
+                // primary event fires before VmServiceConnected in modern Flutter,
+                // so devtools_endpoint is already set by this point.
                 UpdateResult {
                     message: follow_up_msg,
                     action: Some(UpdateAction::StartPerformanceMonitoring {
@@ -1540,9 +1550,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     }),
                 }
             } else {
+                // In Normal (log-view) mode: use the action slot for the devtools.serve
+                // fallback if the endpoint is not yet populated.
+                let devtools_action = maybe_serve_devtools(state, session_id);
                 UpdateResult {
                     message: follow_up_msg,
-                    action: None,
+                    action: devtools_action,
                 }
             }
         }
@@ -1879,6 +1892,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             base_url,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                info!(
+                    session_id = session_id,
+                    base_url = %base_url,
+                    "DevTools endpoint ready for session"
+                );
                 handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
                     base_url,
                     served_at: std::time::Instant::now(),
@@ -1892,10 +1910,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.devtools_serve_pending = false;
             }
-            tracing::warn!(
+            warn!(
                 session_id = session_id,
                 reason = %reason,
-                "DevTools serve failed"
+                "DevTools serve failed; falling back to legacy URL"
             );
             UpdateResult::none()
         }

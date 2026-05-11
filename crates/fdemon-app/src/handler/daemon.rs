@@ -1,6 +1,7 @@
 //! Multi-session daemon event handling
 
 use crate::handler::{UpdateAction, UpdateResult};
+use crate::message::Message;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{DaemonEvent, DaemonMessage, LogEntry, LogSource};
@@ -55,6 +56,37 @@ pub fn handle_session_daemon_event(
                 _ => None,
             };
 
+            // Bridge app.devTools event → Message::DevToolsServed.
+            // The `app.devTools` event fires automatically during `flutter run --machine`
+            // startup (Flutter ≥ 1.22.0) and provides the base DevTools server URL.
+            // This is the primary (preferred) path; the devtools.serve RPC fallback
+            // fires later on VmServiceConnected.
+            let devtools_msg: Option<Message> = match &parsed {
+                Some(DaemonMessage::DevToolsServed { app_id, base_url }) => {
+                    // Map app_id → session_id via the session manager.
+                    // Use the session_id passed to this handler when app_id is empty
+                    // (empty means the message came from the devtools.serve RPC response
+                    // which doesn't carry an app_id; in that case the session is already
+                    // known from the request routing).
+                    let resolved_id = if app_id.is_empty() {
+                        Some(session_id)
+                    } else {
+                        state.session_manager.find_by_app_id(app_id)
+                    };
+                    resolved_id.map(|sid| Message::DevToolsServed {
+                        session_id: sid,
+                        base_url: base_url.clone(),
+                    })
+                }
+                Some(DaemonMessage::DevToolsServeFailed { reason }) => {
+                    Some(Message::DevToolsServeFailed {
+                        session_id,
+                        reason: reason.clone(),
+                    })
+                }
+                _ => None,
+            };
+
             // Mutate state (logs the line, updates session phase, etc.).
             handle_session_stdout(state, session_id, &line);
 
@@ -80,10 +112,27 @@ pub fn handle_session_daemon_event(
             };
 
             // Priority: VM service connection > native log capture > app started.
-            // These events are always separate, so at most one action is non-None.
-            match vm_action.or(native_log_action).or(app_started_action) {
-                Some(action) => UpdateResult::action(action),
-                None => UpdateResult::none(),
+            // DevTools events are separate from these (different event names), so
+            // devtools_msg and the action are mutually exclusive in practice.
+            // When a DevTools message is present, return it as a follow-up message;
+            // action handling (VM connect, native log, DAP) is returned as the action.
+            let action = vm_action.or(native_log_action).or(app_started_action);
+            match (action, devtools_msg) {
+                (Some(a), Some(m)) => {
+                    // Both present (unlikely in practice — distinct events).
+                    // Return the action; the devtools follow-up is deferred.
+                    // The devtools state will be populated when the next
+                    // VmServiceConnected message triggers the fallback path.
+                    tracing::debug!(
+                        "Session {}: action and devtools_msg both present; prioritizing action",
+                        session_id
+                    );
+                    let _ = m; // devtools_msg is deferred; fallback path covers it
+                    UpdateResult::action(a)
+                }
+                (Some(a), None) => UpdateResult::action(a),
+                (None, Some(m)) => UpdateResult::message(m),
+                (None, None) => UpdateResult::none(),
             }
         }
         DaemonEvent::Stderr(line) => {
@@ -129,6 +178,28 @@ pub fn handle_session_daemon_event(
                 None
             };
 
+            // Bridge DevToolsServed / DevToolsServeFailed → Message::DevTools*.
+            let devtools_msg: Option<Message> = match &msg {
+                DaemonMessage::DevToolsServed { app_id, base_url } => {
+                    let resolved_id = if app_id.is_empty() {
+                        Some(session_id)
+                    } else {
+                        state.session_manager.find_by_app_id(app_id)
+                    };
+                    resolved_id.map(|sid| Message::DevToolsServed {
+                        session_id: sid,
+                        base_url: base_url.clone(),
+                    })
+                }
+                DaemonMessage::DevToolsServeFailed { reason } => {
+                    Some(Message::DevToolsServeFailed {
+                        session_id,
+                        reason: reason.clone(),
+                    })
+                }
+                _ => None,
+            };
+
             // Legacy path - convert typed message
             if let Some(entry_info) = fdemon_daemon::to_log_entry(&msg) {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
@@ -152,10 +223,22 @@ pub fn handle_session_daemon_event(
             };
 
             // Priority: VM service connection (AppDebugPort) > native log capture (AppStart).
-            // These two events are always separate, so at most one action is non-None here.
-            match vm_action.or(native_log_action) {
-                Some(action) => UpdateResult::action(action),
-                None => UpdateResult::none(),
+            // DevTools events are separate and returned as follow-up messages.
+            let action = vm_action.or(native_log_action);
+            match (action, devtools_msg) {
+                (Some(a), Some(m)) => {
+                    // Both present — action takes priority; devtools deferred to fallback.
+                    tracing::debug!(
+                        "Session {}: action and devtools_msg both present in Message arm; \
+                         prioritizing action",
+                        session_id
+                    );
+                    let _ = m;
+                    UpdateResult::action(a)
+                }
+                (Some(a), None) => UpdateResult::action(a),
+                (None, Some(m)) => UpdateResult::message(m),
+                (None, None) => UpdateResult::none(),
             }
         }
     }

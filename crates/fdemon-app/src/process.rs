@@ -65,6 +65,7 @@ pub fn process_message(
             let action = action.and_then(|a| hydrate_start_network_monitoring(a, state));
             let action = action.and_then(|a| hydrate_fetch_http_request_detail(a, state));
             let action = action.and_then(|a| hydrate_clear_http_profile(a, state));
+            let action = action.and_then(|a| hydrate_send_daemon_command(a, state));
 
             if let Some(action) = action {
                 handle_action(
@@ -429,6 +430,41 @@ fn get_session_cmd_sender(action: &UpdateAction, state: &AppState) -> Option<Com
             .and_then(|h| h.cmd_sender.clone());
     }
     None
+}
+
+/// Hydrate `SendDaemonCommand` with the `CommandSender` from the session.
+///
+/// If the session has no attached `CommandSender` (process not yet spawned or
+/// already exited), the action is silently discarded by returning `None`.
+/// All other action variants are returned unchanged.
+fn hydrate_send_daemon_command(action: UpdateAction, state: &AppState) -> Option<UpdateAction> {
+    if let UpdateAction::SendDaemonCommand {
+        session_id,
+        command,
+        cmd_sender,
+    } = action
+    {
+        if cmd_sender.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::SendDaemonCommand {
+                session_id,
+                command,
+                cmd_sender,
+            });
+        }
+        // Fetch the cmd_sender from the session. If unavailable (process not yet
+        // attached or already exited), discard the action silently.
+        let sender = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.cmd_sender.clone())?;
+        return Some(UpdateAction::SendDaemonCommand {
+            session_id,
+            command,
+            cmd_sender: Some(sender),
+        });
+    }
+    Some(action)
 }
 
 /// Get command senders for all sessions in ReloadAllSessions action

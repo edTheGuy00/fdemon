@@ -11910,3 +11910,154 @@ mod phase5_5_modal_precedence_tests {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DevTools endpoint handler tests (Task 05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+mod devtools_served_handler {
+    use super::*;
+    use crate::session::SessionId;
+
+    fn make_state_with_session() -> (AppState, SessionId) {
+        let mut state = AppState::new();
+        let device = test_device("device-1", "Pixel 5");
+        let sid = state.session_manager.create_session(&device).unwrap();
+        (state, sid)
+    }
+
+    /// `Message::DevToolsServed` populates `devtools_endpoint` and clears
+    /// `devtools_serve_pending`.
+    #[test]
+    fn devtools_served_populates_endpoint() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Set serve-pending to simulate a prior `devtools.serve` dispatch
+        {
+            let h = state.session_manager.get_mut(session_id).unwrap();
+            h.session.devtools_serve_pending = true;
+        }
+
+        let result = update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: "http://127.0.0.1:9100".to_string(),
+            },
+        );
+
+        // Handler should not produce a follow-up message or action
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        let endpoint = handle.session.devtools_endpoint.as_ref().unwrap();
+        assert_eq!(endpoint.base_url, "http://127.0.0.1:9100");
+        assert!(
+            !handle.session.devtools_serve_pending,
+            "devtools_serve_pending should be cleared"
+        );
+    }
+
+    /// `Message::DevToolsServeFailed` clears `devtools_serve_pending` and leaves
+    /// `devtools_endpoint` as `None`.
+    #[test]
+    fn devtools_serve_failed_clears_pending() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Set serve-pending to simulate a prior dispatch
+        {
+            let h = state.session_manager.get_mut(session_id).unwrap();
+            h.session.devtools_serve_pending = true;
+        }
+
+        let result = update(
+            &mut state,
+            Message::DevToolsServeFailed {
+                session_id,
+                reason: "devtools.serve failed: Method not found (code -32601)".to_string(),
+            },
+        );
+
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.devtools_endpoint.is_none(),
+            "devtools_endpoint should remain None after failure"
+        );
+        assert!(
+            !handle.session.devtools_serve_pending,
+            "devtools_serve_pending should be cleared after failure"
+        );
+    }
+
+    /// `Message::DevToolsServed` with DDS-integrated base URL (auth-token in path).
+    #[test]
+    fn devtools_served_dds_integrated_base_url() {
+        let (mut state, session_id) = make_state_with_session();
+
+        let base_url = "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools".to_string();
+        update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: base_url.clone(),
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        let endpoint = handle.session.devtools_endpoint.as_ref().unwrap();
+        assert_eq!(endpoint.base_url, base_url);
+    }
+
+    /// A second `DevToolsServed` for the same session overwrites the endpoint
+    /// (handles the race between `app.devTools` event and `devtools.serve` response).
+    #[test]
+    fn devtools_served_overwrites_existing_endpoint() {
+        let (mut state, session_id) = make_state_with_session();
+
+        update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: "http://127.0.0.1:9100".to_string(),
+            },
+        );
+        update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: "http://127.0.0.1:9200".to_string(),
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.devtools_endpoint.as_ref().unwrap().base_url,
+            "http://127.0.0.1:9200",
+            "second DevToolsServed should overwrite first"
+        );
+        assert!(!handle.session.devtools_serve_pending);
+    }
+
+    /// `DevToolsServed` for an unknown session_id is silently ignored (no panic).
+    #[test]
+    fn devtools_served_unknown_session_is_noop() {
+        let mut state = AppState::new();
+        // Use a session_id that was never created
+        let phantom_id: SessionId = 99999;
+
+        let result = update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id: phantom_id,
+                base_url: "http://127.0.0.1:9100".to_string(),
+            },
+        );
+
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+    }
+}

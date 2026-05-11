@@ -851,6 +851,42 @@ pub fn handle_action(
                 }
             });
         }
+
+        UpdateAction::SendDaemonCommand {
+            session_id,
+            command,
+            cmd_sender,
+        } => {
+            // Fire-and-forget: send the command to the session's Flutter process stdin.
+            // The result is received as a daemon event (app.devTools or devtools.serve
+            // response) which is bridged back to Message::DevToolsServed /
+            // Message::DevToolsServeFailed by the daemon event handler.
+            //
+            // `cmd_sender` is hydrated by `process.rs`; if it is still None at this
+            // point it means the session's process has not yet attached a sender,
+            // which should not happen (process.rs discards the action when None).
+            if let Some(sender) = cmd_sender {
+                tokio::spawn(async move {
+                    if let Err(e) = sender.send_fire_and_forget(command).await {
+                        tracing::warn!(
+                            session_id = session_id,
+                            error = %e,
+                            "devtools.serve fire-and-forget failed"
+                        );
+                    } else {
+                        tracing::debug!(
+                            session_id = session_id,
+                            "devtools.serve command sent to Flutter daemon"
+                        );
+                    }
+                });
+            } else {
+                tracing::debug!(
+                    session_id = session_id,
+                    "SendDaemonCommand: cmd_sender is None (process not attached); skipping"
+                );
+            }
+        }
     }
 }
 

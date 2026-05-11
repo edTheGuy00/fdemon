@@ -577,6 +577,24 @@ pub enum UpdateAction {
         /// `None` when no SDK is resolved — action is skipped.
         executable: Option<fdemon_daemon::FlutterExecutable>,
     },
+
+    /// Fire-and-forget a daemon command on the session's Flutter process stdin.
+    ///
+    /// Used by the eager DevTools serve path to send `devtools.serve` to the
+    /// Flutter daemon after the VM Service URI becomes known (on `app.debugPort`).
+    ///
+    /// The `cmd_sender` field is `None` until hydrated by `process.rs` from the
+    /// session's `cmd_sender`. `handle_action` silently skips the command when
+    /// `cmd_sender` remains `None` (process not yet attached or already exited).
+    SendDaemonCommand {
+        /// Session whose Flutter process stdin should receive the command.
+        session_id: SessionId,
+        /// The daemon command to send.
+        command: fdemon_daemon::DaemonCommand,
+        /// The session's command sender.
+        /// `None` until hydrated by `process.rs`.
+        cmd_sender: Option<fdemon_daemon::CommandSender>,
+    },
 }
 
 /// Background tasks to spawn
