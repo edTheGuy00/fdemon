@@ -93,7 +93,8 @@ pub use native_logs::MacOsLogConfig;
 pub use native_logs::{AndroidLogConfig, NativeLogCapture, NativeLogEvent, NativeLogHandle};
 pub use process::FlutterProcess;
 pub use protocol::{
-    detect_log_level, parse_daemon_message, parse_flutter_log, to_log_entry, LogEntryInfo,
+    detect_log_level, parse_daemon_message, parse_devtools_serve_response, parse_flutter_log,
+    to_log_entry, LogEntryInfo,
 };
 pub use simulators::{
     boot_simulator, group_simulators_by_runtime, list_ios_simulators, shutdown_simulator,

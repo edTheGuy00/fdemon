@@ -1721,6 +1721,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // handles clean exit. Setting to None signals no Network tab
                 // is open for this disconnected session.
                 handle.network_pause_tx = None;
+
+                // Clear DevTools endpoint and pending flag. If the daemon
+                // dies mid-flight, devtools_serve_pending would otherwise
+                // stay `true` forever and block any future fallback dispatch.
+                // The stored base_url may also point at a now-dead DDS port.
+                handle.session.devtools_endpoint = None;
+                handle.session.devtools_serve_pending = false;
             }
             UpdateResult::none()
         }

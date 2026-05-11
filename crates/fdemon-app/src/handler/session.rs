@@ -162,6 +162,13 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
         // persist across a session stop/restart.
         handle.native_tag_state = crate::session::NativeTagState::default();
 
+        // Clear DevTools endpoint — on next run the Flutter daemon may serve
+        // DevTools on a different port (or not at all), so the stored URL
+        // would point at a stale or non-listening server. Pressing `B` after
+        // exit must NOT silently open a dead URL.
+        handle.session.devtools_endpoint = None;
+        handle.session.devtools_serve_pending = false;
+
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
     }
@@ -229,6 +236,14 @@ pub fn handle_session_message_state(
                 // Reset native tag state — tags from the previous run should
                 // not persist when the app is restarted within the same session.
                 handle.native_tag_state = crate::session::NativeTagState::default();
+
+                // Clear DevTools endpoint — hot restart cycles the Flutter
+                // app and likely cycles its DevTools server. The stored URL
+                // may now point at a dead port; the next `app.devTools`
+                // event will repopulate it (or the eager fallback fires on
+                // the next VmServiceConnected).
+                handle.session.devtools_endpoint = None;
+                handle.session.devtools_serve_pending = false;
             }
         }
     }
@@ -289,7 +304,11 @@ pub fn maybe_serve_devtools(state: &mut AppState, session_id: SessionId) -> Opti
         return Some(UpdateAction::SendDaemonCommand {
             session_id,
             command: fdemon_daemon::DaemonCommand::ServeDevTools {
-                request_id: Some(format!("devtools-serve-{}", session_id)),
+                request_id: Some(format!(
+                    "{}{}",
+                    crate::process::DEVTOOLS_SERVE_REQUEST_PREFIX,
+                    session_id
+                )),
             },
             cmd_sender: None,
         });

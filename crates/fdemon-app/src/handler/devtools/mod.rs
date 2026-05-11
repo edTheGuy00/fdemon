@@ -403,13 +403,18 @@ pub fn handle_open_browser_devtools(state: &mut AppState) -> UpdateResult {
         return UpdateResult::none();
     };
 
-    let Some(ref ws_uri) = session_handle.session.ws_uri else {
+    if session_handle.session.ws_uri.is_none() {
         tracing::warn!("Cannot open browser DevTools: no VM Service URI available");
+        state.push_toast(
+            ToastLevel::Warn,
+            "VM Service not ready yet \u{2014} \
+             wait for the app to finish launching, then press B again.",
+        );
         return UpdateResult::none();
-    };
+    }
+    let ws_uri = session_handle.session.ws_uri.clone().unwrap_or_default();
 
     // Clone the data we need before the mutable borrow of `state`.
-    let ws_uri = ws_uri.clone();
     let devtools_endpoint = session_handle.session.devtools_endpoint.clone();
     let devtools_serve_pending = session_handle.session.devtools_serve_pending;
     let browser = state.settings.devtools.browser.clone();
@@ -791,6 +796,24 @@ mod tests {
         assert!(
             result.action.is_none(),
             "Expected no action when ws_uri is not set"
+        );
+    }
+
+    #[test]
+    fn open_browser_no_ws_uri_emits_toast() {
+        // When ws_uri is not yet set, the user should see a toast explaining
+        // why pressing B did nothing — not a silent no-op.
+        let mut state = make_state_with_session();
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("VM Service not ready")),
+            "Expected a 'VM Service not ready' toast, got: {:?}",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
         );
     }
 

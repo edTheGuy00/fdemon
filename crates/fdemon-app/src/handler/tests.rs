@@ -12060,4 +12060,80 @@ mod devtools_served_handler {
         assert!(result.message.is_none());
         assert!(result.action.is_none());
     }
+
+    // -- Lifecycle resets ----------------------------------------------------
+    // After hot restart / process exit / VM disconnect, the stored DevTools
+    // URL is stale (DDS may have cycled the port). Pressing `B` after
+    // these events must not silently open a dead URL — both
+    // `devtools_endpoint` and `devtools_serve_pending` must be cleared.
+
+    use fdemon_core::AppStop;
+
+    fn populate_devtools_state(state: &mut AppState, session_id: SessionId) {
+        let h = state.session_manager.get_mut(session_id).unwrap();
+        h.session.app_id = Some("test-app".to_string());
+        h.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".to_string(),
+            served_at: std::time::Instant::now(),
+        });
+        h.session.devtools_serve_pending = true;
+    }
+
+    #[test]
+    fn app_stop_resets_devtools_endpoint() {
+        use crate::handler::session::handle_session_message_state;
+        let (mut state, session_id) = make_state_with_session();
+        populate_devtools_state(&mut state, session_id);
+
+        handle_session_message_state(
+            &mut state,
+            session_id,
+            &fdemon_core::DaemonMessage::AppStop(AppStop {
+                app_id: "test-app".to_string(),
+                error: None,
+            }),
+        );
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.session.devtools_endpoint.is_none(),
+            "AppStop must clear devtools_endpoint to avoid stale URL after restart"
+        );
+        assert!(
+            !h.session.devtools_serve_pending,
+            "AppStop must clear devtools_serve_pending"
+        );
+    }
+
+    #[test]
+    fn session_exited_resets_devtools_state() {
+        use crate::handler::session::handle_session_exited;
+        let (mut state, session_id) = make_state_with_session();
+        populate_devtools_state(&mut state, session_id);
+
+        handle_session_exited(&mut state, session_id, Some(0));
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(h.session.devtools_endpoint.is_none());
+        assert!(!h.session.devtools_serve_pending);
+    }
+
+    #[test]
+    fn vm_service_disconnected_resets_devtools_state() {
+        let (mut state, session_id) = make_state_with_session();
+        populate_devtools_state(&mut state, session_id);
+
+        update(&mut state, Message::VmServiceDisconnected { session_id });
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.session.devtools_endpoint.is_none(),
+            "VmServiceDisconnected must clear devtools_endpoint"
+        );
+        assert!(
+            !h.session.devtools_serve_pending,
+            "VmServiceDisconnected must clear devtools_serve_pending so a \
+             reconnect can fire the fallback again"
+        );
+    }
 }

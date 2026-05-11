@@ -15,7 +15,9 @@ use crate::session::SessionId;
 use crate::state::AppState;
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
-use fdemon_daemon::{parse_daemon_message, vm_service::VmRequestHandle, CommandSender};
+use fdemon_daemon::{
+    parse_daemon_message, parse_devtools_serve_response, vm_service::VmRequestHandle, CommandSender,
+};
 use fdemon_dap::{adapter::DebugEvent as DapDebugEvent, DapServerHandle};
 
 use super::actions::handle_action;
@@ -34,7 +36,7 @@ pub fn process_message(
     dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>>,
 ) {
     // Route JSON-RPC responses from SessionDaemon events to RequestTracker
-    route_session_daemon_response(&message, state);
+    route_session_daemon_response(&message, state, msg_tx);
 
     // Process message through TEA update loop
     let mut msg = Some(message);
@@ -393,15 +395,62 @@ fn hydrate_clear_http_profile(action: UpdateAction, state: &AppState) -> Option<
     Some(action)
 }
 
-/// Route JSON-RPC responses for multi-session daemon events
-fn route_session_daemon_response(message: &Message, state: &AppState) {
+/// Prefix used for `devtools.serve` JSON-RPC request IDs.
+///
+/// Outgoing requests carry `"devtools-serve-{session_id}"` as a string ID
+/// (set in `handler::session::maybe_serve_devtools`). The daemon echoes the
+/// same ID in its response, which we match here to route the response into
+/// a `Message::DevToolsServed` / `Message::DevToolsServeFailed`.
+pub(crate) const DEVTOOLS_SERVE_REQUEST_PREFIX: &str = "devtools-serve-";
+
+/// Route JSON-RPC responses for multi-session daemon events.
+///
+/// Two routing strategies live here:
+///
+/// 1. **Numeric-ID responses** — registered via `RequestTracker` (the
+///    standard `CommandSender::send`/`send_with_timeout` path). Routed to
+///    the tracker so the awaiting future resolves.
+/// 2. **String-ID `devtools.serve` responses** — sent via
+///    `send_fire_and_forget` with an explicit string ID. The tracker has no
+///    pending entry for these, so we parse the response payload here and
+///    forward it as a synthetic `Message::DevToolsServed` /
+///    `Message::DevToolsServeFailed` on `msg_tx`. Without this, the
+///    response would be silently dropped and `devtools_serve_pending` would
+///    remain `true` forever, blocking any future fallback dispatch.
+fn route_session_daemon_response(
+    message: &Message,
+    state: &AppState,
+    msg_tx: &mpsc::Sender<Message>,
+) {
     if let Message::SessionDaemon {
         session_id,
         event: DaemonEvent::Stdout(ref line),
     } = message
     {
         if let Some(DaemonMessage::Response { id, result, error }) = parse_daemon_message(line) {
-            // Use session-specific cmd_sender for response routing
+            // String-ID devtools.serve response → synthesize a Message.
+            if let Some(id_str) = id.as_str() {
+                if id_str.starts_with(DEVTOOLS_SERVE_REQUEST_PREFIX) {
+                    if let Some(m) = synthesize_devtools_serve_message(
+                        *session_id,
+                        result.as_ref(),
+                        error.as_ref(),
+                    ) {
+                        // Best-effort: a full channel means the runtime
+                        // is overwhelmed; logging is enough.
+                        if let Err(e) = msg_tx.try_send(m) {
+                            tracing::warn!(
+                                session_id = *session_id,
+                                error = %e,
+                                "Failed to forward devtools.serve response"
+                            );
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // Numeric-ID response → standard tracker path.
             if let Some(handle) = state.session_manager.get(*session_id) {
                 if let Some(ref sender) = handle.cmd_sender {
                     if let Some(id_num) = id.as_u64() {
@@ -413,6 +462,31 @@ fn route_session_daemon_response(message: &Message, state: &AppState) {
                 }
             }
         }
+    }
+}
+
+/// Convert a parsed `devtools.serve` response payload into a follow-up
+/// `Message::DevToolsServed` or `Message::DevToolsServeFailed` for the given
+/// session. Returns `None` when the response is malformed (no result + no
+/// error).
+///
+/// Extracted as a pure function so it can be unit-tested without an async
+/// runtime, channels, or a full `AppState`.
+fn synthesize_devtools_serve_message(
+    session_id: SessionId,
+    result: Option<&serde_json::Value>,
+    error: Option<&serde_json::Value>,
+) -> Option<Message> {
+    let parsed = parse_devtools_serve_response(result, error)?;
+    match parsed {
+        DaemonMessage::DevToolsServed { base_url, .. } => Some(Message::DevToolsServed {
+            session_id,
+            base_url,
+        }),
+        DaemonMessage::DevToolsServeFailed { reason } => {
+            Some(Message::DevToolsServeFailed { session_id, reason })
+        }
+        _ => None,
     }
 }
 
@@ -485,5 +559,72 @@ fn get_session_cmd_senders_for_action(
             .collect()
     } else {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const SID: SessionId = 7;
+
+    #[test]
+    fn synthesize_serves_message_on_success() {
+        let result = json!({"host": "127.0.0.1", "port": 9100});
+        let msg = synthesize_devtools_serve_message(SID, Some(&result), None).unwrap();
+        match msg {
+            Message::DevToolsServed {
+                session_id,
+                base_url,
+            } => {
+                assert_eq!(session_id, SID);
+                assert_eq!(base_url, "http://127.0.0.1:9100");
+            }
+            other => panic!("expected DevToolsServed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn synthesize_serves_failed_on_method_not_found() {
+        let error = json!({"code": -32601, "message": "Method not found"});
+        let msg = synthesize_devtools_serve_message(SID, None, Some(&error)).unwrap();
+        match msg {
+            Message::DevToolsServeFailed { session_id, reason } => {
+                assert_eq!(session_id, SID);
+                assert!(reason.contains("Method not supported"), "got: {reason}");
+            }
+            other => panic!("expected DevToolsServeFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn synthesize_serves_failed_on_null_host_port() {
+        let result = json!({"host": null, "port": null});
+        let msg = synthesize_devtools_serve_message(SID, Some(&result), None).unwrap();
+        assert!(matches!(msg, Message::DevToolsServeFailed { .. }));
+    }
+
+    #[test]
+    fn synthesize_serves_failed_on_unsafe_host() {
+        let result = json!({"host": "127.0.0.1@evil.com", "port": 9100});
+        let msg = synthesize_devtools_serve_message(SID, Some(&result), None).unwrap();
+        assert!(matches!(msg, Message::DevToolsServeFailed { .. }));
+    }
+
+    #[test]
+    fn synthesize_returns_none_on_malformed_response() {
+        // No result and no error → malformed.
+        assert!(synthesize_devtools_serve_message(SID, None, None).is_none());
+    }
+
+    #[test]
+    fn devtools_serve_request_prefix_matches_session_format() {
+        // Guards against the prefix in process.rs drifting from the format used
+        // by maybe_serve_devtools — a silent break would orphan the response
+        // path again. If the prefix changes, both sites must change.
+        let request_id = format!("{}{}", DEVTOOLS_SERVE_REQUEST_PREFIX, 42);
+        assert!(request_id.starts_with(DEVTOOLS_SERVE_REQUEST_PREFIX));
+        assert_eq!(request_id, "devtools-serve-42");
     }
 }

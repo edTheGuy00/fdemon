@@ -157,7 +157,7 @@ fn parse_event(event: &str, params: serde_json::Value) -> DaemonMessage {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if base_url.is_empty() {
+            if base_url.is_empty() || !is_safe_http_url(&base_url) {
                 unknown_event(event, params)
             } else {
                 DaemonMessage::DevToolsServed { app_id, base_url }
@@ -202,13 +202,16 @@ pub fn parse_devtools_serve_response(
         let host = res.get("host").and_then(|v| v.as_str());
         let port = res.get("port").and_then(|v| v.as_u64());
         match (host, port) {
-            (Some(h), Some(p)) if !h.is_empty() => {
+            (Some(h), Some(p)) if !h.is_empty() && is_safe_host(h) && (1..=65535).contains(&p) => {
                 let base_url = format!("http://{}:{}", h, p);
                 Some(DaemonMessage::DevToolsServed {
                     app_id: String::new(),
                     base_url,
                 })
             }
+            (Some(h), Some(_)) if !h.is_empty() => Some(DaemonMessage::DevToolsServeFailed {
+                reason: format!("Rejected unsafe host/port from devtools.serve: {h:?}"),
+            }),
             _ => Some(DaemonMessage::DevToolsServeFailed {
                 reason: "DevTools server unavailable".to_string(),
             }),
@@ -216,6 +219,35 @@ pub fn parse_devtools_serve_response(
     } else {
         None
     }
+}
+
+/// Returns `true` iff `host` is composed only of characters valid in a
+/// hostname or IP literal (including IPv6 brackets and zone identifiers).
+///
+/// This is a defense-in-depth check against URL injection: a malicious
+/// Flutter daemon (or supply-chain attacker controlling its stdout) could
+/// otherwise supply a `host` like `"127.0.0.1@evil.com"` which browsers
+/// parse as a credential-style URL targeting `evil.com`, or `"127.0.0.1#"`
+/// which truncates the path.
+fn is_safe_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']' | '%'))
+}
+
+/// Returns `true` iff `url` begins with `http://` or `https://` and contains
+/// no characters that would break out of the URL grammar in surprising ways
+/// (whitespace, control characters).
+///
+/// This is a defense-in-depth check against scheme injection: the
+/// `app.devTools` event's `uri` field is daemon-supplied and must not be
+/// allowed to take the form `javascript:`, `file://`, `data:` etc.
+fn is_safe_http_url(url: &str) -> bool {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return false;
+    }
+    !url.chars().any(|c| c.is_control() || c == ' ')
 }
 
 /// Create an unknown event fallback
@@ -1341,6 +1373,83 @@ mod tests {
             parse_devtools_serve_response(None, None).is_none(),
             "Malformed response should return None"
         );
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_rejects_unsafe_host() {
+        // host with credential separator should be rejected
+        let result = serde_json::json!({"host": "127.0.0.1@evil.com", "port": 9100});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServeFailed { reason } => {
+                assert!(reason.contains("unsafe host/port"), "got: {reason}");
+            }
+            other => panic!("expected DevToolsServeFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_rejects_fragment_in_host() {
+        // host containing '#' would truncate the path in a browser
+        let result = serde_json::json!({"host": "127.0.0.1#", "port": 9100});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        assert!(matches!(msg, DaemonMessage::DevToolsServeFailed { .. }));
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_rejects_slash_in_host() {
+        let result = serde_json::json!({"host": "127.0.0.1/../../etc/passwd?", "port": 9100});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        assert!(matches!(msg, DaemonMessage::DevToolsServeFailed { .. }));
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_accepts_ipv6_host() {
+        // IPv6 literal with brackets and zone identifier should be accepted
+        let result = serde_json::json!({"host": "[::1]", "port": 9100});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        match msg {
+            DaemonMessage::DevToolsServed { base_url, .. } => {
+                assert_eq!(base_url, "http://[::1]:9100");
+            }
+            other => panic!("expected DevToolsServed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_rejects_port_zero() {
+        let result = serde_json::json!({"host": "127.0.0.1", "port": 0});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        assert!(matches!(msg, DaemonMessage::DevToolsServeFailed { .. }));
+    }
+
+    #[test]
+    fn test_parse_devtools_serve_response_rejects_port_out_of_range() {
+        let result = serde_json::json!({"host": "127.0.0.1", "port": 100000u64});
+        let msg = parse_devtools_serve_response(Some(&result), None).unwrap();
+        assert!(matches!(msg, DaemonMessage::DevToolsServeFailed { .. }));
+    }
+
+    #[test]
+    fn test_parse_app_devtools_event_rejects_javascript_uri() {
+        // javascript: scheme must be rejected even from a "legitimate" app event
+        let json = r#"{"event":"app.devTools","params":{"appId":"x","uri":"javascript:alert(1)"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::UnknownEvent { .. }));
+    }
+
+    #[test]
+    fn test_parse_app_devtools_event_rejects_file_uri() {
+        let json = r#"{"event":"app.devTools","params":{"appId":"x","uri":"file:///etc/passwd"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::UnknownEvent { .. }));
+    }
+
+    #[test]
+    fn test_parse_app_devtools_event_rejects_uri_with_whitespace() {
+        let json = r#"{"event":"app.devTools","params":{"appId":"x","uri":"http://evil .com"}}"#;
+        let msg = parse_daemon_message(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::UnknownEvent { .. }));
     }
 
     #[test]

@@ -409,9 +409,22 @@ pub(super) fn spawn_clear_http_profile(session_id: SessionId, handle: VmRequestH
 /// If `browser` is non-empty, uses it as the browser command.
 /// Otherwise uses the platform-default browser opener.
 ///
+/// Only `http://` and `https://` URLs are allowed. Other schemes (`file://`,
+/// `javascript:`, `data:`, …) are rejected with `InvalidInput` because the
+/// URL ultimately comes from the Flutter daemon's stdout — a malicious
+/// project/SDK could otherwise direct the user's browser or file-opener at
+/// arbitrary local resources.
+///
 /// Called from the `handle_action` dispatch for
 /// [`crate::UpdateAction::OpenBrowserDevTools`].
 pub(super) fn open_url_in_browser(url: &str, browser: &str) -> std::io::Result<()> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "only http:// and https:// URLs may be opened in the browser",
+        ));
+    }
+
     if !browser.is_empty() {
         // Custom browser specified in settings.
         Command::new(browser).arg(url).spawn()?;
@@ -552,5 +565,39 @@ mod tests {
             result, 3000,
             "multiplier should be applied after base clamp"
         );
+    }
+
+    // -- open_url_in_browser scheme validation ---------------------------------
+
+    #[test]
+    fn open_url_in_browser_rejects_file_scheme() {
+        let err = open_url_in_browser("file:///etc/passwd", "").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn open_url_in_browser_rejects_javascript_scheme() {
+        let err = open_url_in_browser("javascript:alert(1)", "").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn open_url_in_browser_rejects_data_scheme() {
+        let err = open_url_in_browser("data:text/html,<script>alert(1)</script>", "").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn open_url_in_browser_rejects_empty_url() {
+        let err = open_url_in_browser("", "").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn open_url_in_browser_rejects_non_url_argument() {
+        // Even if a malicious `host` slipped through earlier validation, an
+        // argument that doesn't begin with http(s) is rejected here.
+        let err = open_url_in_browser("calc.exe", "").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

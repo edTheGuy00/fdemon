@@ -858,9 +858,15 @@ pub fn handle_action(
             cmd_sender,
         } => {
             // Fire-and-forget: send the command to the session's Flutter process stdin.
-            // The result is received as a daemon event (app.devTools or devtools.serve
-            // response) which is bridged back to Message::DevToolsServed /
-            // Message::DevToolsServeFailed by the daemon event handler.
+            // Responses arrive as `DaemonMessage::Response` and are routed in
+            // `process::route_session_daemon_response`:
+            //   * Numeric-ID responses go through `RequestTracker` (the awaiting
+            //     future resolves).
+            //   * String-ID `devtools-serve-*` responses are parsed via
+            //     `parse_devtools_serve_response` and forwarded as synthetic
+            //     `Message::DevToolsServed` / `Message::DevToolsServeFailed`.
+            // The `app.devTools` daemon event (primary, modern Flutter) is handled
+            // separately in `handler/daemon.rs`.
             //
             // `cmd_sender` is hydrated by `process.rs`; if it is still None at this
             // point it means the session's process has not yet attached a sender,
