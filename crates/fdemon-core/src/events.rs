@@ -134,6 +134,37 @@ pub enum DaemonMessage {
         error: Option<serde_json::Value>,
     },
 
+    /// DevTools server is reachable at the given base URL.
+    ///
+    /// Emitted when the Flutter daemon fires an `app.devTools` event (primary path,
+    /// Flutter ≥ 1.22.0). The `base_url` field holds the raw base URL exactly as
+    /// provided by DDS — e.g. `http://127.0.0.1:9100` or
+    /// `http://127.0.0.1:59123/tbrR0DzW2j8=/devtools` for DDS-integrated DevTools.
+    ///
+    /// Callers construct the final browser URL by appending `?uri=<encoded_ws_uri>`:
+    /// ```text
+    /// format!("{}?uri={}", base_url, percent_encode(ws_uri))
+    /// ```
+    DevToolsServed {
+        /// The app ID that triggered this DevTools availability notification.
+        app_id: String,
+        /// Base DevTools server URL, ready for use as the browser target (without
+        /// the `?uri=` query parameter).
+        base_url: String,
+    },
+
+    /// The Flutter daemon could not serve DevTools.
+    ///
+    /// Possible causes:
+    /// - `devtools.serve` RPC returned a JSON-RPC error (e.g., `-32601 Method not found`
+    ///   on Flutter < 1.22.0).
+    /// - `devtools.serve` returned a success response but with `null` host/port fields,
+    ///   indicating the DevTools bundle is unavailable.
+    DevToolsServeFailed {
+        /// Human-readable reason for the failure, suitable for display in a toast/log.
+        reason: String,
+    },
+
     // Fallback for unknown events
     UnknownEvent {
         event: String,
@@ -155,6 +186,7 @@ impl DaemonMessage {
             DaemonMessage::AppLog(e) => Some(&e.app_id),
             DaemonMessage::AppProgress(e) => Some(&e.app_id),
             DaemonMessage::AppDebugPort(e) => Some(&e.app_id),
+            DaemonMessage::DevToolsServed { app_id, .. } => Some(app_id),
             _ => None,
         }
     }
@@ -165,6 +197,7 @@ impl DaemonMessage {
             DaemonMessage::AppLog(log) => log.error,
             DaemonMessage::AppStop(stop) => stop.error.is_some(),
             DaemonMessage::Response { error, .. } => error.is_some(),
+            DaemonMessage::DevToolsServeFailed { .. } => true,
             _ => false,
         }
     }
@@ -209,6 +242,12 @@ impl DaemonMessage {
                 } else {
                     format!("Response #{}: ok", id)
                 }
+            }
+            DaemonMessage::DevToolsServed { base_url, .. } => {
+                format!("DevTools available at {}", base_url)
+            }
+            DaemonMessage::DevToolsServeFailed { reason } => {
+                format!("DevTools unavailable: {}", reason)
             }
             DaemonMessage::UnknownEvent { event, .. } => {
                 format!("Event: {}", event)
