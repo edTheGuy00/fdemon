@@ -92,6 +92,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             // Note: NewSessionDialog doesn't have animation frames to tick
 
+            // Expire stale toast notifications.
+            state.expire_toasts();
+
             UpdateResult::none()
         }
 

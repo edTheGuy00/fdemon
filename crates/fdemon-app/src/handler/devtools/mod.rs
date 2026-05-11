@@ -27,7 +27,7 @@ pub(crate) use performance::{
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::DebugOverlayKind;
 use crate::session::SessionId;
-use crate::state::{AppState, DevToolsError, DevToolsPanel, VmConnectionStatus};
+use crate::state::{AppState, DevToolsError, DevToolsPanel, ToastLevel, VmConnectionStatus};
 
 /// Map a raw RPC error string to a user-friendly [`DevToolsError`].
 ///
@@ -387,7 +387,18 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
 /// available — this is the URL from the `app.devTools` daemon event or the
 /// `devtools.serve` RPC response.  Falls back to `build_local_devtools_url`
 /// (the legacy DDS-path URL) when no endpoint has been recorded yet.
-pub fn handle_open_browser_devtools(state: &AppState) -> UpdateResult {
+///
+/// When falling back, a transient toast is pushed to `state.toasts`:
+/// - If `devtools_serve_pending` is `true`, the message tells the user the
+///   server is still starting.
+/// - Otherwise the message explains that DevTools is not registered with DDS
+///   and provides recovery steps.
+///
+/// **Behaviour choice**: when the endpoint is pending we still open the legacy
+/// fallback URL (rather than deferring the open entirely). This lets the user
+/// access DevTools immediately even if the served URL is not ready yet, while
+/// the toast communicates that a better URL may become available soon.
+pub fn handle_open_browser_devtools(state: &mut AppState) -> UpdateResult {
     let Some(session_handle) = state.session_manager.selected() else {
         return UpdateResult::none();
     };
@@ -397,19 +408,33 @@ pub fn handle_open_browser_devtools(state: &AppState) -> UpdateResult {
         return UpdateResult::none();
     };
 
-    let url = match &session_handle.session.devtools_endpoint {
-        Some(endpoint) => {
+    // Clone the data we need before the mutable borrow of `state`.
+    let ws_uri = ws_uri.clone();
+    let devtools_endpoint = session_handle.session.devtools_endpoint.clone();
+    let devtools_serve_pending = session_handle.session.devtools_serve_pending;
+    let browser = state.settings.devtools.browser.clone();
+
+    let url = match devtools_endpoint {
+        Some(ref endpoint) => {
             tracing::info!(base_url = %endpoint.base_url, "Opening served DevTools URL");
-            endpoint.url(ws_uri)
+            endpoint.url(&ws_uri)
         }
         None => {
             tracing::warn!("No served DevTools endpoint — falling back to legacy URL");
-            let encoded = percent_encode_uri(ws_uri);
-            build_local_devtools_url(ws_uri, &encoded)
+
+            let toast_msg = if devtools_serve_pending {
+                "DevTools server is still starting — try again in a moment."
+            } else {
+                "DevTools is not registered with DDS. \
+                 Update Flutter to \u{2265} 1.22 or run `dart devtools` manually."
+            };
+            state.push_toast(ToastLevel::Warn, toast_msg);
+
+            let encoded = percent_encode_uri(&ws_uri);
+            build_local_devtools_url(&ws_uri, &encoded)
         }
     };
 
-    let browser = state.settings.devtools.browser.clone();
     UpdateResult::action(UpdateAction::OpenBrowserDevTools { url, browser })
 }
 
@@ -684,7 +709,7 @@ mod tests {
         state.session_manager.selected_mut().unwrap().session.ws_uri =
             Some("ws://127.0.0.1:12345/abc=/ws".to_string());
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         assert!(result.action.is_some(), "Expected an action to be returned");
 
@@ -714,7 +739,7 @@ mod tests {
         state.session_manager.selected_mut().unwrap().session.ws_uri =
             Some("wss://127.0.0.1:9999/auth=/ws".to_string());
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         if let Some(UpdateAction::OpenBrowserDevTools { url, .. }) = result.action {
             assert!(
@@ -759,9 +784,9 @@ mod tests {
     #[test]
     fn test_open_browser_devtools_no_ws_uri_returns_none() {
         // A session exists but has no ws_uri set.
-        let state = make_state_with_session();
+        let mut state = make_state_with_session();
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         assert!(
             result.action.is_none(),
@@ -786,7 +811,7 @@ mod tests {
             served_at: Instant::now(),
         });
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         match result.action.unwrap() {
             UpdateAction::OpenBrowserDevTools { url, .. } => {
@@ -822,7 +847,7 @@ mod tests {
             served_at: Instant::now(),
         });
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         match result.action.unwrap() {
             UpdateAction::OpenBrowserDevTools { url, .. } => {
@@ -846,7 +871,7 @@ mod tests {
             Some("ws://127.0.0.1:1234/abc=/ws".to_string());
         // No devtools_endpoint set — remains None.
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         match result.action.unwrap() {
             UpdateAction::OpenBrowserDevTools { url, .. } => {
@@ -861,6 +886,84 @@ mod tests {
             }
             _ => panic!("expected OpenBrowserDevTools action"),
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Toast emission tests (Task 07: fallback-and-recovery-toast)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fallback_path_emits_toast() {
+        // When no devtools_endpoint is set (legacy fallback), a toast must be
+        // pushed with the DDS registration failure message.
+        let mut state = make_state_with_session();
+        state.session_manager.selected_mut().unwrap().session.ws_uri =
+            Some("ws://127.0.0.1:9999/abc=/ws".to_string());
+        // No devtools_endpoint → fallback path.
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            !state.toasts.is_empty(),
+            "A toast must be pushed when falling back to the legacy URL"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("not registered with DDS")),
+            "Toast must mention DDS registration (got: {:?})",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn pending_serve_emits_different_toast() {
+        // When devtools_serve_pending is true, the toast should tell the user
+        // to wait rather than report a DDS failure.
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:9999/abc=/ws".to_string());
+        handle.session.devtools_serve_pending = true;
+        // No devtools_endpoint → fallback path with pending flavour.
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            !state.toasts.is_empty(),
+            "A toast must be pushed when devtools_serve_pending is true"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("still starting")),
+            "Toast must mention server is still starting (got: {:?})",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn served_endpoint_no_toast() {
+        // When a devtools_endpoint is available no toast should be pushed.
+        use crate::session::DevToolsEndpoint;
+        use std::time::Instant;
+
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+        handle.session.devtools_endpoint = Some(DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        });
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            state.toasts.is_empty(),
+            "No toast should be pushed when the served endpoint is available (got: {:?})",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -911,6 +911,58 @@ pub struct SettingsClickStamp {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Toast / Notification system
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Severity level of a transient toast notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    /// Informational notice (blue).
+    Info,
+    /// Warning that requires user attention (yellow).
+    Warn,
+}
+
+/// How long a toast stays visible before it is automatically dismissed.
+///
+/// Derived from a comfortable reading speed for the longest expected message
+/// (~80 characters at 250 wpm ≈ 4 seconds).
+pub const TOAST_TTL_SECS: u64 = 5;
+
+/// A transient user-facing notification displayed as a one-line overlay.
+///
+/// Toasts are pushed by handler code (e.g., [`crate::handler::devtools`]) into
+/// [`AppState::toasts`] and rendered by the TUI as a bottom-of-screen overlay.
+/// They expire automatically after [`TOAST_TTL_SECS`] seconds; the
+/// [`crate::handler::update`] `Tick` arm calls
+/// [`AppState::expire_toasts`] to remove stale entries.
+#[derive(Debug, Clone)]
+pub struct Toast {
+    /// Short human-readable message to display.
+    pub text: String,
+    /// Visual severity level (controls accent colour).
+    pub level: ToastLevel,
+    /// Wall-clock time at which this toast was created.
+    pub created_at: std::time::Instant,
+}
+
+impl Toast {
+    /// Construct a new toast with the current timestamp.
+    pub fn new(level: ToastLevel, text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            level,
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    /// Return `true` if this toast has outlived [`TOAST_TTL_SECS`].
+    pub fn is_expired(&self) -> bool {
+        self.created_at.elapsed().as_secs() >= TOAST_TTL_SECS
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -1046,6 +1098,13 @@ pub struct AppState {
     /// Cleared when the New Session dialog is dismissed.
     pub show_migration_banner: bool,
 
+    /// Transient toast notifications shown as a one-line overlay in the TUI.
+    ///
+    /// Pushed by handler code (e.g., DevTools fallback in
+    /// `handler/devtools/mod.rs`) via [`AppState::push_toast`].
+    /// Expired automatically on each `Tick` via [`AppState::expire_toasts`].
+    pub toasts: Vec<Toast>,
+
     /// Per-frame mouse click-region registry.
     ///
     /// Populated by widgets during render via [`crate::mouse_regions::MouseRegionsBuilder`]
@@ -1140,10 +1199,39 @@ impl AppState {
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
             show_migration_banner: false,
+            toasts: Vec::new(),
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
             last_settings_click: None,
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Toast Helpers
+    // ─────────────────────────────────────────────────────────
+
+    /// Push a transient toast notification to the display queue.
+    ///
+    /// The toast is visible until [`expire_toasts`][Self::expire_toasts] removes
+    /// it after [`TOAST_TTL_SECS`] seconds (driven by the `Tick` handler).
+    ///
+    /// Capped at 5 concurrent toasts to prevent unbounded growth when events
+    /// fire in rapid succession. If the queue is already full the oldest toast
+    /// is evicted before the new one is added.
+    pub fn push_toast(&mut self, level: ToastLevel, text: impl Into<String>) {
+        /// Maximum number of concurrent toasts.
+        const MAX_TOASTS: usize = 5;
+        if self.toasts.len() >= MAX_TOASTS {
+            self.toasts.remove(0);
+        }
+        self.toasts.push(Toast::new(level, text));
+    }
+
+    /// Remove all toasts that have exceeded [`TOAST_TTL_SECS`].
+    ///
+    /// Called on each `Tick` by the update handler.
+    pub fn expire_toasts(&mut self) {
+        self.toasts.retain(|t| !t.is_expired());
     }
 
     // ─────────────────────────────────────────────────────────
