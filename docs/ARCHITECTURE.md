@@ -904,6 +904,19 @@ Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 5. Handler functions update per-session state
 6. TUI renders the updated state on the next frame
 
+### Browser DevTools URL (Served Endpoint)
+
+When the `B` key is pressed from DevTools mode, fdemon opens the Flutter DevTools UI in the system browser. To produce a stable, DDS-registered URL, fdemon uses the Flutter daemon's `devtools.serve` JSON-RPC method rather than constructing a URL from raw VM Service connection details.
+
+The endpoint acquisition follows two channels:
+
+- **Primary — `app.devTools` event**: The Flutter daemon emits this event asynchronously after the DevTools server starts. `fdemon-daemon/protocol.rs` parses the event and emits a `DaemonEvent::DevToolsServed` variant; the handler in `fdemon-app/handler/daemon.rs` stores the resolved base URL on the session.
+- **Eager fallback — `devtools.serve` RPC**: When VM Service connection is established for a session, fdemon eagerly fires a `devtools.serve` JSON-RPC call via `fdemon-daemon/commands.rs`. This populates the endpoint before the user first presses `B`, avoiding a cold-start delay. Both channels write to the same `Session.devtools_endpoint` field (`{base_url: String, served_at: Instant}`), so whichever arrives first wins.
+
+If neither channel has produced an endpoint by the time `B` is pressed, fdemon falls back to the legacy VM Service WebSocket URL and shows a recovery toast informing the user of the degraded path.
+
+The `devtools.serve` method is available on Flutter SDK ≥ 1.22 (October 2020). On older SDKs the daemon returns a JSON-RPC `-32601 Method not found` error, which the daemon layer treats as a signal to suppress the eager-serve request and rely solely on the `app.devTools` event path or the legacy fallback.
+
 ---
 
 ## DAP Server Subsystem
