@@ -5,16 +5,27 @@
 
 use super::*;
 
+use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::performance::FrameTiming;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::widgets::MouseCtx;
+
 // ── Bar chart methods ─────────────────────────────────────────────────────────
 
 impl FrameChart<'_> {
     /// Render the bar chart section.
-    pub(super) fn render_bar_chart(&self, area: Rect, buf: &mut Buffer) {
+    ///
+    /// Pass `Some(ctx)` to record one click region per visible frame slot.
+    /// Pass `None` (as in the [`Widget::render`] impl) to skip region recording.
+    pub(super) fn render_bar_chart(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mut ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -116,6 +127,24 @@ impl FrameChart<'_> {
                     if let Some(cell) = buf.cell_mut((x + 1, highlight_y)) {
                         cell.set_char('▔').set_style(hl_style);
                     }
+                }
+            }
+
+            // Register a click region covering the full slot width and chart height.
+            // Clicking anywhere in the bar pair (UI + Raster + gap) selects the frame.
+            if let Some(c) = ctx.as_deref_mut() {
+                // Width: CHARS_PER_FRAME (3) per slot, but clamp to available columns
+                // at the right edge of the chart so we never exceed the area bounds.
+                let avail = area.right().saturating_sub(x);
+                let rect_w = CHARS_PER_FRAME.min(avail);
+                if rect_w > 0 && area.height > 0 {
+                    let rect = MouseRect::new(x, area.y, rect_w, area.height);
+                    c.click(
+                        rect,
+                        MouseAction::emit(fdemon_app::Message::SelectPerformanceFrame {
+                            index: Some(global_idx),
+                        }),
+                    );
                 }
             }
         }

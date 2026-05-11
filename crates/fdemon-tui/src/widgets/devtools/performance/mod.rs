@@ -33,6 +33,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
+use crate::widgets::MouseCtx;
+
 use crate::theme::{icons::IconSet, palette};
 
 use frame_chart::FrameChart;
@@ -97,6 +99,21 @@ impl<'a> PerformancePanel<'a> {
 
 impl Widget for PerformancePanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_impl(area, buf, None);
+    }
+}
+
+impl PerformancePanel<'_> {
+    // ── Shared render entry point ─────────────────────────────────────────────
+
+    /// Shared implementation called by both `Widget::render` and
+    /// `render_with_regions`.
+    ///
+    /// When `ctx` is `None` the behaviour is identical to the old
+    /// `Widget::render` implementation. When `ctx` is `Some`, click regions
+    /// are forwarded into the FrameChart section only (the only clickable
+    /// surface). The memory chart and compact-summary paths receive `None`.
+    fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
         // Clear background
         let bg_style = Style::default().bg(palette::DEEPEST_BG);
         for y in area.y..area.bottom() {
@@ -113,24 +130,16 @@ impl Widget for PerformancePanel<'_> {
             return;
         }
 
-        self.render_content(area, buf);
-    }
-}
-
-impl PerformancePanel<'_> {
-    // ── Main content rendering ────────────────────────────────────────────────
-
-    fn render_content(&self, area: Rect, buf: &mut Buffer) {
         let total_h = area.height;
 
         if total_h < COMPACT_THRESHOLD {
-            // Very small terminal — show a compact single-line summary
+            // Very small terminal — compact summary, no regions.
             self.render_compact_summary(area, buf);
             return;
         }
 
         if total_h < DUAL_SECTION_MIN_HEIGHT {
-            // Small terminal — show frame chart only
+            // Small terminal — frame chart only (no memory section).
             let frame_block = Block::default()
                 .title(format!(" {} Frame Timing ", self.icons.activity()))
                 .borders(Borders::ALL)
@@ -146,7 +155,7 @@ impl PerformancePanel<'_> {
                 &self.performance.stats,
                 false,
             )
-            .render(frame_inner, buf);
+            .render_with_regions(frame_inner, buf, ctx);
             return;
         }
 
@@ -166,7 +175,7 @@ impl PerformancePanel<'_> {
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
             .split(usable_area);
 
-        // Frame timing section (with block border)
+        // Frame timing section (with block border) — ctx forwarded here.
         let frame_block = Block::default()
             .title(format!(" {} Frame Timing ", self.icons.activity()))
             .borders(Borders::ALL)
@@ -182,11 +191,12 @@ impl PerformancePanel<'_> {
             &self.performance.stats,
             false,
         )
-        .render(frame_inner, buf);
+        .render_with_regions(frame_inner, buf, ctx);
 
-        // Memory section — use Borders::TOP only to maximise inner height.
-        // The top border carries the title; no bottom/side borders are needed
-        // because the footer hint line occupies the row below.
+        // Memory section — no clicks in Phase 4. Use Borders::TOP only to
+        // maximise inner height. The top border carries the title; no
+        // bottom/side borders are needed because the footer hint line occupies
+        // the row below.
         let memory_block = Block::default()
             .title(format!(" {} Memory ", self.icons.cpu()))
             .borders(Borders::TOP)
@@ -273,6 +283,24 @@ impl PerformancePanel<'_> {
         ]);
         buf.set_line(area.x, area.y, &line, area.width);
     }
+}
+
+/// Render the performance panel, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `devtools::render_with_regions`.
+/// Delegates to `PerformancePanel::render_impl` — the single authoritative
+/// implementation shared with `Widget::render`.  Passing `None` for `ctx`
+/// produces output byte-identical to `Widget::render`.
+///
+/// `ctx` is forwarded only into the frame-chart bar-chart section. The memory
+/// chart, compact-summary, and disconnected paths do not record click regions.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    widget: PerformancePanel<'_>,
+    ctx: Option<&mut MouseCtx<'_>>,
+) {
+    widget.render_impl(area, buf, ctx);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -6,9 +6,9 @@ use crate::config::{SettingValue, SettingsTab};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::message::Message;
 use crate::settings_items::get_selected_item;
-use crate::state::AppState;
+use crate::state::{AppState, SettingsClickStamp};
 
-use super::{update, UpdateResult};
+use super::{update, UpdateResult, DOUBLE_CLICK_WINDOW_MS};
 
 /// Handle show settings message
 pub fn handle_show_settings(state: &mut AppState) -> UpdateResult {
@@ -33,18 +33,27 @@ pub fn handle_hide_settings(state: &mut AppState) -> UpdateResult {
     } else {
         state.hide_settings();
     }
+    // Clear any pending double-click pairing for hygiene (mirrors last_log_click
+    // reset behaviour on session change). The 400 ms window would naturally
+    // expire, but explicit clearing is cleaner.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
 /// Handle settings next tab message
 pub fn handle_settings_next_tab(state: &mut AppState) -> UpdateResult {
     state.settings_view_state.next_tab();
+    // Tab change invalidates any pending double-click pairing: row 5 on the
+    // Project tab and row 5 on the User tab must not be treated as a pair.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
 /// Handle settings previous tab message
 pub fn handle_settings_prev_tab(state: &mut AppState) -> UpdateResult {
     state.settings_view_state.prev_tab();
+    // Tab change invalidates any pending double-click pairing.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
@@ -52,6 +61,8 @@ pub fn handle_settings_prev_tab(state: &mut AppState) -> UpdateResult {
 pub fn handle_settings_goto_tab(state: &mut AppState, idx: usize) -> UpdateResult {
     if let Some(tab) = SettingsTab::from_index(idx) {
         state.settings_view_state.goto_tab(tab);
+        // Tab change invalidates any pending double-click pairing.
+        state.last_settings_click = None;
     }
     UpdateResult::none()
 }
@@ -144,36 +155,48 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
-/// Handle settings save message
-pub fn handle_settings_save(state: &mut AppState) -> UpdateResult {
+/// Save the active settings tab to disk and mark the form clean on success.
+///
+/// This is the single authoritative save path shared by [`handle_settings_save`]
+/// and [`handle_settings_save_and_close`]. Both public handlers delegate here so
+/// the `match active_tab` block exists in exactly one place.
+///
+/// On success the dirty flag is cleared and any previously displayed error is
+/// removed. On failure the error message is stored for the UI to display; the
+/// caller decides whether to close the settings panel.
+fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<()> {
     use crate::config::{launch::save_launch_configs, save_settings, save_user_preferences};
 
-    let result = match state.settings_view_state.active_tab {
+    match state.settings_view_state.active_tab {
         SettingsTab::Project => {
             // Save project settings (config.toml)
-            save_settings(&state.project_path, &state.settings)
+            save_settings(&state.project_path, &state.settings)?;
         }
         SettingsTab::UserPrefs => {
             // Save user preferences (settings.local.toml)
-            save_user_preferences(&state.project_path, &state.settings_view_state.user_prefs)
+            save_user_preferences(&state.project_path, &state.settings_view_state.user_prefs)?;
         }
         SettingsTab::LaunchConfig => {
             // Save launch configs (launch.toml)
             use crate::config::launch::load_launch_configs;
             let configs = load_launch_configs(&state.project_path);
             let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
-            save_launch_configs(&state.project_path, &config_vec)
+            save_launch_configs(&state.project_path, &config_vec)?;
         }
         SettingsTab::VSCodeConfig => {
-            // Read-only - nothing to save
-            Ok(())
+            // Read-only tab — nothing to save.
         }
-    };
+    }
 
-    match result {
+    state.settings_view_state.clear_dirty();
+    state.settings_view_state.error = None;
+    Ok(())
+}
+
+/// Handle settings save message
+pub fn handle_settings_save(state: &mut AppState) -> UpdateResult {
+    match save_active_tab(state) {
         Ok(()) => {
-            state.settings_view_state.clear_dirty();
-            state.settings_view_state.error = None;
             tracing::info!("Settings saved successfully");
         }
         Err(e) => {
@@ -256,27 +279,26 @@ pub fn handle_settings_toggle_bool(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle settings cycle enum next message
-pub fn handle_settings_cycle_enum_next(state: &mut AppState) -> UpdateResult {
-    // Cycle enum to next value
-    state.settings_view_state.mark_dirty();
+pub fn handle_settings_cycle_enum_next(_state: &mut AppState) -> UpdateResult {
+    // stub — no-op until field-by-field cycle logic is implemented.
+    // Marking dirty without changing a value would mislead the user into seeing
+    // the unsaved-changes confirmation dialog for a cycle that changed nothing.
     UpdateResult::none()
 }
 
 /// Handle settings cycle enum previous message
-pub fn handle_settings_cycle_enum_prev(state: &mut AppState) -> UpdateResult {
-    // Cycle enum to previous value
-    state.settings_view_state.mark_dirty();
+pub fn handle_settings_cycle_enum_prev(_state: &mut AppState) -> UpdateResult {
+    // stub — no-op until field-by-field cycle logic is implemented.
+    // Marking dirty without changing a value would mislead the user into seeing
+    // the unsaved-changes confirmation dialog for a cycle that changed nothing.
     UpdateResult::none()
 }
 
 /// Handle settings increment message
-pub fn handle_settings_increment(state: &mut AppState, _delta: i64) -> UpdateResult {
-    // Increment/decrement number value
-    // For direct increment without edit mode
-    // Actual implementation will be in Task 11 (persistence)
-    if !state.settings_view_state.editing {
-        state.settings_view_state.mark_dirty();
-    }
+pub fn handle_settings_increment(_state: &mut AppState, _delta: i64) -> UpdateResult {
+    // stub — no-op until field-by-field increment logic is implemented.
+    // Marking dirty without changing a value would mislead the user into seeing
+    // the unsaved-changes confirmation dialog for an increment that changed nothing.
     UpdateResult::none()
 }
 
@@ -334,27 +356,9 @@ pub fn handle_settings_remove_list_item(state: &mut AppState) -> UpdateResult {
 
 /// Handle settings save and close message
 pub fn handle_settings_save_and_close(state: &mut AppState) -> UpdateResult {
-    // Save then close
-    use crate::config::{launch::save_launch_configs, save_settings, save_user_preferences};
-
-    let result = match state.settings_view_state.active_tab {
-        SettingsTab::Project => save_settings(&state.project_path, &state.settings),
-        SettingsTab::UserPrefs => {
-            save_user_preferences(&state.project_path, &state.settings_view_state.user_prefs)
-        }
-        SettingsTab::LaunchConfig => {
-            use crate::config::launch::load_launch_configs;
-            let configs = load_launch_configs(&state.project_path);
-            let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
-            save_launch_configs(&state.project_path, &config_vec)
-        }
-        SettingsTab::VSCodeConfig => Ok(()),
-    };
-
-    match result {
+    // Delegate to the shared save helper then close on success.
+    match save_active_tab(state) {
         Ok(()) => {
-            state.settings_view_state.clear_dirty();
-            state.settings_view_state.error = None;
             state.hide_settings();
             tracing::info!("Settings saved and closed");
         }
@@ -362,7 +366,7 @@ pub fn handle_settings_save_and_close(state: &mut AppState) -> UpdateResult {
             let error_msg = format!("Save failed: {}", e);
             tracing::error!("{}", error_msg);
             state.settings_view_state.error = Some(error_msg);
-            // Don't close on error - stay in settings to show error
+            // Don't close on error — stay in settings so the error is visible.
         }
     }
 
@@ -374,6 +378,8 @@ pub fn handle_force_hide_settings(state: &mut AppState) -> UpdateResult {
     // Force close without saving (discard changes)
     state.settings_view_state.clear_dirty();
     state.hide_settings();
+    // Clear the stamp for hygiene — mirrors last_log_click reset on session change.
+    state.last_settings_click = None;
     UpdateResult::none()
 }
 
@@ -413,6 +419,70 @@ fn get_item_count_for_tab(state: &AppState) -> usize {
                 .map(|(idx, resolved)| vscode_config_items(&resolved.config, idx).len())
                 .sum()
         }
+    }
+}
+
+/// Handle a single click on a settings panel row.
+///
+/// Sets `settings_view_state.selected_index = index` so the row appears
+/// selected. If the same row was clicked within
+/// [`DOUBLE_CLICK_WINDOW_MS`] ms, emits a follow-up [`Message::SettingsToggleEdit`]
+/// via [`UpdateResult::message`] to enter edit mode (mirroring the Phase 4
+/// log-view double-click pattern).
+///
+/// Single click never enters edit mode. Settings panel UX requires two clicks
+/// to start editing.
+///
+/// # Edge cases
+/// - If `index` is out of range for the active tab's item list, the
+///   `selected_index` is clamped to the last valid item (or 0 if the tab is
+///   empty). The widget renderer only registers regions for visible rows, so an
+///   out-of-range index from a click is unlikely; we clamp defensively.
+/// - If `editing == true` (a previous click already entered edit mode), the
+///   click is ignored — keyboard `Esc` must close the editor first. This
+///   mirrors `handle_settings_next_item` / `handle_settings_prev_item` which
+///   also no-op while editing.
+pub fn handle_settings_click_row(state: &mut AppState, index: usize) -> UpdateResult {
+    // Don't move selection while editing — user must close the editor first.
+    if state.settings_view_state.editing {
+        return UpdateResult::none();
+    }
+
+    let item_count = get_item_count_for_tab(state);
+    let clamped = if item_count == 0 {
+        0
+    } else {
+        index.min(item_count - 1)
+    };
+
+    // Read the previous click stamp (Copy, so no `take` needed).
+    let prev = state.last_settings_click;
+    let now = std::time::Instant::now();
+
+    // Update selection.
+    state.settings_view_state.selected_index = clamped;
+
+    // Double-click detection: same row, within window.
+    let is_double_click = match prev {
+        Some(stamp) if stamp.index == clamped => {
+            let elapsed_ms = now.saturating_duration_since(stamp.at).as_millis();
+            elapsed_ms <= u128::from(DOUBLE_CLICK_WINDOW_MS)
+        }
+        _ => false,
+    };
+
+    if is_double_click {
+        // Consume the stamp so a third click within the window doesn't re-fire.
+        state.last_settings_click = None;
+        // Emit the toggle-edit follow-up.
+        UpdateResult::message(Message::SettingsToggleEdit)
+    } else {
+        // Record this click for potential future double-click pairing.
+        state.last_settings_click = Some(SettingsClickStamp {
+            index: clamped,
+            at: now,
+        });
+        UpdateResult::none()
     }
 }
 
@@ -692,6 +762,130 @@ mod tests {
             assert_ne!(
                 item.id, "launch.__add_new__",
                 "sentinel must not appear when there are no configs"
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // handle_settings_click_row — double-click detection tests (Phase 5 Task 03)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn fresh_state() -> AppState {
+        let mut s = AppState::new();
+        s.show_settings();
+        s
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_single_click_sets_index_no_follow_up() {
+        let mut s = fresh_state();
+        let result = handle_settings_click_row(&mut s, 3);
+        assert_eq!(s.settings_view_state.selected_index, 3);
+        assert!(result.message.is_none());
+        assert!(s.last_settings_click.is_some());
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_double_click_same_row_emits_toggle_edit() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 2);
+        let result = handle_settings_click_row(&mut s, 2);
+        assert!(
+            matches!(result.message, Some(Message::SettingsToggleEdit)),
+            "expected SettingsToggleEdit, got {:?}",
+            result.message
+        );
+        // Stamp consumed.
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_second_click_different_row_no_toggle() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 2);
+        let result = handle_settings_click_row(&mut s, 5);
+        assert!(result.message.is_none());
+        assert_eq!(s.settings_view_state.selected_index, 5);
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_second_click_after_window_no_toggle() {
+        use crate::state::SettingsClickStamp;
+        use std::time::{Duration, Instant};
+
+        let mut s = fresh_state();
+        // Manually set a stale stamp (older than 400 ms).
+        s.last_settings_click = Some(SettingsClickStamp {
+            index: 2,
+            at: Instant::now() - Duration::from_millis(500),
+        });
+        let result = handle_settings_click_row(&mut s, 2);
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_while_editing_is_no_op() {
+        let mut s = fresh_state();
+        s.settings_view_state.selected_index = 1;
+        s.settings_view_state.editing = true;
+        let snapshot_before = s.settings_view_state.selected_index;
+        let result = handle_settings_click_row(&mut s, 7);
+        assert!(result.message.is_none());
+        assert_eq!(s.settings_view_state.selected_index, snapshot_before);
+    }
+
+    #[test]
+    fn test_handle_settings_goto_tab_clears_click_stamp() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 3);
+        assert!(s.last_settings_click.is_some());
+        let _ = handle_settings_goto_tab(&mut s, 1);
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn test_handle_settings_next_tab_clears_click_stamp() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 0);
+        assert!(s.last_settings_click.is_some());
+        let _ = handle_settings_next_tab(&mut s);
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn test_handle_settings_prev_tab_clears_click_stamp() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 0);
+        assert!(s.last_settings_click.is_some());
+        let _ = handle_settings_prev_tab(&mut s);
+        assert!(s.last_settings_click.is_none());
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_third_click_in_window_no_retrigger() {
+        let mut s = fresh_state();
+        let _ = handle_settings_click_row(&mut s, 2);
+        let r2 = handle_settings_click_row(&mut s, 2);
+        assert!(
+            matches!(r2.message, Some(Message::SettingsToggleEdit)),
+            "second click should emit SettingsToggleEdit"
+        );
+        // Third click within the same window should NOT re-fire toggle.
+        let r3 = handle_settings_click_row(&mut s, 2);
+        assert!(r3.message.is_none(), "third click must not re-toggle");
+    }
+
+    #[test]
+    fn test_handle_settings_click_row_out_of_range_index_clamps_to_last() {
+        let mut s = fresh_state();
+        let count = get_item_count_for_tab(&s);
+        // Only meaningful when there are items to clamp to.
+        if count > 0 {
+            let too_far = count + 100;
+            let _ = handle_settings_click_row(&mut s, too_far);
+            assert_eq!(
+                s.settings_view_state.selected_index,
+                count.saturating_sub(1)
             );
         }
     }

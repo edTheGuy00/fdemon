@@ -3,13 +3,12 @@
 //! Renders detailed information about a selected HTTP request, with sub-tab
 //! switching between General, Headers, Request Body, Response Body, and Timing.
 
+use fdemon_app::message::Message;
 use fdemon_app::session::NetworkDetailTab;
+use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::network::{
     format_bytes, format_duration_ms, HttpProfileEntry, HttpProfileEntryDetail,
 };
-
-/// Width of the label column in the General tab layout (characters).
-const LABEL_COL_WIDTH: u16 = 18;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -18,6 +17,10 @@ use ratatui::{
 };
 
 use super::super::truncate_str;
+use crate::widgets::MouseCtx;
+
+/// Width of the label column in the General tab layout (characters).
+const LABEL_COL_WIDTH: u16 = 18;
 
 // ── RequestDetails ────────────────────────────────────────────────────────────
 
@@ -56,12 +59,27 @@ impl<'a> RequestDetails<'a> {
 
 impl Widget for RequestDetails<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_impl(area, buf, None);
+    }
+}
+
+impl RequestDetails<'_> {
+    /// Render the details panel, optionally recording click regions.
+    ///
+    /// When `ctx` is `Some`, registers 5 click regions for the sub-tab bar
+    /// (one per [`NetworkDetailTab`] variant). The body content area has no
+    /// click regions in v1. Passing `None` is equivalent to `Widget::render`.
+    pub fn render_with_regions(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
+        self.render_impl(area, buf, ctx);
+    }
+
+    fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
         if area.height < 3 {
             return;
         }
 
         // Row 0: Sub-tab bar
-        self.render_tab_bar(Rect { height: 1, ..area }, buf);
+        self.render_tab_bar(Rect { height: 1, ..area }, buf, ctx);
 
         // Remaining: Tab content
         let content_area = Rect {
@@ -91,7 +109,11 @@ impl Widget for RequestDetails<'_> {
 impl RequestDetails<'_> {
     // ── Sub-tab bar ───────────────────────────────────────────────────────────
 
-    fn render_tab_bar(&self, area: Rect, buf: &mut Buffer) {
+    /// Render the sub-tab bar, optionally recording click regions.
+    ///
+    /// When `ctx` is `Some`, registers one `MouseAction::Emit(NetworkSwitchDetailTab(tab))`
+    /// region per tab label. Each region is 1 row tall and `padded.len()` columns wide.
+    fn render_tab_bar(&self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
         let tabs = [
             (NetworkDetailTab::General, "[g] General"),
             (NetworkDetailTab::Headers, "[h] Headers"),
@@ -102,6 +124,10 @@ impl RequestDetails<'_> {
 
         let mut x = area.x;
         for (tab, label) in &tabs {
+            if x >= area.right() {
+                break;
+            }
+
             let style = if *tab == self.active_tab {
                 Style::default()
                     .fg(Color::Black)
@@ -111,11 +137,22 @@ impl RequestDetails<'_> {
                 Style::default().fg(Color::Gray)
             };
             let padded = format!(" {} ", label);
+            let needed_width = padded.len() as u16;
             buf.set_string(x, area.y, &padded, style);
-            x += padded.len() as u16;
-            if x >= area.right() {
-                break;
+
+            // Register click region for this tab label.
+            if let Some(c) = ctx.as_deref_mut() {
+                let render_w = needed_width.min(area.right().saturating_sub(x));
+                if render_w > 0 {
+                    let rect = MouseRect::new(x, area.y, render_w, 1);
+                    c.click(
+                        rect,
+                        MouseAction::emit(Message::NetworkSwitchDetailTab(*tab)),
+                    );
+                }
             }
+
+            x += needed_width;
         }
     }
 

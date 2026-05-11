@@ -231,6 +231,24 @@ pub fn Architecture() -> impl IntoView {
                 </DiagramContainer>
             </Section>
 
+            // ── Mouse Subsystem ──────────────────────────────
+            <Section title="Mouse Subsystem">
+                <p class="text-slate-400">
+                    "Mouse input flows through the same TEA pipeline as keyboard events. "
+                    "The "<code class="text-blue-400">"MouseInput"</code>" type (in "<code class="text-blue-400">"fdemon-app/input_mouse.rs"</code>") carries button press, scroll direction, and modifier keys. "
+                    "During each render frame, widgets register hit-testable regions via a "<strong class="text-white">"Mouse Region Registry"</strong>" — a per-frame, z-index-aware table of "<code class="text-blue-400">"MouseRegionEntry"</code>" values held on "<code class="text-blue-400">"AppState"</code>" as a "<code class="text-blue-400">"MouseRegionsCell"</code>"."
+                </p>
+                <p class="text-slate-400">
+                    "At frame start, "<code class="text-blue-400">"render::view()"</code>" acquires a "<code class="text-blue-400">"MouseRegionGuard"</code>" (RAII) via "<code class="text-blue-400">"state.mouse_regions.take_guard()"</code>". "
+                    "Widgets push click regions through a "<code class="text-blue-400">"MouseRegionsBuilder"</code>" during rendering; the guard returns the populated registry to the cell on drop. "
+                    "On "<code class="text-blue-400">"Message::Mouse(Press)"</code>", the handler runs "<code class="text-blue-400">"hit_test(x, y, button)"</code>" against the registry, dispatching the highest-z matching action."
+                </p>
+                <p class="text-slate-400">
+                    "Modal precedence is enforced at the renderer: when a modal is active (confirm dialog, tag filter, new-session dialog), the renderer skips base-UI region registration so only modal regions are clickable. "
+                    "See the "<a href="/docs/mouse" class="text-blue-400 hover:underline">"Mouse reference"</a>" for user-facing semantics, per-mode scroll behavior, and platform caveats."
+                </p>
+            </Section>
+
             // ── Data Flow: Hot Reload ────────────────────────
             <Section title="Data Flow: Hot Reload">
                 <DiagramContainer title="Hot Reload Sequence">

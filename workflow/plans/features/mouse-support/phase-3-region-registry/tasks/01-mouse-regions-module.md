@@ -1,0 +1,439 @@
+## Task: Create `mouse_regions` Module
+
+**Objective**: Add a new `mouse_regions` module to `fdemon-app` containing the per-frame click-region registry, builder, hit-test, and supporting types. No state wiring, no widget changes — pure types and pure logic with comprehensive unit tests.
+
+**Depends on**: None
+
+**Estimated Time**: 2 hours
+
+### Scope
+
+**Files Modified (Write):**
+- `crates/fdemon-app/src/mouse_regions.rs` (NEW): Defines `MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, and the z-index-aware `hit_test` helper.
+- `crates/fdemon-app/src/lib.rs`: Add a single line `pub(crate) mod mouse_regions;` next to the existing `pub(crate) mod input_mouse;` declaration. **Do not** add re-exports here — Task 03 owns that lib.rs edit.
+
+**Files Read (Dependencies):**
+- `crates/fdemon-app/src/message.rs`: `Message` is the payload type for `MouseAction::Emit`.
+- `crates/fdemon-app/src/input_mouse.rs`: `MouseButton` is reused (we do not duplicate it).
+
+### Details
+
+#### Type design
+
+```rust
+//! Per-frame mouse click-region registry.
+//!
+//! Widgets push entries during render; the [`crate::handler::mouse`] dispatcher
+//! reads entries on click. The registry lives on [`crate::state::AppState`] as
+//! a `Cell<MouseRegions>` (TEA exception, see `docs/CODE_STANDARDS.md`
+//! Principle 3 — same exception class as the existing `Cell<usize>` render-hint
+//! feedback).
+//!
+//! ## Lifecycle
+//!
+//! 1. `render::view()` calls `state.mouse_regions.take()` to drain the previous
+//!    frame, then constructs a [`MouseRegionsBuilder`].
+//! 2. Widgets that need clickable surfaces call `ctx.click(rect, action)` /
+//!    `ctx.click_with(rect, button, action)` during their `render()` method.
+//! 3. After all widgets have rendered, `render::view()` puts the populated
+//!    [`MouseRegions`] back via `state.mouse_regions.set(regions)`.
+//! 4. On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, the handler
+//!    layer calls `regions.hit_test(x, y, button)` to find the matching region.
+
+use crate::input_mouse::MouseButton;
+use crate::message::Message;
+
+/// Rectangle in terminal cell coordinates. Mirrors `ratatui::layout::Rect`
+/// without the dependency — `fdemon-app` does not depend on `ratatui`.
+///
+/// The TUI side defines `impl From<ratatui::layout::Rect> for MouseRect` to
+/// make conversion at the boundary a one-liner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct MouseRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl MouseRect {
+    /// Convenience constructor.
+    pub const fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
+        Self { x, y, width, height }
+    }
+
+    /// Returns `true` when `(px, py)` falls inside the rect (left/top inclusive,
+    /// right/bottom exclusive — matching ratatui's hit-test convention).
+    pub const fn contains(self, px: u16, py: u16) -> bool {
+        px >= self.x
+            && py >= self.y
+            && (px - self.x) < self.width
+            && (py - self.y) < self.height
+    }
+
+    /// Returns `true` when the rect has zero width or zero height. Hit-tests
+    /// always return `false` for empty rects; widgets should skip pushing
+    /// empty rects.
+    pub const fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
+/// What to do when a region is clicked.
+#[derive(Debug, Clone)]
+pub enum MouseAction {
+    /// Emit a single [`Message`] verbatim.
+    Emit(Message),
+    /// Emit a [`Message`] computed from the click coordinates.
+    /// Used in Phase 4+ for log-row clicks, frame-bar clicks, etc.
+    EmitWithCoord(fn(u16, u16) -> Message),
+}
+
+impl MouseAction {
+    /// Resolve the action into a concrete [`Message`] for the click at
+    /// `(x, y)`. `Emit` ignores the coordinate; `EmitWithCoord` invokes the
+    /// stored function.
+    pub fn resolve(&self, x: u16, y: u16) -> Message {
+        match self {
+            MouseAction::Emit(msg) => msg.clone(),
+            MouseAction::EmitWithCoord(f) => f(x, y),
+        }
+    }
+}
+
+/// Single click-region entry.
+#[derive(Debug, Clone)]
+pub struct MouseRegionEntry {
+    pub rect: MouseRect,
+    /// Action for left button press. `None` = unbound.
+    pub on_left: Option<MouseAction>,
+    /// Action for middle button press. `None` = unbound.
+    pub on_middle: Option<MouseAction>,
+    /// Higher z-index wins on overlap. Modal layers (Phase 5: dialogs,
+    /// overlays) record at `z_index = 1`; everything else uses `0`.
+    pub z_index: u8,
+}
+
+/// Per-frame click-region registry.
+///
+/// Backing storage: `Vec<MouseRegionEntry>`. The vec is reused frame-over-frame
+/// via `Cell::take` + `Vec::clear` (no realloc) to keep the renderer hot path
+/// allocation-free at steady state.
+#[derive(Debug, Default)]
+pub struct MouseRegions {
+    entries: Vec<MouseRegionEntry>,
+}
+
+impl MouseRegions {
+    /// Pre-sized constructor (allocates capacity for 32 entries — covers the
+    /// worst case of header + 9 tabs + 9 device rows + 6 settings rows).
+    pub fn with_capacity() -> Self {
+        Self { entries: Vec::with_capacity(32) }
+    }
+
+    /// Find the highest-`z_index` entry whose rect contains `(x, y)` and
+    /// has a binding for `button`. Ties on `z_index` are broken by
+    /// last-pushed-wins (later entries shadow earlier ones at the same z),
+    /// because widgets pushed later in render order are drawn on top.
+    pub fn hit_test(&self, x: u16, y: u16, button: MouseButton) -> Option<&MouseRegionEntry> {
+        self.entries
+            .iter()
+            .rev() // last-pushed first → matches paint order at same z
+            .filter(|e| e.rect.contains(x, y))
+            .filter(|e| match button {
+                MouseButton::Left => e.on_left.is_some(),
+                MouseButton::Middle => e.on_middle.is_some(),
+                MouseButton::Right => false, // reserved for future
+            })
+            .max_by_key(|e| e.z_index)
+    }
+
+    /// Return a builder borrowed against this registry. The builder appends
+    /// entries to the existing vec; `Vec::clear` is the caller's responsibility
+    /// (typically `render::view()` calls `clear()` before handing the builder
+    /// to widgets).
+    pub fn builder(&mut self) -> MouseRegionsBuilder<'_> {
+        MouseRegionsBuilder { regions: self }
+    }
+
+    /// Drop all entries while preserving the backing vec's capacity.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Number of registered entries (useful for tests).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// `true` when no entries are registered.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterator over registered entries in registration order.
+    pub fn iter(&self) -> std::slice::Iter<'_, MouseRegionEntry> {
+        self.entries.iter()
+    }
+}
+
+/// Borrowed builder used during render to push click regions.
+#[derive(Debug)]
+pub struct MouseRegionsBuilder<'a> {
+    regions: &'a mut MouseRegions,
+}
+
+impl<'a> MouseRegionsBuilder<'a> {
+    /// Register a left-click-only region at `z_index = 0`.
+    pub fn click(&mut self, rect: MouseRect, action: MouseAction) {
+        if rect.is_empty() {
+            return;
+        }
+        self.regions.entries.push(MouseRegionEntry {
+            rect,
+            on_left: Some(action),
+            on_middle: None,
+            z_index: 0,
+        });
+    }
+
+    /// Register a left-click-only region at a specific `z_index`. Phase 5
+    /// dialogs/overlays use `z_index = 1`; Phase 3 widgets stay at `0`.
+    pub fn click_at_z(&mut self, rect: MouseRect, action: MouseAction, z_index: u8) {
+        if rect.is_empty() {
+            return;
+        }
+        self.regions.entries.push(MouseRegionEntry {
+            rect,
+            on_left: Some(action),
+            on_middle: None,
+            z_index,
+        });
+    }
+
+    /// Register a region with separate left and middle bindings (used for
+    /// session tabs: left = select, middle = close).
+    pub fn click_left_middle(
+        &mut self,
+        rect: MouseRect,
+        on_left: MouseAction,
+        on_middle: MouseAction,
+    ) {
+        if rect.is_empty() {
+            return;
+        }
+        self.regions.entries.push(MouseRegionEntry {
+            rect,
+            on_left: Some(on_left),
+            on_middle: Some(on_middle),
+            z_index: 0,
+        });
+    }
+}
+```
+
+#### Notes for the implementor
+
+- **Do not** add `pub use` re-exports in `lib.rs` — Task 03 owns the re-exports for `MouseRect`, `MouseAction`, `MouseRegions`. This task only declares the module.
+- **Do not** add a `Cell<MouseRegions>` field to `AppState` here — Task 03 owns that.
+- The `EmitWithCoord(fn(u16, u16) -> Message)` variant uses a function pointer (not a closure), keeping `MouseAction: Clone` and avoiding allocation. Phase 4 (log-row clicks) will use it; Phase 3 widgets only use `Emit`.
+- `hit_test` returns the *first* matching entry by paint order at a given z, then the highest z wins. Implementation uses `rev().max_by_key(z_index)` — `max_by_key` returns the *last* element on a tie, but because we iterate in `.rev()`, that "last" is actually the *first-pushed* at the highest z. This matches the painter's algorithm: later widgets cover earlier widgets at the same z. Confirm with a unit test.
+- Right-click is intentionally inert in `hit_test` (returns `None` for `MouseButton::Right`). PLAN.md "Out of scope (v1)" rules out right-click context menus.
+
+### Acceptance Criteria
+
+1. New file `crates/fdemon-app/src/mouse_regions.rs` exists with the types listed above.
+2. `lib.rs` declares `pub(crate) mod mouse_regions;` — no other change to `lib.rs`.
+3. The crate still compiles (`cargo check -p fdemon-app`).
+4. All new unit tests in the `tests` submodule pass.
+5. No clippy warnings (`cargo clippy -p fdemon-app --all-targets -- -D warnings`).
+6. `MouseAction::Emit` and `MouseAction::EmitWithCoord` are both publicly visible for the re-exports Task 03 will add.
+7. `MouseRegionsBuilder::click(empty_rect, _)` is a silent no-op (no entry pushed). Verified by test.
+
+### Testing
+
+Add a `#[cfg(test)] mod tests` block at the bottom of `mouse_regions.rs` covering:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Message;
+
+    #[test]
+    fn rect_contains_inclusive_top_left_exclusive_bottom_right() {
+        let r = MouseRect::new(5, 10, 3, 2);
+        assert!(r.contains(5, 10));     // top-left
+        assert!(r.contains(7, 11));     // last cell inside (x=5+3-1, y=10+2-1)
+        assert!(!r.contains(8, 10));    // exclusive right edge
+        assert!(!r.contains(5, 12));    // exclusive bottom edge
+        assert!(!r.contains(4, 10));    // outside left
+        assert!(!r.contains(5, 9));     // outside top
+    }
+
+    #[test]
+    fn empty_rect_contains_nothing() {
+        assert!(!MouseRect::new(0, 0, 0, 5).contains(0, 0));
+        assert!(!MouseRect::new(0, 0, 5, 0).contains(0, 0));
+    }
+
+    #[test]
+    fn builder_skips_empty_rects() {
+        let mut regions = MouseRegions::default();
+        regions
+            .builder()
+            .click(MouseRect::new(0, 0, 0, 5), MouseAction::Emit(Message::HotReload));
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn click_with_left_only_does_not_match_middle() {
+        let mut regions = MouseRegions::default();
+        regions.builder().click(
+            MouseRect::new(0, 0, 4, 1),
+            MouseAction::Emit(Message::HotReload),
+        );
+        assert!(regions.hit_test(1, 0, MouseButton::Left).is_some());
+        assert!(regions.hit_test(1, 0, MouseButton::Middle).is_none());
+        assert!(regions.hit_test(1, 0, MouseButton::Right).is_none());
+    }
+
+    #[test]
+    fn click_left_middle_binds_both_buttons() {
+        let mut regions = MouseRegions::default();
+        regions.builder().click_left_middle(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::Emit(Message::SelectSessionByIndex(0)),
+            MouseAction::Emit(Message::CloseSessionAt(0)), // requires Task 02 — for the
+                                                            // unit test, substitute any
+                                                            // existing Message variant if
+                                                            // Task 02 lands later.
+        );
+        let left = regions.hit_test(0, 0, MouseButton::Left).unwrap();
+        let middle = regions.hit_test(0, 0, MouseButton::Middle).unwrap();
+        assert!(matches!(left.on_left, Some(MouseAction::Emit(_))));
+        assert!(matches!(middle.on_middle, Some(MouseAction::Emit(_))));
+    }
+
+    #[test]
+    fn higher_z_index_wins_on_overlap() {
+        let mut regions = MouseRegions::default();
+        regions.builder().click_at_z(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::Emit(Message::HotReload),
+            0,
+        );
+        regions.builder().click_at_z(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::Emit(Message::RequestQuit),
+            1,
+        );
+        let hit = regions.hit_test(5, 0, MouseButton::Left).unwrap();
+        assert!(matches!(hit.on_left, Some(MouseAction::Emit(Message::RequestQuit))));
+    }
+
+    #[test]
+    fn last_pushed_wins_at_same_z() {
+        // Two regions at z=0 overlap; the second push (later widget paint order)
+        // should be returned by hit_test.
+        let mut regions = MouseRegions::default();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::Emit(Message::HotReload),
+        );
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::Emit(Message::HotRestart),
+        );
+        let hit = regions.hit_test(0, 0, MouseButton::Left).unwrap();
+        assert!(matches!(hit.on_left, Some(MouseAction::Emit(Message::HotRestart))));
+    }
+
+    #[test]
+    fn click_outside_all_regions_returns_none() {
+        let mut regions = MouseRegions::default();
+        regions.builder().click(
+            MouseRect::new(0, 0, 4, 1),
+            MouseAction::Emit(Message::HotReload),
+        );
+        assert!(regions.hit_test(100, 100, MouseButton::Left).is_none());
+    }
+
+    #[test]
+    fn emit_with_coord_resolves_to_coordinate_message() {
+        let action = MouseAction::EmitWithCoord(|_x, y| Message::SelectSessionByIndex(y as usize));
+        assert!(matches!(
+            action.resolve(0, 4),
+            Message::SelectSessionByIndex(4)
+        ));
+    }
+
+    #[test]
+    fn clear_preserves_capacity() {
+        let mut regions = MouseRegions::with_capacity();
+        let cap_before = regions.entries.capacity();
+        for i in 0..16 {
+            regions.builder().click(
+                MouseRect::new(i, 0, 1, 1),
+                MouseAction::Emit(Message::HotReload),
+            );
+        }
+        regions.clear();
+        assert!(regions.is_empty());
+        assert!(regions.entries.capacity() >= cap_before);
+    }
+
+    #[test]
+    fn right_button_never_matches() {
+        let mut regions = MouseRegions::default();
+        regions.builder().click_left_middle(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::Emit(Message::HotReload),
+            MouseAction::Emit(Message::HotReload),
+        );
+        assert!(regions.hit_test(0, 0, MouseButton::Right).is_none());
+    }
+}
+```
+
+### Notes
+
+- Some test cases reference `Message::CloseSessionAt(0)` which is added in Task 02. If this task lands first, substitute any existing `Message` variant in the affected test (`click_left_middle_binds_both_buttons`) and add a TODO to switch when Task 02 lands. The orchestrator should ideally land Task 02 alongside Task 01 so the test can use the real variant from the start (both are Wave 1 and parallelizable).
+- `MouseRegionEntry` is `Clone` but we never clone it on the hot path — only by-reference access via `hit_test`. Cloning is a convenience for testing.
+- The capacity hint of 32 in `with_capacity()` covers the worst-case Phase 5 scenarios (header + 9 tabs + 9 device rows + 6 settings rows = 25); 32 leaves slack for future widgets.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | New file: `MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, 11 unit tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub(crate) mod mouse_regions;` declaration |
+
+### Notable Decisions/Tradeoffs
+
+1. **`MouseAction::Emit(Box<Message>)` instead of `Emit(Message)`**: The `Message` enum is ~352 bytes (largest variant). Boxing keeps `MouseAction` pointer-sized and avoids the clippy `large_enum_variant` warning. Added a `MouseAction::emit(msg)` convenience constructor to keep call sites ergonomic.
+
+2. **`hit_test` uses `enumerate() + max_by_key((z_index, push_index))`**: The original task spec's note described `rev().max_by_key(z_index)` but that implementation would return the *first-pushed* entry at same-z, contradicting both the test expectation and painter's algorithm semantics (last-drawn covers earlier). The correct fix uses a composite key `(z_index, push_index)` — higher push index wins ties — which matches the test's expectation of last-pushed winning at same z.
+
+3. **`#![allow(dead_code)]` at module level**: All public items are unused until Task 03 wires `MouseRegions` into `AppState` and Task 04+ adds widget call sites. Module-level allow avoids 9 individual `#[allow(dead_code)]` attributes and is documented with a comment explaining the intent.
+
+4. **`Message::CloseCurrentSession` substituted for `Message::CloseSessionAt(0)`**: Task 02 (which adds `CloseSessionAt`) had not landed. Used `CloseCurrentSession` with a TODO comment in `click_left_middle_binds_both_buttons` test.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app mouse_regions` - Passed (11 tests)
+- `cargo test --workspace` - Passed (all tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`Box<Message>` API divergence from task spec**: The task spec shows `Emit(Message)` but the implementation uses `Emit(Box<Message>)` to pass clippy. Task 03 (re-exports) and widget call sites (Tasks 05-07) will need to use `MouseAction::emit(msg)` constructor. This is a minor API shape difference that is clearly documented.

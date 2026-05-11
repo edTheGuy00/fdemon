@@ -397,3 +397,183 @@ fn test_ms_to_half_blocks_half_range() {
 fn test_ms_to_half_blocks_zero_range_returns_zero() {
     assert_eq!(ms_to_half_blocks(10.0, 0.0, 40.0), 0);
 }
+
+// ── Phase 4 Task 08: click region tests ──────────────────────────────────────
+
+/// Build a minimal FrameTiming value for tests.
+fn make_timing(number: u64) -> fdemon_core::performance::FrameTiming {
+    make_frame(number, 5_000, 5_000)
+}
+
+#[test]
+fn frame_chart_records_one_region_per_visible_frame() {
+    use fdemon_app::{Message, MouseAction, MouseRegions};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use crate::widgets::MouseCtx;
+
+    let mut history = RingBuffer::new(120);
+    for i in 1..=8u64 {
+        history.push(make_timing(i));
+    }
+    let stats = PerformanceStats::default();
+    let chart = FrameChart::new(&history, None, &stats, false);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        chart.render_with_regions(area, &mut buf, Some(&mut ctx));
+    }
+
+    // Collect the global indices from every SelectPerformanceFrame region.
+    let frame_indices: Vec<usize> = regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(m)) => match **m {
+                Message::SelectPerformanceFrame { index: Some(i) } => Some(i),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        frame_indices,
+        vec![0, 1, 2, 3, 4, 5, 6, 7],
+        "8 frames → 8 regions with indices 0..=7"
+    );
+}
+
+#[test]
+fn frame_chart_in_compact_mode_records_no_regions() {
+    use fdemon_app::MouseRegions;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use crate::widgets::MouseCtx;
+
+    let mut history = RingBuffer::new(120);
+    history.push(make_timing(1));
+    let stats = PerformanceStats::default();
+    let chart = FrameChart::new(&history, None, &stats, false);
+
+    // Compact: height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT (= 4 + 3 = 7).
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 80, 5);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        chart.render_with_regions(area, &mut buf, Some(&mut ctx));
+    }
+
+    assert_eq!(
+        regions.iter().count(),
+        0,
+        "compact mode → no regions registered"
+    );
+}
+
+#[test]
+fn frame_chart_region_width_is_chars_per_frame() {
+    // Each region should be CHARS_PER_FRAME (3) wide for non-edge slots.
+    use fdemon_app::{Message, MouseAction, MouseRegions};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use crate::widgets::MouseCtx;
+
+    let mut history = RingBuffer::new(120);
+    for i in 1..=4u64 {
+        history.push(make_timing(i));
+    }
+    let stats = PerformanceStats::default();
+    let chart = FrameChart::new(&history, None, &stats, false);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 80, 20);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        chart.render_with_regions(area, &mut buf, Some(&mut ctx));
+    }
+
+    // All four frames should have width = CHARS_PER_FRAME (area is wide enough).
+    for entry in regions.iter().filter(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(m)) if matches!(**m, Message::SelectPerformanceFrame { .. })
+        )
+    }) {
+        assert_eq!(
+            entry.rect.width, CHARS_PER_FRAME,
+            "region width should equal CHARS_PER_FRAME for a wide area"
+        );
+    }
+}
+
+#[test]
+fn frame_chart_region_height_equals_chart_height() {
+    // Each region should span the full bar-chart height (area.height - DETAIL_PANEL_HEIGHT).
+    use fdemon_app::{Message, MouseAction, MouseRegions};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use crate::widgets::MouseCtx;
+
+    let mut history = RingBuffer::new(120);
+    history.push(make_timing(42));
+    let stats = PerformanceStats::default();
+    let chart = FrameChart::new(&history, None, &stats, false);
+
+    let total_h: u16 = 20;
+    let expected_chart_h = total_h - DETAIL_PANEL_HEIGHT;
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 80, total_h);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        chart.render_with_regions(area, &mut buf, Some(&mut ctx));
+    }
+
+    for entry in regions.iter().filter(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(m)) if matches!(**m, Message::SelectPerformanceFrame { .. })
+        )
+    }) {
+        assert_eq!(
+            entry.rect.height, expected_chart_h,
+            "region height should equal chart_h (area.height - DETAIL_PANEL_HEIGHT)"
+        );
+    }
+}
+
+#[test]
+fn frame_chart_no_regions_without_ctx() {
+    // Widget::render (without ctx) should register no regions.
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
+
+    let mut history = RingBuffer::new(120);
+    for i in 1..=4u64 {
+        history.push(make_timing(i));
+    }
+    let stats = PerformanceStats::default();
+    let chart = FrameChart::new(&history, None, &stats, false);
+
+    let area = Rect::new(0, 0, 80, 20);
+    let mut buf = Buffer::empty(area);
+    // Widget::render does not accept ctx — it simply cannot register regions.
+    chart.render(area, &mut buf);
+    // This test documents that the region-free path doesn't panic.
+    // The absence of region registration is enforced by the type system (no ctx).
+}

@@ -437,3 +437,48 @@ fn test_performance_panel_with_selected_frame() {
     render_to_buf(widget, 80, 30);
     // Should not panic with selected frame
 }
+
+// ── Phase 4.5 Task 03: render_with_regions parity test ───────────────────────
+
+#[test]
+fn render_with_regions_matches_widget_render_buffer() {
+    use fdemon_app::MouseRegions;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    // At least one frame in the buffer with vm_connected = true — non-trivial path.
+    let perf = make_test_performance();
+    let area = Rect::new(0, 0, 80, 24);
+
+    let mut buf_a = Buffer::empty(area);
+    PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    )
+    .render(area, &mut buf_a);
+
+    let mut buf_b = Buffer::empty(area);
+    {
+        let mut regions = MouseRegions::default();
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            area,
+            &mut buf_b,
+            PerformancePanel::new(
+                &perf,
+                true,
+                IconSet::default(),
+                &VmConnectionStatus::Connected,
+            ),
+            Some(&mut ctx),
+        );
+    }
+
+    assert_eq!(
+        buf_a, buf_b,
+        "Widget::render and render_with_regions must produce identical buffers"
+    );
+}

@@ -3,6 +3,7 @@
 use super::*;
 use crate::theme::icons::IconSet;
 use fdemon_app::config::IconMode;
+use fdemon_app::hyperlinks::LinkHighlightState;
 use fdemon_app::session::CollapseState;
 use fdemon_core::stack_trace::ParsedStackTrace;
 use fdemon_core::{FilterState, LogLevelFilter, LogSourceFilter, SearchState};
@@ -1490,4 +1491,951 @@ fn test_native_source_color_is_distinct_from_others() {
     assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_FLUTTER_ERROR);
     assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_WATCHER);
     assert_ne!(palette::SOURCE_NATIVE, palette::ACCENT);
+}
+
+// ── Phase 4 Task 06: render_with_regions click-region tests ──────────────────
+
+/// Helper: create a VecDeque with `count` plain (no stack trace) log entries.
+fn make_logs_no_traces(count: usize) -> std::collections::VecDeque<LogEntry> {
+    let mut logs = std::collections::VecDeque::new();
+    for i in 0..count {
+        logs.push_back(make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            &format!("message {i}"),
+        ));
+    }
+    logs
+}
+
+/// Helper: create a VecDeque with a single error entry that has `frame_count`
+/// stack frames.  Expanded=true because `LogView` will be built with
+/// `default_collapsed(false)`.
+fn make_logs_with_stack_trace(frame_count: usize) -> std::collections::VecDeque<LogEntry> {
+    let raw = (0..frame_count)
+        .map(|i| format!("#{i}      fn_{i} (package:app/main.dart:{i}:3)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let trace = ParsedStackTrace::parse(&raw);
+
+    let mut entry = make_entry(LogLevel::Error, LogSource::App, "boom");
+    entry.stack_trace = Some(trace);
+
+    let mut logs = std::collections::VecDeque::new();
+    logs.push_back(entry);
+    logs
+}
+
+#[test]
+fn render_with_regions_records_one_region_per_visible_row_nowrap() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_rows: Vec<_> = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.on_left,
+                Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ClickLogRow { .. })
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        click_rows.len(),
+        3,
+        "expected one ClickLogRow region per visible entry, got {}",
+        click_rows.len()
+    );
+}
+
+#[test]
+fn render_with_regions_no_regions_without_ctx() {
+    // The plain StatefulWidget::render path must not record any regions.
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    // Render without a ctx — no regions should be recorded.
+    // Verify it compiles and does not panic (the assertion is that `render_inner`
+    // with None ctx never touches the regions API).
+    StatefulWidget::render(view, area, &mut buf, &mut state);
+
+    // The positive case (ctx = Some) is verified by other tests; this test
+    // documents that `None` produces no side effects.
+}
+
+/// Verifies that `render_with_regions` records exactly the expected number of
+/// rows when given a log with a 3-frame stack trace and `default_collapsed(false)`.
+/// Expected layout: 1 message row + 3 frame rows = 4 ClickLogRow regions.
+#[test]
+fn render_with_regions_records_frame_index_for_stack_frames() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_with_stack_trace(3);
+    let mut state = LogViewState::new();
+    // default_collapsed(false) so all frames are shown without a CollapseState.
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(false)
+        .default_collapsed(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let frame_indices: Vec<Option<usize>> = regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::ClickLogRow { frame_index, .. } => Some(frame_index),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    // 1 message row (None) + 3 stack frames (Some(0), Some(1), Some(2)).
+    assert_eq!(
+        frame_indices,
+        vec![None, Some(0), Some(1), Some(2)],
+        "expected [None, Some(0), Some(1), Some(2)], got {frame_indices:?}"
+    );
+}
+
+#[test]
+fn render_with_regions_entry_ids_match_log_entries() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let expected_ids: Vec<u64> = logs.iter().map(|e| e.id).collect();
+
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let recorded_ids: Vec<u64> = regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::ClickLogRow { entry_id, .. } => Some(entry_id),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        recorded_ids, expected_ids,
+        "recorded entry_ids must match the log entries in order"
+    );
+}
+
+#[test]
+fn render_with_regions_row_rects_have_correct_dimensions_nowrap() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let row_rects: Vec<_> = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.on_left,
+                Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ClickLogRow { .. })
+            )
+        })
+        .map(|e| e.rect)
+        .collect();
+
+    for rect in &row_rects {
+        // In nowrap mode every row is exactly 1 cell tall.
+        assert_eq!(
+            rect.height, 1,
+            "nowrap row height must be 1, got {}",
+            rect.height
+        );
+        // Width spans the content area (80-wide terminal minus borders = 78).
+        assert!(rect.width > 0, "row width must be > 0");
+        // No zero-area rects — width > 0 and height > 0.
+        assert!(rect.width > 0 && rect.height > 0, "rect must not be empty");
+    }
+
+    // Row Y positions must be strictly increasing (rows don't overlap).
+    let ys: Vec<u16> = row_rects.iter().map(|r| r.y).collect();
+    for window in ys.windows(2) {
+        assert!(
+            window[0] < window[1],
+            "row Y positions must be strictly increasing: {:?}",
+            ys
+        );
+    }
+}
+
+// ── Phase 4.5 Task 01: wrap-mode click-region alignment regression tests ──────
+
+/// Helper: extract ClickLogRow regions from a MouseRegions, returning (rect, entry_id) pairs.
+fn collect_click_regions(regions: &fdemon_app::MouseRegions) -> Vec<(fdemon_app::MouseRect, u64)> {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseAction;
+
+    regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::ClickLogRow { entry_id, .. } => Some((e.rect, entry_id)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Wrap mode with offset=0: a single entry whose message wraps to exactly 3
+/// terminal rows should register one click region spanning those 3 rows.
+///
+/// Layout (area 20x20, no timestamps/source, width=18):
+///   content_area: x=1, y=3, width=18, height=16
+///   Entry A: message = 54 chars → 3 wrapped rows
+///   wrap_intra_offset = 0
+///   Expected region: y=3, height=3
+#[test]
+fn wrap_mode_zero_offset_regions_align_with_rows() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 54-char message → ceil(54/18) = 3 wrapped rows at content_area width=18.
+    let msg_a = "A".repeat(54);
+    let entry_a = make_entry(LogLevel::Info, LogSource::App, &msg_a);
+    let id_a = entry_a.id;
+
+    let logs = logs_from(vec![entry_a]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(true)
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 20, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_regions = collect_click_regions(&regions);
+
+    assert_eq!(
+        click_regions.len(),
+        1,
+        "expected exactly 1 click region for entry A, got {}: {click_regions:?}",
+        click_regions.len()
+    );
+    let (rect, entry_id) = click_regions[0];
+    assert_eq!(entry_id, id_a, "region entry_id must match entry A");
+    // content_area.y = area.y(0) + border(1) + metadata(1) + top_gap(1) = 3
+    assert_eq!(rect.y, 3, "region must start at content_area top (y=3)");
+    assert_eq!(
+        rect.height, 3,
+        "region height must equal wrapped row count (3)"
+    );
+}
+
+/// Wrap mode with offset=2 (partial top-clip): entry A has 3 wrapped rows,
+/// entry B has 2. With offset=2, wrap_intra_offset=2, so only A's third row
+/// is visible (height=1) and B's two rows follow.
+///
+/// Before the fix, A was registered at y=3 with height=3 and B at y=6 with
+/// height=2 — both off the screen relative to what the Paragraph rendered.
+/// After the fix, A is at y=3 height=1 and B is at y=4 height=2.
+#[test]
+fn wrap_mode_intra_offset_skips_top_clipped_row() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let msg_a = "A".repeat(54); // 3 wrapped rows at width=18
+    let msg_b = "B".repeat(36); // 2 wrapped rows at width=18
+    let entry_a = make_entry(LogLevel::Info, LogSource::App, &msg_a);
+    let entry_b = make_entry(LogLevel::Info, LogSource::App, &msg_b);
+    let id_a = entry_a.id;
+    let id_b = entry_b.id;
+
+    let logs = logs_from(vec![entry_a, entry_b]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // offset=2 → wrap_intra_offset=2 for entry A (which starts at units_skipped=0).
+    // A's visible portion: rows 2..=2 (1 row). B follows at screen y=1..=2.
+    state.offset = 2;
+
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(true)
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 20, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_regions = collect_click_regions(&regions);
+
+    // Both entries should have a region (A is partially visible).
+    assert_eq!(
+        click_regions.len(),
+        2,
+        "expected 2 click regions (A clipped + B full), got {}: {click_regions:?}",
+        click_regions.len()
+    );
+
+    let [(rect_a, eid_a), (rect_b, eid_b)] = [click_regions[0], click_regions[1]];
+    assert_eq!(eid_a, id_a, "first region must be entry A");
+    assert_eq!(eid_b, id_b, "second region must be entry B");
+
+    // content_area.y = 3; wrap_intra_offset=2 hides the first 2 rows of A.
+    // A: visible_y=0, height=1 → rect.y=3, height=1.
+    assert_eq!(
+        rect_a.y, 3,
+        "A clipped region must start at content_area top"
+    );
+    assert_eq!(
+        rect_a.height, 1,
+        "A must show only its 1 remaining visible row"
+    );
+
+    // B: visible_y = 3 - 2 = 1 → rect.y=4, height=2.
+    assert_eq!(
+        rect_b.y, 4,
+        "B region must start one row below A's clipped region"
+    );
+    assert_eq!(rect_b.height, 2, "B must show all 2 of its wrapped rows");
+}
+
+/// Wrap mode with offset=3 (full top-skip): entry A has exactly 3 wrapped rows
+/// so it is completely scrolled past. Only B is visible, starting at screen y=0.
+///
+/// The fix must not produce any region for A (it is never added to row_actions),
+/// and B's region must be aligned to the top of the content area.
+#[test]
+fn wrap_mode_intra_offset_top_skipped_row_dropped() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let msg_a = "A".repeat(54); // 3 wrapped rows at width=18
+    let msg_b = "B".repeat(36); // 2 wrapped rows at width=18
+    let entry_a = make_entry(LogLevel::Info, LogSource::App, &msg_a);
+    let entry_b = make_entry(LogLevel::Info, LogSource::App, &msg_b);
+    let id_a = entry_a.id;
+    let id_b = entry_b.id;
+
+    let logs = logs_from(vec![entry_a, entry_b]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // offset=3 → A (3 rows) is fully past; B starts at screen y=0, wrap_intra_offset=0.
+    state.offset = 3;
+
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(true)
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 20, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_regions = collect_click_regions(&regions);
+
+    // Only B is visible; A must produce no region.
+    let entry_ids: Vec<u64> = click_regions.iter().map(|(_, id)| *id).collect();
+    assert!(
+        !entry_ids.contains(&id_a),
+        "A must produce no region when fully scrolled off; got {click_regions:?}"
+    );
+    assert_eq!(
+        click_regions.len(),
+        1,
+        "expected exactly 1 click region (B only), got {}: {click_regions:?}",
+        click_regions.len()
+    );
+
+    let (rect_b, eid_b) = click_regions[0];
+    assert_eq!(eid_b, id_b, "the sole region must be entry B");
+    // B starts at top of content_area: rect.y = 3, height = 2.
+    assert_eq!(rect_b.y, 3, "B must align to content_area top (y=3)");
+    assert_eq!(rect_b.height, 2, "B must show its full 2 wrapped rows");
+}
+
+// ── Phase 5 Task 08: link-highlight badge region tests ────────────────────────
+
+/// Build a `LinkHighlightState` from a list of (entry_index, frame_index, shortcut,
+/// display_text) tuples. The state is set to active.
+fn make_link_state(links: &[(usize, Option<usize>, char, &str)]) -> LinkHighlightState {
+    use fdemon_app::hyperlinks::{DetectedLink, FileReference};
+
+    let mut state = LinkHighlightState::new();
+    for (i, &(entry_index, frame_index, shortcut, display_text)) in links.iter().enumerate() {
+        // Construct a FileReference whose display matches display_text.
+        // We need display_text == path:line:col so parse it naively.
+        // For test purposes, create any FileReference and override the display via
+        // DetectedLink directly (display_text is a stored field, not recomputed on access).
+        let file_ref = FileReference::new(display_text, 1, 1);
+        let mut link = DetectedLink::new(file_ref, entry_index, frame_index, shortcut, i);
+        // Override display_text to match exactly what's in the log message.
+        link.display_text = display_text.to_string();
+        state.add_link(link);
+    }
+    state.activate();
+    state
+}
+
+/// Helper: extract SelectLink shortcuts from recorded regions.
+fn collect_badge_shortcuts(regions: &fdemon_app::MouseRegions) -> Vec<char> {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseAction;
+
+    regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::SelectLink(c) => Some(c),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Helper: extract badge regions (rect + shortcut) from recorded regions.
+fn collect_badge_regions(
+    regions: &fdemon_app::MouseRegions,
+) -> Vec<(fdemon_app::MouseRect, char, u8)> {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseAction;
+
+    regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::SelectLink(c) => Some((e.rect, c, e.z_index)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// When `link_highlight_state` is not set on the `LogView`, zero badge regions
+/// must be recorded even when a `MouseCtx` is provided.
+#[test]
+fn render_with_regions_records_no_badges_when_link_mode_inactive() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // One entry with a file reference in the message — badge would be rendered
+    // if link mode were active, but it isn't here.
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "Error at lib/main.dart:10:1",
+    )]);
+    let mut state = LogViewState::new();
+    // No link_highlight_state set on the view.
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_count = collect_badge_shortcuts(&regions).len();
+    assert_eq!(
+        badge_count, 0,
+        "no badge regions expected when link mode is inactive"
+    );
+}
+
+/// When `link_highlight_state` is active with N links, exactly N badge regions
+/// must be recorded (one per link badge rendered in the log view).
+#[test]
+fn render_with_regions_records_one_badge_per_link_when_active() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // Three entries each with a distinct file reference in the message.
+    let logs = logs_from(vec![
+        make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "see lib/a.dart:1:1 for details",
+        ),
+        make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "see lib/b.dart:2:1 for details",
+        ),
+        make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "see lib/c.dart:3:1 for details",
+        ),
+    ]);
+
+    let link_state = make_link_state(&[
+        (0, None, '1', "lib/a.dart:1:1"),
+        (1, None, '2', "lib/b.dart:2:1"),
+        (2, None, '3', "lib/c.dart:3:1"),
+    ]);
+
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        3,
+        "expected 3 badge regions (one per link), got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+
+    // Each badge rect must be exactly 3 cells wide, 1 cell tall, at z_index = 0.
+    for (rect, _shortcut, z_index) in &badge_regions {
+        assert_eq!(rect.width, 3, "badge rect must be 3 cells wide");
+        assert_eq!(rect.height, 1, "badge rect must be 1 cell tall");
+        assert_eq!(*z_index, 0, "badge regions must be at z_index = 0");
+    }
+
+    // Shortcuts must match links in order.
+    let shortcuts: Vec<char> = badge_regions.iter().map(|(_, c, _)| *c).collect();
+    assert_eq!(
+        shortcuts,
+        vec!['1', '2', '3'],
+        "shortcuts must match links in order"
+    );
+}
+
+/// Badge regions must be pushed *after* the row regions so they win on
+/// overlapping cells (last-pushed-wins at equal z_index).
+#[test]
+fn render_with_regions_badges_pushed_after_row_regions() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "see lib/x.dart:5:1 here",
+    )]);
+
+    let link_state = make_link_state(&[(0, None, 'a', "lib/x.dart:5:1")]);
+
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    // Find the positions of ClickLogRow and SelectLink entries in the push order.
+    let all: Vec<_> = regions.iter().collect();
+    let row_pos = all.iter().position(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ClickLogRow { .. })
+        )
+    });
+    let badge_pos = all.iter().position(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::SelectLink(_))
+        )
+    });
+
+    assert!(row_pos.is_some(), "expected a ClickLogRow region");
+    assert!(badge_pos.is_some(), "expected a SelectLink region");
+    assert!(
+        badge_pos.unwrap() > row_pos.unwrap(),
+        "badge region must be pushed after row region so it wins on overlap"
+    );
+}
+
+/// Links whose entries are scrolled out of the visible window must not produce
+/// any badge regions (the badge is not rendered, so no rect is registered).
+#[test]
+fn render_with_regions_off_screen_links_not_recorded() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 5 entries, but we render a small area that only shows ~1 entry.
+    // The entries at indices 2-4 will be scrolled off screen.
+    let mut entries = Vec::new();
+    for i in 0..5 {
+        entries.push(make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            &format!("see lib/file{i}.dart:{i}:1 here"),
+        ));
+    }
+    let logs = logs_from(entries);
+
+    // Links for entries 2-4 only (entries 0-1 have no badge).
+    let link_state = make_link_state(&[
+        (2, None, '1', "lib/file2.dart:2:1"),
+        (3, None, '2', "lib/file3.dart:3:1"),
+        (4, None, '3', "lib/file4.dart:4:1"),
+    ]);
+
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // offset = 0: only entries 0 and 1 fit in a 6-row area
+    // (border=2 + metadata=1 + gap=1 + content=2 rows visible).
+
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    // Small area: only 2 content rows visible.
+    let area = Rect::new(0, 0, 80, 6);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_count = collect_badge_shortcuts(&regions).len();
+    assert_eq!(
+        badge_count, 0,
+        "no badge regions expected: links are for entries scrolled off screen"
+    );
+}
+
+// ── Phase 5.5 Task 03: wrap-mode badge y-position fix ────────────────────────
+
+/// Regression: in wrap mode, a badge whose `col_offset` fits on the first
+/// wrapped sub-row (col_offset < visible_width) must record a rect at the
+/// correct screen-y with dx = col_offset, dy = 0.
+///
+/// Layout (area 22×10, visible_width=20):
+///   content_area: x=1, y=3, width=20, height=6
+///   col_offset=10 → dx=10, dy=0 → rect (11, 3, 3, 1)
+#[test]
+fn wrap_mode_badge_on_first_wrapped_row_records_at_correct_y() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 10-char prefix so badge lands at col_offset=10.
+    let prefix = "A".repeat(10);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'a', display_text)]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    // area width=22 → content_area.width=20 (visible_width=20).
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        1,
+        "expected exactly 1 badge region, got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+    let (rect, shortcut, _z) = badge_regions[0];
+    assert_eq!(shortcut, 'a');
+    // content_area: x=1, y=3, width=20.
+    // col_offset=10 → dx=10, dy=0 → badge_x=11, screen_y=3.
+    assert_eq!(
+        rect.x, 11,
+        "badge x should be content_area.x + dx (1+10=11)"
+    );
+    assert_eq!(rect.y, 3, "badge y should be content_area.y + 0 (dy=0)");
+    assert_eq!(rect.width, 3, "badge width should be 3");
+    assert_eq!(rect.height, 1, "badge height should be 1");
+}
+
+/// Regression: in wrap mode, a badge whose `col_offset` exceeds `visible_width`
+/// renders on a wrapped sub-row. The rect must use modular arithmetic:
+///   dx = col_offset % visible_width
+///   dy = col_offset / visible_width
+///
+/// Layout (area 22×10, visible_width=20):
+///   content_area: x=1, y=3, width=20, height=6
+///   col_offset=25 → dx=5, dy=1 → rect (6, 4, 3, 1)
+#[test]
+fn wrap_mode_badge_on_second_wrapped_row_records_at_correct_y() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 25-char prefix so badge lands at col_offset=25.
+    let prefix = "A".repeat(25);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'b', display_text)]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        1,
+        "expected exactly 1 badge region, got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+    let (rect, shortcut, _z) = badge_regions[0];
+    assert_eq!(shortcut, 'b');
+    // col_offset=25, visible_width=20 → dx=25%20=5, dy=25/20=1.
+    // badge_x = content_area.x + dx = 1 + 5 = 6.
+    // screen_y = content_area.y + (rel_y + dy - wio) = 3 + (0+1-0) = 4.
+    assert_eq!(
+        rect.x, 6,
+        "badge x should be content_area.x + (col_offset % 20) = 1+5=6"
+    );
+    assert_eq!(rect.y, 4, "badge y should be content_area.y + dy = 3+1=4");
+    assert_eq!(rect.width, 3, "badge width should be 3");
+    assert_eq!(rect.height, 1, "badge height should be 1");
+}
+
+/// Regression: a badge at the last column of a wrapped sub-row (dx + badge_w > visible_width)
+/// must be clipped to fit within the content area rather than overflowing.
+///
+/// Layout (area 22×10, visible_width=20):
+///   content_area: x=1, y=3, width=20, height=6
+///   col_offset=19 → dx=19, dy=0 → badge_x=20, badge_w=min(3, right_edge-badge_x)=min(3,1)=1
+#[test]
+fn wrap_mode_badge_clipped_at_right_edge() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 19-char prefix so badge lands at col_offset=19 (last column of first sub-row).
+    let prefix = "A".repeat(19);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'c', display_text)]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        1,
+        "expected exactly 1 badge region (clipped), got {}: {badge_regions:?}",
+        badge_regions.len()
+    );
+    let (rect, shortcut, _z) = badge_regions[0];
+    assert_eq!(shortcut, 'c');
+    // col_offset=19 → dx=19, dy=0. badge_x=1+19=20.
+    // content right edge = 1+20=21. badge_w = min(3, 21-20) = 1.
+    assert_eq!(
+        rect.x, 20,
+        "badge x should be 20 (content_area.x + dx = 1+19)"
+    );
+    assert_eq!(rect.y, 3, "badge y should be content_area.y (dy=0)");
+    assert_eq!(
+        rect.width, 1,
+        "badge width should be clipped to 1 (only 1 cell before right edge)"
+    );
+    assert_eq!(rect.height, 1, "badge height should be 1");
+}
+
+/// Regression: a badge whose computed `screen_y >= content_area.height` after
+/// wrap-offset adjustment must be silently dropped — no panic, no region recorded.
+///
+/// Layout (area 22×10, visible_width=20, content_area.height=6):
+///   col_offset=120 → dy=6 → screen_y=6 >= 6 → dropped.
+#[test]
+fn wrap_mode_badge_off_screen_dropped() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 120-char prefix → col_offset=120, dy=120/20=6 which equals content_area.height.
+    let prefix = "A".repeat(120);
+    let display_text = "lib/foo.dart:1:1";
+    let msg = format!("{prefix}{display_text}");
+    let entry = make_entry(LogLevel::Info, LogSource::App, &msg);
+    let logs = logs_from(vec![entry]);
+
+    let link_state = make_link_state(&[(0, None, 'd', display_text)]);
+    let mut state = LogViewState::new();
+    // Keep offset=0 so wio=0 and badge_all_lines_y=dy=6 >= content_area.height=6.
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let area = Rect::new(0, 0, 22, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let view = LogView::new(&logs, test_icons())
+            .wrap_mode(true)
+            .show_timestamps(false)
+            .show_source(false)
+            .link_highlight_state(&link_state);
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let badge_regions = collect_badge_regions(&regions);
+    assert_eq!(
+        badge_regions.len(),
+        0,
+        "badge at screen_y >= content_area.height must be dropped, got: {badge_regions:?}"
+    );
 }

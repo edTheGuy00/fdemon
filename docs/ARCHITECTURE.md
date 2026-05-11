@@ -537,6 +537,9 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 | `message.rs` | `Message` enum — all possible events/actions |
 | `signals.rs` | Signal handling for SIGINT/SIGTERM |
 | `handler/` | `update()` function and handler helpers (TEA) |
+| `handler/mouse/` | Per-mode mouse event handlers; `mod.rs` dispatches by `UiMode`, sub-modules handle scroll and click hit-testing per mode |
+| `input_mouse.rs` | `MouseInput`, `MouseButton`, `ScrollDir`, `KeyModSet` — raw mouse event types |
+| `mouse_regions.rs` | Per-frame click-region registry (`MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, `MouseRegionsCell`, `MouseRegionGuard`). `fdemon-app` does **not** depend on `ratatui`; `MouseRect` mirrors `ratatui::layout::Rect` locally, with conversion handled at the `fdemon-tui` boundary. |
 | `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
@@ -600,7 +603,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 |------|---------|
 | `runner.rs` | Main entry point, Engine creation, event loop |
 | `startup.rs` | TUI-specific startup logic |
-| `render/mod.rs` | State → UI rendering |
+| `render/mod.rs` | State → UI rendering; defines `MouseCtx` — the per-frame borrowed bridge that threads `MouseRegionsBuilder` into widgets |
 | `render/tests.rs` | Full-screen snapshot and transition tests |
 | `layout.rs` | Layout calculations for different UI modes |
 | `event.rs` | Terminal event polling (keyboard, resize) |
@@ -780,6 +783,56 @@ stdout ─────────┴──▶ DaemonMessage::Response
 ### Pre-App Source Gating
 
 `handle_launch()` conditionally returns `SpawnPreAppSources` when one or more custom sources have `start_before_app = true`. Readiness checks run concurrently with independent timeouts. The Flutter launch gate lifts on `Message::PreAppSourcesReady` (all checks passed or timed out). Sources without a `ready_check` are spawned and immediately considered ready (fire-and-forget). This pattern keeps `handle_launch()` pure (returns an action, spawns nothing directly) and routes all side effects through the normal `UpdateAction` pipeline.
+
+### Mouse Region Registry
+
+The mouse region registry (`fdemon-app/mouse_regions.rs`) is a per-frame, z-index-aware hit-test table. Widgets push click regions during render; the click handler reads them on button press. It lives on `AppState` as a `MouseRegionsCell` field — a `Cell<MouseRegions>` newtype that satisfies `#[derive(Debug)]` while providing interior mutability (see the TEA exception note below).
+
+**Key types:**
+
+- `MouseRect` — Terminal cell coordinate rectangle, mirroring `ratatui::layout::Rect` without the dependency. `fdemon-app` does not depend on `ratatui`; conversion from `Rect` to `MouseRect` is handled at the `fdemon-tui` boundary.
+- `MouseAction` — Either `Emit(Box<Message>)` (a fixed message) or `EmitWithCoord(fn(u16, u16) -> Message)` (a message computed from click coordinates). `Box` keeps the enum pointer-sized.
+- `MouseRegionEntry` — A single entry: `rect`, optional `on_left`, optional `on_middle`, and `z_index`.
+- `MouseRegions` — Backing `Vec<MouseRegionEntry>`. `hit_test(x, y, button)` returns the highest-z entry whose rect contains the point and has a binding for the given button; ties at the same `z_index` are broken by last-pushed-wins (later render order wins).
+- `MouseRegionsBuilder` — Borrowed builder with `click(rect, action)`, `click_at_z(rect, action, z)`, and `click_left_middle(rect, left, middle)` helpers. Empty rects are silently skipped.
+- `MouseRegionsCell` — Thin newtype wrapping `Cell<MouseRegions>` with `take_guard()` (canonical accessor), `take()`, `set()`, and a custom `Debug` impl. Production code should use `take_guard()` (see below); `take()` and `set()` remain as low-level primitives available for tests.
+- `MouseRegionGuard<'a>` — RAII guard returned by `MouseRegionsCell::take_guard()`. Holds the `MouseRegions` taken from the cell; on `Drop`, puts it back automatically. Exposes `MouseRegions` via `Deref`/`DerefMut`.
+
+**Per-frame lifecycle (render path):**
+
+1. `render::view()` calls `state.mouse_regions.take_guard()` at frame start. The guard takes ownership of the inner `MouseRegions` (leaving `Default::default()` in the cell for the duration of the frame) and exposes it via `Deref`/`DerefMut`.
+2. `regions.clear()` resets the entry list while preserving the `Vec`'s allocated capacity (allocation-free at steady state).
+3. `MouseCtx::new(regions.builder())` constructs the per-frame thread-through. Widgets that have clickable surfaces accept `Option<&mut MouseCtx<'_>>` and call `ctx.click(...)`, `ctx.click_at_z(...)`, or `ctx.click_left_middle(...)` as they paint. Passing `None` keeps widgets usable in unit tests that render without a registry.
+4. When the guard goes out of scope at the end of `view()`, its `Drop` impl puts the populated registry back into the cell — no explicit `set()` call is required.
+
+**Per-click lifecycle (handler path):**
+
+On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, `handler/mouse/mod.rs::handle_press` routes to the per-mode handler. Each per-mode handler (`normal`, `devtools`, `confirm_dialog`, `settings`, `new_session`, `link_highlight`, `tag_filter`) uses the `take_guard()` pattern: a guard wraps the hit-test, ensuring the registry is restored even if the hit-test path panics. Modes without a wired click surface (`EmulatorSelector`, `Loading`, `SearchInput`, `FlutterVersion`) return `None`.
+
+Two gate checks sit above the per-mode dispatch in `handle_press`:
+
+- **Tag-filter overlay gate** (`handler/mouse/mod.rs`): when `state.tag_filter_visible`, press events route directly to `tag_filter::handle_press` regardless of the underlying `ui_mode`. The overlay's row regions are registered by the tag-filter widget and resolved through the same `hit_test` path.
+- **Busy gate** (`handler/mouse/normal.rs`): `HotReload`, `HotRestart`, and `StopApp` messages resolved from click regions are suppressed when `any_session_busy()` returns `true`, mirroring the equivalent check in `handler/keys.rs`.
+
+**Modal Precedence and Sub-Modal Gates:**
+
+When a modal `UiMode` is active (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `FlutterVersion`, `EmulatorSelector`) or when `tag_filter_visible` is set, `render::view()` passes `None` (instead of `Some(&mut mouse_ctx)`) to `MainHeader` and `LogView`. Base-UI z=0 regions are therefore not registered during modal frames. Per-mode dispatchers calling `regions.hit_test(x, y, button)` see only the modal widget's own regions — explicit `z_index` filtering at the dispatcher level is unnecessary.
+
+`UiMode::LinkHighlight` is intentionally excluded from the modal gate: links are overlaid on top of the log view, and both the log-view scroll regions and the link-badge regions are expected to be interactive simultaneously.
+
+`UiMode::Settings` renders a full-screen panel that replaces the log view entirely. Its regions are at z=0; suppressing the underlying header/log-view regions prevents ghost clicks.
+
+The `is_modal_ui_mode()` helper that encodes this logic lives in `fdemon-tui/src/render/mod.rs`.
+
+**Sub-modal gate (Settings):** Two modals (`dart_defines_modal`, `extra_args_modal`) can open on top of the Settings panel without changing `ui_mode`. Because `render::view()` cannot detect these sub-modals via `is_modal_ui_mode()`, `settings::handle_press` (`handler/mouse/settings.rs`) short-circuits to `None` when `state.settings_view_state.has_modal_open()` returns `true`. This prevents clicks outside the sub-modal's area from accidentally routing to underlying settings rows or tabs.
+
+**Panic safety:**
+
+Prior to `MouseRegionGuard`, a widget panic between `Cell::take()` and `Cell::set()` would silently leave the registry permanently empty (replaced with `Default::default()`), disabling mouse interaction for the rest of the session with no diagnostic. The guard's `Drop` impl restores the registry on stack unwind, eliminating this failure mode. The lower-level `MouseRegionsCell::{take, set}` methods remain available for tests but should not appear in production code.
+
+**TEA exception note:**
+
+`AppState::mouse_regions` uses `Cell` interior mutability, which is a deliberate exception to the TEA principle that the Model is immutable between update cycles. This is the same exception class as the existing `Cell<usize>` render-hint write-back on `TagFilterUiState`. The registry is purely a render-hint: it carries no business logic, participates in no state equality checks, and is not part of any `EngineEvent`. See `docs/CODE_STANDARDS.md` Principle 3 and `docs/REVIEW_FOCUS.md` "Approved TEA Exception → Current usage" for the canonical list of approved exceptions.
 
 ---
 
@@ -1505,6 +1558,7 @@ The complete application state, owned by the Engine. Contains:
 - **Device selector state** — Device/emulator selection UI state
 - **Configuration** — Settings, project path, project name
 - **Active session state** — Phase, logs, log view state, app ID, device info, reload count
+- **Mouse region registry** (`mouse_regions: MouseRegionsCell`) — Per-frame click-region table; a TEA-approved render-hint exception (see "Mouse Region Registry" in Key Patterns above). Access via `take_guard()` → `MouseRegionGuard<'a>` (RAII, panic-safe); `take()`/`set()` are low-level primitives for tests only.
 
 ### Message (Events)
 

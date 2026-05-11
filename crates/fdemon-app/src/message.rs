@@ -2,6 +2,7 @@
 
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
+use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::{NetworkDetailTab, SessionId};
 use crate::state::DevToolsPanel;
@@ -68,6 +69,13 @@ pub struct AutoLaunchSuccess {
 pub enum Message {
     /// Keyboard event from terminal
     Key(InputKey),
+
+    /// Mouse event from terminal (click, release, drag, scroll).
+    ///
+    /// Routed to [`crate::handler::mouse::handle_mouse`] which dispatches
+    /// per `UiMode` to a concrete `Message`. Mouse events are no-ops in
+    /// Phase 1; later phases populate the dispatcher.
+    Mouse(MouseInput),
 
     /// Event from Flutter daemon with session context (multi-session mode)
     SessionDaemon {
@@ -222,6 +230,13 @@ pub enum Message {
     PreviousSession,
     /// Close the current session (x / Ctrl+W)
     CloseCurrentSession,
+
+    /// Close the session at a specific index (middle-click on a tab).
+    ///
+    /// Differs from [`Message::CloseCurrentSession`] in that it operates on an
+    /// arbitrary index rather than `state.session_manager.selected_id()`.
+    /// Out-of-range indices are silently ignored.
+    CloseSessionAt(usize),
 
     // ─────────────────────────────────────────────────────────
     // Log Control (Task 10)
@@ -1420,6 +1435,103 @@ pub enum Message {
 
     /// Update the selected version (u key) — stub for Phase 3
     FlutterVersionUpdate,
+
+    // ── Mouse Click Messages (Phase 5) ────────────────────────────────────────
+    /// Click on a device row inside the NewSessionDialog Connected/Bootable list.
+    ///
+    /// `index` is the absolute position into the *currently active* tab's device
+    /// list at render time (Connected or Bootable, whichever was visible). The
+    /// handler at [`crate::handler::new_session::clicks::handle_select_device_at`]
+    /// sets `target_selector.selected_index = index` for the active tab and emits
+    /// a follow-up [`Message::NewSessionDialogDeviceSelect`] via
+    /// [`UpdateResult::message`] so the click is exactly equivalent to "arrow
+    /// down N times then Enter".
+    NewSessionDialogSelectDeviceAt { index: usize },
+
+    /// Click on a launch-context field row (Configuration / Mode / Flavor /
+    /// Entry Point / Dart Defines).
+    ///
+    /// Sets `launch_context.focused_field = field` and emits a follow-up
+    /// [`Message::NewSessionDialogFieldActivate`] via [`UpdateResult::message`]
+    /// for fields that activate-on-Enter. The Mode field's left/right cycler is
+    /// not exercised by click in v1 — clicking the Mode field activates the
+    /// existing keyboard-Enter behaviour (cycle to next mode).
+    NewSessionDialogFocusField {
+        field: crate::new_session_dialog::LaunchContextField,
+    },
+
+    /// Click on a result row inside the NewSessionDialog fuzzy modal
+    /// (config picker, flavor picker, entry-point picker).
+    ///
+    /// Sets `fuzzy_modal.selected_index = index` and emits a follow-up
+    /// [`Message::NewSessionDialogFuzzyConfirm`] via [`UpdateResult::message`].
+    /// Equivalent to "arrow down N times then Enter" inside the modal.
+    NewSessionDialogFuzzySelectAt { index: usize },
+
+    /// Click on a setting row in the Settings panel.
+    ///
+    /// `index` is the absolute position into the active tab's `SettingItem` list
+    /// at render time. The handler at
+    /// [`crate::handler::settings_handlers::handle_settings_click_row`] updates
+    /// `AppState::last_settings_click` for double-click detection and sets
+    /// `settings_view_state.selected_index = index`. When the same row is
+    /// clicked twice within 400 ms, a follow-up
+    /// [`Message::SettingsToggleEdit`] is emitted via
+    /// [`UpdateResult::message`] (mirroring [`Message::ClickLogRow`]).
+    SettingsClickRow { index: usize },
+
+    /// Click on a tag row in the tag-filter overlay.
+    ///
+    /// `index` is the absolute position into the *sorted* tag list at render
+    /// time. The inline handler in `update.rs` sets
+    /// `tag_filter_ui.selected_index = index` AND toggles the tag's visibility
+    /// in a single arm — no follow-up message. Single click both navigates to
+    /// and toggles the tag, since there is no useful "select-without-toggle"
+    /// state in this overlay (the user wants both).
+    TagFilterClickRow { index: usize },
+
+    // ── Mouse Click Messages (Phase 4) ──────────────────────────────────────
+    /// Click on a single log-view row.
+    ///
+    /// Emitted by the per-frame mouse region registry when the user left-clicks
+    /// inside the log content area. `entry_id` is the [`LogEntry::id`] of the
+    /// clicked entry; `frame_index` is `Some(i)` when the click landed on the
+    /// i-th visible stack-frame line under that entry, or `None` for the
+    /// message-line click.
+    ///
+    /// Handler at [`crate::handler::log_view::handle_click_log_row`] updates
+    /// `AppState::last_log_click` for double-click detection. When the same
+    /// entry is clicked twice within 400 ms, a follow-up
+    /// [`Message::ToggleStackTraceForEntry`] is emitted via
+    /// [`UpdateResult::message`].
+    ClickLogRow {
+        entry_id: u64,
+        frame_index: Option<usize>,
+    },
+
+    /// Toggle stack trace expand / collapse for a *specific* log entry.
+    ///
+    /// Emitted as a follow-up to [`Message::ClickLogRow`] when a double click is
+    /// detected. Distinct from [`Message::ToggleStackTrace`], which operates on
+    /// the scroll-focused entry — the click target is rarely the focused entry,
+    /// so the click flow needs an absolute-id variant.
+    ToggleStackTraceForEntry { entry_id: u64 },
+
+    /// Click on a row in the widget inspector tree.
+    ///
+    /// `index` is the absolute position into `InspectorState::visible_nodes()`
+    /// at render time — the registry stored this index when recording the row's
+    /// rect. The handler sets `inspector.selected_index = index` and dispatches
+    /// a layout fetch under the same debounce / cache rules as
+    /// [`InspectorNav::Up`] / [`InspectorNav::Down`].
+    DevToolsInspectorSelectRow { index: usize },
+
+    /// Click on the leading expansion glyph (▶ / ▼ / ●) of a tree row.
+    ///
+    /// Selects the row first (same as [`Message::DevToolsInspectorSelectRow`])
+    /// then toggles the node's `expanded` set if the node has children. No-op
+    /// for leaf nodes.
+    DevToolsInspectorToggleNode { index: usize },
 
     /// Internal trigger: start the version probe.
     ///

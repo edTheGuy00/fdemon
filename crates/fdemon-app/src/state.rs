@@ -10,6 +10,7 @@ use rand::Rng;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::flutter_version::FlutterVersionState;
+use crate::mouse_regions::{MouseRegions, MouseRegionsCell};
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
@@ -839,10 +840,11 @@ impl DapStatus {
 /// Lives on `AppState` so the TUI render function can read it without reaching
 /// into session state.
 ///
-/// `last_known_visible_height` uses `Cell<usize>` interior mutability and is
-/// written by the renderer each frame as a render-hint feedback channel. It must
-/// not be used as a correctness input to business logic or participate in state
-/// equality comparisons. See `docs/CODE_STANDARDS.md` "Principle 3" for rationale.
+/// `last_known_visible_height` and `last_known_scroll_offset` use `Cell<usize>`
+/// interior mutability and are written by the renderer each frame as render-hint
+/// feedback channels. They must not be used as correctness inputs to business
+/// logic or participate in state equality comparisons. See `docs/CODE_STANDARDS.md`
+/// "Principle 3" for rationale.
 #[derive(Debug, Clone, Default)]
 pub struct TagFilterUiState {
     /// Currently selected index in the tag list.
@@ -851,6 +853,12 @@ pub struct TagFilterUiState {
     /// Defaults to 0, which signals "not yet rendered — use fallback".
     /// Written by the renderer; not mutated by message handlers.
     pub last_known_visible_height: Cell<usize>,
+    /// Render-hint: the `ListState.offset()` value from the last rendered
+    /// frame, i.e., the absolute index of the topmost visible tag row.
+    /// Written by the renderer after `render_stateful_widget`; read by the
+    /// region recorder to convert screen-row numbers to absolute tag indices.
+    /// Defaults to 0 — safe fallback when no render has occurred yet.
+    pub last_known_scroll_offset: Cell<usize>,
 }
 
 impl TagFilterUiState {
@@ -870,6 +878,36 @@ impl TagFilterUiState {
     pub fn reset(&mut self) {
         self.selected_index = 0;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Log Click State (Phase 4 Mouse)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Click stamp recorded by [`crate::handler::log_view::handle_click_log_row`]
+/// to detect double-clicks within the 400 ms window.
+///
+/// Both fields are `Copy` so the read-then-clear pattern in the handler
+/// (`let last = state.last_log_click; state.last_log_click = None;`) does
+/// not require `Option::take`.
+#[derive(Debug, Clone, Copy)]
+pub struct LogClickStamp {
+    /// [`LogEntry::id`] of the clicked entry.
+    pub entry_id: u64,
+    /// Wall-clock time of the click, used for 400 ms double-click detection.
+    pub at: std::time::Instant,
+}
+
+/// Click stamp recorded by [`handler::settings_handlers::handle_settings_click_row`]
+/// to detect double-clicks on a setting row within the 400 ms window.
+///
+/// Mirrors [`LogClickStamp`] — see Phase 4 task 01 for the precedent.
+#[derive(Debug, Clone, Copy)]
+pub struct SettingsClickStamp {
+    /// 0-based index into the active tab's `SettingItem` list.
+    pub index: usize,
+    /// Wall-clock time of the click, used for 400 ms double-click detection.
+    pub at: std::time::Instant,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1007,6 +1045,42 @@ pub struct AppState {
     /// dialog so users see the change without needing to inspect the log file.
     /// Cleared when the New Session dialog is dismissed.
     pub show_migration_banner: bool,
+
+    /// Per-frame mouse click-region registry.
+    ///
+    /// Populated by widgets during render via [`crate::mouse_regions::MouseRegionsBuilder`]
+    /// and read by [`crate::handler::mouse`] during click hit-tests. Lives on
+    /// `AppState` (rather than being threaded through the handler layer) because
+    /// `Cell` interior mutability lets render write back without forcing
+    /// `&mut AppState` everywhere.
+    ///
+    /// **TEA exception**: This is the same exception class as
+    /// [`TagFilterUiState::last_known_visible_height`] — a render-hint write-back
+    /// that does NOT participate in business logic or state equality. See
+    /// `docs/CODE_STANDARDS.md` Principle 3 for rationale.
+    ///
+    /// Lifecycle (per frame):
+    /// 1. `render::view` calls `state.mouse_regions.take()`, draining the previous
+    ///    frame's entries (the `Cell` now holds an empty `MouseRegions`).
+    /// 2. Widgets push entries into a `MouseRegionsBuilder` borrowed against the
+    ///    drained instance.
+    /// 3. `render::view` calls `state.mouse_regions.set(populated)` to put the
+    ///    new registry back.
+    /// 4. On `Message::Mouse(MouseInput::Press {..})`, `handler::mouse::normal`
+    ///    performs the same take/hit-test/put-back dance.
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    pub mouse_regions: MouseRegionsCell,
+
+    /// Most recent log-row click, used for double-click detection.
+    ///
+    /// Set by [`crate::handler::log_view::handle_click_log_row`] and cleared
+    /// when a double-click is consumed or the selected session changes.
+    pub last_log_click: Option<LogClickStamp>,
+
+    /// Most recent settings-row click, used for double-click detection.
+    /// Cleared whenever a double-click is consumed or the active tab
+    /// changes.
+    pub last_settings_click: Option<SettingsClickStamp>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1066,6 +1140,9 @@ impl AppState {
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
             show_migration_banner: false,
+            mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
+            last_log_click: None,
+            last_settings_click: None,
         }
     }
 
@@ -2220,5 +2297,28 @@ mod tests {
             UiMode::Normal,
             "ui_mode must return to Normal after hide_new_session_dialog"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Mouse Region Field Tests (Phase 3, Task 03)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_appstate_initializes_with_empty_mouse_regions() {
+        let state = AppState::new();
+        let regions = state.mouse_regions.take();
+        assert!(regions.is_empty(), "fresh AppState has no mouse regions");
+        state.mouse_regions.set(regions); // restore so the assertion is non-destructive
+    }
+
+    #[test]
+    fn test_appstate_mouse_regions_capacity_preserves() {
+        let state = AppState::new();
+        let regions = state.mouse_regions.take();
+        // with_capacity() pre-sizes to 32 — we don't lock that number into a test,
+        // but we do assert that capacity is non-zero so a single push doesn't
+        // immediately realloc.
+        assert!(regions.iter().count() == 0);
+        state.mouse_regions.set(regions);
     }
 }

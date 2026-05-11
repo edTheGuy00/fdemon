@@ -72,7 +72,7 @@ pub fn Home() -> impl IntoView {
                         "Why Flutter Demon?"
                     </h2>
                     <p class="text-slate-400">
-                        "Designed for power users who prefer the keyboard over the mouse."
+                        "Designed for keyboard-first power users — mouse support is opt-in."
                     </p>
                 </div>
 

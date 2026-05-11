@@ -333,5 +333,31 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit, bypasses confirmation" },
             ],
         },
+
+        // ── Mouse Interactions ───────────────────────────────────────
+        KeybindingSection {
+            title: "Mouse Interactions",
+            color: "bg-pink-500",
+            key_color: "text-pink-400",
+            bindings: vec![
+                Keybinding { key: "Wheel", action: "Scroll focused surface", description: "Routes by current UiMode; coordinate-free — scrolls wherever focus is" },
+                Keybinding { key: "Shift+Wheel", action: "Page scroll", description: "Normal / LinkHighlight / DevTools-Network only; Windows 11 drops Shift modifier" },
+                Keybinding { key: "Click [r]/[R]/[x]/[d]/[D]/[q]", action: "Hot reload / restart / stop / DevTools / DAP / quit", description: "Bracketed header shortcuts; same is_busy gate as keyboard" },
+                Keybinding { key: "Click session tab", action: "Switch session", description: "Left-click a tab in the tab bar" },
+                Keybinding { key: "Middle-click session tab", action: "Close session", description: "Closes the clicked session without switching first" },
+                Keybinding { key: "Click device pill", action: "Open New Session dialog", description: "Single-session compact header only" },
+                Keybinding { key: "Click log row", action: "Register for double-click", description: "No visible action on single click" },
+                Keybinding { key: "Double-click log row", action: "Toggle stack trace", description: "Within 400 ms; entry_id-matched; resets on session switch" },
+                Keybinding { key: "Click DevTools sub-tab", action: "Switch panel", description: "Click [i] Inspector / [p] Performance / [n] Network" },
+                Keybinding { key: "Click Inspector row", action: "Select node", description: "Click expansion glyph ▶/▼ to expand or collapse" },
+                Keybinding { key: "Click frame bar", action: "Select frame", description: "Performance chart; clicking outside a bar is a no-op" },
+                Keybinding { key: "Click Network row", action: "Select request", description: "Details appear in side panel; click detail tab to switch view" },
+                Keybinding { key: "Click NewSessionDialog tab/device/field/Launch", action: "Activate", description: "Device tabs, device list rows, launch-context fields, and Launch button are all clickable" },
+                Keybinding { key: "Click ConfirmDialog Yes / No", action: "Confirm / cancel", description: "Bracket+label hit area" },
+                Keybinding { key: "Click TagFilter row", action: "Toggle tag visibility", description: "Single click selects and toggles the tag" },
+                Keybinding { key: "Click LinkHighlight badge", action: "Open link", description: "Three-cell hit area per badge" },
+                Keybinding { key: "Click Settings row", action: "Select row", description: "Double-click within 400 ms enters edit mode" },
+            ],
+        },
     ]
 }

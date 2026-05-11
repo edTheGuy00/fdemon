@@ -24,6 +24,7 @@ use ratatui::{
 use crate::theme::icons::IconSet;
 use crate::theme::palette;
 use crate::theme::styles as theme_styles;
+use crate::widgets::MouseCtx;
 
 /// Stack trace styling constants
 pub mod styles;
@@ -237,6 +238,59 @@ impl<'a> LogView<'a> {
         Style::default()
             .fg(palette::ACCENT)
             .add_modifier(Modifier::UNDERLINED)
+    }
+
+    /// Return true if `span` is a link badge `[<c>]` (3-char content, ACCENT background).
+    ///
+    /// Used during badge-region recording to locate the badge span within a rendered
+    /// line without re-running the full link-detection logic.
+    fn is_link_badge_span(span: &Span<'_>) -> bool {
+        let c = &span.content;
+        if c.len() < 3 {
+            return false;
+        }
+        let chars: Vec<char> = c.chars().collect();
+        if chars.len() != 3 {
+            return false;
+        }
+        if chars[0] != '[' || chars[2] != ']' {
+            return false;
+        }
+        span.style.bg == Some(crate::theme::palette::ACCENT)
+    }
+
+    /// Extract the shortcut character from a badge span `[<c>]`.
+    ///
+    /// Returns `None` if the span content does not have exactly 3 chars in `[X]` form.
+    fn badge_span_shortcut(span: &Span<'_>) -> Option<char> {
+        let chars: Vec<char> = span.content.chars().collect();
+        if chars.len() == 3 && chars[0] == '[' && chars[2] == ']' {
+            Some(chars[1])
+        } else {
+            None
+        }
+    }
+
+    /// Walk `spans` and push a [`BadgeAction`] for each badge span found.
+    ///
+    /// `rel_y` is the row's Y coordinate (relative to `content_area.y`).
+    /// This is called only when `link_highlight_state.is_active()` and a
+    /// `MouseCtx` is present.
+    fn collect_badge_actions(spans: &[Span<'_>], rel_y: u16, out: &mut Vec<BadgeAction>) {
+        let mut col: u16 = 0;
+        for span in spans {
+            let width = span.content.chars().count() as u16;
+            if Self::is_link_badge_span(span) {
+                if let Some(shortcut) = Self::badge_span_shortcut(span) {
+                    out.push(BadgeAction {
+                        rel_y,
+                        col_offset: col,
+                        shortcut,
+                    });
+                }
+            }
+            col = col.saturating_add(width);
+        }
     }
 
     /// Insert a link badge into spans at the position of a file reference.
@@ -1040,10 +1094,52 @@ impl<'a> LogView<'a> {
     }
 }
 
-impl<'a> StatefulWidget for LogView<'a> {
-    type State = LogViewState;
+/// Per-row metadata accumulated during the render loop for mouse-region recording.
+///
+/// Collected in `render_inner` when a `MouseCtx` is present, then converted to
+/// click regions after all lines have been placed.
+struct RowAction {
+    /// Y position relative to `content_area.y` (0 = first content row).
+    rel_y: u16,
+    /// Height in terminal rows (1 in nowrap mode; `wrapped_row_count` in wrap mode).
+    height: u16,
+    /// `LogEntry::id` of the entry this row belongs to.
+    entry_id: u64,
+    /// `None` for the message line; `Some(i)` for stack frame `i`.
+    frame_index: Option<usize>,
+}
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+/// Per-badge metadata accumulated during the render loop for link-badge region recording.
+///
+/// Collected when `link_highlight_state.is_active()` and a `MouseCtx` is present.
+/// Each badge is a 3-cell `[<shortcut>]` span; its click region emits
+/// `Message::SelectLink(shortcut)` at `z_index = 0`.
+struct BadgeAction {
+    /// Y position relative to `content_area.y` (same coordinate as `RowAction::rel_y`).
+    rel_y: u16,
+    /// X column offset from the start of the line (0 = leftmost cell of the content area).
+    /// In nowrap mode, subtract `h_offset` and skip if the badge is off-screen left.
+    col_offset: u16,
+    /// The shortcut character embedded in the badge (`[<shortcut>]`).
+    shortcut: char,
+}
+
+impl<'a> LogView<'a> {
+    /// Core rendering implementation shared by [`StatefulWidget::render`] and
+    /// [`render_with_regions`].
+    ///
+    /// When `mouse_ctx` is `Some`, the function additionally records one
+    /// [`MouseAction::Emit(Message::ClickLogRow { .. })`] region per visible
+    /// row in the content area. When `mouse_ctx` is `None` the behaviour is
+    /// identical to the original `render` body — no allocations are made for
+    /// region tracking.
+    fn render_inner(
+        self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &mut LogViewState,
+        mouse_ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         // Handle empty state specially
         if self.logs.is_empty() {
             self.render_empty(area, buf);
@@ -1138,6 +1234,14 @@ impl<'a> StatefulWidget for LogView<'a> {
         // We need to skip `offset` units and take `visible_lines` units.
         // In wrap mode, units are terminal rows; in nowrap, logical lines.
         let mut all_lines: Vec<Line> = Vec::new();
+        // Parallel list tracking entry identity and position for click-region recording.
+        // Only populated when `mouse_ctx` is `Some` (no allocation otherwise).
+        let mut row_actions: Vec<RowAction> = Vec::new();
+        // Badge-region actions (Phase 5 Task 08): one entry per link badge visible in this frame.
+        // Populated only when `mouse_ctx` is `Some` AND `link_highlight_state.is_active()`.
+        let mut badge_actions: Vec<BadgeAction> = Vec::new();
+        // Running Y cursor for row_actions (relative to content_area.y).
+        let mut rel_y_cursor: u16 = 0;
         let mut units_added = 0;
         let mut units_skipped = 0;
         // In wrap mode, tracks how many terminal rows to scroll past at the top
@@ -1146,6 +1250,15 @@ impl<'a> StatefulWidget for LogView<'a> {
 
         // Track focus info for the first visible line (Phase 3 Task 03)
         let mut focus_captured = false;
+
+        // Gate flag: avoids repeating `mouse_ctx.is_some()` at each call site.
+        // A Rust closure cannot be used here because it would exclusively borrow
+        // `rel_y_cursor` and `row_actions`, preventing reads of `rel_y_cursor` at
+        // call sites and the direct advance for the collapsed-indicator row.
+        let has_mouse_ctx = mouse_ctx.is_some();
+        // Gate flag: badge-region recording fires only in link-highlight mode.
+        let has_link_badges =
+            has_mouse_ctx && self.link_highlight_state.is_some_and(|s| s.is_active());
 
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
@@ -1196,10 +1309,27 @@ impl<'a> StatefulWidget for LogView<'a> {
                 }
 
                 let line = self.format_entry(entry, idx);
-                if self.wrap_mode {
-                    units_added += Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                let row_h: u16 = if self.wrap_mode {
+                    let wrc =
+                        Self::wrapped_row_count(Self::line_width(&line), visible_width) as u16;
+                    units_added += wrc as usize;
+                    wrc
                 } else {
                     units_added += 1;
+                    1u16
+                };
+                if has_mouse_ctx {
+                    // Collect badge regions (Phase 5 Task 08) before advancing rel_y_cursor.
+                    if has_link_badges {
+                        Self::collect_badge_actions(&line.spans, rel_y_cursor, &mut badge_actions);
+                    }
+                    row_actions.push(RowAction {
+                        rel_y: rel_y_cursor,
+                        height: row_h,
+                        entry_id: entry.id,
+                        frame_index: None,
+                    });
+                    rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                 }
                 all_lines.push(line);
             }
@@ -1237,11 +1367,32 @@ impl<'a> StatefulWidget for LogView<'a> {
 
                         // Use link-aware formatting (Phase 3.1)
                         let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
-                        if self.wrap_mode {
-                            units_added +=
-                                Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                        let row_h: u16 = if self.wrap_mode {
+                            let wrc =
+                                Self::wrapped_row_count(Self::line_width(&line), visible_width)
+                                    as u16;
+                            units_added += wrc as usize;
+                            wrc
                         } else {
                             units_added += 1;
+                            1u16
+                        };
+                        if has_mouse_ctx {
+                            // Collect badge regions (Phase 5 Task 08) before advancing rel_y_cursor.
+                            if has_link_badges {
+                                Self::collect_badge_actions(
+                                    &line.spans,
+                                    rel_y_cursor,
+                                    &mut badge_actions,
+                                );
+                            }
+                            row_actions.push(RowAction {
+                                rel_y: rel_y_cursor,
+                                height: row_h,
+                                entry_id: entry.id,
+                                frame_index: Some(frame_idx),
+                            });
+                            rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                         }
                         all_lines.push(line);
                     }
@@ -1276,16 +1427,38 @@ impl<'a> StatefulWidget for LogView<'a> {
 
                         // Use link-aware formatting (Phase 3.1)
                         let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
-                        if self.wrap_mode {
-                            units_added +=
-                                Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                        let row_h: u16 = if self.wrap_mode {
+                            let wrc =
+                                Self::wrapped_row_count(Self::line_width(&line), visible_width)
+                                    as u16;
+                            units_added += wrc as usize;
+                            wrc
                         } else {
                             units_added += 1;
+                            1u16
+                        };
+                        if has_mouse_ctx {
+                            // Collect badge regions (Phase 5 Task 08) before advancing rel_y_cursor.
+                            if has_link_badges {
+                                Self::collect_badge_actions(
+                                    &line.spans,
+                                    rel_y_cursor,
+                                    &mut badge_actions,
+                                );
+                            }
+                            row_actions.push(RowAction {
+                                rel_y: rel_y_cursor,
+                                height: row_h,
+                                entry_id: entry.id,
+                                frame_index: Some(frame_idx),
+                            });
+                            rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                         }
                         all_lines.push(line);
                     }
 
-                    // Add collapsed indicator if there are hidden frames
+                    // Add collapsed indicator if there are hidden frames.
+                    // The indicator row is not a clickable entry — skip region recording for it.
                     let target = if self.wrap_mode {
                         visible_lines + wrap_intra_offset
                     } else {
@@ -1296,6 +1469,10 @@ impl<'a> StatefulWidget for LogView<'a> {
                         if indicator_position > skip_in_entry {
                             all_lines.push(Self::format_collapsed_indicator(hidden_count));
                             units_added += 1; // collapsed indicator is always short
+                                              // Advance rel_y_cursor so subsequent rows are placed correctly.
+                            if has_mouse_ctx {
+                                rel_y_cursor = rel_y_cursor.saturating_add(1);
+                            }
                         }
                     }
                 }
@@ -1331,7 +1508,8 @@ impl<'a> StatefulWidget for LogView<'a> {
                 .collect()
         };
 
-        // Add blinking cursor at end if auto-scroll is active
+        // Add blinking cursor at end if auto-scroll is active.
+        // The cursor is not a log entry — do not register a click region for it.
         let mut final_lines = final_lines_base;
         if state.auto_scroll && !final_lines.is_empty() {
             // Add cursor to a new line after the last entry
@@ -1367,6 +1545,149 @@ impl<'a> StatefulWidget for LogView<'a> {
 
             scrollbar.render(area, buf, &mut scrollbar_state);
         }
+
+        // Register click regions for all visible rows (Phase 4 Task 06) and
+        // link-highlight badge regions (Phase 5 Task 08).
+        // Only executed when a MouseCtx was provided; no-op for the plain render path.
+        if let Some(ctx) = mouse_ctx {
+            use fdemon_app::message::Message;
+            use fdemon_app::{MouseAction, MouseRect};
+
+            // In wrap mode, `r.rel_y` is in "all_lines space" (accumulated from the
+            // first row pushed, which may be the partially-scrolled entry at the top).
+            // The Paragraph is rendered with `.scroll((wrap_intra_offset, 0))`, so we
+            // must subtract `wrap_intra_offset` to convert to screen space.
+            let wio = wrap_intra_offset as u16;
+
+            for r in &row_actions {
+                // Skip rows fully scrolled off the top (entirely above the viewport).
+                if r.rel_y.saturating_add(r.height) <= wio {
+                    continue;
+                }
+
+                // Top-clip: rows partially scrolled off the top.
+                // `top_clip` is the number of rows of this entry that are above the viewport.
+                let top_clip = wio.saturating_sub(r.rel_y);
+                // Convert from all_lines space to screen space.
+                let visible_y = r.rel_y.saturating_sub(wio);
+                let visible_h = r.height.saturating_sub(top_clip);
+
+                // Skip rows fully below the content area (bottom overflow).
+                if visible_y >= content_area.height {
+                    continue;
+                }
+
+                // Bottom-clip: rows partially below the content area.
+                let h = visible_h.min(content_area.height.saturating_sub(visible_y));
+                if h == 0 {
+                    continue;
+                }
+
+                let rect = MouseRect::new(
+                    content_area.x,
+                    content_area.y.saturating_add(visible_y),
+                    content_area.width,
+                    h,
+                );
+                // `MouseRegionsBuilder::click` already skips zero-sized rects, but
+                // guard here for clarity (content_area.width may be 0 at narrow widths).
+                if rect.width == 0 || rect.height == 0 {
+                    continue;
+                }
+                ctx.click(
+                    rect,
+                    MouseAction::emit(Message::ClickLogRow {
+                        entry_id: r.entry_id,
+                        frame_index: r.frame_index,
+                    }),
+                );
+            }
+
+            // Phase 5 Task 08: register one SelectLink region per visible badge.
+            //
+            // Badges are pushed *after* row regions, so they win over row regions on
+            // overlapping cells (last-pushed-wins at equal z_index — see mouse_regions.rs).
+            // z_index = 0: link mode is in-place, not modal.
+            for b in &badge_actions {
+                // Compute the screen-space (dx, dy) of the badge.
+                //
+                // In nowrap mode `col_offset` maps directly to x (minus h_offset).
+                // In wrap mode `col_offset` is an absolute character position within
+                // the unwrapped line; when it exceeds `visible_width` the badge renders
+                // on a subsequent wrapped sub-row. Convert with modular arithmetic:
+                //   dx = col_offset % visible_width  (x within the sub-row)
+                //   dy = col_offset / visible_width  (extra rows from wrapping)
+                // The badge's "all_lines-space" row is then `b.rel_y + dy`.
+                let (dx, dy) = if self.wrap_mode && content_area.width > 0 {
+                    let vw = content_area.width as usize;
+                    let dx = (b.col_offset as usize % vw) as u16;
+                    let dy = (b.col_offset as usize / vw) as u16;
+                    (dx, dy)
+                } else {
+                    // Nowrap mode: dy is always 0; dx is handled below with h_offset.
+                    (b.col_offset, 0u16)
+                };
+
+                // The badge's row in "all_lines space" (incorporating wrap sub-row offset).
+                let badge_all_lines_y = b.rel_y.saturating_add(dy);
+
+                // Apply the same top-clip / bottom-clip logic as for row_actions.
+                if badge_all_lines_y.saturating_add(1) <= wio {
+                    continue; // entirely above the viewport
+                }
+                let visible_y = badge_all_lines_y.saturating_sub(wio);
+                if visible_y >= content_area.height {
+                    continue; // below the content area
+                }
+
+                // Compute the rendered x of the badge in the buffer.
+                // In nowrap mode, horizontal scroll shifts the line left by `h_offset`.
+                // Skip badges that are entirely scrolled off the left edge.
+                let badge_x = if self.wrap_mode {
+                    // Wrap mode: no horizontal scroll; dx is already the sub-row position.
+                    content_area.x.saturating_add(dx)
+                } else {
+                    // Nowrap mode: account for horizontal scroll offset.
+                    let h_off = state.h_offset as u16;
+                    if dx < h_off {
+                        continue; // badge start is off-screen left
+                    }
+                    let local_x = dx - h_off;
+                    if local_x >= content_area.width {
+                        continue; // badge start is off-screen right
+                    }
+                    content_area.x.saturating_add(local_x)
+                };
+
+                // Badge is always 3 cells wide and 1 cell tall.
+                // Clip to content area width (a badge at the very right edge may overflow).
+                let badge_w = 3u16.min(
+                    content_area
+                        .x
+                        .saturating_add(content_area.width)
+                        .saturating_sub(badge_x),
+                );
+                if badge_w == 0 {
+                    continue;
+                }
+
+                let rect = MouseRect::new(
+                    badge_x,
+                    content_area.y.saturating_add(visible_y),
+                    badge_w,
+                    1,
+                );
+                ctx.click(rect, MouseAction::emit(Message::SelectLink(b.shortcut)));
+            }
+        }
+    }
+}
+
+impl<'a> StatefulWidget for LogView<'a> {
+    type State = LogViewState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        self.render_inner(area, buf, state, None);
     }
 }
 
@@ -1376,6 +1697,28 @@ impl Widget for LogView<'_> {
         let mut state = LogViewState::new();
         StatefulWidget::render(self, area, buf, &mut state);
     }
+}
+
+/// Render the log view, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `render::view`. The
+/// `StatefulWidget::render` impl does not record regions; this function is the
+/// canonical path for region-aware rendering.
+///
+/// Passing `None` for `ctx` makes this function behave identically to calling
+/// `frame.render_stateful_widget(view, area, state)` directly — no regions are
+/// recorded and no additional allocations are made.
+///
+/// When `ctx` is `Some`, one [`fdemon_app::message::Message::ClickLogRow`]
+/// region is registered per visible row in the content area (Phase 4 Task 06).
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &mut LogViewState,
+    view: LogView<'_>,
+    ctx: Option<&mut MouseCtx<'_>>,
+) {
+    view.render_inner(area, buf, state, ctx);
 }
 
 #[cfg(test)]

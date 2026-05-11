@@ -3,6 +3,7 @@
 //! Contains the per-row tree view logic including viewport scrolling,
 //! node styling, and the scroll indicator.
 
+use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::widget_tree::DiagnosticsNode;
 use ratatui::{
     buffer::Buffer,
@@ -15,16 +16,34 @@ use ratatui::{
 use super::short_path;
 use super::truncate_str;
 use super::WidgetInspector;
+use crate::render::MouseCtx;
 use crate::theme::palette;
 
 impl WidgetInspector<'_> {
-    /// Render the widget tree panel with scrollable rows.
-    pub(super) fn render_tree_panel(
+    /// Render the widget tree panel, optionally recording click regions.
+    ///
+    /// When `ctx` is `Some`, two regions are registered per visible row:
+    ///
+    /// 1. **Row region** — the full width of `tree_inner` at row `y`.
+    ///    Action: `Emit(Message::DevToolsInspectorSelectRow { index: vis_index })`.
+    /// 2. **Glyph region** — a 1-cell wide rect at the leading glyph position
+    ///    (`▶` / `▼` / `●`).
+    ///    Action: `Emit(Message::DevToolsInspectorToggleNode { index: vis_index })`.
+    ///
+    /// The glyph region is pushed *after* the row region so that the registry's
+    /// last-pushed-wins-at-same-z invariant (Phase 3 unit test
+    /// `test_last_pushed_wins_at_same_z`) makes the glyph region win on the
+    /// glyph cell when both rects overlap.
+    ///
+    /// When `ctx` is `None`, this function is identical to the original
+    /// `render_tree_panel` — no regions are registered.
+    pub(super) fn render_tree_panel_inner(
         &self,
         area: Rect,
         buf: &mut Buffer,
         visible: &[(&DiagnosticsNode, usize)],
         selected: usize,
+        mut ctx: Option<&mut MouseCtx<'_>>,
     ) {
         // Block border for tree area
         let tree_block = Block::default()
@@ -95,6 +114,45 @@ impl WidgetInspector<'_> {
                         );
                     }
                 }
+            }
+
+            // ── Phase 4: register click regions ──────────────────────────────
+            //
+            // Row region pushed first, then glyph region — so last-pushed-wins
+            // at the glyph cell position.
+            if let Some(c) = ctx.as_deref_mut() {
+                use fdemon_app::message::Message;
+
+                // Whole-row click region (left-click → select).
+                let row_rect = MouseRect::new(tree_inner.x, y, tree_inner.width, 1);
+                if !row_rect.is_empty() {
+                    c.click(
+                        row_rect,
+                        MouseAction::emit(Message::DevToolsInspectorSelectRow { index: vis_index }),
+                    );
+                }
+
+                // Glyph click region (left-click on ▶/▼/● → toggle).
+                // Pushed AFTER the row region so the registry's last-pushed-wins-at-same-z
+                // invariant makes the glyph rect win on overlap.
+                //
+                // depth-to-x conversion: checked_mul + checked_add guarantee we don't
+                // silently saturate and place the glyph far off-screen. At depths above
+                // ~32 767 (u16::MAX / 2) the tree is pathological; skip glyph registration.
+                let Some(indent) = (*depth as u16).checked_mul(2) else {
+                    continue; // depth overflows u16 — skip glyph for impossibly deep node
+                };
+                let Some(glyph_x) = tree_inner.x.checked_add(indent) else {
+                    continue; // indent pushes glyph past u16 bounds — skip
+                };
+                if glyph_x >= tree_inner.right() {
+                    continue; // glyph clipped past the right edge (normal viewport case)
+                }
+                let glyph_rect = MouseRect::new(glyph_x, y, 1, 1);
+                c.click(
+                    glyph_rect,
+                    MouseAction::emit(Message::DevToolsInspectorToggleNode { index: vis_index }),
+                );
             }
         }
 

@@ -11,10 +11,12 @@ use ratatui::{
 };
 
 use fdemon_app::session_manager::SessionManager;
+use fdemon_app::{Message, MouseAction, MouseRect};
 
 use crate::theme::{icons::IconSet, palette, styles};
+use crate::widgets::MouseCtx;
 
-use super::SessionTabs;
+use super::tabs::render_session_tabs;
 
 /// App version from Cargo.toml, surfaced in the title bar
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -48,59 +50,146 @@ impl<'a> MainHeader<'a> {
 
 impl Widget for MainHeader<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Render glass container with rounded borders
-        let block = styles::glass_block(false).style(Style::default().bg(palette::CARD_BG));
+        render_main_header(area, buf, &self, None);
+    }
+}
 
-        // Get inner content area (inside borders) before rendering
-        let inner = block.inner(area);
+/// Render the main header, optionally recording clickable regions into `ctx`.
+///
+/// This is the canonical render entry point used by `render::view`.  The
+/// `Widget::render` impl delegates here with `ctx = None` so that existing tests
+/// which call `frame.render_widget(header, area)` continue to work without any
+/// mouse-region machinery.
+///
+/// # Arguments
+/// * `area` - The full area (including border) allocated to the header.
+/// * `buf` - Ratatui cell buffer to paint into.
+/// * `header` - Borrowed `MainHeader` descriptor.
+/// * `ctx` - Optional mutable reference to the per-frame mouse region context.
+///   When `None`, no regions are registered (test-safe default).
+pub fn render_main_header(
+    area: Rect,
+    buf: &mut Buffer,
+    header: &MainHeader<'_>,
+    ctx: Option<&mut MouseCtx<'_>>,
+) {
+    // Render glass container with rounded borders
+    let block = styles::glass_block(false).style(Style::default().bg(palette::CARD_BG));
 
-        // Now render the block
-        block.render(area, buf);
+    // Get inner content area (inside borders) before rendering
+    let inner = block.inner(area);
 
-        if inner.height == 0 || inner.width == 0 {
-            return;
-        }
+    // Now render the block
+    block.render(area, buf);
 
-        // Check if we have multiple sessions (need to show tabs)
-        let has_multiple_sessions = self.session_manager.map(|sm| sm.len() > 1).unwrap_or(false);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
 
-        if has_multiple_sessions {
-            // Multi-session mode: split into title row and tabs row
-            if inner.height >= 2 {
-                // Title row
-                let title_area = Rect {
-                    x: inner.x,
-                    y: inner.y,
-                    width: inner.width,
-                    height: 1,
-                };
-                self.render_title_row(title_area, buf, false);
+    // Check if we have multiple sessions (need to show tabs)
+    let has_multiple_sessions = header
+        .session_manager
+        .map(|sm| sm.len() > 1)
+        .unwrap_or(false);
 
-                // Tabs row
-                let tabs_area = Rect {
-                    x: inner.x,
-                    y: inner.y + 1,
-                    width: inner.width,
-                    height: inner.height.saturating_sub(1),
-                };
-                if let Some(session_manager) = self.session_manager {
-                    let tabs = SessionTabs::new(session_manager, self.icons);
-                    tabs.render(tabs_area, buf);
-                }
-            } else {
-                // Not enough space for both rows, just render title
-                self.render_title_row(inner, buf, false);
+    if has_multiple_sessions {
+        // Multi-session mode: split into title row and tabs row
+        if inner.height >= 2 {
+            // Title row — no shortcuts in multi-session mode (show_device = false)
+            let title_area = Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            };
+            header.render_title_row(title_area, buf, false, None);
+
+            // Tabs row
+            let tabs_area = Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: inner.height.saturating_sub(1),
+            };
+            if let Some(session_manager) = header.session_manager {
+                render_session_tabs(tabs_area, buf, session_manager, header.icons, ctx);
             }
         } else {
-            // Single session or no session: render title + shortcuts + device pill in one row
-            self.render_title_row(inner, buf, true);
+            // Not enough space for both rows, just render title
+            header.render_title_row(inner, buf, false, None);
         }
+    } else {
+        // Single session or no session: render title + shortcuts + device pill in one row
+        header.render_title_row(inner, buf, true, ctx);
+    }
+}
+
+/// Mapping of bracketed shortcut characters to their `Message` actions.
+///
+/// Order matches left-to-right rendering order: r, R, x, d, D, q.
+/// Each entry is `(rendered_label, action_message)` where `rendered_label`
+/// is the text shown after the closing bracket (used to compute span widths).
+#[allow(clippy::type_complexity)]
+const SHORTCUTS_DEF: &[(&str, fn() -> Message)] = &[
+    ("Run  ", || Message::HotReload),
+    ("Restart  ", || Message::HotRestart),
+    ("Stop  ", || Message::CloseCurrentSession),
+    ("Debug  ", || Message::EnterDevToolsMode),
+    ("DAP  ", || Message::ToggleDap),
+    ("Quit", || Message::RequestQuit),
+];
+
+/// Width in terminal cells of the non-clickable prefix of each shortcut segment:
+/// `'[' (1) + key_char (1) + ']' (1) + ' ' (1)`. The full segment is this prefix plus the
+/// trailing label text (e.g., `"Run  "`). Used in `register_shortcut_clicks` to advance the
+/// cursor between adjacent shortcuts.
+const SHORTCUT_SEGMENT_PREFIX: u16 = 4;
+
+/// Width in terminal cells of the clickable `[X` portion of each shortcut.
+/// Only the bracket and letter are clickable, not the closing bracket or label.
+const SHORTCUT_CLICK_WIDTH: u16 = 2;
+
+/// Register left-click regions for the six bracketed shortcuts rendered on the
+/// title row.  Called only when the full shortcut line fits (`total_content_width
+/// <= area.width` branch).
+///
+/// `shortcuts_x` is the x-coordinate where the first shortcut `[` was painted.
+/// `row_y` is the y-coordinate of the title row.
+fn register_shortcut_clicks(ctx: &mut MouseCtx<'_>, shortcuts_x: u16, row_y: u16, area: Rect) {
+    let mut cursor_x = shortcuts_x;
+    for (label, make_msg) in SHORTCUTS_DEF {
+        let click_x = cursor_x;
+
+        // Full segment width: `[` (1) + letter (1) + `] ` (2) + label_text
+        // where label already includes trailing spaces (e.g., "Run  " = 5 chars).
+        let segment_width: u16 = u16::try_from(SHORTCUT_SEGMENT_PREFIX as usize + label.len())
+            .expect("shortcut label fits in u16 segment width");
+        cursor_x = cursor_x.saturating_add(segment_width);
+
+        // Skip if the clickable cells fall outside the visible area.
+        if click_x.saturating_add(SHORTCUT_CLICK_WIDTH) > area.x.saturating_add(area.width) {
+            continue;
+        }
+
+        let rect = MouseRect::new(click_x, row_y, SHORTCUT_CLICK_WIDTH, 1);
+        ctx.click(rect, MouseAction::emit(make_msg()));
     }
 }
 
 impl MainHeader<'_> {
-    /// Render the title row with status dot, project name, shortcuts, and optional device pill
-    fn render_title_row(&self, area: Rect, buf: &mut Buffer, show_device: bool) {
+    /// Render the title row with status dot, project name, shortcuts, and optional device pill.
+    ///
+    /// `show_device` — when `false` (multi-session mode) the device pill and shortcut hints are
+    /// suppressed; only the left section (title, project name) is rendered.
+    ///
+    /// `ctx` — optional mouse context; when `Some`, shortcut click regions are registered.
+    fn render_title_row(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        show_device: bool,
+        ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         if area.height == 0 || area.width == 0 {
             return;
         }
@@ -220,6 +309,12 @@ impl MainHeader<'_> {
             let shortcuts_x = area.x + left_width + 2;
             if shortcuts_x + shortcuts_width <= area.x + area.width {
                 buf.set_line(shortcuts_x, area.y, &shortcuts_line, shortcuts_width);
+
+                // Register clickable regions for each bracketed shortcut, but only
+                // when the shortcut line was actually rendered into the buffer.
+                if let Some(ctx) = ctx {
+                    register_shortcut_clicks(ctx, shortcuts_x, area.y, area);
+                }
             }
 
             // Right-align device pill
@@ -230,7 +325,7 @@ impl MainHeader<'_> {
                 }
             }
         } else if left_width + device_width + 2 <= area.width {
-            // Shortcuts don't fit, but left + device does
+            // Shortcuts don't fit, but left + device does — no region registration.
             buf.set_line(area.x, area.y, &left_line, area.width);
 
             if let Some(device_line) = device_content {
@@ -240,7 +335,7 @@ impl MainHeader<'_> {
                 }
             }
         } else {
-            // Only left section fits
+            // Only left section fits — no region registration.
             buf.set_line(area.x, area.y, &left_line, area.width);
         }
     }
@@ -512,5 +607,123 @@ mod tests {
         assert!(term.buffer_contains("Flutter Demon"), "Title should show");
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         assert!(term.buffer_contains(&version), "Version should show");
+    }
+
+    // ── Mouse region tests (Task 06) ─────────────────────────────────────
+
+    #[test]
+    fn header_records_six_bracketed_shortcut_regions_at_120x24() {
+        use fdemon_app::{AppState, MouseAction};
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+
+        terminal
+            .draw(|f| crate::render::view(f, &mut state))
+            .unwrap();
+
+        let regions = state.mouse_regions.take();
+        let actions: Vec<_> = regions
+            .iter()
+            .filter_map(|e| e.on_left.as_ref().map(|a| (e.rect, a.clone())))
+            .collect();
+
+        // Expect at least the 6 bracketed-shortcut regions on the header row.
+        assert!(
+            actions.len() >= 6,
+            "expected >= 6 shortcut regions, got {}",
+            actions.len()
+        );
+
+        // Order is r, R, x, d, D, q — left-to-right.
+        let messages: Vec<_> = actions
+            .iter()
+            .filter_map(|(_, a)| match a {
+                MouseAction::Emit(m) => Some(format!("{:?}", m)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("HotReload")),
+            "no HotReload region"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("HotRestart")),
+            "no HotRestart region"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("CloseCurrentSession")),
+            "no Close region"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("EnterDevToolsMode")),
+            "no DevTools region"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("ToggleDap")),
+            "no DAP region"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("RequestQuit")),
+            "no Quit region"
+        );
+    }
+
+    #[test]
+    fn header_skips_region_recording_when_shortcuts_clipped() {
+        // At 40 cols, the existing header logic falls into the "Only left section
+        // fits" branch and does not render shortcuts. No regions should be
+        // registered for shortcuts.
+        use fdemon_app::AppState;
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let backend = TestBackend::new(40, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+
+        terminal
+            .draw(|f| crate::render::view(f, &mut state))
+            .unwrap();
+
+        let regions = state.mouse_regions.take();
+        // No bracketed-shortcut regions at this width.
+        let shortcut_count = regions
+            .iter()
+            .filter(|e| e.rect.width == 2 && e.rect.height == 1)
+            .count();
+        assert_eq!(
+            shortcut_count, 0,
+            "shortcuts not visible at 40 cols => no clickable regions"
+        );
+    }
+
+    #[test]
+    fn header_shortcut_rect_is_two_cells_wide() {
+        use fdemon_app::{AppState, Message, MouseAction};
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+
+        terminal
+            .draw(|f| crate::render::view(f, &mut state))
+            .unwrap();
+
+        let regions = state.mouse_regions.take();
+        // Find the HotReload region; it should be exactly 2 cells wide.
+        let entry = regions
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.on_left,
+                    Some(MouseAction::Emit(m)) if matches!(**m, Message::HotReload)
+                )
+            })
+            .expect("HotReload region must be registered");
+        assert_eq!(entry.rect.width, 2);
+        assert_eq!(entry.rect.height, 1);
     }
 }

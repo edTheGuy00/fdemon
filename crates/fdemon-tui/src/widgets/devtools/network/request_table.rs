@@ -4,11 +4,15 @@
 //! content type, duration, and response size columns. Supports selection
 //! highlighting, pending request indicators, and filter highlighting.
 
+use fdemon_app::message::Message;
+use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::network::{format_duration_ms, HttpProfileEntry};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
+
+use crate::widgets::MouseCtx;
 
 // ── Column widths (characters) ────────────────────────────────────────────────
 
@@ -70,6 +74,20 @@ impl<'a> RequestTable<'a> {
 
 impl Widget for RequestTable<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_impl(area, buf, None);
+    }
+}
+
+impl RequestTable<'_> {
+    /// Render the table, optionally recording one click region per visible row.
+    ///
+    /// When `ctx` is `Some`, emits `Message::NetworkSelectRequest { index: Some(entry_idx) }`
+    /// for each visible row. Passing `None` is equivalent to `Widget::render`.
+    pub fn render_with_regions(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
+        self.render_impl(area, buf, ctx);
+    }
+
+    fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
         // Need at least 2 rows: header bar + column headers.
         if area.height < 2 {
             return;
@@ -92,7 +110,7 @@ impl Widget for RequestTable<'_> {
             height: area.height.saturating_sub(2),
             ..area
         };
-        self.render_rows(data_area, buf);
+        self.render_rows(data_area, buf, ctx);
     }
 }
 
@@ -171,8 +189,11 @@ impl RequestTable<'_> {
 
     // ── Data rows ─────────────────────────────────────────────────────────────
 
-    /// Render the visible window of request rows.
-    fn render_rows(&self, area: Rect, buf: &mut Buffer) {
+    /// Render the visible window of request rows, optionally recording click regions.
+    ///
+    /// When `ctx` is `Some`, registers one `MouseAction::Emit(NetworkSelectRequest)`
+    /// per visible row. The region spans the full row width (1 row tall).
+    fn render_rows(&self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
         if area.height == 0 {
             return;
         }
@@ -270,6 +291,19 @@ impl RequestTable<'_> {
                 truncate(uri_text, uri_width),
                 Style::default().fg(Color::White).patch(row_style),
             );
+
+            // Register click region: one region per row spanning full width.
+            if let Some(c) = ctx.as_deref_mut() {
+                let rect = MouseRect::new(area.x, y, area.width, 1);
+                if rect.width > 0 {
+                    c.click(
+                        rect,
+                        MouseAction::emit(Message::NetworkSelectRequest {
+                            index: Some(entry_idx),
+                        }),
+                    );
+                }
+            }
         }
     }
 }

@@ -19,4 +19,5 @@ unicode-width = "0.2"
 [dev-dependencies]
 tempfile.workspace = true
 insta.workspace = true
+serial_test.workspace = true
 fdemon-daemon = { workspace = true, features = ["test-helpers"] }

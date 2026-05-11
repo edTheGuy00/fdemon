@@ -117,6 +117,67 @@ pub fn handle_mode_prev(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
+/// Sets the Flutter mode to a specific value.
+///
+/// Unlike `handle_mode_next` / `handle_mode_prev`, this function accepts an
+/// explicit target mode. It is invoked from mouse click regions on the three
+/// mode buttons so the user can jump directly to any mode.
+///
+/// - If the Mode field is not editable, returns `UpdateResult::none()`.
+/// - Sets `focused_pane` and `focused_field` so a click also focuses the row,
+///   matching the row-level `FocusField` region's effect.
+/// - Does **not** short-circuit when `mode == current mode`; clicking the
+///   already-selected button is valid (it focuses the field).
+/// - Triggers auto-save for editable FDemon configurations.
+pub fn handle_set_mode(state: &mut AppState, mode: crate::config::FlutterMode) -> UpdateResult {
+    use crate::new_session_dialog::{DialogPane, LaunchContextField};
+
+    // Gate: only proceed when the Mode field is editable
+    if !state
+        .new_session_dialog_state
+        .launch_context
+        .is_mode_editable()
+    {
+        return UpdateResult::none();
+    }
+
+    // Focus the LaunchContext pane and the Mode field so clicking a button
+    // also moves keyboard focus there.
+    state.new_session_dialog_state.focused_pane = DialogPane::LaunchContext;
+    state.new_session_dialog_state.launch_context.focused_field = LaunchContextField::Mode;
+
+    // Apply the mode
+    state.new_session_dialog_state.launch_context.mode = mode;
+
+    // Trigger auto-save if the selected config is an FDemon config
+    if let Some(config_idx) = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
+    {
+        if let Some(config) = state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .get(config_idx)
+        {
+            use crate::config::ConfigSource;
+            if config.source == ConfigSource::FDemon {
+                return UpdateResult::action(UpdateAction::AutoSaveConfig {
+                    configs: state
+                        .new_session_dialog_state
+                        .launch_context
+                        .configs
+                        .clone(),
+                });
+            }
+        }
+    }
+
+    UpdateResult::none()
+}
+
 /// Handles configuration selection from the fuzzy modal.
 ///
 /// Applies the selected configuration and closes the modal.
@@ -2040,6 +2101,167 @@ mod tests {
         assert!(
             !prefs_path.exists(),
             "settings.local.toml must NOT be written when session creation fails"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // handle_set_mode tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_handle_set_mode_sets_mode_when_editable() {
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+        // Default mode is Debug; set to Profile
+        let result = handle_set_mode(&mut state, crate::config::FlutterMode::Profile);
+
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.mode,
+            crate::config::FlutterMode::Profile,
+        );
+        // No config selected → no auto-save action
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_handle_set_mode_is_noop_when_not_editable() {
+        use crate::config::priority::SourcedConfig;
+        use crate::config::types::{ConfigSource, LaunchConfig};
+
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+
+        // Add a VSCode config — mode field is read-only for VSCode configs
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "VSCode Config".to_string(),
+                    mode: crate::config::FlutterMode::Debug,
+                    ..Default::default()
+                },
+                source: ConfigSource::VSCode,
+                display_name: "VSCode Config".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let original_mode = state.new_session_dialog_state.launch_context.mode;
+        let result = handle_set_mode(&mut state, crate::config::FlutterMode::Release);
+
+        // Mode must remain unchanged
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.mode,
+            original_mode,
+        );
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_handle_set_mode_returns_auto_save_for_fdemon_config() {
+        use crate::config::priority::SourcedConfig;
+        use crate::config::types::{ConfigSource, LaunchConfig};
+
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+
+        // Add an FDemon config
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "MyConfig".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+                display_name: "MyConfig".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let result = handle_set_mode(&mut state, crate::config::FlutterMode::Release);
+
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.mode,
+            crate::config::FlutterMode::Release,
+        );
+        assert!(
+            matches!(result.action, Some(UpdateAction::AutoSaveConfig { .. })),
+            "Expected AutoSaveConfig action for FDemon config"
+        );
+    }
+
+    #[test]
+    fn test_handle_set_mode_returns_none_for_vscode_config() {
+        // VSCode config is not editable for mode — early return before auto-save check
+        // The is_mode_editable() gate fires first, so no action is returned.
+        use crate::config::priority::SourcedConfig;
+        use crate::config::types::{ConfigSource, LaunchConfig};
+
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "VSCode".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::VSCode,
+                display_name: "VSCode".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let result = handle_set_mode(&mut state, crate::config::FlutterMode::Profile);
+
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_handle_set_mode_focuses_mode_field() {
+        use crate::new_session_dialog::{DialogPane, LaunchContextField};
+
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+
+        handle_set_mode(&mut state, crate::config::FlutterMode::Release);
+
+        assert_eq!(
+            state.new_session_dialog_state.focused_pane,
+            DialogPane::LaunchContext,
+            "focused_pane should be LaunchContext after handle_set_mode"
+        );
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.focused_field,
+            LaunchContextField::Mode,
+            "focused_field should be Mode after handle_set_mode"
         );
     }
 }

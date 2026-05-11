@@ -29,6 +29,9 @@ pub struct TargetSelector<'a> {
     icons: IconSet,
     is_focused: bool,
     compact: bool,
+    /// When `true` and `compact` is also `true`, render a one-line hint
+    /// informing the user that mouse regions are not registered at this size.
+    enable_mouse: bool,
 }
 
 impl<'a> TargetSelector<'a> {
@@ -43,6 +46,7 @@ impl<'a> TargetSelector<'a> {
             icons: IconSet::default(),
             is_focused,
             compact: false,
+            enable_mouse: false,
         }
     }
 
@@ -58,6 +62,13 @@ impl<'a> TargetSelector<'a> {
     /// Enable compact mode for narrow terminals
     pub fn compact(mut self, compact: bool) -> Self {
         self.compact = compact;
+        self
+    }
+
+    /// Propagate the `enable_mouse` setting so that `render_compact` can show
+    /// a hint when mouse regions are not registered at this layout size.
+    pub fn enable_mouse(mut self, enable: bool) -> Self {
+        self.enable_mouse = enable;
         self
     }
 }
@@ -162,12 +173,22 @@ impl TargetSelector<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Compact mode: smaller tab bar, tighter spacing, no footer
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // Compact tab bar (single line)
-            Constraint::Min(1),    // Device list (reduced from 3 to account for borders)
-        ])
-        .split(inner);
+        // Compact mode: smaller tab bar, tighter spacing, no footer.
+        // When mouse is enabled, reserve one extra row for the "resize wider" hint.
+        let chunks = if self.enable_mouse {
+            Layout::vertical([
+                Constraint::Length(1), // Compact tab bar (single line)
+                Constraint::Min(1),    // Device list
+                Constraint::Length(1), // Mouse hint
+            ])
+            .split(inner)
+        } else {
+            Layout::vertical([
+                Constraint::Length(1), // Compact tab bar (single line)
+                Constraint::Min(1),    // Device list
+            ])
+            .split(inner)
+        };
 
         // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
         let visible_height = chunks[1].height as usize;
@@ -214,6 +235,17 @@ impl TargetSelector<'_> {
                     list.render(chunks[1], buf);
                 }
             }
+        }
+
+        // Mouse hint: inform the user that device rows are not clickable at this
+        // compact size. Rendered only when mouse support is enabled; keyboard
+        // navigation is unaffected.  No MouseCtx region is registered here —
+        // compact-mode click regions are explicitly out of scope.
+        if self.enable_mouse {
+            let hint = Paragraph::new("Resize wider for mouse")
+                .style(Style::default().fg(palette::TEXT_MUTED))
+                .alignment(Alignment::Center);
+            hint.render(chunks[2], buf);
         }
     }
 
@@ -1296,6 +1328,124 @@ mod tests {
         assert!(
             rendered.contains(glyph),
             "compact mode should show refresh glyph when active tab is refreshing, got: {rendered}"
+        );
+    }
+
+    // ── Mouse-hint tests (Phase 6 Task 10) ──────────────────────────────────
+
+    /// Helper: collect all cell symbols in a Buffer into a single String.
+    fn buf_to_string(buf: &ratatui::buffer::Buffer) -> String {
+        buf.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn test_target_selector_compact_renders_mouse_hint_when_enabled() {
+        let state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let widget = TargetSelector::new(&state, &tool_availability, true)
+                    .compact(true)
+                    .enable_mouse(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let content = buf_to_string(terminal.backend().buffer());
+        assert!(
+            content.contains("Resize"),
+            "compact + enable_mouse=true should render mouse hint, got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn test_target_selector_compact_no_hint_when_mouse_disabled() {
+        let state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let widget = TargetSelector::new(&state, &tool_availability, true)
+                    .compact(true)
+                    .enable_mouse(false);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let content = buf_to_string(terminal.backend().buffer());
+        assert!(
+            !content.contains("Resize"),
+            "compact + enable_mouse=false should NOT render mouse hint, got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn test_target_selector_wide_no_hint_even_when_mouse_enabled() {
+        let state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                // compact(false) is the default; enable_mouse(true) is set but should not
+                // trigger the hint because the wide (non-compact) render path never calls
+                // the hint code.
+                let widget = TargetSelector::new(&state, &tool_availability, true)
+                    .compact(false)
+                    .enable_mouse(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let content = buf_to_string(terminal.backend().buffer());
+        assert!(
+            !content.contains("Resize"),
+            "wide (compact=false) mode should NOT render mouse hint even when enable_mouse=true, got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn test_target_selector_compact_mouse_hint_visible_height_with_hint() {
+        // When enable_mouse=true the hint row is allocated from the inner area.
+        // At terminal height 20, inner = 20 - 2 (border) = 18.
+        // Layout: Length(1) tab + Min(1) list + Length(1) hint → list = 18 - 2 = 16.
+        let state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
+        let tool_availability = ToolAvailability::default();
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let widget = TargetSelector::new(&state, &tool_availability, true)
+                    .compact(true)
+                    .enable_mouse(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+        assert_eq!(
+            state.last_known_visible_height.get(),
+            16,
+            "With hint row, list height at terminal height 20 should be 16"
         );
     }
 

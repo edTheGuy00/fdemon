@@ -578,6 +578,84 @@ fn test_close_session_shows_device_selector_when_multiple() {
 }
 
 // ─────────────────────────────────────────────────────────
+// CloseSessionAt tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_close_session_at_specific_index_removes_only_that_session() {
+    let mut state = AppState::new();
+    let manager = &mut state.session_manager;
+    let id1 = manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let id2 = manager.create_session(&test_device("d2", "Pixel")).unwrap();
+    let id3 = manager.create_session(&test_device("d3", "Web")).unwrap();
+    manager.select_by_id(id2); // select the middle one
+
+    update(&mut state, Message::CloseSessionAt(0)); // close iPhone
+
+    assert_eq!(state.session_manager.len(), 2);
+    assert!(
+        state.session_manager.get(id1).is_none(),
+        "session 0 was closed"
+    );
+    assert!(state.session_manager.get(id2).is_some(), "Pixel preserved");
+    assert!(state.session_manager.get(id3).is_some(), "Web preserved");
+    assert_eq!(
+        state.session_manager.selected_id(),
+        Some(id2),
+        "selection follows the live session, not the index"
+    );
+}
+
+#[test]
+fn test_close_session_at_out_of_range_is_noop() {
+    let mut state = AppState::new();
+    state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let count_before = state.session_manager.len();
+
+    update(&mut state, Message::CloseSessionAt(99));
+
+    assert_eq!(state.session_manager.len(), count_before);
+}
+
+#[test]
+fn test_close_session_at_last_session_triggers_quit() {
+    let mut state = AppState::new();
+    state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    state.settings.behavior.confirm_quit = false; // bypass dialog
+
+    update(&mut state, Message::CloseSessionAt(0));
+
+    assert!(state.should_quit(), "closing the only session should quit");
+}
+
+#[test]
+fn test_close_session_at_zero_when_selected_is_zero_picks_next() {
+    // Sanity check that closing the selected session at index 0 leaves
+    // selection on a sensible session (delegates to existing
+    // SessionManager::remove_session post-removal selection logic).
+    let mut state = AppState::new();
+    let manager = &mut state.session_manager;
+    let _id1 = manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let id2 = manager.create_session(&test_device("d2", "Pixel")).unwrap();
+    manager.select_by_index(0); // select id1
+
+    update(&mut state, Message::CloseSessionAt(0));
+
+    assert_eq!(state.session_manager.len(), 1);
+    assert_eq!(state.session_manager.selected_id(), Some(id2));
+}
+
+// ─────────────────────────────────────────────────────────
 // Clear logs tests
 // ─────────────────────────────────────────────────────────
 
@@ -10144,4 +10222,1691 @@ fn test_background_device_discovery_failure_clears_refreshing() {
         !state.new_session_dialog_state.target_selector.refreshing,
         "background failure must clear the refreshing flag"
     );
+}
+
+#[test]
+fn test_update_mouse_message_is_no_op() {
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+
+    let mut state = AppState::new();
+    let original_phase = state.phase;
+    let mouse = MouseInput::Press {
+        x: 0,
+        y: 0,
+        button: MouseButton::Left,
+        modifiers: KeyModSet::NONE,
+    };
+    let result = update(&mut state, Message::Mouse(mouse));
+    assert!(result.message.is_none());
+    assert!(result.action.is_none());
+    assert_eq!(state.phase, original_phase);
+}
+
+#[test]
+fn test_mouse_message_returns_none_result_and_does_not_mutate_state() {
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+
+    let mut state = AppState::new();
+    let before_mode = state.ui_mode;
+    let before_phase = state.phase;
+
+    let input = MouseInput::Press {
+        x: 0,
+        y: 0,
+        button: MouseButton::Left,
+        modifiers: KeyModSet::NONE,
+    };
+    let result = update(&mut state, Message::Mouse(input));
+
+    assert!(
+        result.message.is_none(),
+        "update should not produce a follow-up message"
+    );
+    assert!(
+        result.action.is_none(),
+        "update should not request a side effect"
+    );
+    assert_eq!(state.ui_mode, before_mode, "ui_mode must not change");
+    assert_eq!(state.phase, before_phase, "phase must not change");
+}
+
+// ─ Mouse scroll routing through update() ─────────────────────────────────────
+//
+// Integration tests that drive `update(state, Message::Mouse(Scroll {...}))` for
+// each `UiMode` (and key sub-states) and assert the resulting
+// `UpdateResult::message`. These catch dispatcher misrouting that per-submodule
+// unit tests can miss — e.g. a typo in `mouse/mod.rs::handle_scroll` that sends
+// `Settings` input to `new_session::handle_scroll`.
+
+mod mouse_scroll {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
+    use crate::message::{InspectorNav, NetworkNav};
+    use crate::state::DevToolsPanel;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn scroll_input(direction: ScrollDir, modifiers: KeyModSet) -> MouseInput {
+        MouseInput::Scroll {
+            x: 0,
+            y: 0,
+            direction,
+            modifiers,
+        }
+    }
+
+    /// Assert that `update()` on a `Message::Mouse(Scroll{..})` produces a follow-up
+    /// message whose **discriminant** matches `expected`.
+    ///
+    /// IMPORTANT: This helper compares `std::mem::discriminant` only — it does NOT
+    /// check inner variant data. For `Message` variants that carry a payload (e.g.
+    /// `NetworkNavigate(NetworkNav::Up)` vs `NetworkNavigate(NetworkNav::PageDown)`)
+    /// or `DevToolsInspectorNavigate(InspectorNav::Up)` vs `(InspectorNav::Collapse)`,
+    /// use `matches!(result.message, Some(Message::X(Y)))` directly in the test
+    /// body. This helper is appropriate only for unit-style variants like
+    /// `ScrollUp`, `ScrollDown`, `PageUp`, `PageDown`, `SettingsPrevItem`, etc.
+    fn assert_scroll_routes_to(
+        state: &mut AppState,
+        dir: ScrollDir,
+        mods: KeyModSet,
+        expected: Message,
+    ) {
+        let result = update(state, Message::Mouse(scroll_input(dir, mods)));
+        match result.message {
+            Some(actual) => assert!(
+                std::mem::discriminant(&actual) == std::mem::discriminant(&expected),
+                "expected {:?}, got {:?}",
+                expected,
+                actual
+            ),
+            None => panic!("expected Some({:?}), got None", expected),
+        }
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    fn assert_scroll_routes_to_nothing(state: &mut AppState, dir: ScrollDir, mods: KeyModSet) {
+        let result = update(state, Message::Mouse(scroll_input(dir, mods)));
+        assert!(
+            result.message.is_none(),
+            "expected None, got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none());
+    }
+
+    // ── Acceptance-criteria test cases ────────────────────────────────────────
+
+    // 1. UiMode::Normal (no tag filter), Up no mods → Message::ScrollUp
+    #[test]
+    fn mouse_scroll_normal_plain_up_produces_scroll_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::ScrollUp,
+        );
+    }
+
+    // 2. UiMode::Normal (no tag filter), Down Shift-only → Message::PageDown
+    #[test]
+    fn mouse_scroll_normal_shift_down_produces_page_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        let shift = KeyModSet::new(true, false, false);
+        assert_scroll_routes_to(&mut state, ScrollDir::Down, shift, Message::PageDown);
+    }
+
+    // 3. UiMode::Normal (tag_filter_visible == true), Up no mods → Message::TagFilterMoveUp
+    #[test]
+    fn mouse_scroll_normal_tag_filter_visible_up_produces_tag_filter_move_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        state.tag_filter_visible = true;
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::TagFilterMoveUp,
+        );
+    }
+
+    // 4. UiMode::DevTools, Inspector panel, Down no mods → Message::DevToolsInspectorNavigate(InspectorNav::Down)
+    #[test]
+    fn mouse_scroll_devtools_inspector_down_produces_inspector_navigate_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Down, KeyModSet::NONE)),
+        );
+        assert!(
+            matches!(
+                result.message,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Down))
+            ),
+            "expected DevToolsInspectorNavigate(Down), got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    // 5. UiMode::DevTools, Performance panel, Up Shift-only → None
+    #[test]
+    fn mouse_scroll_devtools_performance_shift_up_produces_none() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        let shift = KeyModSet::new(true, false, false);
+        assert_scroll_routes_to_nothing(&mut state, ScrollDir::Up, shift);
+    }
+
+    // 6. UiMode::DevTools, Network panel (filter inactive), Up no mods → Message::NetworkNavigate(NetworkNav::Up)
+    #[test]
+    fn mouse_scroll_devtools_network_plain_up_produces_network_navigate_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        // No session = filter_input_active defaults to false (no selected session).
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Up, KeyModSet::NONE)),
+        );
+        assert!(
+            matches!(
+                result.message,
+                Some(Message::NetworkNavigate(NetworkNav::Up))
+            ),
+            "expected NetworkNavigate(Up), got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    // 7. UiMode::DevTools, Network panel (filter inactive), Down Shift-only → Message::NetworkNavigate(NetworkNav::PageDown)
+    #[test]
+    fn mouse_scroll_devtools_network_shift_down_produces_network_navigate_page_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        let shift = KeyModSet::new(true, false, false);
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Down, shift)),
+        );
+        assert!(
+            matches!(
+                result.message,
+                Some(Message::NetworkNavigate(NetworkNav::PageDown))
+            ),
+            "expected NetworkNavigate(PageDown), got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    // 8. UiMode::Settings (no modal, not editing), Up no mods → Message::SettingsPrevItem
+    #[test]
+    fn mouse_scroll_settings_plain_up_produces_settings_prev_item() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        // No modal, not editing — main list navigation.
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::SettingsPrevItem,
+        );
+    }
+
+    // 9. UiMode::FlutterVersion, Down no mods → Message::FlutterVersionDown
+    #[test]
+    fn mouse_scroll_flutter_version_plain_down_produces_flutter_version_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::FlutterVersion;
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::FlutterVersionDown,
+        );
+    }
+
+    // 10. UiMode::LinkHighlight, Up Shift-only → Message::PageUp
+    #[test]
+    fn mouse_scroll_link_highlight_shift_up_produces_page_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::LinkHighlight;
+        let shift = KeyModSet::new(true, false, false);
+        assert_scroll_routes_to(&mut state, ScrollDir::Up, shift, Message::PageUp);
+    }
+
+    // 11. UiMode::Startup, TargetSelector pane, Down no mods → Message::NewSessionDialogDeviceDown
+    #[test]
+    fn mouse_scroll_startup_target_selector_down_produces_device_down() {
+        let mut state = AppState::new();
+        // Explicitly set Startup mode. AppState::new() defaults to Normal.
+        state.ui_mode = UiMode::Startup;
+        // Default focused_pane is TargetSelector.
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::NewSessionDialogDeviceDown,
+        );
+    }
+
+    // 12. UiMode::SearchInput, any wheel input → no message (explicit no-op)
+    #[test]
+    fn mouse_scroll_search_input_any_direction_produces_none() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::SearchInput;
+        for dir in [
+            ScrollDir::Up,
+            ScrollDir::Down,
+            ScrollDir::Left,
+            ScrollDir::Right,
+        ] {
+            for mods in [KeyModSet::NONE, KeyModSet::new(true, false, false)] {
+                assert_scroll_routes_to_nothing(&mut state, dir, mods);
+            }
+        }
+    }
+
+    // ── Additional: modal-precedence smoke test through update() ─────────────
+
+    // Settings with dart-defines modal open → DartDefinesUp/Down, not SettingsPrevItem/NextItem
+    #[test]
+    fn mouse_scroll_settings_dart_defines_modal_open_routes_to_dart_defines_nav() {
+        use crate::new_session_dialog::DartDefine;
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.dart_defines_modal =
+            Some(crate::new_session_dialog::DartDefinesModalState::new(vec![
+                DartDefine::new("K", "V"),
+            ]));
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::SettingsDartDefinesUp,
+        );
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::SettingsDartDefinesDown,
+        );
+    }
+
+    // NewSessionDialog with fuzzy modal open → FuzzyUp/Down, not DeviceUp/Down
+    #[test]
+    fn mouse_scroll_new_session_dialog_fuzzy_modal_open_routes_to_fuzzy_nav() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.new_session_dialog_state.fuzzy_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::Config, vec![]));
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::NewSessionDialogFuzzyUp,
+        );
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::NewSessionDialogFuzzyDown,
+        );
+    }
+
+    // ── Busy-session invariant ────────────────────────────────────────────────
+
+    /// Verifies the documented invariant from `keys.rs:263` and PLAN.md:
+    /// scroll is never blocked by reload/restart state. If a future change adds
+    /// an `is_busy` gate to the scroll path (or to `Message::ScrollUp` handling),
+    /// this test will fail and force re-verification of the safety claim.
+    #[test]
+    fn scroll_during_reload_does_not_block() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Create a session and put it into the busy (Reloading) state.
+        // This exercises the path where `session_manager.any_session_busy()`
+        // returns true — the same condition that blocks HotReload/HotRestart
+        // (keys.rs:129+167) but must NOT block scroll.
+        let device = test_device("busy-device", "Busy Device");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .phase = fdemon_core::AppPhase::Reloading;
+
+        // Sanity-check: the session is indeed busy.
+        assert!(state.session_manager.any_session_busy());
+
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Up, KeyModSet::NONE)),
+        );
+
+        assert!(
+            matches!(result.message, Some(Message::ScrollUp)),
+            "scroll must fire even with a busy session — got {:?}",
+            result.message
+        );
+        assert!(
+            result.action.is_none(),
+            "scroll must not produce an action even when busy"
+        );
+    }
+
+    // ── Press / Release / Drag remain no-ops through update() ────────────────
+
+    // Phase 3+ variants: Press, Release, Drag produce no message in any mode
+    // (integration-path agreement with the per-module tests in mouse/mod.rs).
+    #[test]
+    fn mouse_press_release_drag_no_op_through_update_in_all_modes() {
+        fn make_press() -> MouseInput {
+            MouseInput::Press {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }
+        }
+        fn make_release() -> MouseInput {
+            MouseInput::Release {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }
+        }
+        fn make_drag() -> MouseInput {
+            MouseInput::Drag {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }
+        }
+
+        for mode in [
+            UiMode::Startup,
+            UiMode::Normal,
+            UiMode::NewSessionDialog,
+            UiMode::EmulatorSelector,
+            UiMode::ConfirmDialog,
+            UiMode::Loading,
+            UiMode::SearchInput,
+            UiMode::LinkHighlight,
+            UiMode::Settings,
+            UiMode::FlutterVersion,
+            UiMode::DevTools,
+        ] {
+            let mut state = AppState::new();
+            state.ui_mode = mode;
+            for input in [make_press(), make_release(), make_drag()] {
+                let result = update(&mut state, Message::Mouse(input));
+                assert!(
+                    result.message.is_none(),
+                    "expected no-op for {:?} + {:?}",
+                    mode,
+                    input
+                );
+                assert!(
+                    result.action.is_none(),
+                    "expected no action for {:?} + {:?}",
+                    mode,
+                    input
+                );
+            }
+        }
+    }
+}
+
+// ── Phase 3 end-to-end click tests ───────────────────────────────────────────
+//
+// These tests drive `Message::Mouse(Press { ... })` through the full TEA loop
+// to confirm that header/tab clicks produce the expected effects: HotReload,
+// session selection, session close, and dialog open.
+//
+// The registry is populated manually (mirroring what `render::view` produces)
+// because `fdemon-app` does not depend on `fdemon-tui`.
+//
+// TODO(phase-5): tag-filter overlay precedence — when Phase 5 adds a modal
+// layer, these tests may need to verify that modal z_index wins over header
+// regions when the overlay is open.
+mod mouse_phase3_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+    use crate::mouse_regions::{MouseAction, MouseRect};
+
+    /// Mirror what `widgets/header.rs` registers: six bracketed shortcuts at
+    /// known coordinates.  The exact positions are arbitrary for handler-level
+    /// tests; what matters is that the registry contains the expected actions
+    /// at the coords the test clicks on.
+    fn populate_header_shortcuts(state: &mut AppState) {
+        let mut regions = state.mouse_regions.take();
+        let mut b = regions.builder();
+        b.click(
+            MouseRect::new(10, 0, 2, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        b.click(
+            MouseRect::new(15, 0, 2, 1),
+            MouseAction::emit(Message::HotRestart),
+        );
+        b.click(
+            MouseRect::new(20, 0, 2, 1),
+            MouseAction::emit(Message::CloseCurrentSession),
+        );
+        b.click(
+            MouseRect::new(25, 0, 2, 1),
+            MouseAction::emit(Message::EnterDevToolsMode),
+        );
+        b.click(
+            MouseRect::new(30, 0, 2, 1),
+            MouseAction::emit(Message::ToggleDap),
+        );
+        b.click(
+            MouseRect::new(35, 0, 2, 1),
+            MouseAction::emit(Message::RequestQuit),
+        );
+        state.mouse_regions.set(regions);
+    }
+
+    fn make_left_press(x: u16, y: u16) -> Message {
+        Message::Mouse(MouseInput::Press {
+            x,
+            y,
+            button: MouseButton::Left,
+            modifiers: KeyModSet::NONE,
+        })
+    }
+
+    fn make_middle_press(x: u16, y: u16) -> Message {
+        Message::Mouse(MouseInput::Press {
+            x,
+            y,
+            button: MouseButton::Middle,
+            modifiers: KeyModSet::NONE,
+        })
+    }
+
+    /// Click on `[q]` → `RequestQuit` → quits when no running sessions.
+    ///
+    /// The mouse handler resolves the registry hit to `Message::RequestQuit` and
+    /// returns it as a follow-up via `UpdateResult::message`.  The engine would
+    /// loop the follow-up back into `update()`; the test simulates that one step.
+    #[test]
+    fn click_on_q_emits_request_quit_and_quits_when_no_running_sessions() {
+        let mut state = AppState::new();
+        // Disable confirm dialog so RequestQuit quits immediately.
+        state.settings.behavior.confirm_quit = false;
+        populate_header_shortcuts(&mut state);
+
+        let result = update(&mut state, make_left_press(35, 0));
+
+        // The mouse handler returned RequestQuit; update() returns it as a
+        // follow-up message for the engine to loop back.  Simulate that here.
+        if let Some(follow_up) = result.message {
+            update(&mut state, follow_up);
+        }
+
+        assert!(state.should_quit(), "click on [q] should quit");
+    }
+
+    /// Click on `[r]` while any session is busy → no-op (busy gate).
+    ///
+    /// The busy gate in `handler/mouse/normal.rs::handle_press` mirrors the
+    /// keyboard handler's busy guard and returns `None` for `HotReload` when
+    /// `any_session_busy()` is true.
+    #[test]
+    fn click_on_r_when_busy_is_no_op() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .mark_started("app".into());
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .start_reload();
+        assert!(state.session_manager.any_session_busy(), "precondition");
+        populate_header_shortcuts(&mut state);
+
+        let result = update(&mut state, make_left_press(10, 0));
+
+        // Busy gate blocks HotReload; update() returns UpdateResult::none().
+        assert!(result.message.is_none(), "busy gate blocks reload click");
+        assert!(result.action.is_none());
+    }
+
+    /// Click outside every registered region → no-op.
+    #[test]
+    fn click_outside_any_region_is_no_op() {
+        let mut state = AppState::new();
+        populate_header_shortcuts(&mut state);
+
+        let result = update(&mut state, make_left_press(200, 200));
+
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+    }
+
+    /// Middle-click on a tab → `CloseSessionAt(idx)` → that session is removed.
+    ///
+    /// Three sessions are created and the registry is manually populated with
+    /// three tab entries.  Middle-clicking tab 0 (iPhone) should remove it while
+    /// preserving Pixel (id2) and Web (id3).
+    #[test]
+    fn middle_click_on_tab_closes_that_session() {
+        let mut state = AppState::new();
+        let id1 = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let id2 = state
+            .session_manager
+            .create_session(&test_device("d2", "Pixel"))
+            .unwrap();
+        let id3 = state
+            .session_manager
+            .create_session(&test_device("d3", "Web"))
+            .unwrap();
+        state.session_manager.select_by_id(id2);
+
+        // Manually populate the tab registry: three tabs at known coordinates.
+        let mut regions = state.mouse_regions.take();
+        let mut b = regions.builder();
+        b.click_left_middle(
+            MouseRect::new(0, 0, 14, 1),
+            MouseAction::emit(Message::SelectSessionByIndex(0)),
+            MouseAction::emit(Message::CloseSessionAt(0)),
+        );
+        b.click_left_middle(
+            MouseRect::new(17, 0, 14, 1),
+            MouseAction::emit(Message::SelectSessionByIndex(1)),
+            MouseAction::emit(Message::CloseSessionAt(1)),
+        );
+        b.click_left_middle(
+            MouseRect::new(34, 0, 14, 1),
+            MouseAction::emit(Message::SelectSessionByIndex(2)),
+            MouseAction::emit(Message::CloseSessionAt(2)),
+        );
+        state.mouse_regions.set(regions);
+
+        // Middle-click tab 0 (iPhone). Expect Pixel/Web to remain.
+        let result = update(&mut state, make_middle_press(0, 0));
+        if let Some(follow_up) = result.message {
+            update(&mut state, follow_up);
+        }
+
+        assert_eq!(state.session_manager.len(), 2);
+        assert!(state.session_manager.get(id1).is_none(), "iPhone closed");
+        assert!(state.session_manager.get(id2).is_some(), "Pixel preserved");
+        assert!(state.session_manager.get(id3).is_some(), "Web preserved");
+        assert_eq!(
+            state.session_manager.selected_id(),
+            Some(id2),
+            "selection follows id"
+        );
+    }
+
+    /// Click on the single-session device pill → opens the New Session dialog.
+    ///
+    /// The device pill click region is registered during render with
+    /// `Message::OpenNewSessionDialog`.  Clicking it should transition the UI
+    /// to `NewSessionDialog` mode.
+    #[test]
+    fn left_click_on_device_pill_opens_new_session_dialog() {
+        let mut state = AppState::new();
+        state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+
+        // Register the device pill region manually.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(60, 0, 20, 1),
+            MouseAction::emit(Message::OpenNewSessionDialog),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = update(&mut state, make_left_press(65, 0));
+        if let Some(follow_up) = result.message {
+            update(&mut state, follow_up);
+        }
+
+        assert!(
+            state.is_new_session_dialog_visible(),
+            "device pill click should open new session dialog"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4 cross-cutting integration tests
+//
+// These tests drive the full Message → state mutation → follow-up message chain
+// for every Phase-4 click message type, without using the TUI layer (fdemon-app
+// does not depend on fdemon-tui).  The registry is populated manually where
+// needed; the update() function drives the handler dispatch.
+// ─────────────────────────────────────────────────────────────────────────────
+mod phase4_integration_tests {
+    use super::*;
+    use crate::state::{DevToolsPanel, LogClickStamp};
+    use fdemon_core::{
+        network::HttpProfileEntry,
+        performance::FrameTiming,
+        stack_trace::{ParsedStackTrace, StackFrame},
+        LogEntry, LogSource,
+    };
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// Build a minimal AppState that has one session with one log entry that
+    /// carries a two-frame stack trace.  Returns `(state, entry_id)`.
+    fn make_state_with_stack_entry() -> (AppState, u64) {
+        let mut state = AppState::new();
+        let device = test_device("d1", "iPhone");
+        state.session_manager.create_session(&device).unwrap();
+
+        // Build a log entry with a parsed stack trace.
+        let mut trace = ParsedStackTrace::new("flutter: exception");
+        trace.add_frame(StackFrame::new(
+            0,
+            "myFunc",
+            "package:myapp/main.dart",
+            10,
+            3,
+        ));
+        trace.add_frame(StackFrame::new(
+            1,
+            "bootstrap",
+            "package:myapp/bootstrap.dart",
+            5,
+            1,
+        ));
+
+        let entry = LogEntry::with_stack_trace(
+            fdemon_core::LogLevel::Error,
+            LogSource::Flutter,
+            "Unhandled exception",
+            trace,
+        );
+        let entry_id = entry.id;
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.add_log(entry);
+
+        (state, entry_id)
+    }
+
+    /// Build a state in DevTools mode with the given active panel.
+    fn make_devtools_state(panel: DevToolsPanel) -> AppState {
+        let mut state = AppState::new();
+        let device = test_device("d1", "iPhone");
+        state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = panel;
+        state
+    }
+
+    /// Build a state with inspector tree containing `count` visible nodes
+    /// (root + count-1 children, all expanded so all are visible).
+    fn make_inspector_state_with_nodes(count: usize) -> AppState {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+
+        // Build root with (count-1) children, each with a unique value_id.
+        let mut children = Vec::new();
+        for i in 1..count {
+            children.push(serde_json::json!({
+                "description": format!("Child{}", i),
+                "valueId": format!("child-{}", i),
+                "children": []
+            }));
+        }
+
+        let root: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "root-id",
+            "children": children
+        }))
+        .expect("valid DiagnosticsNode");
+
+        // Expand root so all children are visible.
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.root = Some(root);
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        state
+    }
+
+    /// Build a state in Performance panel with `count` frames pushed into the
+    /// selected session's frame_history ring buffer.
+    fn make_performance_state_with_frames(count: u64) -> AppState {
+        let mut state = make_devtools_state(DevToolsPanel::Performance);
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        for n in 0..count {
+            let frame = FrameTiming {
+                number: n,
+                build_micros: 8_000,
+                raster_micros: 8_000,
+                elapsed_micros: 16_000,
+                timestamp: chrono::Local::now(),
+                phases: None,
+                shader_compilation: false,
+            };
+            handle.session.performance.frame_history.push(frame);
+        }
+
+        state
+    }
+
+    /// Build a state in Network panel with `count` HTTP entries in the selected
+    /// session's network state.
+    fn make_network_state_with_requests(count: usize) -> AppState {
+        let mut state = make_devtools_state(DevToolsPanel::Network);
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        for i in 0..count {
+            let entry = HttpProfileEntry {
+                id: format!("req-{}", i),
+                method: "GET".to_string(),
+                uri: format!("https://example.com/api/{}", i),
+                status_code: Some(200),
+                content_type: None,
+                start_time_us: (i as i64) * 1_000_000,
+                end_time_us: Some((i as i64) * 1_000_000 + 100_000),
+                request_content_length: None,
+                response_content_length: Some(512),
+                error: None,
+            };
+            handle.session.network.entries.push_back(entry);
+        }
+
+        state
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
+    /// Single click records a stamp; second click on same entry within the
+    /// 400 ms window emits `ToggleStackTraceForEntry` and the stack trace
+    /// actually toggles in state.
+    ///
+    /// Note: two consecutive calls in fast test execution are well within the
+    /// 400 ms window; no explicit Instant planting is needed.
+    #[test]
+    fn click_log_row_then_double_click_emits_toggle_stack_trace_for_entry() {
+        let (mut state, entry_id) = make_state_with_stack_entry();
+
+        // First click — records stamp, no follow-up.
+        let r1 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            },
+        );
+        assert!(r1.message.is_none(), "single click: no follow-up");
+        assert!(
+            state.last_log_click.is_some(),
+            "stamp recorded after first click"
+        );
+
+        // Second click within window — produces a follow-up.
+        let r2 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            },
+        );
+        let follow_up = r2
+            .message
+            .expect("expected ToggleStackTraceForEntry follow-up");
+        assert!(
+            matches!(follow_up, Message::ToggleStackTraceForEntry { entry_id: e } if e == entry_id),
+            "follow-up must be ToggleStackTraceForEntry for the same entry"
+        );
+
+        // Stamp must be cleared so a third click does not immediately retoggle.
+        assert!(
+            state.last_log_click.is_none(),
+            "stamp consumed by double-click"
+        );
+
+        // Dispatch the follow-up and verify the stack trace toggled.
+        let default_collapsed = state.settings.ui.stack_trace_collapsed;
+        let was_expanded_before = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .is_stack_trace_expanded(entry_id, default_collapsed);
+
+        update(&mut state, follow_up);
+
+        let is_expanded_after = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .is_stack_trace_expanded(entry_id, default_collapsed);
+
+        assert_ne!(
+            was_expanded_before, is_expanded_after,
+            "stack trace state must toggle after ToggleStackTraceForEntry"
+        );
+    }
+
+    /// A click older than 400 ms is NOT counted as the second half of a
+    /// double-click — the handler treats it as a fresh single click.
+    #[test]
+    fn click_log_row_after_window_expires_is_single_click() {
+        let (mut state, entry_id) = make_state_with_stack_entry();
+
+        // Plant a stamp older than the 400 ms window.
+        state.last_log_click = Some(LogClickStamp {
+            entry_id,
+            at: std::time::Instant::now() - std::time::Duration::from_millis(500),
+        });
+
+        let result = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            },
+        );
+        assert!(
+            result.message.is_none(),
+            "outside window: treated as single click"
+        );
+        assert!(
+            state.last_log_click.is_some(),
+            "fresh stamp must be recorded after timeout"
+        );
+    }
+
+    /// Session switch clears `last_log_click` so a same-id click on the new
+    /// session cannot trigger a spurious double-click / `ToggleStackTraceForEntry`.
+    ///
+    /// Scenario:
+    /// 1. Session A: single-click entry_id=7 → stamp recorded.
+    /// 2. `SelectSessionByIndex` → stamp must be cleared.
+    /// 3. Session B: single-click entry_id=7 (collision) → fresh single click,
+    ///    no `ToggleStackTraceForEntry` follow-up.
+    #[test]
+    fn click_after_session_switch_does_not_double_click() {
+        let mut state = AppState::new();
+
+        // Create two sessions.
+        let device_a = test_device("dev-a", "Phone A");
+        let device_b = test_device("dev-b", "Phone B");
+        state.session_manager.create_session(&device_a).unwrap();
+        state.session_manager.create_session(&device_b).unwrap();
+
+        // Session A is selected (index 0).
+        // Single-click entry_id=7 → stamp recorded.
+        const ENTRY_ID: u64 = 7;
+        let r1 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id: ENTRY_ID,
+                frame_index: None,
+            },
+        );
+        assert!(r1.message.is_none(), "single click: no follow-up");
+        assert!(
+            state.last_log_click.is_some(),
+            "stamp must be recorded after first click"
+        );
+
+        // Switch to session B (index 1) — must clear the stamp.
+        update(&mut state, Message::SelectSessionByIndex(1));
+        assert!(
+            state.last_log_click.is_none(),
+            "last_log_click must be cleared on session switch"
+        );
+
+        // Single-click the same entry_id=7 on session B — must be a fresh single
+        // click, not a double-click.
+        let r3 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id: ENTRY_ID,
+                frame_index: None,
+            },
+        );
+        assert!(
+            r3.message.is_none(),
+            "cross-session same-id click must be treated as a fresh single click, not a double-click"
+        );
+        assert!(
+            state.last_log_click.is_some(),
+            "fresh stamp must be recorded on session B's click"
+        );
+        assert_eq!(
+            state.last_log_click.unwrap().entry_id,
+            ENTRY_ID,
+            "new stamp carries the correct entry_id"
+        );
+    }
+
+    /// `SwitchDevToolsPanel` switches the active panel in state.
+    #[test]
+    fn click_devtools_inspector_tab_switches_panel() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+
+        update(
+            &mut state,
+            Message::SwitchDevToolsPanel(DevToolsPanel::Network),
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Network,
+            "SwitchDevToolsPanel must update active_panel"
+        );
+
+        // Round-trip back to Inspector.
+        update(
+            &mut state,
+            Message::SwitchDevToolsPanel(DevToolsPanel::Inspector),
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Inspector
+        );
+    }
+
+    /// Clicking row index 2 in a 5-node inspector tree sets `selected_index`
+    /// to 2 and dispatches `FetchLayoutData` (because the clicked node has a
+    /// `value_id` and the selection changed).
+    #[test]
+    fn click_inspector_select_row_sets_index_and_dispatches_layout_fetch() {
+        let mut state = make_inspector_state_with_nodes(5);
+        // Ensure the debounce window is not active (layout_last_fetch_time = None).
+
+        let result = update(&mut state, Message::DevToolsInspectorSelectRow { index: 2 });
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 2,
+            "selected_index must be updated to the clicked row"
+        );
+        assert!(
+            matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
+            "clicking a different row must dispatch FetchLayoutData; got: {:?}",
+            result.action
+        );
+    }
+
+    /// Clicking the same row twice should not dispatch a second layout fetch
+    /// (the second click is treated as a no-op because selection did not change).
+    #[test]
+    fn click_inspector_select_same_row_twice_does_not_redispatch_fetch() {
+        let mut state = make_inspector_state_with_nodes(5);
+        // First click: select row 1.
+        update(&mut state, Message::DevToolsInspectorSelectRow { index: 1 });
+        // Second click on the same row: should be a no-op.
+        let r2 = update(&mut state, Message::DevToolsInspectorSelectRow { index: 1 });
+        assert!(
+            r2.action.is_none(),
+            "re-clicking the same row must not dispatch FetchLayoutData"
+        );
+    }
+
+    /// `SelectPerformanceFrame` sets `selected_frame` on the active session's
+    /// performance state.
+    #[test]
+    fn click_performance_frame_sets_selected_frame() {
+        let mut state = make_performance_state_with_frames(8);
+
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(3) },
+        );
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .selected_frame,
+            Some(3),
+            "SelectPerformanceFrame must update selected_frame"
+        );
+    }
+
+    /// Deselecting a frame (index = None) clears `selected_frame`.
+    #[test]
+    fn click_performance_frame_none_clears_selection() {
+        let mut state = make_performance_state_with_frames(8);
+        // Pre-select frame 5.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .performance
+            .selected_frame = Some(5);
+
+        update(&mut state, Message::SelectPerformanceFrame { index: None });
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .selected_frame,
+            None,
+            "SelectPerformanceFrame(None) must clear selected_frame"
+        );
+    }
+
+    /// `NetworkSelectRequest` sets `selected_index` on the active session's
+    /// network state.
+    #[test]
+    fn click_network_select_request_sets_selected_index() {
+        let mut state = make_network_state_with_requests(5);
+
+        update(&mut state, Message::NetworkSelectRequest { index: Some(2) });
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .network
+                .selected_index,
+            Some(2),
+            "NetworkSelectRequest must update selected_index"
+        );
+    }
+
+    /// Deselecting (index = None) clears `selected_index`.
+    #[test]
+    fn click_network_deselect_clears_selected_index() {
+        let mut state = make_network_state_with_requests(5);
+        // Pre-select entry 3.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .selected_index = Some(3);
+
+        update(&mut state, Message::NetworkSelectRequest { index: None });
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .network
+                .selected_index,
+            None,
+            "NetworkSelectRequest(None) must clear selected_index"
+        );
+    }
+
+    // ── TagFilterClickRow ────────────────────────────────────────────────────
+
+    #[test]
+    fn click_row_sets_selection_and_toggles_visibility() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+
+        // Discover three tags.
+        handle.native_tag_state.observe_tag("alpha");
+        handle.native_tag_state.observe_tag("beta");
+        handle.native_tag_state.observe_tag("gamma");
+        assert!(handle.native_tag_state.is_tag_visible("beta"));
+
+        // Click row 1 (sorted: alpha=0, beta=1, gamma=2).
+        let result = update(&mut state, Message::TagFilterClickRow { index: 1 });
+
+        let handle = state.session_manager.get(id).unwrap();
+        assert_eq!(state.tag_filter_ui.selected_index, 1);
+        assert!(
+            !handle.native_tag_state.is_tag_visible("beta"),
+            "beta toggled hidden"
+        );
+        assert!(
+            handle.native_tag_state.is_tag_visible("alpha"),
+            "alpha unchanged"
+        );
+        assert!(
+            handle.native_tag_state.is_tag_visible("gamma"),
+            "gamma unchanged"
+        );
+        assert!(result.message.is_none(), "no follow-up message");
+    }
+
+    #[test]
+    fn click_row_with_out_of_range_index_is_no_op() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+        handle.native_tag_state.observe_tag("alpha");
+
+        let initial_selected = state.tag_filter_ui.selected_index;
+        let result = update(&mut state, Message::TagFilterClickRow { index: 99 });
+
+        assert_eq!(state.tag_filter_ui.selected_index, initial_selected);
+        let handle = state.session_manager.get(id).unwrap();
+        assert!(
+            handle.native_tag_state.is_tag_visible("alpha"),
+            "alpha unchanged"
+        );
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn click_row_with_no_session_is_no_op() {
+        let mut state = AppState::new();
+        let result = update(&mut state, Message::TagFilterClickRow { index: 0 });
+        assert!(result.message.is_none());
+        // With `tag_count == 0` we return early before mutating selected_index.
+        assert_eq!(state.tag_filter_ui.selected_index, 0);
+    }
+
+    #[test]
+    fn click_row_double_toggles_back() {
+        // Two clicks on the same row toggle off, then on — proving the
+        // "single click is single toggle" semantic.
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+        handle.native_tag_state.observe_tag("alpha");
+        assert!(handle.native_tag_state.is_tag_visible("alpha"));
+
+        let _ = update(&mut state, Message::TagFilterClickRow { index: 0 });
+        assert!(!state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha"));
+
+        let _ = update(&mut state, Message::TagFilterClickRow { index: 0 });
+        assert!(state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha"));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5 cross-cutting integration tests (Task 11)
+//
+// These tests verify the full pipe: dispatcher → handler → state mutation for
+// Phase-5 cross-cutting contracts.  They lock in:
+//   A. Click-precedence (z-index) — modal z=1 wins over base z=0 at same cell.
+//   B. Settings double-click chain — two rapid clicks enters edit mode.
+//   C. Tag-filter click integration — click toggles tag visibility end-to-end.
+//
+// The registry is populated manually; `fdemon-app` does not depend on
+// `fdemon-tui`, so render::view cannot be called here.
+// ─────────────────────────────────────────────────────────────────────────────
+mod phase5_integration_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+    use crate::mouse_regions::{MouseAction, MouseRect};
+    use crate::state::UiMode;
+
+    // ── A. Click-precedence (z-index) ────────────────────────────────────────
+
+    /// When a z=1 region and a z=0 region overlap on the same cell, the
+    /// dispatcher must return the z=1 region's message.
+    ///
+    /// Phase 5 is the first consumer of z=1; this test locks the z-precedence
+    /// contract at the handler integration level (without going through the
+    /// TUI render layer).
+    #[test]
+    fn phase5_modal_z1_region_wins_over_base_z0_region_at_same_cell() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // z=0 base region: header `[r]` shortcut at (0,0).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 3, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        // z=1 modal region: NewSessionDialogLaunch overlapping the same cell.
+        regions.builder().click_at_z(
+            MouseRect::new(0, 0, 3, 1),
+            MouseAction::emit(Message::NewSessionDialogLaunch),
+            1,
+        );
+        state.mouse_regions.set(regions);
+
+        // Drive through the full Message::Mouse → update() path.
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 1,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // The dispatcher returns the matched message as a follow-up via
+        // UpdateResult::message so the engine can re-loop it.
+        assert!(
+            matches!(result.message, Some(Message::NewSessionDialogLaunch)),
+            "modal z=1 must win over base z=0; got {:?}",
+            result.message
+        );
+    }
+
+    // ── B. Settings double-click chain ───────────────────────────────────────
+
+    /// First click selects row; second click within the 400 ms window chains
+    /// `SettingsToggleEdit`, which when re-dispatched sets `editing = true`.
+    ///
+    /// Between the two clicks the registry is re-registered to simulate the
+    /// "registry rebuilt every frame" production contract.
+    #[test]
+    fn phase5_settings_double_click_enters_edit_mode() {
+        let mut state = AppState::new();
+        state.show_settings();
+        state.ui_mode = UiMode::Settings;
+
+        // Register a row-click region for index 3.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 5, 80, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 3 }),
+        );
+        state.mouse_regions.set(regions);
+
+        // First click: press at (0,5) → SettingsClickRow { index: 3 }.
+        let r1 = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 0,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // Process the returned SettingsClickRow message.
+        if let Some(msg) = r1.message {
+            let r1b = update(&mut state, msg);
+            assert_eq!(state.settings_view_state.selected_index, 3);
+            assert!(
+                !state.settings_view_state.editing,
+                "single click does not enter edit mode"
+            );
+            assert!(
+                r1b.message.is_none(),
+                "first click does not chain a follow-up"
+            );
+        } else {
+            panic!("first click should return SettingsClickRow message");
+        }
+
+        // Re-register the region (simulating next frame's render).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 5, 80, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 3 }),
+        );
+        state.mouse_regions.set(regions);
+
+        // Second click on the same row within the 400 ms window.
+        let r2 = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 0,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // The dispatcher returns SettingsClickRow; update dispatches it and
+        // receives a SettingsToggleEdit follow-up.
+        if let Some(msg) = r2.message {
+            let r2b = update(&mut state, msg);
+            // r2b.message should be SettingsToggleEdit (the double-click chain).
+            if let Some(toggle_msg) = r2b.message {
+                assert!(
+                    matches!(toggle_msg, Message::SettingsToggleEdit),
+                    "expected SettingsToggleEdit follow-up on double-click, got {:?}",
+                    toggle_msg
+                );
+                // Process the chained SettingsToggleEdit.
+                update(&mut state, toggle_msg);
+                assert!(
+                    state.settings_view_state.editing,
+                    "SettingsToggleEdit must set editing = true"
+                );
+            } else {
+                panic!("expected SettingsToggleEdit follow-up from double-click");
+            }
+        } else {
+            panic!("second click should return SettingsClickRow message");
+        }
+    }
+
+    // ── C. Tag-filter click integration ─────────────────────────────────────
+
+    /// A `TagFilterClickRow` click through the dispatcher toggles the tag's
+    /// visibility and updates `tag_filter_ui.selected_index`.
+    ///
+    /// This tests the full click → Message → update() → state chain:
+    /// the registry is populated with a `click_at_z` region (z=1, matching
+    /// the tag-filter overlay's modal layer), a press is dispatched, the
+    /// returned message is processed through `update()`, and the final
+    /// visibility state is asserted.
+    #[test]
+    fn phase5_tag_filter_click_toggles_visibility() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        {
+            let handle = state.session_manager.get_mut(id).unwrap();
+            handle.native_tag_state.observe_tag("alpha");
+        }
+        state.tag_filter_visible = true;
+
+        // Register a tag-row click region at z=1 (tag-filter is an overlay).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click_at_z(
+            MouseRect::new(0, 5, 40, 1),
+            MouseAction::emit(Message::TagFilterClickRow { index: 0 }),
+            1,
+        );
+        state.mouse_regions.set(regions);
+
+        let initial_visible = state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha");
+
+        // Drive the full press → update() pipe.
+        let r = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 0,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        // Process the returned TagFilterClickRow message.
+        if let Some(msg) = r.message {
+            update(&mut state, msg);
+        } else {
+            panic!("tag-filter click should return TagFilterClickRow message");
+        }
+
+        let final_visible = state
+            .session_manager
+            .get(id)
+            .unwrap()
+            .native_tag_state
+            .is_tag_visible("alpha");
+
+        assert_ne!(
+            initial_visible, final_visible,
+            "tag visibility must toggle after click — initial: {}, final: {}",
+            initial_visible, final_visible
+        );
+        assert_eq!(
+            state.tag_filter_ui.selected_index, 0,
+            "selected_index must be updated to the clicked row"
+        );
+    }
+
+    // ── D. z=0 baseline: a lone z=0 region wins when no z=1 region overlaps ─
+
+    /// When only a z=0 region is registered (no modal overlay), the dispatcher
+    /// must still return that region's message.  This is the complementary
+    /// contract to `phase5_modal_z1_region_wins_over_base_z0_region_at_same_cell`:
+    /// z=1 presence is the exceptional case; z=0 must continue to win when no
+    /// higher-priority region exists.
+    #[test]
+    fn phase5_base_z0_region_wins_when_no_z1_region_overlaps() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Single z=0 region with no modal overlay.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(5, 5, 10, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 5,
+                y: 5,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        assert!(
+            matches!(result.message, Some(Message::HotReload)),
+            "z=0 region must be matched when no z=1 region is present; got {:?}",
+            result.message
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5.5 modal-precedence and sub-modal gate tests (Task 01)
+//
+// These tests verify:
+//   A. Settings sub-modal early-return: when dart_defines or extra_args modal
+//      is open, `settings::handle_press` returns None regardless of regions.
+//   B. Right-click universal coverage: all major UiMode variants return None
+//      for right-click presses, locking the "right-click reserved" convention.
+//
+// The renderer-level gate (suppressing base-UI z=0 regions in modal modes) is
+// tested in `crates/fdemon-tui/src/render/tests.rs` because it requires
+// calling `render::view()` which lives in `fdemon-tui`.
+// ─────────────────────────────────────────────────────────────────────────────
+mod phase5_5_modal_precedence_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+    use crate::mouse_regions::{MouseAction, MouseRect};
+    use crate::state::UiMode;
+
+    // ── A. Settings sub-modal gate ────────────────────────────────────────
+
+    /// When the dart-defines sub-modal is open, `settings::handle_press` must
+    /// return `None` even if a z=0 settings tab region is registered at the
+    /// clicked coordinate.
+    ///
+    /// This locks the sub-modal gate added in Phase 5.5 Task 01.  Without it,
+    /// a click outside the sub-modal's UI (which has no registered regions in
+    /// v1) would fall through to the underlying settings tab row.
+    #[test]
+    fn phase5_5_settings_dispatcher_with_dart_defines_modal_open_returns_none() {
+        use crate::new_session_dialog::{DartDefine, DartDefinesModalState};
+
+        let mut state = AppState::new();
+        state.show_settings();
+        state.ui_mode = UiMode::Settings;
+
+        // Open the dart-defines sub-modal.
+        state.settings_view_state.dart_defines_modal =
+            Some(DartDefinesModalState::new(vec![DartDefine::new("K", "V")]));
+
+        // Register a z=0 settings tab region at (10, 4) — the kind that
+        // would normally route to SettingsGotoTab.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(10, 4, 20, 1),
+            MouseAction::emit(Message::SettingsGotoTab(0)),
+        );
+        state.mouse_regions.set(regions);
+
+        // Drive through the full Message::Mouse → update() path.
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 10,
+                y: 4,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        assert!(
+            result.message.is_none(),
+            "settings click must be suppressed when dart-defines modal is open; got {:?}",
+            result.message
+        );
+    }
+
+    /// When the extra-args sub-modal is open, `settings::handle_press` must
+    /// return `None` even if a z=0 settings row region is registered at the
+    /// clicked coordinate.
+    #[test]
+    fn phase5_5_settings_dispatcher_with_extra_args_modal_open_returns_none() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.show_settings();
+        state.ui_mode = UiMode::Settings;
+
+        // Open the extra-args sub-modal.
+        state.settings_view_state.extra_args_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::ExtraArgs, vec![]));
+
+        // Register a z=0 settings row region at (5, 8).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(5, 8, 40, 1),
+            MouseAction::emit(Message::SettingsClickRow { index: 2 }),
+        );
+        state.mouse_regions.set(regions);
+
+        // Drive through the full Message::Mouse → update() path.
+        let result = update(
+            &mut state,
+            Message::Mouse(MouseInput::Press {
+                x: 5,
+                y: 8,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }),
+        );
+        assert!(
+            result.message.is_none(),
+            "settings click must be suppressed when extra-args modal is open; got {:?}",
+            result.message
+        );
+    }
+
+    // ── B. Right-click universal coverage (Minor #19) ─────────────────────
+
+    /// Right-click must be a no-op in every major UI mode.
+    ///
+    /// This test iterates over all `UiMode` variants that have per-mode press
+    /// handlers and asserts that dispatching a right-click always returns
+    /// `None`.  It locks the "right-click reserved for future context-menu"
+    /// convention across every mode simultaneously.
+    ///
+    /// Modes without click handlers (`EmulatorSelector`, `Loading`,
+    /// `SearchInput`, `FlutterVersion`) return `None` unconditionally for any
+    /// press (handled by the `None` arm in `mouse::handle_press`), so they are
+    /// included in the assertion too.
+    #[test]
+    fn phase5_5_right_click_is_no_op_in_all_ui_modes() {
+        let modes = [
+            UiMode::Normal,
+            UiMode::DevTools,
+            UiMode::ConfirmDialog,
+            UiMode::Settings,
+            UiMode::NewSessionDialog,
+            UiMode::Startup,
+            UiMode::LinkHighlight,
+            UiMode::Loading,
+            UiMode::EmulatorSelector,
+            UiMode::SearchInput,
+            UiMode::FlutterVersion,
+        ];
+
+        for mode in modes {
+            let mut state = AppState::new();
+            state.ui_mode = mode;
+
+            // Register a z=0 region at (0,0) so that if a right-click were
+            // accidentally routed to the hit-test it could theoretically match.
+            let mut regions = state.mouse_regions.take();
+            regions.builder().click(
+                MouseRect::new(0, 0, 80, 24),
+                MouseAction::emit(Message::HotReload),
+            );
+            state.mouse_regions.set(regions);
+
+            let result = update(
+                &mut state,
+                Message::Mouse(MouseInput::Press {
+                    x: 5,
+                    y: 5,
+                    button: MouseButton::Right,
+                    modifiers: KeyModSet::NONE,
+                }),
+            );
+            assert!(
+                result.message.is_none(),
+                "right-click must be a no-op in {:?} mode; got {:?}",
+                mode,
+                result.message
+            );
+        }
+    }
 }

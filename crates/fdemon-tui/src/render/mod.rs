@@ -8,12 +8,61 @@ use std::collections::VecDeque;
 use super::{layout, widgets};
 use crate::widgets::LogViewState;
 use fdemon_app::state::{AppState, LoadingState, UiMode};
+use fdemon_app::{MouseAction, MouseRect, MouseRegionsBuilder};
 use fdemon_core::LogEntry;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+/// Borrowed bridge between [`view`] and widgets that record clickable regions
+/// during render.
+///
+/// `MouseCtx` exists so widgets do not need to thread `&mut MouseRegionsBuilder`
+/// directly (which collides ergonomically with the `Widget::render` trait that
+/// only sees `area` and `buf`). Widgets that need region recording accept an
+/// `Option<&mut MouseCtx<'_>>` constructor argument; passing `None` keeps the
+/// widget usable in tests that render without a registry.
+///
+/// # Temporary placeholder note
+///
+/// Phase 3 Tasks 06 (header bracket regions) and 07 (tab/device-pill regions)
+/// will pass `&mut mouse_ctx` into `MainHeader` and `SessionTabs` respectively.
+/// Until those tasks land the ctx is constructed but not forwarded to any widget.
+#[derive(Debug)]
+pub struct MouseCtx<'a> {
+    builder: MouseRegionsBuilder<'a>,
+}
+
+impl<'a> MouseCtx<'a> {
+    /// Wrap a [`MouseRegionsBuilder`] in a [`MouseCtx`].
+    pub fn new(builder: MouseRegionsBuilder<'a>) -> Self {
+        Self { builder }
+    }
+
+    /// Register a left-click region at `z_index = 0`.
+    pub fn click(&mut self, rect: MouseRect, action: MouseAction) {
+        self.builder.click(rect, action);
+    }
+
+    /// Register a left-click region at a specific `z_index`. Phase 5
+    /// dialogs/overlays use `z_index = 1`; Phase 3 widgets stay at `0`.
+    pub fn click_at_z(&mut self, rect: MouseRect, action: MouseAction, z: u8) {
+        self.builder.click_at_z(rect, action, z);
+    }
+
+    /// Register a region with separate left and middle bindings (used by
+    /// session tabs: left = select, middle = close).
+    pub fn click_left_middle(
+        &mut self,
+        rect: MouseRect,
+        on_left: MouseAction,
+        on_middle: MouseAction,
+    ) {
+        self.builder.click_left_middle(rect, on_left, on_middle);
+    }
+}
 
 use crate::theme::{icons::IconSet, palette};
 
@@ -47,12 +96,59 @@ fn render_search_overlay(
     }
 }
 
+/// Returns `true` when the current UI mode is a modal overlay that should
+/// suppress base-UI (header + log view) mouse-region recording.
+///
+/// When a modal is active, z=0 regions registered by `MainHeader` and
+/// `LogView` would be reachable via `hit_test` for clicks that fall outside
+/// the modal's z=1 rects.  By passing `None` instead of `Some(&mut mouse_ctx)`
+/// to those widgets we prevent spurious z=0 hits while the modal is up.
+///
+/// `UiMode::LinkHighlight` is intentionally excluded: links are overlaid on
+/// top of the log view and the user expects both the log view and the badge
+/// regions to remain interactive (scrolling, clicking links).
+///
+/// `UiMode::Settings` renders a full-screen panel that *replaces* the log
+/// view entirely — the header is not rendered in Settings mode.  Settings
+/// regions are at z=0 and rely on the full-screen panel, so we suppress the
+/// underlying header/log-view base-UI regions there too.
+fn is_modal_ui_mode(mode: &UiMode) -> bool {
+    matches!(
+        mode,
+        UiMode::Startup
+            | UiMode::NewSessionDialog
+            | UiMode::ConfirmDialog
+            | UiMode::Settings
+            | UiMode::FlutterVersion
+            | UiMode::EmulatorSelector
+    )
+}
+
 /// Render the complete UI (View function in TEA)
 ///
 /// This is a pure rendering function - it should not modify state
 /// except for widget state that tracks rendering info (scroll position).
 pub fn view(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
+
+    // ── Mouse region registry: take, clear, render, put back ─────────────
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    // RAII guard puts the registry back on Drop, even if rendering panics.
+    let mut regions = state.mouse_regions.take_guard();
+    regions.clear();
+
+    // Build the borrowed mouse context. `mouse_ctx` lives for the entire
+    // render body so widgets can register regions throughout the frame.
+    // The borrow of `*regions` (via DerefMut) is released when `mouse_ctx`
+    // is dropped, after which the guard's Drop puts the registry back.
+    let mut mouse_ctx = MouseCtx::new(regions.builder());
+
+    // Determine whether a modal overlay is active.  When `in_modal` is true
+    // we suppress base-UI (header + log view) region recording by passing
+    // `None` instead of `Some(&mut mouse_ctx)` to those widgets.  The
+    // tag-filter overlay (`tag_filter_visible`) is also "modal" for click
+    // purposes even though `ui_mode` remains `Normal`.
+    let in_modal = is_modal_ui_mode(&state.ui_mode) || state.tag_filter_visible;
 
     // Fill entire terminal with deepest background color
     let bg_block = Block::default().style(Style::default().bg(palette::DEEPEST_BG));
@@ -64,12 +160,20 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // Construct IconSet from settings
     let icons = IconSet::new(state.settings.ui.icons);
 
-    // Main header with project name and session tabs inside
+    // Main header with project name and session tabs inside.
+    // Pass `Some(&mut mouse_ctx)` so header shortcut regions are registered
+    // (Task 06), but only when no modal overlay is active.  When a modal is
+    // up (`in_modal = true`) we pass `None` so that clicking header shortcuts
+    // while a modal is displayed cannot fire base-UI actions.
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
         .with_sessions(&state.session_manager);
-    frame.render_widget(header, areas.header);
+    let header_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
+    widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, header_ctx);
 
-    // Log view - use selected session's logs or show empty state
+    // Log view - use selected session's logs or show empty state.
+    // Same modal-gate as the header: pass `None` when a modal overlay is active
+    // so that clicks that miss the modal's z=1 rects cannot fall through to the
+    // underlying log-view z=0 regions.
     if let Some(handle) = state.session_manager.selected_mut() {
         let mut log_view = widgets::LogView::new(&handle.session.logs, icons)
             .filter_state(&handle.session.filter_state)
@@ -111,13 +215,27 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         };
         log_view = log_view.with_status(status_info);
 
-        frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
+        let log_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
+        widgets::log_view::render_with_regions(
+            areas.logs,
+            frame.buffer_mut(),
+            &mut handle.session.log_view_state,
+            log_view,
+            log_ctx,
+        );
     } else {
         // No session selected - show empty log view
         let empty_logs: VecDeque<LogEntry> = VecDeque::new();
         let log_view = widgets::LogView::new(&empty_logs, icons);
         let mut empty_state = LogViewState::new();
-        frame.render_stateful_widget(log_view, areas.logs, &mut empty_state);
+        let log_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
+        widgets::log_view::render_with_regions(
+            areas.logs,
+            frame.buffer_mut(),
+            &mut empty_state,
+            log_view,
+            log_ctx,
+        );
     }
 
     // Status bar removed - status info is now integrated into the log view's bottom metadata bar
@@ -132,8 +250,14 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &state.tool_availability,
                 &icons,
             )
-            .migration_banner(state.show_migration_banner);
-            frame.render_widget(dialog, area);
+            .migration_banner(state.show_migration_banner)
+            .enable_mouse(state.settings.ui.enable_mouse);
+            widgets::new_session_dialog::render_with_regions(
+                area,
+                frame.buffer_mut(),
+                dialog,
+                Some(&mut mouse_ctx),
+            );
         }
         // Legacy DeviceSelector removed - use NewSessionDialog instead
         UiMode::EmulatorSelector => {
@@ -149,7 +273,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Render confirmation dialog
             if let Some(ref dialog_state) = state.confirm_dialog_state {
                 let dialog = widgets::ConfirmDialog::new(dialog_state);
-                frame.render_widget(dialog, area);
+                widgets::confirm_dialog::render_with_regions(
+                    area,
+                    frame.buffer_mut(),
+                    dialog,
+                    Some(&mut mouse_ctx),
+                );
             }
         }
         UiMode::SearchInput => {
@@ -163,11 +292,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Tag filter overlay (Phase 2, Task 09) — drawn on top of normal log view.
             if state.tag_filter_visible {
                 if let Some(handle) = state.session_manager.selected() {
-                    widgets::render_tag_filter(
+                    widgets::render_tag_filter_with_regions(
                         frame,
                         areas.logs,
                         &handle.native_tag_state,
                         &state.tag_filter_ui,
+                        Some(&mut mouse_ctx),
                     );
                 }
             }
@@ -241,7 +371,13 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         UiMode::Settings => {
             // Full-screen settings panel
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
-            frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
+            widgets::settings_panel::render_with_regions(
+                area,
+                frame.buffer_mut(),
+                settings_panel,
+                &mut state.settings_view_state,
+                Some(&mut mouse_ctx),
+            );
         }
         UiMode::FlutterVersion => {
             // Render Flutter Version panel as an overlay on top of the normal log view.
@@ -259,9 +395,20 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 state.session_manager.selected(),
                 icons,
             );
-            frame.render_widget(devtools, areas.logs);
+            widgets::devtools::render_with_regions(
+                areas.logs,
+                frame.buffer_mut(),
+                devtools,
+                Some(&mut mouse_ctx),
+            );
         }
     }
+
+    // ── Registry put-back handled by guard's Drop ─────────────────────────
+    // The `regions` guard (MouseRegionGuard) calls `state.mouse_regions.set`
+    // automatically when it drops here. No explicit set() needed.
+    // `mouse_ctx`'s borrow of `*regions` ends at its last use above (NLL);
+    // the guard can then drop and put the registry back.
 }
 
 /// Render loading screen during startup initialization (Task 08d)

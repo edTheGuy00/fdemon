@@ -694,3 +694,263 @@ fn test_network_monitor_state_preserved_across_sizes() {
         "selected_index should be preserved after rendering at small terminal size"
     );
 }
+
+// ── Phase 4 Task 09: render_with_regions click-region tests ──────────────────
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::session::NetworkDetailTab;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use fdemon_core::network::HttpProfileEntryDetail;
+    use request_details::RequestDetails;
+    use request_table::RequestTable;
+
+    fn make_simple_entry(id: &str, i: usize) -> HttpProfileEntry {
+        HttpProfileEntry {
+            id: id.to_string(),
+            method: "GET".to_string(),
+            uri: format!("https://api.example.com/resource/{}", i),
+            status_code: Some(200),
+            content_type: Some("application/json".to_string()),
+            start_time_us: 1_000_000 + (i as i64 * 50_000),
+            end_time_us: Some(1_050_000 + (i as i64 * 50_000)),
+            request_content_length: None,
+            response_content_length: Some(1024),
+            error: None,
+        }
+    }
+
+    fn make_entries(n: usize) -> Vec<HttpProfileEntry> {
+        (0..n)
+            .map(|i| make_simple_entry(&format!("req_{}", i), i))
+            .collect()
+    }
+
+    #[test]
+    fn network_table_records_one_region_per_visible_row() {
+        // Area: 80 wide, 12 tall. Header=1 + col_headers=1 = 2 fixed rows.
+        // Visible data rows = 12 - 2 = 10. We have exactly 10 entries.
+        let entries = make_entries(10);
+        let refs: Vec<&HttpProfileEntry> = entries.iter().collect();
+        let table = RequestTable::new(&refs, None, 0, true, "");
+
+        let mut regions = MouseRegions::default();
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            table.render_with_regions(area, &mut buf, Some(&mut ctx));
+        }
+
+        let click_indices: Vec<usize> = regions
+            .iter()
+            .filter_map(|e| match &e.on_left {
+                Some(MouseAction::Emit(msg)) => match msg.as_ref() {
+                    Message::NetworkSelectRequest { index: Some(i) } => Some(*i),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            click_indices,
+            (0..10).collect::<Vec<_>>(),
+            "expected one region per visible row with correct absolute indices"
+        );
+    }
+
+    #[test]
+    fn network_table_scroll_offset_emits_correct_absolute_indices() {
+        // scroll_offset = 3: entries 3..13 are visible in a 12-row area (10 data rows).
+        let entries = make_entries(15);
+        let refs: Vec<&HttpProfileEntry> = entries.iter().collect();
+        let table = RequestTable::new(&refs, None, 3, true, "");
+
+        let mut regions = MouseRegions::default();
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            table.render_with_regions(area, &mut buf, Some(&mut ctx));
+        }
+
+        let click_indices: Vec<usize> = regions
+            .iter()
+            .filter_map(|e| match &e.on_left {
+                Some(MouseAction::Emit(msg)) => match msg.as_ref() {
+                    Message::NetworkSelectRequest { index: Some(i) } => Some(*i),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            click_indices,
+            (3..13).collect::<Vec<_>>(),
+            "with scroll_offset=3, regions should carry absolute indices 3..13"
+        );
+    }
+
+    #[test]
+    fn detail_tab_bar_records_five_regions() {
+        let entry = make_simple_entry("req_1", 0);
+        let details = RequestDetails::new(
+            &entry,
+            None::<&HttpProfileEntryDetail>,
+            NetworkDetailTab::General,
+            false,
+        );
+
+        let mut regions = MouseRegions::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            details.render_with_regions(area, &mut buf, Some(&mut ctx));
+        }
+
+        let tab_clicks: Vec<NetworkDetailTab> = regions
+            .iter()
+            .filter_map(|e| match &e.on_left {
+                Some(MouseAction::Emit(msg)) => match msg.as_ref() {
+                    Message::NetworkSwitchDetailTab(t) => Some(*t),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            tab_clicks,
+            vec![
+                NetworkDetailTab::General,
+                NetworkDetailTab::Headers,
+                NetworkDetailTab::RequestBody,
+                NetworkDetailTab::ResponseBody,
+                NetworkDetailTab::Timing,
+            ],
+            "detail tab bar should register 5 regions in order"
+        );
+    }
+
+    #[test]
+    fn network_disconnected_records_no_regions() {
+        let network_state = NetworkState::default();
+        let conn_status = VmConnectionStatus::Disconnected;
+        let widget = NetworkMonitor::new(&network_state, false, &conn_status);
+
+        let mut regions = MouseRegions::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        assert_eq!(
+            regions.len(),
+            0,
+            "disconnected state should register no click regions"
+        );
+    }
+
+    #[test]
+    fn network_extensions_unavailable_records_no_regions() {
+        let network_state = NetworkState {
+            extensions_available: Some(false),
+            ..Default::default()
+        };
+        let conn_status = VmConnectionStatus::Connected;
+        let widget = NetworkMonitor::new(&network_state, true, &conn_status);
+
+        let mut regions = MouseRegions::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        assert_eq!(
+            regions.len(),
+            0,
+            "extensions_available=false should register no click regions"
+        );
+    }
+
+    #[test]
+    fn detail_tab_region_widths_match_padded_label_widths() {
+        let entry = make_simple_entry("req_1", 0);
+        let details = RequestDetails::new(
+            &entry,
+            None::<&HttpProfileEntryDetail>,
+            NetworkDetailTab::General,
+            false,
+        );
+
+        let mut regions = MouseRegions::default();
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            details.render_with_regions(area, &mut buf, Some(&mut ctx));
+        }
+
+        let expected_widths: Vec<u16> = [
+            " [g] General ",
+            " [h] Headers ",
+            " [q] Request ",
+            " [s] Response ",
+            " [t] Timing ",
+        ]
+        .iter()
+        .map(|s| s.len() as u16)
+        .collect();
+
+        let actual_widths: Vec<u16> = regions
+            .iter()
+            .filter_map(|e| match &e.on_left {
+                Some(MouseAction::Emit(msg)) => match msg.as_ref() {
+                    Message::NetworkSwitchDetailTab(_) => Some(e.rect.width),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            actual_widths, expected_widths,
+            "detail tab region widths should match padded label widths"
+        );
+    }
+
+    #[test]
+    fn network_table_no_ctx_renders_without_regions() {
+        // Passing None ctx must not register any regions and must not panic.
+        let entries = make_entries(5);
+        let refs: Vec<&HttpProfileEntry> = entries.iter().collect();
+        let table = RequestTable::new(&refs, None, 0, true, "");
+
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        // render_with_regions with None ctx — identical to Widget::render.
+        table.render_with_regions(area, &mut buf, None);
+        // Should render the header row without panicking.
+        let has_header = (0..80).any(|x| buf.cell((x, 0u16)).is_some_and(|c| c.symbol() != " "));
+        assert!(
+            has_header,
+            "render_with_regions(None) should still render content"
+        );
+    }
+}

@@ -7,6 +7,7 @@
 //! - `session`: Session state helpers
 //! - `session_lifecycle`: Session lifecycle handlers
 //! - `keys`: Key event handlers for UI modes
+//! - `mouse`: Mouse event handlers for UI modes
 //! - `helpers`: Utility functions
 //! - `new_session`: NewSessionDialog handlers
 //! - `settings`: Settings helpers
@@ -25,6 +26,7 @@ pub(crate) mod flutter_version;
 pub(crate) mod helpers;
 pub(crate) mod keys;
 pub(crate) mod log_view;
+pub(crate) mod mouse;
 pub(crate) mod new_session;
 pub(crate) mod scroll;
 pub(crate) mod session;
@@ -45,6 +47,20 @@ use fdemon_daemon::{Device, FlutterExecutable};
 
 // Re-export main entry point
 pub use update::update;
+
+/// Maximum elapsed time between two clicks on the same target for them to
+/// count as a double-click (inclusive boundary).
+///
+/// 400 ms matches the macOS / GNOME / KDE double-click defaults and is the
+/// value that keeps the double-click feel consistent across all interactive
+/// surfaces:
+///
+/// - [`log_view::handle_click_log_row`] — toggles stack-trace expansion
+/// - [`settings_handlers::handle_settings_click_row`] — enters edit mode
+///
+/// Adding a new double-click surface? Import this constant rather than
+/// hard-coding `400` so that the threshold stays consistent project-wide.
+pub(crate) const DOUBLE_CLICK_WINDOW_MS: u64 = 400;
 
 // Re-export functions used by internal tests
 #[cfg(test)]

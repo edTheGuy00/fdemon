@@ -22,7 +22,7 @@ pub fn Introduction() -> impl IntoView {
                 <FeatureCard
                     icon=|| view! { <Terminal class="w-5 h-5 text-blue-400" /> }.into_any()
                     title="Keyboard-First"
-                    text="Vim-style navigation, search, and controls. Never reach for the mouse."
+                    text="Vim-style navigation, search, and controls. Mouse support is opt-in."
                 />
                 <FeatureCard
                     icon=|| view! { <Zap class="w-5 h-5 text-yellow-400" /> }.into_any()

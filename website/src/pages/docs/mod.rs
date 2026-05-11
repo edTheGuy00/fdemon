@@ -6,6 +6,7 @@ pub mod devtools;
 pub mod installation;
 pub mod introduction;
 pub mod keybindings;
+pub mod mouse;
 pub mod native_logs;
 
 use leptos::prelude::*;
@@ -13,7 +14,8 @@ use leptos_router::components::{Outlet, A};
 use leptos_router::hooks::use_location;
 
 use crate::components::icons::{
-    Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings, Terminal,
+    Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, MousePointer, ScrollText, Settings,
+    Terminal,
 };
 
 struct DocItem {
@@ -38,6 +40,11 @@ fn doc_items() -> Vec<DocItem> {
             href: "/docs/keybindings",
             label: "Keybindings",
             icon: || view! { <Keyboard class="w-4 h-4 mr-3" /> }.into_any(),
+        },
+        DocItem {
+            href: "/docs/mouse",
+            label: "Mouse",
+            icon: || view! { <MousePointer class="w-4 h-4 mr-3" /> }.into_any(),
         },
         DocItem {
             href: "/docs/devtools",

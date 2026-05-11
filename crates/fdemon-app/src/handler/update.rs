@@ -57,6 +57,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
         }
 
+        Message::Mouse(input) => {
+            if let Some(msg) = super::mouse::handle_mouse(state, input) {
+                UpdateResult::message(msg)
+            } else {
+                UpdateResult::none()
+            }
+        }
+
         Message::SessionDaemon { session_id, event } => {
             handle_session_daemon_event(state, session_id, event)
         }
@@ -526,14 +534,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         } => session_lifecycle::handle_session_process_attached(state, session_id, cmd_sender),
 
         Message::SelectSessionByIndex(index) => {
+            // Clear the double-click stamp so a cross-session entry_id collision
+            // cannot trigger a spurious ToggleStackTraceForEntry on the new session.
+            state.last_log_click = None;
             session_lifecycle::handle_select_session_by_index(state, index)
         }
 
-        Message::NextSession => session_lifecycle::handle_next_session(state),
+        Message::NextSession => {
+            state.last_log_click = None;
+            session_lifecycle::handle_next_session(state)
+        }
 
-        Message::PreviousSession => session_lifecycle::handle_previous_session(state),
+        Message::PreviousSession => {
+            state.last_log_click = None;
+            session_lifecycle::handle_previous_session(state)
+        }
 
-        Message::CloseCurrentSession => session_lifecycle::handle_close_current_session(state),
+        Message::CloseCurrentSession => {
+            state.last_log_click = None;
+            session_lifecycle::handle_close_current_session(state)
+        }
+        Message::CloseSessionAt(idx) => {
+            state.last_log_click = None;
+            session_lifecycle::handle_close_session_at(state, idx)
+        }
 
         // ─────────────────────────────────────────────────────────
         // Log Control (Task 10)
@@ -680,6 +704,85 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 }
             }
             UpdateResult::none()
+        }
+
+        // ── Mouse Click Messages (Phase 5) ────────────────────────────────────
+        Message::NewSessionDialogSelectDeviceAt { index } => {
+            crate::handler::new_session::clicks::handle_select_device_at(state, index)
+        }
+
+        Message::NewSessionDialogFocusField { field } => {
+            crate::handler::new_session::clicks::handle_focus_field(state, field)
+        }
+
+        Message::NewSessionDialogFuzzySelectAt { index } => {
+            crate::handler::new_session::clicks::handle_fuzzy_select_at(state, index)
+        }
+
+        Message::SettingsClickRow { index } => {
+            crate::handler::settings_handlers::handle_settings_click_row(state, index)
+        }
+
+        // Click on a tag row in the tag filter overlay.
+        //
+        // Sets `tag_filter_ui.selected_index = index` (so the selection follows
+        // the click target — useful if the user keyboard-arrows after the click)
+        // AND toggles the visibility of the tag at that index.
+        //
+        // Single click both navigates and toggles by design. See Phase 5 PLAN.md
+        // notes for the UX rationale (tag-filter overlay has no useful "selected
+        // but not toggled" state).
+        //
+        // `index` is clamped to the valid tag range. If the index is out of range
+        // (which shouldn't happen because the widget only registers regions for
+        // visible rows), the toggle is a no-op.
+        Message::TagFilterClickRow { index } => {
+            let tag_count = state
+                .session_manager
+                .selected()
+                .map(|h| h.native_tag_state.tag_count())
+                .unwrap_or(0);
+
+            if tag_count == 0 || index >= tag_count {
+                return UpdateResult::none();
+            }
+
+            state.tag_filter_ui.selected_index = index;
+
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    // Collect the tag name at the clicked index before mutably
+                    // borrowing the session manager. Mirrors the
+                    // `TagFilterToggleSelected` arm's pattern.
+                    let tag_name: Option<String> = handle
+                        .native_tag_state
+                        .sorted_tags()
+                        .get(index)
+                        .map(|(tag, _)| tag.to_string());
+                    if let Some(tag) = tag_name {
+                        handle.native_tag_state.toggle_tag(&tag);
+                    }
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // ── Mouse Click Messages (Phase 4) ───────────────────────────────────
+        Message::ClickLogRow {
+            entry_id,
+            frame_index,
+        } => crate::handler::log_view::handle_click_log_row(state, entry_id, frame_index),
+
+        Message::ToggleStackTraceForEntry { entry_id } => {
+            crate::handler::log_view::handle_toggle_stack_trace_for_entry(state, entry_id)
+        }
+
+        Message::DevToolsInspectorSelectRow { index } => {
+            crate::handler::devtools::inspector::handle_inspector_select_row(state, index)
+        }
+
+        Message::DevToolsInspectorToggleNode { index } => {
+            crate::handler::devtools::inspector::handle_inspector_toggle_node(state, index)
         }
 
         // ─────────────────────────────────────────────────────────
@@ -1074,7 +1177,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         | Message::NewSessionDialogSetError { .. }
         | Message::NewSessionDialogClearError
         | Message::NewSessionDialogSelectConfig { .. }
-        | Message::NewSessionDialogSetMode { .. }
         | Message::NewSessionDialogSetFlavor { .. }
         | Message::NewSessionDialogSetDartDefines { .. } => {
             // Handlers for these will be implemented in subsequent tasks
@@ -1093,6 +1195,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::NewSessionDialogModeNext => new_session::handle_mode_next(state),
 
         Message::NewSessionDialogModePrev => new_session::handle_mode_prev(state),
+
+        Message::NewSessionDialogSetMode { mode } => new_session::handle_set_mode(state, mode),
 
         Message::NewSessionDialogConfigSelected { config_name } => {
             new_session::handle_config_selected(state, config_name)

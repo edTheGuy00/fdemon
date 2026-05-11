@@ -734,6 +734,7 @@ dependencies = [
  "fdemon-daemon",
  "insta",
  "ratatui",
+ "serial_test",
  "tempfile",
  "tokio",
  "tracing",

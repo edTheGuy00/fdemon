@@ -15,6 +15,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
+use crate::widgets::MouseCtx;
+
 // Re-export pure helpers so tests.rs (which uses `use super::*;`) can access them.
 // bar_colors and ms_to_half_blocks are pub(crate) in bars.rs to allow this re-export.
 // The cfg(test) guard prevents an unused-import warning in non-test builds.
@@ -120,7 +122,52 @@ impl Widget for FrameChart<'_> {
             height: DETAIL_PANEL_HEIGHT,
         };
 
-        self.render_bar_chart(chart_area, buf);
+        self.render_bar_chart(chart_area, buf, None);
+        self.render_detail_panel(detail_area, buf);
+    }
+}
+
+impl FrameChart<'_> {
+    /// Render the frame chart, optionally recording clickable regions.
+    ///
+    /// Pass `Some(ctx)` to register one `MouseAction::Emit(SelectPerformanceFrame { index: Some(i) })`
+    /// per visible frame slot. Pass `None` to skip region recording (identical to `Widget::render`).
+    ///
+    /// This is called from `performance::render_with_regions` in Phase 4.
+    pub(super) fn render_with_regions(
+        self,
+        area: Rect,
+        buf: &mut Buffer,
+        ctx: Option<&mut MouseCtx<'_>>,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let total_h = area.height;
+
+        // Compact mode: area is too small for chart + detail panel — no regions
+        if total_h < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT {
+            self.render_summary_line(area, buf);
+            return;
+        }
+
+        let chart_h = total_h - DETAIL_PANEL_HEIGHT;
+        let chart_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: chart_h,
+        };
+        let detail_area = Rect {
+            x: area.x,
+            y: area.y + chart_h,
+            width: area.width,
+            height: DETAIL_PANEL_HEIGHT,
+        };
+
+        // Forward ctx into the bar chart; detail panel is not clickable in v1.
+        self.render_bar_chart(chart_area, buf, ctx);
         self.render_detail_panel(detail_area, buf);
     }
 }

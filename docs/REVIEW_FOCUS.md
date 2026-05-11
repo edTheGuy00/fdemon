@@ -26,8 +26,10 @@ handler layer. These fields:
 - Must not participate in state equality comparisons or serialization
 - Must default to a safe fallback (e.g., 0) so the handler works without any render
 
-**Current usage:** `TargetSelectorState::last_known_visible_height` — the renderer writes
-the actual device list area height each frame; the handler reads it for scroll calculations.
+**Current usage:**
+- `TargetSelectorState::last_known_visible_height` — the renderer writes the actual device list area height each frame; the handler reads it for scroll calculations.
+- `AppState::mouse_regions: MouseRegionsCell` — the renderer populates a fresh `MouseRegions` registry each frame (header shortcuts, session tabs, device pill); `handler/mouse/normal.rs::handle_press` reads it for click hit-tests. Wrapped in a `MouseRegionsCell` newtype to satisfy `#[derive(Debug)]` on `AppState` (since `Cell<T>: Debug` requires `T: Copy`, which `MouseRegions` cannot be).
+- `TagFilterUiState::last_known_scroll_offset` — the renderer writes ratatui's `ListState.offset()` each frame after `render_stateful_widget`; the region recorder reads it to convert screen-row numbers to absolute tag indices for click region registration. Default 0 (safe fallback when no render has happened yet).
 
 New `Cell`-based render-hint fields require explicit review and documentation here.
 

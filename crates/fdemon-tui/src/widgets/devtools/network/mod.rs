@@ -26,6 +26,8 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
+use crate::widgets::MouseCtx;
+
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::palette;
@@ -168,6 +170,16 @@ impl NetworkMonitor<'_> {
     // ── Layout variants ───────────────────────────────────────────────────────
 
     fn render_wide_layout(&self, area: Rect, buf: &mut Buffer, filtered: &[&HttpProfileEntry]) {
+        self.render_wide_layout_with_regions(area, buf, filtered, None);
+    }
+
+    fn render_wide_layout_with_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        filtered: &[&HttpProfileEntry],
+        mut ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
@@ -181,7 +193,7 @@ impl NetworkMonitor<'_> {
             self.network_state.recording,
             &self.network_state.filter,
         );
-        table.render(chunks[0], buf);
+        table.render_with_regions(chunks[0], buf, ctx.as_deref_mut());
 
         // Right: Request details (with border)
         let detail_block = Block::default()
@@ -197,16 +209,26 @@ impl NetworkMonitor<'_> {
                 self.network_state.detail_tab,
                 self.network_state.loading_detail,
             );
-            detail_widget.render(detail_inner, buf);
+            detail_widget.render_with_regions(detail_inner, buf, ctx);
         }
     }
 
     fn render_narrow_split(&self, area: Rect, buf: &mut Buffer, filtered: &[&HttpProfileEntry]) {
+        self.render_narrow_split_with_regions(area, buf, filtered, None);
+    }
+
+    fn render_narrow_split_with_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        filtered: &[&HttpProfileEntry],
+        mut ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         let chunks =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
 
         // Top: request table
-        self.render_table_only(chunks[0], buf, filtered);
+        self.render_table_only_with_regions(chunks[0], buf, filtered, ctx.as_deref_mut());
 
         // Bottom: request details
         if let Some(entry) = self.network_state.selected_entry() {
@@ -216,11 +238,21 @@ impl NetworkMonitor<'_> {
                 self.network_state.detail_tab,
                 self.network_state.loading_detail,
             );
-            detail_widget.render(chunks[1], buf);
+            detail_widget.render_with_regions(chunks[1], buf, ctx);
         }
     }
 
     fn render_table_only(&self, area: Rect, buf: &mut Buffer, filtered: &[&HttpProfileEntry]) {
+        self.render_table_only_with_regions(area, buf, filtered, None);
+    }
+
+    fn render_table_only_with_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        filtered: &[&HttpProfileEntry],
+        ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         let table = RequestTable::new(
             filtered,
             self.network_state.selected_index,
@@ -228,7 +260,7 @@ impl NetworkMonitor<'_> {
             self.network_state.recording,
             &self.network_state.filter,
         );
-        table.render(area, buf);
+        table.render_with_regions(area, buf, ctx);
     }
 
     // ── Filter input bar ──────────────────────────────────────────────────────
@@ -343,5 +375,89 @@ impl NetworkMonitor<'_> {
             };
             buf.set_string(x, y, line, style);
         }
+    }
+}
+
+/// Render the network monitor panel, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `devtools::render_with_regions`.
+/// The `Widget::render` impl calls this with `ctx = None` so it never records
+/// regions. Passing `None` for `ctx` makes this function behave identically to
+/// `Widget::render`.
+///
+/// When `ctx` is `Some`:
+/// - Each visible request-table row registers a
+///   `MouseAction::Emit(Message::NetworkSelectRequest { index: Some(entry_idx) })`
+///   region spanning the full row width.
+/// - Each detail-panel sub-tab label registers a
+///   `MouseAction::Emit(Message::NetworkSwitchDetailTab(tab))` region.
+/// - Disconnected / unavailable / too-small early-return paths register no regions.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    widget: NetworkMonitor<'_>,
+    ctx: Option<&mut MouseCtx<'_>>,
+) {
+    // Fill background using an unstyled Block.
+    Block::new()
+        .style(Style::default().bg(palette::DEEPEST_BG))
+        .render(area, buf);
+
+    // Gate on VM connection — no regions on disconnected view.
+    if !widget.vm_connected {
+        widget.render_disconnected(area, buf);
+        return;
+    }
+
+    // Check if extensions are unavailable — no regions.
+    if widget.network_state.extensions_available == Some(false) {
+        widget.render_unavailable(area, buf);
+        return;
+    }
+
+    // Reserve bottom row for parent footer.
+    let usable = Rect {
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+
+    if usable.height < MIN_USABLE_HEIGHT || usable.width < MIN_USABLE_WIDTH {
+        widget.render_too_small(usable, buf);
+        return;
+    }
+
+    // When filter input is active, reserve the top row for the filter bar.
+    let content_area = if widget.network_state.filter_input_active {
+        widget.render_filter_input_bar(
+            Rect {
+                height: 1,
+                ..usable
+            },
+            buf,
+        );
+        Rect {
+            y: usable.y + 1,
+            height: usable.height.saturating_sub(1),
+            ..usable
+        }
+    } else {
+        usable
+    };
+
+    if content_area.height < MIN_USABLE_HEIGHT || content_area.width < MIN_USABLE_WIDTH {
+        return;
+    }
+
+    let filtered = widget.network_state.filtered_entries();
+    let has_selection = widget.network_state.selected_index.is_some();
+
+    if has_selection {
+        if area.width >= WIDE_THRESHOLD {
+            widget.render_wide_layout_with_regions(content_area, buf, &filtered, ctx);
+        } else {
+            widget.render_narrow_split_with_regions(content_area, buf, &filtered, ctx);
+        }
+    } else {
+        widget.render_table_only_with_regions(content_area, buf, &filtered, ctx);
     }
 }

@@ -2,6 +2,10 @@
 
 This document provides a comprehensive reference of all keyboard controls available in Flutter Demon, organized by context and functionality.
 
+> **Mouse interactions** are documented separately in [MOUSE.md](MOUSE.md), which covers
+> wheel-scroll routing, click-to-activate semantics for the header / tabs / dialogs / DevTools,
+> and the `[ui] enable_mouse` opt-out.
+
 ---
 
 ## Table of Contents

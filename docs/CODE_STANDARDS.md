@@ -479,6 +479,69 @@ fn handle_scroll(state: &mut AppState) {
 // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
 ```
 
+### Region Registry Pattern (Approved TEA Exception)
+
+The mouse region registry (`AppState::mouse_regions: MouseRegionsCell`) is a per-frame, z-index-aware click-region table. Widgets push entries during render; the click handler reads them on the next button-press event. It uses `Cell` interior mutability, which is an approved TEA exception in the same class as the `Cell<usize>` render-hint described in Principle 3.
+
+For the type-level details of `MouseRect`, `MouseAction`, `MouseRegions`, and the hit-test algorithm, see `docs/ARCHITECTURE.md` "Mouse Region Registry". This section standardizes **how to use the pattern correctly** in production code.
+
+#### Why the exception is approved
+
+- Mirrors the `Cell<usize>` precedent above — single render-hint value, no business logic, no state-equality participation, not part of any `EngineEvent`.
+- The `MouseRegions` content is regenerated every frame; persistence across frames is intentional only because the next click event arrives between two `view()` calls.
+- Strictly scoped to render-time population and event-time read: no other code path touches the cell.
+
+#### How to use it correctly
+
+**Step 1 — Take the registry with `take_guard()` (RAII):**
+
+```rust
+// EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
+// "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
+let mut regions = state.mouse_regions.take_guard();
+```
+
+`take_guard()` returns a `MouseRegionGuard<'a>` that puts the registry back into the cell on `Drop`, even on panic. Never use `take()` + `set()` in production — only in unit tests where the guard's automatic restore gets in the way.
+
+**Step 2 — Thread `MouseCtx` through widget render functions:**
+
+```rust
+let mut mouse_ctx = MouseCtx::new(regions.builder());
+
+// Pass Some(&mut mouse_ctx) to clickable widgets, or None to suppress
+// registration (e.g., for base-UI widgets when a modal is active).
+widget.render(area, buf, Some(&mut mouse_ctx));
+```
+
+Widgets call `ctx.click(rect, action)`, `ctx.click_at_z(rect, action, z)`, or `ctx.click_left_middle(rect, left, middle)` as they paint. Empty rects are silently skipped.
+
+**Step 3 — Modal precedence via renderer-level suppression:**
+
+When the active `UiMode` is a modal (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `LinkHighlight`, `FlutterVersion`) or `tag_filter_visible` is set, pass `None` as the `MouseCtx` to base-UI widgets. This prevents z=0 base-UI regions from being registered, so clicks that miss a modal's z=1 rects cannot fall through to base-UI actions. See `docs/ARCHITECTURE.md` "Modal Precedence and Sub-Modal Gates" for the full policy.
+
+#### Annotation requirement
+
+Every cell-write site must carry an `// EXCEPTION:` annotation. Match the following style verbatim:
+
+```rust
+// EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
+// "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
+let mut regions = state.mouse_regions.take_guard();
+```
+
+This annotation lets reviewers distinguish intentional Cell writes from accidental ones at a glance.
+
+#### Anti-patterns
+
+| Anti-pattern | Why it's wrong | Correct alternative |
+|---|---|---|
+| `take()` + `set()` in production code | A panic between take and set leaves the registry empty for the rest of the session | `take_guard()` (RAII) — guard restores on `Drop` even on panic |
+| Manual `z_index >= 1` filter in the handler for modal precedence | Renderer-level suppression is the canonical mechanism; manual filtering duplicates logic and risks drift | Pass `None` as `MouseCtx` to base-UI widgets when in a modal mode |
+| Storing business state on the registry | The registry is a render hint, not state — it is replaced every frame | Add real state to `AppState` and emit messages through the TEA update cycle |
+| Cell-write site without an `// EXCEPTION:` annotation | Reviewers cannot distinguish intentional Cell writes from accidental ones | Add the annotation using the required style above |
+
+**Cross-references:** `docs/ARCHITECTURE.md` "Mouse Region Registry" — type definitions and hit-test algorithm. `docs/REVIEW_FOCUS.md` "Approved TEA Exception → Current usage" — exhaustive list of all approved Cell exceptions.
+
 ### Principle 4: Use named constants for layout thresholds
 
 **Statement**: Every numeric threshold used in layout decisions must be a named constant with a doc comment explaining how the value was derived. Magic numbers are forbidden in layout code.

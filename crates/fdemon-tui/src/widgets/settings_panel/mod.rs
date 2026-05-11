@@ -38,6 +38,24 @@ use styles::{
     LABEL_WIDTH_VSCODE, VALUE_WIDTH, VALUE_WIDTH_VSCODE,
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Layout constants — single source of truth shared by renderers and region
+// recorder.  Changing any value here automatically keeps visual output and
+// mouse-region rects in sync.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Fixed pixel width (columns) of each settings tab pill.
+const SETTINGS_TAB_WIDTH: u16 = 12;
+
+/// Gap (columns) between adjacent tab pills.
+const SETTINGS_TAB_GAP: u16 = 1;
+
+/// Height (rows) of the info banner rendered above the User Preferences item list.
+const SETTINGS_USER_PREFS_BANNER_HEIGHT: u16 = 4;
+
+/// Height (rows) of the info banner rendered above the VSCode config item list.
+const SETTINGS_VSCODE_BANNER_HEIGHT: u16 = 4;
+
 /// Full-screen settings panel widget
 pub struct SettingsPanel<'a> {
     /// Reference to application settings
@@ -164,8 +182,8 @@ impl SettingsPanel<'_> {
             (SettingsTab::VSCodeConfig, "4. VSCODE"),
         ];
 
-        let tab_width = 12u16; // Fixed width per tab
-        let gap = 1u16; // Gap between tabs
+        let tab_width = SETTINGS_TAB_WIDTH;
+        let gap = SETTINGS_TAB_GAP;
 
         let mut x = area.left();
         for (tab, label) in tabs {
@@ -200,6 +218,8 @@ impl SettingsPanel<'_> {
     // ─────────────────────────────────────────────────────────────────────────────
 
     fn render_content(&self, area: Rect, buf: &mut Buffer, state: &mut SettingsViewState) {
+        use fdemon_app::config::{launch::load_launch_configs, load_vscode_configs};
+
         let content_block = Block::default()
             .borders(Borders::LEFT | Borders::RIGHT)
             .border_set(symbols::border::ROUNDED);
@@ -210,12 +230,20 @@ impl SettingsPanel<'_> {
         // Create IconSet once for all renderers
         let icons = IconSet::new(self.settings.ui.icons);
 
-        // Dispatch to tab-specific renderer
+        // Load configs once per render pass — only for the active tab that needs them.
+        // The loaded vec is threaded into the tab renderer so neither renderer nor the
+        // companion `render_with_regions` region recorder needs a second disk read.
         match state.active_tab {
             SettingsTab::Project => self.render_project_tab(inner, buf, state, &icons),
             SettingsTab::UserPrefs => self.render_user_prefs_tab(inner, buf, state, &icons),
-            SettingsTab::LaunchConfig => self.render_launch_tab(inner, buf, state, &icons),
-            SettingsTab::VSCodeConfig => self.render_vscode_tab(inner, buf, state, &icons),
+            SettingsTab::LaunchConfig => {
+                let configs = load_launch_configs(self.project_path);
+                self.render_launch_tab(inner, buf, state, &icons, &configs);
+            }
+            SettingsTab::VSCodeConfig => {
+                let configs = load_vscode_configs(self.project_path);
+                self.render_vscode_tab(inner, buf, state, &icons, &configs);
+            }
         }
     }
 
@@ -554,15 +582,21 @@ impl SettingsPanel<'_> {
         icons: &IconSet,
     ) {
         // Render info banner about local settings
-        let info_area = Rect::new(area.x, area.y, area.width, 4);
+        let info_area = Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            SETTINGS_USER_PREFS_BANNER_HEIGHT,
+        );
         self.render_user_prefs_info(info_area, buf);
 
         // Content area below info banner
         let content_area = Rect::new(
             area.x,
-            area.y + 4,
+            area.y + SETTINGS_USER_PREFS_BANNER_HEIGHT,
             area.width,
-            area.height.saturating_sub(4),
+            area.height
+                .saturating_sub(SETTINGS_USER_PREFS_BANNER_HEIGHT),
         );
 
         let items = user_prefs_items(&state.user_prefs, self.settings);
@@ -779,12 +813,8 @@ impl SettingsPanel<'_> {
         buf: &mut Buffer,
         state: &mut SettingsViewState,
         _icons: &IconSet,
+        configs: &[fdemon_app::config::ResolvedLaunchConfig],
     ) {
-        use fdemon_app::config::launch::load_launch_configs;
-
-        // Load configurations from disk
-        let configs = load_launch_configs(self.project_path);
-
         if configs.is_empty() {
             self.render_launch_empty_state(area, buf);
             return;
@@ -956,23 +986,19 @@ impl SettingsPanel<'_> {
         buf: &mut Buffer,
         state: &mut SettingsViewState,
         _icons: &IconSet,
+        configs: &[fdemon_app::config::ResolvedLaunchConfig],
     ) {
-        use fdemon_app::config::load_vscode_configs;
-
         // Info banner about read-only nature
-        let info_area = Rect::new(area.x, area.y, area.width, 4);
+        let info_area = Rect::new(area.x, area.y, area.width, SETTINGS_VSCODE_BANNER_HEIGHT);
         self.render_vscode_info(info_area, buf);
 
         // Content area
         let content_area = Rect::new(
             area.x,
-            area.y + 4,
+            area.y + SETTINGS_VSCODE_BANNER_HEIGHT,
             area.width,
-            area.height.saturating_sub(4),
+            area.height.saturating_sub(SETTINGS_VSCODE_BANNER_HEIGHT),
         );
-
-        // Load configs (Dart-only, filtered by vscode.rs)
-        let configs = load_vscode_configs(self.project_path);
 
         if configs.is_empty() {
             // Check if the file exists at all
@@ -1342,6 +1368,254 @@ impl SettingsPanel<'_> {
     pub fn get_selected_item(&self, state: &SettingsViewState) -> Option<SettingItem> {
         fdemon_app::settings_items::get_selected_item(self.settings, self.project_path, state)
     }
+}
+
+/// Render `SettingsPanel` and record clickable row regions.
+///
+/// This is a free-function sister to [`StatefulWidget::render`] that
+/// additionally accepts an optional [`crate::widgets::MouseCtx`] for region
+/// recording.
+///
+/// When `ctx` is `Some`, this function registers:
+/// - Four tab-header click regions (`z_index = 0`) emitting
+///   [`fdemon_app::message::Message::SettingsGotoTab(i)`].
+/// - One click region per visible setting row (`z_index = 0`) emitting
+///   [`fdemon_app::message::Message::SettingsClickRow { index }`] where
+///   `index` is the flat item index (section-header rows are skipped).
+///
+/// Passing `None` produces output identical to calling
+/// `frame.render_stateful_widget(panel, area, state)`.
+///
+/// # Sub-modal note
+///
+/// When `state.dart_defines_modal` or `state.extra_args_modal` is open, the
+/// underlying tab + row regions are still registered. The dispatcher's editing
+/// gate (Task 05) handles click suppression for the modal case. Sub-modal
+/// regions (dart-defines, extra-args) are deferred to Phase 6.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    view: SettingsPanel<'_>,
+    state: &mut SettingsViewState,
+    ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
+) {
+    // 1. Delegate rendering to StatefulWidget::render (visual output unchanged).
+    // We keep a copy of relevant layout references for region recording below.
+    let settings = view.settings;
+    let project_path = view.project_path;
+
+    <SettingsPanel as StatefulWidget>::render(view, area, buf, state);
+
+    // 2. If no context, we are done.
+    let ctx = match ctx {
+        Some(c) => c,
+        None => return,
+    };
+
+    // ── Mirror the layout from StatefulWidget::render ────────────────────────
+
+    // Main vertical layout (same constraints as in render()):
+    //   chunks[0] = header (height 5)
+    //   chunks[1] = content (min 5)
+    //   chunks[2] = footer (height 3)
+    let chunks = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(5),
+        ratatui::layout::Constraint::Min(5),
+        ratatui::layout::Constraint::Length(3),
+    ])
+    .split(area);
+
+    let header_area = chunks[0];
+    let content_area = chunks[1];
+
+    // ── Tab bar regions ───────────────────────────────────────────────────────
+
+    // Mirror render_header / render_tab_bar layout:
+    //   header_block has Borders::ALL (rounded) → inner shrinks by 1 on each side
+    //   title_y = inner.top()
+    //   tab_y   = inner.top() + 2
+    //   tab_area = Rect::new(inner.left() + 1, tab_y, inner.width - 2, 1)
+    let header_inner_x = header_area.x.saturating_add(1);
+    let header_inner_y = header_area.y.saturating_add(1);
+    let header_inner_width = header_area.width.saturating_sub(2);
+
+    let tab_y = header_inner_y.saturating_add(2);
+    let tab_area_x = header_inner_x.saturating_add(1);
+    let tab_area_width = header_inner_width.saturating_sub(2);
+
+    let tab_width: u16 = SETTINGS_TAB_WIDTH;
+    let gap: u16 = SETTINGS_TAB_GAP;
+
+    let mut x = tab_area_x;
+    for i in 0..4usize {
+        if x + tab_width > tab_area_x + tab_area_width {
+            break;
+        }
+        let rect = fdemon_app::MouseRect::new(x, tab_y, tab_width, 1);
+        if !rect.is_empty() {
+            ctx.click(
+                rect,
+                fdemon_app::MouseAction::emit(fdemon_app::message::Message::SettingsGotoTab(i)),
+            );
+        }
+        x = x.saturating_add(tab_width + gap);
+    }
+
+    // ── Setting row regions ───────────────────────────────────────────────────
+
+    // Mirror content layout: content_block has Borders::LEFT | Borders::RIGHT
+    // → inner shrinks by 1 on left and right only (no top/bottom offset).
+    let inner_x = content_area.x.saturating_add(1);
+    let inner_y = content_area.y;
+    let inner_width = content_area.width.saturating_sub(2);
+    let inner_bottom = content_area.bottom();
+
+    // Build the item list and starting Y offset for each tab, mirroring the
+    // per-tab render functions exactly (section-header skip logic must match).
+    //
+    // For LaunchConfig and VSCode tabs the configs are loaded ONCE here and
+    // threaded to the region recorder — no second disk read in this path.
+    // (StatefulWidget::render above already did one load inside render_content;
+    // the region recorder must not perform an additional load.)
+    match state.active_tab {
+        SettingsTab::Project => {
+            let items = project_settings_items(settings);
+            register_setting_row_regions(ctx, &items, inner_x, inner_y, inner_width, inner_bottom);
+        }
+        SettingsTab::UserPrefs => {
+            let items = user_prefs_items(&state.user_prefs, settings);
+            // User prefs tab renders a SETTINGS_USER_PREFS_BANNER_HEIGHT-row info banner above.
+            let content_y = inner_y.saturating_add(SETTINGS_USER_PREFS_BANNER_HEIGHT);
+            register_setting_row_regions(
+                ctx,
+                &items,
+                inner_x,
+                content_y,
+                inner_width,
+                inner_bottom,
+            );
+        }
+        SettingsTab::LaunchConfig => {
+            use fdemon_app::config::launch::load_launch_configs;
+
+            // Single load for the region-recorder path (renderer loaded once above).
+            let configs = load_launch_configs(project_path);
+            if !configs.is_empty() {
+                let mut all_items: Vec<fdemon_app::config::SettingItem> = Vec::new();
+                for (idx, resolved) in configs.iter().enumerate() {
+                    all_items.extend(launch_config_items(&resolved.config, idx));
+                }
+                let after_items_y = register_setting_row_regions(
+                    ctx,
+                    &all_items,
+                    inner_x,
+                    inner_y,
+                    inner_width,
+                    inner_bottom,
+                );
+
+                // ── Sentinel: "Add New Configuration" row ──────────────────
+                // Mirrors render_launch_tab: rendered at y+1 (spacer) after all
+                // items, guarded by `y + 2 < area.bottom()`.
+                let sentinel_index = all_items.len();
+                let sentinel_y = after_items_y.saturating_add(1); // one spacer row
+                if after_items_y.saturating_add(2) < inner_bottom {
+                    let sentinel_rect =
+                        fdemon_app::MouseRect::new(inner_x, sentinel_y, inner_width, 1);
+                    if !sentinel_rect.is_empty() {
+                        ctx.click(
+                            sentinel_rect,
+                            fdemon_app::MouseAction::emit(
+                                fdemon_app::message::Message::SettingsClickRow {
+                                    index: sentinel_index,
+                                },
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        SettingsTab::VSCodeConfig => {
+            use fdemon_app::config::load_vscode_configs;
+
+            // Single load for the region-recorder path (renderer loaded once above).
+            let configs = load_vscode_configs(project_path);
+            if !configs.is_empty() {
+                // VSCode tab renders a SETTINGS_VSCODE_BANNER_HEIGHT-row info banner above.
+                let content_y = inner_y.saturating_add(SETTINGS_VSCODE_BANNER_HEIGHT);
+
+                let mut all_items: Vec<fdemon_app::config::SettingItem> = Vec::new();
+                for (idx, resolved) in configs.iter().enumerate() {
+                    all_items.extend(vscode_config_items(&resolved.config, idx));
+                }
+                register_setting_row_regions(
+                    ctx,
+                    &all_items,
+                    inner_x,
+                    content_y,
+                    inner_width,
+                    inner_bottom,
+                );
+            }
+        }
+    }
+}
+
+/// Register one left-click region per visible setting row, mirroring the
+/// section-header skip logic used by the per-tab renderers.
+///
+/// `items` is the flat `Vec<SettingItem>` for the active tab.  Section
+/// headers consume one `y` row each (plus a one-row spacer between sections)
+/// but are **not** registered as click regions.  The `index` stored in each
+/// [`Message::SettingsClickRow`] is the flat item index into `items`.
+///
+/// Returns the `y` value immediately after the last registered row.  Callers
+/// that need to append extra rows (e.g. the "Add New Configuration" sentinel
+/// on the LaunchConfig tab) use this value to compute the correct y position.
+fn register_setting_row_regions(
+    ctx: &mut crate::widgets::MouseCtx<'_>,
+    items: &[fdemon_app::config::SettingItem],
+    x: u16,
+    start_y: u16,
+    width: u16,
+    bottom: u16,
+) -> u16 {
+    let mut current_section = String::new();
+    let mut y = start_y;
+
+    for (idx, item) in items.iter().enumerate() {
+        if y >= bottom {
+            break;
+        }
+
+        // Section header — mirrors the renderer's section-skip logic.
+        if item.section != current_section {
+            if !current_section.is_empty() {
+                y = y.saturating_add(1); // spacer row between sections
+            }
+            if y < bottom {
+                // Section header row — NOT clickable, just advance y.
+                y = y.saturating_add(1);
+            }
+            current_section = item.section.clone();
+        }
+
+        // Setting row — register as clickable.
+        if y < bottom {
+            let rect = fdemon_app::MouseRect::new(x, y, width, 1);
+            if !rect.is_empty() {
+                ctx.click(
+                    rect,
+                    fdemon_app::MouseAction::emit(fdemon_app::message::Message::SettingsClickRow {
+                        index: idx,
+                    }),
+                );
+            }
+            y = y.saturating_add(1);
+        }
+    }
+
+    y
 }
 
 #[cfg(test)]

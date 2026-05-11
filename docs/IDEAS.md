@@ -27,33 +27,7 @@ Automatically watch `pubspec.yaml` and `pubspec.lock` for changes and prompt the
 
 ---
 
-### 2. Mouse Support
-
-**Priority**: Low  
-**Complexity**: Medium
-
-Enable mouse interactions within the TUI for users who prefer point-and-click over keyboard shortcuts.
-
-**Potential Features**:
-- Clickable header buttons (Reload, Restart, DevTools, etc.)
-- Scrollable log area with mouse wheel
-- Log entry selection via mouse click
-- Device selection via mouse in the device selector modal
-- Session tab switching with mouse clicks
-
-**Implementation Notes**:
-- Ratatui + Crossterm support mouse events
-- Need to track clickable regions and map mouse positions
-- Must maintain full keyboard accessibility (mouse is optional)
-
-**Why Deferred**:
-- Terminal power users typically prefer keyboard-centric workflows
-- Adds significant complexity to event handling
-- Not all terminals have consistent mouse support
-
----
-
-### 3. Remote Development
+### 2. Remote Development
 
 **Priority**: Low  
 **Complexity**: High
@@ -78,7 +52,7 @@ Support running Flutter Demon on a remote machine with the Flutter project, conn
 
 ---
 
-### 4. Plugin System
+### 3. Plugin System
 
 **Priority**: Low  
 **Complexity**: Very High

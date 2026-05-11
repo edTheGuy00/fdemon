@@ -275,6 +275,16 @@ pub struct UiSettings {
     /// Icon mode: "unicode" (default) or "nerd_fonts"
     #[serde(default)]
     pub icons: IconMode,
+
+    /// Enable mouse interactions in the TUI: clickable header shortcuts,
+    /// session tabs, log view, DevTools panels, and dialogs. Scroll wheel
+    /// always works when enabled. Defaults to `true`.
+    ///
+    /// Set to `false` if your terminal handles mouse reporting poorly or you
+    /// prefer Shift-free native text selection. Changes take effect on the
+    /// next fdemon launch.
+    #[serde(default = "default_true")]
+    pub enable_mouse: bool,
 }
 
 impl Default for UiSettings {
@@ -287,6 +297,7 @@ impl Default for UiSettings {
             stack_trace_collapsed: true,
             stack_trace_max_frames: default_stack_trace_max_frames(),
             icons: IconMode::default(),
+            enable_mouse: true,
         }
     }
 }
@@ -1419,6 +1430,42 @@ debounce_ms = 1000
         assert!(settings.behavior.confirm_quit); // default
         assert_eq!(settings.watcher.debounce_ms, 1000);
         assert!(settings.watcher.auto_reload); // default
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // UiSettings enable_mouse Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ui_settings_enable_mouse_defaults_to_true() {
+        let s = UiSettings::default();
+        assert!(s.enable_mouse);
+    }
+
+    #[test]
+    fn test_ui_settings_deserializes_without_enable_mouse_field() {
+        // Existing config files predating this feature must still load cleanly
+        // and inherit the default.
+        let toml = r#"
+            log_buffer_size = 5000
+            show_timestamps = true
+        "#;
+        let s: UiSettings = toml::from_str(toml).expect("must deserialize");
+        assert!(s.enable_mouse, "missing field should default to true");
+    }
+
+    #[test]
+    fn test_ui_settings_deserializes_explicit_enable_mouse_false() {
+        let toml = r#"enable_mouse = false"#;
+        let s: UiSettings = toml::from_str(toml).expect("must deserialize");
+        assert!(!s.enable_mouse);
+    }
+
+    #[test]
+    fn test_ui_settings_deserializes_explicit_enable_mouse_true() {
+        let toml = r#"enable_mouse = true"#;
+        let s: UiSettings = toml::from_str(toml).expect("must deserialize");
+        assert!(s.enable_mouse);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
