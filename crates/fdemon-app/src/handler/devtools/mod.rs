@@ -382,21 +382,34 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
 }
 
 /// Handle opening Flutter DevTools in the system browser.
+///
+/// Prefers the served DevTools endpoint (`session.devtools_endpoint`) when
+/// available — this is the URL from the `app.devTools` daemon event or the
+/// `devtools.serve` RPC response.  Falls back to `build_local_devtools_url`
+/// (the legacy DDS-path URL) when no endpoint has been recorded yet.
 pub fn handle_open_browser_devtools(state: &AppState) -> UpdateResult {
-    let ws_uri = state
-        .session_manager
-        .selected()
-        .and_then(|h| h.session.ws_uri.clone());
+    let Some(session_handle) = state.session_manager.selected() else {
+        return UpdateResult::none();
+    };
 
-    let Some(ws_uri) = ws_uri else {
+    let Some(ref ws_uri) = session_handle.session.ws_uri else {
         tracing::warn!("Cannot open browser DevTools: no VM Service URI available");
         return UpdateResult::none();
     };
 
-    let encoded_uri = percent_encode_uri(&ws_uri);
-    let url = build_local_devtools_url(&ws_uri, &encoded_uri);
-    let browser = state.settings.devtools.browser.clone();
+    let url = match &session_handle.session.devtools_endpoint {
+        Some(endpoint) => {
+            tracing::info!(base_url = %endpoint.base_url, "Opening served DevTools URL");
+            endpoint.url(ws_uri)
+        }
+        None => {
+            tracing::warn!("No served DevTools endpoint — falling back to legacy URL");
+            let encoded = percent_encode_uri(ws_uri);
+            build_local_devtools_url(ws_uri, &encoded)
+        }
+    };
 
+    let browser = state.settings.devtools.browser.clone();
     UpdateResult::action(UpdateAction::OpenBrowserDevTools { url, browser })
 }
 
@@ -754,6 +767,100 @@ mod tests {
             result.action.is_none(),
             "Expected no action when ws_uri is not set"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Served URL preference tests (Task 06: open-browser-uses-served-url)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn open_browser_uses_served_endpoint_when_available() {
+        use crate::session::DevToolsEndpoint;
+        use std::time::Instant;
+
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+        handle.session.devtools_endpoint = Some(DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+            served_at: Instant::now(),
+        });
+
+        let result = handle_open_browser_devtools(&state);
+
+        match result.action.unwrap() {
+            UpdateAction::OpenBrowserDevTools { url, .. } => {
+                assert!(
+                    url.starts_with("http://127.0.0.1:9100?uri="),
+                    "URL should start with the served base_url (got: {url})"
+                );
+                assert!(
+                    url.contains("ws%3A%2F%2F127.0.0.1%3A1234"),
+                    "URL should contain percent-encoded ws://127.0.0.1:1234 (got: {url})"
+                );
+                // Must NOT contain /devtools/ — that is the legacy path shape.
+                assert!(
+                    !url.contains("/devtools/"),
+                    "Served URL should not use /devtools/ legacy path (got: {url})"
+                );
+            }
+            _ => panic!("expected OpenBrowserDevTools action"),
+        }
+    }
+
+    #[test]
+    fn open_browser_uses_served_endpoint_dds_integrated_format() {
+        // DDS-integrated DevTools (Flutter ≥ 3.24) — base_url has auth-token path.
+        use crate::session::DevToolsEndpoint;
+        use std::time::Instant;
+
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:59123/tbrR0DzW2j8=/ws".to_string());
+        handle.session.devtools_endpoint = Some(DevToolsEndpoint {
+            base_url: "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools".into(),
+            served_at: Instant::now(),
+        });
+
+        let result = handle_open_browser_devtools(&state);
+
+        match result.action.unwrap() {
+            UpdateAction::OpenBrowserDevTools { url, .. } => {
+                assert!(
+                    url.starts_with("http://127.0.0.1:59123/tbrR0DzW2j8=/devtools?uri="),
+                    "DDS-integrated URL should preserve auth-token path (got: {url})"
+                );
+                assert!(
+                    url.contains("ws%3A%2F%2F"),
+                    "URL should contain percent-encoded ws:// scheme (got: {url})"
+                );
+            }
+            _ => panic!("expected OpenBrowserDevTools action"),
+        }
+    }
+
+    #[test]
+    fn open_browser_falls_back_to_legacy_url_when_no_endpoint() {
+        let mut state = make_state_with_session();
+        state.session_manager.selected_mut().unwrap().session.ws_uri =
+            Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+        // No devtools_endpoint set — remains None.
+
+        let result = handle_open_browser_devtools(&state);
+
+        match result.action.unwrap() {
+            UpdateAction::OpenBrowserDevTools { url, .. } => {
+                assert!(
+                    url.contains("/devtools/?uri="),
+                    "Legacy fallback URL should contain /devtools/?uri= (got: {url})"
+                );
+                assert!(
+                    url.contains("ws%3A%2F%2F"),
+                    "Legacy URL should contain percent-encoded ws:// (got: {url})"
+                );
+            }
+            _ => panic!("expected OpenBrowserDevTools action"),
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
