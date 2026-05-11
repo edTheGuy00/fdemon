@@ -428,6 +428,11 @@ Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connecti
 | `b` | Browser DevTools | Open Flutter DevTools in system browser |
 | `q` | Quit | Quit the application |
 
+> **`b` — Browser DevTools behavior:** On Flutter SDK ≥ 1.22, the Flutter daemon registers
+> DevTools with DDS and provides a stable served URL; `b` opens that URL directly in your
+> system browser. On older SDKs that do not support the `devtools.serve` daemon command, `b`
+> falls back to the legacy DDS-served URL and shows a recovery toast in the status bar.
+
 ### Debug Overlays
 
 | Key | Action | Description |
