@@ -1794,7 +1794,8 @@ mod tests {
     }
 
     /// Acceptance criterion 4: with 2-tab dialog and one connected device,
-    /// the registry contains ≥ 8 regions (2 tabs + 1 device + ≥4 fields + 1 launch), all z=1.
+    /// the registry contains ≥ 8 regions (2 tabs + 1 device + ≥4 fields + 1 launch) at z=1,
+    /// plus exactly 3 mode-button regions at z=2 (Debug / Profile / Release).
     #[test]
     fn render_with_regions_integration_horizontal_layout_counts_regions() {
         let state = test_dialog_state(); // has one connected device
@@ -1809,10 +1810,13 @@ mod tests {
             z1_count,
         );
 
+        // The mode-button regions (Debug / Profile / Release) are registered at z=2 so
+        // they win the hit-test over the row-level FocusField region at z=1.  No fuzzy
+        // modal is open, so the only z=2 entries should be the 3 mode buttons.
         let z2_count = regions.iter().filter(|e| e.z_index == 2).count();
         assert_eq!(
-            z2_count, 0,
-            "without fuzzy modal open, expected 0 z=2 regions, got {}",
+            z2_count, 3,
+            "expected 3 z=2 mode-button regions (Debug/Profile/Release), got {}",
             z2_count
         );
     }

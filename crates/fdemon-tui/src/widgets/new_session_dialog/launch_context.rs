@@ -1183,6 +1183,53 @@ impl LaunchContextWithDevice<'_> {
 // render_with_regions helpers
 // ============================================================================
 
+/// Register click regions for the three Mode buttons.
+///
+/// `mode_row` is the rect allocated to the entire Mode field — index `3`
+/// in the expanded layout, index `1` in the compact layout. The button
+/// row lives inside `mode_row` according to `ModeSelector::render`:
+///
+/// - Expanded: label is row 0 (1 row), buttons are rows 1-3 (3 rows).
+/// - Compact: only 1 row total → no button row exists, no registration.
+///
+/// The three button sub-rects use the same `Layout::horizontal` split as
+/// `ModeSelector::render`. Registered at `z_index = 2` so they win the
+/// hit-test over the row-level `FocusField` region at `z = 1`.
+fn register_mode_button_regions(mode_row: Rect, ctx: &mut crate::widgets::MouseCtx<'_>) {
+    // Skip when the row is too short to contain the button row.
+    if mode_row.height < 4 {
+        return;
+    }
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // Label
+        Constraint::Length(3), // Buttons
+    ])
+    .split(mode_row);
+    let button_areas = Layout::horizontal([
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+    ])
+    .spacing(1)
+    .split(chunks[1]);
+
+    let modes = [
+        FlutterMode::Debug,
+        FlutterMode::Profile,
+        FlutterMode::Release,
+    ];
+    for (i, mode) in modes.iter().enumerate() {
+        let r = button_areas[i];
+        if r.width > 0 && r.height > 0 {
+            ctx.click_at_z(
+                MouseRect::new(r.x, r.y, r.width, r.height),
+                MouseAction::emit(Message::NewSessionDialogSetMode { mode: *mode }),
+                2,
+            );
+        }
+    }
+}
+
 /// Register click regions for the expanded (full) layout fields.
 ///
 /// Expanded layout chunks (indices from `calculate_fields_layout`):
@@ -1205,6 +1252,9 @@ fn register_full_layout_regions(chunks: &[Rect; 13], ctx: &mut crate::widgets::M
             );
         }
     }
+    // Per-button click regions for the Mode selector — z=2 so they win over
+    // the row-level FocusField region at z=1.
+    register_mode_button_regions(chunks[3], ctx);
     // Launch button
     let btn = button_render_area(chunks[LAUNCH_BUTTON_SLOT]);
     if btn.width > 0 && btn.height > 0 {
@@ -1223,6 +1273,9 @@ fn register_full_layout_regions(chunks: &[Rect; 13], ctx: &mut crate::widgets::M
 fn register_compact_layout_regions(chunks: &[Rect], ctx: &mut crate::widgets::MouseCtx<'_>) {
     let fields: &[(usize, LaunchContextField)] = &[
         (0, LaunchContextField::Config),
+        // Compact layout reserves 1 row for Mode — the bordered buttons are
+        // suppressed by ModeSelector's compact path, so per-button regions are
+        // not registered (the row-level FocusField region above still applies).
         (1, LaunchContextField::Mode),
         (2, LaunchContextField::Flavor),
         (3, LaunchContextField::EntryPoint),
@@ -2228,17 +2281,20 @@ mod launch_context_tests {
             launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
         }
 
-        // Expect: Config, Mode, Flavor, EntryPoint, DartDefines (5 fields) + 1 Launch = 6
+        // Expect: Config, Mode, Flavor, EntryPoint, DartDefines (5 fields at z=1)
+        // + 1 Launch button (z=1) + 3 mode buttons (z=2) = at least 9 total
         assert!(
-            regions.len() >= 6,
-            "expected at least 6 regions (5 fields + 1 launch), got {}",
+            regions.len() >= 9,
+            "expected at least 9 regions (5 fields + 1 launch + 3 mode buttons), got {}",
             regions.len()
         );
 
+        // Field-level and launch regions should all be at z=1 or z=2 (mode buttons)
         for entry in regions.iter() {
-            assert_eq!(
-                entry.z_index, 1,
-                "all launch-context regions must be at z=1"
+            assert!(
+                entry.z_index == 1 || entry.z_index == 2,
+                "all launch-context regions must be at z=1 or z=2, got z={}",
+                entry.z_index
             );
         }
 
@@ -2274,7 +2330,7 @@ mod launch_context_tests {
             launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
         }
 
-        // Compact mode: 5 inline field rows + 1 launch button = 6
+        // Compact mode: 5 inline field rows + 1 launch button = 6 (no mode-button z=2 regions)
         assert!(
             regions.len() >= 6,
             "expected at least 6 regions in compact mode, got {}",
@@ -2288,6 +2344,237 @@ mod launch_context_tests {
         assert!(
             regions.iter().any(is_launch_btn),
             "expected Launch button region"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mode button region tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mode_button_regions_registered_in_expanded_layout() {
+        use fdemon_app::config::FlutterMode;
+        use fdemon_app::MouseButton;
+
+        // Large enough area for expanded layout: Mode field at chunks[3] has height 4
+        let area = Rect::new(0, 0, 60, 35);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = IconSet::new(IconMode::Unicode);
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(false);
+
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        // The mode row is chunks[3]: y = 6 (1 spacer + 4 config + 1 spacer), height = 4
+        // Button sub-row is row 1–3 of the mode rect (y = 7..9) with 3 equal columns.
+        // Compute centre of each button by calling calculate_fields_layout.
+        let chunks = calculate_fields_layout(area);
+        let mode_row = chunks[3];
+        // Buttons occupy rows 1-3 of mode_row (label at row 0)
+        let button_y = mode_row.y + 1 + 1; // +1 label, +1 to land in middle of 3-row button
+        let col_width = mode_row.width / 3;
+        let debug_x = mode_row.x + col_width / 2;
+        let profile_x = mode_row.x + col_width + col_width / 2;
+        let release_x = mode_row.x + 2 * col_width + col_width / 2;
+
+        let debug_hit = regions.hit_test(debug_x, button_y, MouseButton::Left);
+        let profile_hit = regions.hit_test(profile_x, button_y, MouseButton::Left);
+        let release_hit = regions.hit_test(release_x, button_y, MouseButton::Left);
+
+        assert!(
+            debug_hit
+                .and_then(|e| e.on_left.as_ref())
+                .and_then(|a| a.as_emit())
+                .map(|m| matches!(
+                    m,
+                    Message::NewSessionDialogSetMode {
+                        mode: FlutterMode::Debug
+                    }
+                ))
+                .unwrap_or(false),
+            "centre of Debug button should hit-test to NewSessionDialogSetMode {{ Debug }}"
+        );
+        assert!(
+            profile_hit
+                .and_then(|e| e.on_left.as_ref())
+                .and_then(|a| a.as_emit())
+                .map(|m| matches!(
+                    m,
+                    Message::NewSessionDialogSetMode {
+                        mode: FlutterMode::Profile
+                    }
+                ))
+                .unwrap_or(false),
+            "centre of Profile button should hit-test to NewSessionDialogSetMode {{ Profile }}"
+        );
+        assert!(
+            release_hit
+                .and_then(|e| e.on_left.as_ref())
+                .and_then(|a| a.as_emit())
+                .map(|m| matches!(
+                    m,
+                    Message::NewSessionDialogSetMode {
+                        mode: FlutterMode::Release
+                    }
+                ))
+                .unwrap_or(false),
+            "centre of Release button should hit-test to NewSessionDialogSetMode {{ Release }}"
+        );
+    }
+
+    #[test]
+    fn test_mode_button_regions_z_index_wins_over_focus_field() {
+        use fdemon_app::MouseButton;
+
+        // Large enough area for expanded layout
+        let area = Rect::new(0, 0, 60, 35);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = IconSet::new(IconMode::Unicode);
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(false);
+
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        let chunks = calculate_fields_layout(area);
+        let mode_row = chunks[3];
+        // Pick a point inside the mode row button area — z=2 SetMode regions
+        // must beat the z=1 FocusField region that covers the entire mode row.
+        let button_y = mode_row.y + 2; // inside button area (label at +0, buttons at +1..+3)
+        let button_x = mode_row.x + 1;
+
+        let hit = regions.hit_test(button_x, button_y, MouseButton::Left);
+        assert!(
+            hit.is_some(),
+            "expected a hit inside the mode row button area"
+        );
+        let hit_entry = hit.unwrap();
+        assert_eq!(
+            hit_entry.z_index, 2,
+            "SetMode region at z=2 should win over FocusField at z=1"
+        );
+        // Confirm the winning region is a SetMode, not a FocusField
+        let is_set_mode_msg = hit_entry
+            .on_left
+            .as_ref()
+            .and_then(|a| a.as_emit())
+            .map(|m| matches!(m, Message::NewSessionDialogSetMode { .. }))
+            .unwrap_or(false);
+        assert!(
+            is_set_mode_msg,
+            "winning hit must be NewSessionDialogSetMode, not FocusField"
+        );
+    }
+
+    #[test]
+    fn test_mode_button_regions_skipped_in_compact_layout() {
+        // Small area triggers compact layout
+        let area = Rect::new(0, 0, 60, 15);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = IconSet::new(IconMode::Unicode);
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(true);
+
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        // No SetMode region should exist in compact layout
+        let has_set_mode = regions.iter().any(|e| {
+            e.on_left
+                .as_ref()
+                .and_then(|a| a.as_emit())
+                .map(|m| matches!(m, Message::NewSessionDialogSetMode { .. }))
+                .unwrap_or(false)
+        });
+        assert!(
+            !has_set_mode,
+            "compact layout must not register any SetMode regions"
+        );
+
+        // But there SHOULD be a FocusField region for Mode
+        let has_mode_focus = regions.iter().any(|e| {
+            e.on_left
+                .as_ref()
+                .and_then(|a| a.as_emit())
+                .map(|m| {
+                    matches!(
+                        m,
+                        Message::NewSessionDialogFocusField {
+                            field: LaunchContextField::Mode
+                        }
+                    )
+                })
+                .unwrap_or(false)
+        });
+        assert!(
+            has_mode_focus,
+            "compact layout must still have a FocusField region for Mode"
+        );
+    }
+
+    #[test]
+    fn test_mode_button_regions_label_row_still_focuses_field() {
+        use fdemon_app::MouseButton;
+
+        // Large enough area for expanded layout
+        let area = Rect::new(0, 0, 60, 35);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = IconSet::new(IconMode::Unicode);
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(false);
+
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            launch_context_render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+        }
+
+        let chunks = calculate_fields_layout(area);
+        let mode_row = chunks[3];
+        // Click at the label row (first row of the mode rect — y offset = 0)
+        let label_y = mode_row.y;
+        let label_x = mode_row.x + 1;
+
+        let hit = regions.hit_test(label_x, label_y, MouseButton::Left);
+        assert!(hit.is_some(), "expected a hit in the mode label row");
+        let hit_entry = hit.unwrap();
+
+        // At label_y, the z=2 SetMode regions don't cover that row (buttons start at y+1).
+        // The FocusField region at z=1 covers the entire mode_row (including label row).
+        let is_focus_mode = hit_entry
+            .on_left
+            .as_ref()
+            .and_then(|a| a.as_emit())
+            .map(|m| {
+                matches!(
+                    m,
+                    Message::NewSessionDialogFocusField {
+                        field: LaunchContextField::Mode
+                    }
+                )
+            })
+            .unwrap_or(false);
+        assert!(
+            is_focus_mode,
+            "click on the label row (above buttons) should resolve to FocusField::Mode, not SetMode"
         );
     }
 }

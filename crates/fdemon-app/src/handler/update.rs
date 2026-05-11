@@ -1177,7 +1177,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         | Message::NewSessionDialogSetError { .. }
         | Message::NewSessionDialogClearError
         | Message::NewSessionDialogSelectConfig { .. }
-        | Message::NewSessionDialogSetMode { .. }
         | Message::NewSessionDialogSetFlavor { .. }
         | Message::NewSessionDialogSetDartDefines { .. } => {
             // Handlers for these will be implemented in subsequent tasks
@@ -1196,6 +1195,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::NewSessionDialogModeNext => new_session::handle_mode_next(state),
 
         Message::NewSessionDialogModePrev => new_session::handle_mode_prev(state),
+
+        Message::NewSessionDialogSetMode { mode } => new_session::handle_set_mode(state, mode),
 
         Message::NewSessionDialogConfigSelected { config_name } => {
             new_session::handle_config_selected(state, config_name)
