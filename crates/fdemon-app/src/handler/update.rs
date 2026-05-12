@@ -15,8 +15,8 @@ use tracing::{info, warn};
 use super::{
     daemon::handle_session_daemon_event, dap, devtools, flutter_version, keys::handle_key,
     log_view, new_session, scroll, session::maybe_serve_devtools, session_lifecycle,
-    settings_dart_defines, settings_extra_args, settings_handlers, Task, UpdateAction,
-    UpdateResult,
+    settings_dart_defines, settings_extra_args, settings_handlers, FetchTrigger, Task,
+    UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state.
@@ -1989,6 +1989,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .unwrap_or(false);
 
             if vm_connected {
+                // Choose the fetch trigger:
+                // - `Refresh` when the inspector has already loaded the tree at least
+                //   once; the Flutter framework is already running so the readiness
+                //   poll is wasted latency.
+                // - `Initial` when the user pressed `r` before the tree ever loaded
+                //   (unusual, but possible); polling still applies because the
+                //   framework may still be warming up.
+                let trigger = if state.devtools_view_state.inspector.has_ever_rendered_tree() {
+                    FetchTrigger::Refresh
+                } else {
+                    FetchTrigger::Initial
+                };
+
+                info!(
+                    session_id = session_id,
+                    trigger = ?trigger,
+                    "Inspector: RequestWidgetTree trigger selected"
+                );
+
                 // Clear any previous error so a fresh fetch starts cleanly.
                 state.devtools_view_state.inspector.error = None;
                 state.devtools_view_state.inspector.record_fetch_start();
@@ -2003,6 +2022,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         .settings
                         .devtools
                         .readiness_poll_call_timeout_ms,
+                    trigger,
                 })
             } else {
                 warn!(

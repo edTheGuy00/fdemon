@@ -12269,3 +12269,183 @@ mod devtools_served_handler {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 06: FetchTrigger — bypass readiness poll on `r` refresh
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod fetch_trigger_tests {
+    use super::*;
+    use crate::handler::devtools::handle_widget_tree_fetched;
+    use crate::handler::FetchTrigger;
+    use fdemon_core::DiagnosticsNode;
+
+    /// Build a minimal `DiagnosticsNode` for testing.
+    fn make_root_node() -> DiagnosticsNode {
+        serde_json::from_value(serde_json::json!({
+            "description": "MyApp"
+        }))
+        .expect("valid DiagnosticsNode")
+    }
+
+    /// Build an `AppState` with one VM-connected session.
+    fn make_vm_connected_state() -> (AppState, crate::session::SessionId) {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        update(&mut state, Message::VmServiceConnected { session_id });
+        (state, session_id)
+    }
+
+    // ── has_ever_rendered_tree flag ───────────────────────────────────────────
+
+    /// `has_ever_rendered_tree()` is `false` by default.
+    #[test]
+    fn has_ever_rendered_tree_is_false_by_default() {
+        let state = AppState::new();
+        assert!(
+            !state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree should be false on a fresh InspectorState"
+        );
+    }
+
+    /// After a successful `WidgetTreeFetched` message, the flag becomes `true`.
+    #[test]
+    fn has_ever_rendered_tree_becomes_true_after_first_fetch() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree should be true after a successful fetch"
+        );
+    }
+
+    /// The sticky flag survives a `record_fetch_start()` call (not cleared between refreshes).
+    #[test]
+    fn has_ever_rendered_tree_survives_record_fetch_start() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate first successful render.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree(),);
+
+        // Start a second fetch — the flag must survive.
+        state.devtools_view_state.inspector.record_fetch_start();
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must survive record_fetch_start"
+        );
+    }
+
+    /// The sticky flag is NOT cleared by `reset()`.
+    ///
+    /// `reset()` is called on session switch — but the flag should persist
+    /// because the task spec says "reset only on session destruction."
+    /// (In the current model, session destruction destroys the whole
+    /// `InspectorState`; `reset()` is used for mid-session clears.)
+    #[test]
+    fn has_ever_rendered_tree_survives_reset() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree());
+
+        state.devtools_view_state.inspector.reset();
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must survive reset() — sticky for session lifetime"
+        );
+    }
+
+    // ── FetchTrigger selection in RequestWidgetTree handler ───────────────────
+
+    /// After the inspector has rendered a tree, pressing `r` should produce
+    /// `FetchTrigger::Refresh` so the readiness poll is skipped.
+    #[test]
+    fn refresh_after_render_uses_refresh_trigger() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate first successful render.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree(),);
+
+        // Clear debounce so that the request is not suppressed.
+        state.devtools_view_state.inspector.clear_fetch_debounce();
+
+        let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Refresh,
+                    "Should use Refresh trigger when inspector has ever rendered a tree"
+                );
+            }
+            other => panic!("Expected FetchWidgetTree action, got: {:?}", other),
+        }
+    }
+
+    /// Before the inspector has ever rendered, pressing `r` should produce
+    /// `FetchTrigger::Initial` so polling still applies.
+    #[test]
+    fn refresh_before_first_render_uses_initial_trigger() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // No successful render yet → has_ever_rendered_tree is false.
+        assert!(!state.devtools_view_state.inspector.has_ever_rendered_tree(),);
+
+        let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Initial,
+                    "Should use Initial trigger when inspector has never rendered"
+                );
+            }
+            other => panic!("Expected FetchWidgetTree action, got: {:?}", other),
+        }
+    }
+
+    /// `handle_switch_panel(Inspector)` must use `FetchTrigger::Initial`
+    /// because the panel always fetches on first open.
+    #[test]
+    fn switch_panel_inspector_uses_initial_trigger() {
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Device 1");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        update(&mut state, Message::VmServiceConnected { session_id });
+        // Start in DevTools mode on the Performance panel so switching to
+        // Inspector triggers a fresh fetch.
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Performance;
+
+        let result = update(
+            &mut state,
+            Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Inspector),
+        );
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Initial,
+                    "SwitchDevToolsPanel(Inspector) should use Initial trigger"
+                );
+            }
+            // If the tree is already loaded or loading is in progress the handler
+            // skips the fetch — accept None in that case too.
+            None => {}
+            other => panic!(
+                "Unexpected action from SwitchDevToolsPanel(Inspector): {:?}",
+                other
+            ),
+        }
+    }
+}

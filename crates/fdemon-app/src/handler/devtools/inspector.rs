@@ -46,6 +46,9 @@ pub fn handle_widget_tree_fetched(
         state.devtools_view_state.inspector.loading = false;
         state.devtools_view_state.inspector.error = None;
         state.devtools_view_state.inspector.has_object_group = true;
+        // Sticky: once the tree has been rendered at least once, remember it
+        // so that subsequent `r` presses can skip the readiness poll.
+        state.devtools_view_state.inspector.has_ever_rendered_tree = true;
 
         // Clear stale layout data — value_ids from the previous tree are
         // meaningless after a refresh.

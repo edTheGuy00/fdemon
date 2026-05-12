@@ -68,6 +68,32 @@ pub(crate) use helpers::detect_raw_line_level;
 #[cfg(test)]
 pub(crate) use keys::handle_key;
 
+/// Indicates why a widget tree fetch was initiated.
+///
+/// Passed through `UpdateAction::FetchWidgetTree` and into
+/// `spawn_fetch_widget_tree` so that the readiness poll can be skipped on
+/// user-triggered refreshes where the Flutter framework is already running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchTrigger {
+    /// First fetch after entering DevTools or switching to the Inspector panel.
+    ///
+    /// The full `isWidgetTreeReady` poll budget applies because the framework
+    /// may still be warming up.
+    Initial,
+
+    /// User pressed `r` to refresh the widget tree and the inspector has
+    /// already rendered a tree at least once.
+    ///
+    /// The `isWidgetTreeReady` poll is **skipped** because the Flutter
+    /// framework is already running, so the RPC fires within ~100 ms.
+    Refresh,
+
+    /// Programmatic re-fetch (e.g., after a focused-panel change).
+    ///
+    /// Uses the full poll budget for safety, same as `Initial`.
+    AutoRehydrate,
+}
+
 /// Actions that the event loop should perform after update
 #[derive(Debug, Clone)]
 pub enum UpdateAction {
@@ -247,6 +273,12 @@ pub enum UpdateAction {
         /// Per-call timeout (ms) for each `isWidgetTreeReady` RPC.
         /// From `settings.devtools.readiness_poll_call_timeout_ms`.
         readiness_poll_call_timeout_ms: u64,
+        /// Why this fetch was initiated.
+        ///
+        /// Used by `spawn_fetch_widget_tree` to decide whether to skip the
+        /// `isWidgetTreeReady` poll (skipped when `Refresh` and the inspector
+        /// has already rendered a tree at least once).
+        trigger: FetchTrigger,
     },
 
     /// Fetch layout data for a specific widget node.

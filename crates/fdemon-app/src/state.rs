@@ -246,6 +246,19 @@ pub struct InspectorState {
     ///
     /// This prevents RPC spam during rapid scrolling through the widget tree.
     pub layout_last_fetch_time: Option<Instant>,
+
+    /// Sticky flag that becomes `true` after the first successful widget tree
+    /// render and remains `true` for the lifetime of the session.
+    ///
+    /// **Does not reset on [`Self::reset`], fetch debounce clears, or
+    /// individual fetch failures.** Only cleared when the entire session is
+    /// destroyed (by dropping `InspectorState`).
+    ///
+    /// Used to choose between `FetchTrigger::Initial` (poll applies) and
+    /// `FetchTrigger::Refresh` (poll skipped) when the user presses `r`.
+    /// If the user refreshes before the inspector has ever loaded a tree the
+    /// flag will be `false` and `Initial` is used so polling still applies.
+    pub has_ever_rendered_tree: bool,
 }
 
 impl InspectorState {
@@ -282,6 +295,19 @@ impl InspectorState {
         self.last_fetched_node_id = None;
         self.pending_node_id = None;
         self.layout_last_fetch_time = None;
+    }
+
+    /// Returns `true` after the first successful widget tree render.
+    ///
+    /// This flag is sticky: it is set to `true` by
+    /// [`crate::handler::devtools::handle_widget_tree_fetched`] and never
+    /// cleared by [`Self::reset`], debounce clears, or fetch failures.
+    ///
+    /// Used by `Message::RequestWidgetTree` handler to pick
+    /// `FetchTrigger::Refresh` (skip readiness poll) when the Flutter
+    /// framework is already known to be running.
+    pub fn has_ever_rendered_tree(&self) -> bool {
+        self.has_ever_rendered_tree
     }
 
     /// Returns `true` if a tree refresh request should be suppressed.

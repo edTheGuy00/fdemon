@@ -24,7 +24,7 @@ pub(crate) use performance::{
     handle_select_performance_frame,
 };
 
-use crate::handler::{UpdateAction, UpdateResult};
+use crate::handler::{FetchTrigger, UpdateAction, UpdateResult};
 use crate::message::DebugOverlayKind;
 use crate::session::SessionId;
 use crate::state::{AppState, DevToolsError, DevToolsPanel, ToastLevel, VmConnectionStatus};
@@ -230,6 +230,7 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                         .settings
                         .devtools
                         .readiness_poll_call_timeout_ms,
+                    trigger: FetchTrigger::Initial,
                 });
             }
         }
@@ -340,6 +341,7 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                                 .settings
                                 .devtools
                                 .readiness_poll_call_timeout_ms,
+                            trigger: FetchTrigger::Initial,
                         });
                     }
                 }

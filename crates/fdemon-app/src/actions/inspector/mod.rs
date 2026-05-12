@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::handler::FetchTrigger;
 use crate::message::{DebugOverlayKind, Message};
 use crate::session::SessionId;
 use fdemon_daemon::vm_service::{
@@ -58,6 +59,7 @@ pub(super) fn spawn_fetch_widget_tree(
     readiness_poll_attempts: u32,
     readiness_poll_interval_ms: u64,
     readiness_poll_call_timeout_ms: u64,
+    trigger: FetchTrigger,
 ) {
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(fetch_timeout_secs.max(5));
@@ -66,6 +68,7 @@ pub(super) fn spawn_fetch_widget_tree(
             session_id = %session_id,
             tree_max_depth = tree_max_depth,
             fetch_timeout_secs = fetch_timeout_secs,
+            trigger = ?trigger,
             "Inspector: fetch_widget_tree task started"
         );
 
@@ -83,17 +86,29 @@ pub(super) fn spawn_fetch_widget_tree(
             );
 
             // Step 2: Poll widget tree readiness.
-            let poll_cfg = widget_tree::ReadinessPollConfig {
-                attempts: readiness_poll_attempts,
-                interval_ms: readiness_poll_interval_ms,
-                call_timeout_ms: readiness_poll_call_timeout_ms,
-            };
-            widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id, &poll_cfg).await;
+            // Skip polling when the user explicitly refreshed (`r`) and the
+            // inspector has already rendered a tree.  The Flutter framework is
+            // already running in that case, so the readiness poll is wasted
+            // budget that only adds latency.
+            if trigger != FetchTrigger::Refresh {
+                let poll_cfg = widget_tree::ReadinessPollConfig {
+                    attempts: readiness_poll_attempts,
+                    interval_ms: readiness_poll_interval_ms,
+                    call_timeout_ms: readiness_poll_call_timeout_ms,
+                };
+                widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id, &poll_cfg)
+                    .await;
 
-            tracing::info!(
-                session_id = %session_id,
-                "Inspector: readiness poll completed"
-            );
+                tracing::info!(
+                    session_id = %session_id,
+                    "Inspector: readiness poll completed"
+                );
+            } else {
+                tracing::info!(
+                    session_id = %session_id,
+                    "Inspector: readiness poll skipped (Refresh trigger)"
+                );
+            }
 
             // Step 3: Dispose previous object group.
             let object_group = "fdemon-inspector-1";

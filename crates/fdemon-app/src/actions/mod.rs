@@ -254,6 +254,7 @@ pub fn handle_action(
             readiness_poll_attempts,
             readiness_poll_interval_ms,
             readiness_poll_call_timeout_ms,
+            trigger,
         } => {
             if let Some(handle) = vm_handle {
                 inspector::spawn_fetch_widget_tree(
@@ -265,6 +266,7 @@ pub fn handle_action(
                     readiness_poll_attempts,
                     readiness_poll_interval_ms,
                     readiness_poll_call_timeout_ms,
+                    trigger,
                 );
             } else {
                 warn!(
