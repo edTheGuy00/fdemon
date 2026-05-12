@@ -272,7 +272,7 @@ flutter-demon/
 │   │       │   ├── macos.rs      # macOS log stream capture
 │   │       │   └── ios.rs        # iOS simulator (xcrun simctl) + physical (idevicesyslog)
 │   │       └── vm_service/       # VM Service WebSocket client
-│   │           ├── mod.rs        # VmServiceHandle, connection management
+│   │           ├── mod.rs        # VmServiceHandle, VmRequestHandle, connection management
 │   │           ├── client.rs     # WebSocket client transport
 │   │           ├── protocol.rs   # JSON-RPC protocol types
 │   │           ├── errors.rs     # VM Service error types
@@ -889,6 +889,7 @@ DevTools state lives at two levels:
 
 - **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
 - **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
+- **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, and the `has_ever_rendered_tree` flag. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag survives `reset()` calls — it is sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches.
 
 Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 
@@ -903,6 +904,35 @@ Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 4. Results sent as `Message` variants to the Engine message channel
 5. Handler functions update per-session state
 6. TUI renders the updated state on the next frame
+
+### Inspector Widget Tree Fetch
+
+The Inspector panel fetches the widget tree through a two-phase sequence: isolate resolution followed by a readiness poll (skipped on explicit refresh).
+
+**Flutter UI isolate resolution** (`resolve_flutter_ui_isolate` on `VmRequestHandle`):
+
+The Dart VM may host multiple isolates (UI, worker, background). Targeting the wrong isolate produces empty or incorrect widget tree results. `resolve_flutter_ui_isolate` selects the correct isolate by:
+
+1. Calling `getVM` to enumerate all live isolates.
+2. Calling `getIsolate` on each non-system isolate.
+3. Selecting the first isolate whose `extensionRPCs` list contains at least one `ext.flutter.*` entry — indicating that the Flutter framework has registered its service extensions in that isolate.
+4. If no isolate has Flutter extensions yet (e.g., the app is still warming up), falls back to the first non-system isolate.
+
+The resolved isolate ID is cached on `VmRequestHandle`. The cache is invalidated on hot restart via `invalidate_isolate_cache()` (called from the daemon hot-restart event path) and on session teardown via `clear_isolate_cache()`.
+
+**Readiness poll** (`ReadinessPollConfig`):
+
+Before fetching the widget tree on first load, fdemon polls `ext.flutter.inspector.isWidgetTreeReady` to confirm the Flutter framework has completed its first frame. The poll budget defaults to 2 attempts × 250 ms interval × 1 s per-call timeout (2.5 s worst case). All three parameters are configurable via `[devtools]` keys `readiness_poll_attempts`, `readiness_poll_interval_ms`, and `readiness_poll_call_timeout_ms` in `.fdemon/config.toml`.
+
+**Fetch triggers and poll bypass** (`FetchTrigger`):
+
+Each widget-tree fetch carries a `FetchTrigger` variant — `Initial`, `Refresh`, or `AutoRehydrate` — that controls how the fetch is handled:
+
+- `Initial` — first load for the session; runs the full readiness poll.
+- `Refresh` — user-initiated `r` press after a tree has been rendered at least once; skips the readiness poll and fetches immediately, avoiding an unnecessary 2.5 s wait when the framework is already running.
+- `AutoRehydrate` — background refresh triggered when the Inspector panel becomes visible again after a panel switch; follows the same bypass logic as `Refresh`.
+
+The sticky `has_ever_rendered_tree` flag on `InspectorState` gates whether `r` dispatches a `Refresh` or an `Initial` trigger.
 
 ### Browser DevTools URL (Served Endpoint)
 
