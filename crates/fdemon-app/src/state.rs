@@ -327,6 +327,18 @@ impl InspectorState {
         self.last_fetch_time = Some(Instant::now());
     }
 
+    /// Clear the fetch debounce timer so that the next refresh request is
+    /// dispatched immediately.
+    ///
+    /// Called after a failed or timed-out widget tree fetch so the user can
+    /// press `r` again without waiting for the 2-second cooldown to expire.
+    /// The success path intentionally does **not** clear this — it is fine
+    /// for rapid `r` presses after a successful fetch to be gated by the
+    /// cooldown.
+    pub fn clear_fetch_debounce(&mut self) {
+        self.last_fetch_time = None;
+    }
+
     /// Build a flat list of visible nodes based on expand/collapse state.
     /// Returns (node_ref, depth) pairs for rendering.
     pub fn visible_nodes(&self) -> Vec<(&DiagnosticsNode, usize)> {
