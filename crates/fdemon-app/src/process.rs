@@ -88,10 +88,16 @@ pub fn process_message(
                 // fetch actions so the loading spinner is not stuck forever.
                 match &pre_hydration_action {
                     UpdateAction::FetchWidgetTree { session_id, .. } => {
-                        let _ = msg_tx.try_send(Message::WidgetTreeFetchFailed {
+                        if let Err(e) = msg_tx.try_send(Message::WidgetTreeFetchFailed {
                             session_id: *session_id,
                             error: "VM Service handle unavailable".to_string(),
-                        });
+                        }) {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                error = %e,
+                                "Inspector: failed to send WidgetTreeFetchFailed fallback message"
+                            );
+                        }
                     }
                     UpdateAction::FetchLayoutData { session_id, .. } => {
                         let _ = msg_tx.try_send(Message::LayoutDataFetchFailed {
@@ -173,6 +179,12 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
         fetch_timeout_secs,
     } = action
     {
+        tracing::info!(
+            session_id = %session_id,
+            already_hydrated = vm_handle.is_some(),
+            "Inspector: hydrating FetchWidgetTree action"
+        );
+
         if vm_handle.is_some() {
             return Some(UpdateAction::FetchWidgetTree {
                 session_id,
@@ -184,10 +196,19 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
         let handle = state
             .session_manager
             .get(session_id)
-            .and_then(|h| h.vm_request_handle.clone())?;
+            .and_then(|h| h.vm_request_handle.clone());
+
+        if handle.is_none() {
+            tracing::warn!(
+                session_id = %session_id,
+                "Inspector: vm_request_handle is None — discarding FetchWidgetTree action"
+            );
+            return None;
+        }
+
         return Some(UpdateAction::FetchWidgetTree {
             session_id,
-            vm_handle: Some(handle),
+            vm_handle: handle,
             tree_max_depth,
             fetch_timeout_secs,
         });

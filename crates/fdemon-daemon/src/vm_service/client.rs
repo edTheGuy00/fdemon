@@ -150,12 +150,33 @@ impl VmRequestHandle {
         let result = self.request("getVM", None).await?;
         let vm: VmInfo = serde_json::from_value(result)
             .map_err(|e| Error::vm_service(format!("parse getVM: {e}")))?;
+
+        info!(
+            isolates_count = vm.isolates.len(),
+            isolates = ?vm.isolates.iter().map(|i| (&i.id, &i.name, i.is_system_isolate)).collect::<Vec<_>>(),
+            "VM Service: listing isolates from getVM"
+        );
+
         let isolate = vm
             .isolates
             .iter()
-            .find(|iso| !iso.is_system_isolate.unwrap_or(false))
-            .ok_or_else(|| Error::vm_service("no non-system isolate found"))?;
+            .find(|iso| !iso.is_system_isolate.unwrap_or(false));
+
+        let Some(isolate) = isolate else {
+            warn!(
+                isolates_count = vm.isolates.len(),
+                "VM Service: no non-system isolates available"
+            );
+            return Err(Error::vm_service("no non-system isolate found"));
+        };
+
         let id = isolate.id.clone();
+
+        info!(
+            isolate_id = %id,
+            isolate_name = %isolate.name,
+            "VM Service: selected main isolate"
+        );
 
         {
             let mut guard = self.isolate_id_cache.lock().await;

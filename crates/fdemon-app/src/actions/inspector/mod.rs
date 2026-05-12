@@ -57,6 +57,13 @@ pub(super) fn spawn_fetch_widget_tree(
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(fetch_timeout_secs.max(5));
 
+        tracing::info!(
+            session_id = %session_id,
+            tree_max_depth = tree_max_depth,
+            fetch_timeout_secs = fetch_timeout_secs,
+            "Inspector: fetch_widget_tree task started"
+        );
+
         let fetch_result = tokio::time::timeout(timeout_dur, async {
             // Step 1: Get isolate ID.
             let isolate_id = handle
@@ -64,8 +71,19 @@ pub(super) fn spawn_fetch_widget_tree(
                 .await
                 .map_err(|e| format!("Could not get isolate ID: {e}"))?;
 
+            tracing::info!(
+                session_id = %session_id,
+                isolate_id = %isolate_id,
+                "Inspector: resolved isolate"
+            );
+
             // Step 2: Poll widget tree readiness.
             widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id).await;
+
+            tracing::info!(
+                session_id = %session_id,
+                "Inspector: readiness poll completed"
+            );
 
             // Step 3: Dispose previous object group.
             let object_group = "fdemon-inspector-1";
@@ -86,7 +104,11 @@ pub(super) fn spawn_fetch_widget_tree(
             }
 
             // Step 4: Retry loop — fetch the widget tree.
-            widget_tree::try_fetch_widget_tree(
+            tracing::info!(
+                session_id = %session_id,
+                "Inspector: RPC call getRootWidgetTree starting"
+            );
+            let result = widget_tree::try_fetch_widget_tree(
                 &handle,
                 &isolate_id,
                 object_group,
@@ -94,16 +116,27 @@ pub(super) fn spawn_fetch_widget_tree(
                 session_id,
             )
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+
+            if let Ok(ref root) = result {
+                tracing::info!(
+                    session_id = %session_id,
+                    root_description = %root.description,
+                    child_count = root.children.len(),
+                    "Inspector: RPC call getRootWidgetTree completed"
+                );
+            }
+
+            result
         })
         .await;
 
         let msg = match fetch_result {
             Err(_timeout) => {
                 tracing::warn!(
-                    "FetchWidgetTree timed out after {}s for session {}",
-                    fetch_timeout_secs.max(5),
-                    session_id
+                    session_id = %session_id,
+                    timeout_secs = fetch_timeout_secs.max(5),
+                    "Inspector: fetch_widget_tree timed out"
                 );
                 Message::WidgetTreeFetchTimeout { session_id }
             }
@@ -113,14 +146,32 @@ pub(super) fn spawn_fetch_widget_tree(
             },
             Ok(Err(error)) => {
                 tracing::warn!(
-                    "FetchWidgetTree failed for session {}: {}",
-                    session_id,
-                    error
+                    session_id = %session_id,
+                    error = %error,
+                    "Inspector: fetch_widget_tree failed"
                 );
                 Message::WidgetTreeFetchFailed { session_id, error }
             }
         };
-        let _ = msg_tx.send(msg).await;
+
+        tracing::info!(
+            session_id = %session_id,
+            msg_kind = match &msg {
+                Message::WidgetTreeFetched { .. } => "WidgetTreeFetched",
+                Message::WidgetTreeFetchFailed { .. } => "WidgetTreeFetchFailed",
+                Message::WidgetTreeFetchTimeout { .. } => "WidgetTreeFetchTimeout",
+                _ => "Other",
+            },
+            "Inspector: dispatching result message"
+        );
+
+        if let Err(e) = msg_tx.send(msg).await {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "Inspector: failed to send result message to engine"
+            );
+        }
     });
 }
 

@@ -1964,9 +1964,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::RequestWidgetTree { session_id } => {
             // Cooldown: suppress rapid refreshes while loading or within 2 seconds
             // of the last fetch. This prevents RPC spam when the user holds `r`.
-            if state.devtools_view_state.inspector.is_fetch_debounced() {
+            let inspector = &state.devtools_view_state.inspector;
+            let last_fetch_elapsed = inspector
+                .last_fetch_time
+                .map(|t| t.elapsed().as_millis());
+            if inspector.is_fetch_debounced() {
+                info!(
+                    session_id = session_id,
+                    loading = inspector.loading,
+                    last_fetch_elapsed_ms = ?last_fetch_elapsed,
+                    "Inspector: RequestWidgetTree debounced"
+                );
                 return UpdateResult::none();
             }
+
+            info!(
+                session_id = session_id,
+                last_fetch_elapsed_ms = ?last_fetch_elapsed,
+                "Inspector: refresh requested"
+            );
 
             let vm_connected = state
                 .session_manager
@@ -1985,6 +2001,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
                 })
             } else {
+                warn!(
+                    session_id = session_id,
+                    "Inspector: RequestWidgetTree skipped — VM not connected"
+                );
                 state.devtools_view_state.inspector.error = Some(DevToolsError::new(
                     "VM Service not available",
                     "Ensure the app is running in debug mode",

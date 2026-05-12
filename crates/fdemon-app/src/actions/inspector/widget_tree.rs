@@ -28,7 +28,21 @@ pub(super) async fn poll_widget_tree_ready(
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
     const POLL_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
+    tracing::info!(
+        session_id = %session_id,
+        max_polls = MAX_POLLS,
+        poll_interval_ms = POLL_INTERVAL.as_millis(),
+        poll_call_timeout_secs = POLL_CALL_TIMEOUT.as_secs(),
+        "Inspector: readiness poll loop entered"
+    );
+
     for attempt in 1..=MAX_POLLS {
+        tracing::debug!(
+            session_id = %session_id,
+            attempt = attempt,
+            max_polls = MAX_POLLS,
+            "Inspector: readiness poll attempt"
+        );
         let call_result = tokio::time::timeout(
             POLL_CALL_TIMEOUT,
             handle.call_extension(ext::IS_WIDGET_TREE_READY, isolate_id, None),
@@ -52,11 +66,11 @@ pub(super) async fn poll_widget_tree_ready(
                     .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
                     .unwrap_or(false);
                 if ready {
-                    tracing::debug!(
-                        "Widget tree ready for session {} (poll {}/{})",
-                        session_id,
-                        attempt,
-                        MAX_POLLS,
+                    tracing::info!(
+                        session_id = %session_id,
+                        attempt = attempt,
+                        max_polls = MAX_POLLS,
+                        "Inspector: widget tree is ready"
                     );
                     return;
                 }
@@ -70,18 +84,18 @@ pub(super) async fn poll_widget_tree_ready(
             Ok(Err(e)) => {
                 if is_method_not_found(&e) {
                     // Extension not available (older Flutter SDK) — skip polling.
-                    tracing::debug!(
-                        "isWidgetTreeReady not available for session {} — skipping readiness poll",
-                        session_id,
+                    tracing::info!(
+                        session_id = %session_id,
+                        "Inspector: isWidgetTreeReady not available (older Flutter SDK) — skipping readiness poll"
                     );
                     return;
                 }
                 if !is_transient_error(&e) {
                     // Fatal error (channel closed, IO) — bail out.
-                    tracing::debug!(
-                        "isWidgetTreeReady fatal error for session {}: {} — skipping readiness poll",
-                        session_id,
-                        e,
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "Inspector: isWidgetTreeReady fatal error — skipping readiness poll"
                     );
                     return;
                 }
@@ -97,9 +111,10 @@ pub(super) async fn poll_widget_tree_ready(
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 
-    tracing::debug!(
-        "Widget tree readiness polls exhausted for session {} — proceeding anyway",
-        session_id,
+    tracing::warn!(
+        session_id = %session_id,
+        max_polls = MAX_POLLS,
+        "Inspector: readiness polls exhausted — proceeding with fetch anyway"
     );
 }
 
