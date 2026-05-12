@@ -1654,4 +1654,93 @@ mod tests {
             "last_fetch_time should remain Some after successful fetch"
         );
     }
+
+    // ── Task 07: integration-style lifecycle tests ────────────────────────────
+
+    /// Scenario 1: initial inspector open → success.
+    ///
+    /// After `WidgetTreeFetched` the full state contract holds:
+    /// `loading == false`, `root == Some(_)`, `error == None`.
+    #[test]
+    fn test_inspector_open_success_loading_false_root_some_error_none() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Prime error / loading state that a real fetch start would set.
+        state.devtools_view_state.inspector.loading = true;
+        state.devtools_view_state.inspector.error =
+            Some(DevToolsError::new("stale error", "retry"));
+
+        let node: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "MaterialApp",
+            "valueId": "root-value-id"
+        }))
+        .unwrap();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(node));
+
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading must be false after successful fetch (scenario 1)"
+        );
+        assert!(
+            state.devtools_view_state.inspector.root.is_some(),
+            "root must be Some(_) after successful fetch (scenario 1)"
+        );
+        assert!(
+            state.devtools_view_state.inspector.error.is_none(),
+            "error must be None after successful fetch (scenario 1)"
+        );
+    }
+
+    /// Scenario 4: after failure → `r` press → new RPC fires immediately (not debounced).
+    ///
+    /// Verifies the integration between `handle_widget_tree_fetch_failed`
+    /// clearing the debounce and a subsequent `RequestWidgetTree` message being
+    /// processed without suppression.  The key assertion is that
+    /// `is_fetch_debounced()` is `false` immediately after the failure handler
+    /// returns, so the caller of the message loop can immediately re-issue the
+    /// fetch.
+    #[test]
+    fn test_inspector_open_then_fail_clears_debounce() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Simulate a fetch in progress.
+        state.devtools_view_state.inspector.record_fetch_start();
+        assert!(
+            state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should be active while fetch is in flight"
+        );
+
+        // Fetch fails.
+        handle_widget_tree_fetch_failed(
+            &mut state,
+            session_id,
+            "ext.flutter.inspector.getRootWidgetTree: null check failure".to_string(),
+        );
+
+        // The debounce must be cleared so that a subsequent `r` press is NOT
+        // suppressed and a new RPC fires immediately.
+        assert!(
+            !state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce must be cleared after fetch failure so `r` fires immediately (scenario 4)"
+        );
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading must be false after fetch failure (scenario 4)"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_none(),
+            "last_fetch_time must be None after debounce clear (scenario 4)"
+        );
+        assert!(
+            state.devtools_view_state.inspector.error.is_some(),
+            "error must be set after fetch failure (scenario 4)"
+        );
+    }
 }
