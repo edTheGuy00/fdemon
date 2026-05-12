@@ -92,3 +92,45 @@ fn idempotent_dispatch() { /* call twice, expect one action */ }
 
 - If `UpdateAction::SendDaemonCommand` doesn't accept a `DaemonCommand` directly, plumb the new variant through. Avoid silently dropping unknown commands at the dispatch layer.
 - The bridge from `DaemonMessage` to `Message` happens at the daemon-reader/engine boundary — find the existing pattern and follow it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::SendDaemonCommand { session_id, command, cmd_sender }` variant |
+| `crates/fdemon-app/src/handler/session.rs` | Added `maybe_serve_devtools()` helper; added 5 unit tests for dispatch trigger, idempotence, multi-session, no-cmd_sender guard |
+| `crates/fdemon-app/src/handler/daemon.rs` | Added bridge for `DaemonMessage::DevToolsServed` → `Message::DevToolsServed` (primary `app.devTools` path) and `DevToolsServeFailed` bridge, in both `Stdout` and `Message` arms |
+| `crates/fdemon-app/src/handler/update.rs` | Added `info!` log to `DevToolsServed` handler; improved `warn!` to `DevToolsServeFailed`; calls `maybe_serve_devtools` in `VmServiceConnected` handler (non-DevTools mode) |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_send_daemon_command()` to fill `cmd_sender` from session before dispatch |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `SendDaemonCommand` arm in `handle_action` (fire-and-forget via `send_fire_and_forget`) |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `devtools_served_handler` test module with 5 tests covering success, failure, overwrite, DDS URL, unknown-session noop |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmServiceConnected` as the fallback trigger instead of `AppDebugPort`**: `AppDebugPort` fires alongside `ConnectVmService` which already consumes the single `UpdateAction` slot. Using `VmServiceConnected` (which fires after the VM WebSocket connects) avoids the action conflict. In DevTools mode, `StartPerformanceMonitoring` takes priority; the `app.devTools` primary path fires before VM connection in modern Flutter, making the fallback a no-op in the common case.
+
+2. **`cmd_sender` guard in `maybe_serve_devtools`**: Added an early return when `cmd_sender` is None (process not yet attached). This prevents setting `devtools_serve_pending = true` prematurely and avoids hydration-and-discard in `process.rs`. Existing tests (which create sessions without cmd_senders) continue to assert `result.action.is_none()` unchanged.
+
+3. **Deferred action when both `app.devTools` event and action conflict**: In the rare case where both a devtools bridge message and a regular action are present in the `Stdout` arm, the action takes priority. The `app.devTools` event fires separately from `AppDebugPort`, so in practice only one is non-None per daemon event.
+
+4. **`SendDaemonCommand` uses `send_fire_and_forget`**: The `devtools.serve` RPC is fire-and-forget because the response comes back as a daemon event (`app.devTools` or a JSON-RPC response) that is already handled by the bridge. No need for request-response correlation in the action.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — 2142 passed; 0 failed (includes 10 new tests)
+- `cargo test --workspace --lib` — all crates pass
+- `cargo clippy --workspace -- -D warnings` — PASS
+- `cargo fmt --all -- --check` — PASS
+
+### Risks/Limitations
+
+1. **Fallback only fires in Normal mode**: `maybe_serve_devtools` is only called in the non-DevTools `VmServiceConnected` branch. If the user is in DevTools mode when the VM connects, the fallback is skipped. Mitigated by the primary `app.devTools` event path which fires regardless of UI mode.
+
+2. **Edge case: `app.devTools` and `SendDaemonCommand` race**: If `app.devTools` arrives between `VmServiceConnected` and the dispatch of `SendDaemonCommand`, `devtools_endpoint` is set but `devtools_serve_pending` remains true until the response arrives. The response handler clears it. This is benign.

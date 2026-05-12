@@ -99,3 +99,33 @@ fn open_browser_falls_back_to_legacy_url_when_no_endpoint() {
 - Don't break `build_local_devtools_url` — it stays as the fallback.
 - No new keybinding; `B` continues to dispatch `OpenBrowserDevTools`.
 - The recovery toast for the fallback case lands in task 07.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Updated `handle_open_browser_devtools` to check `session.devtools_endpoint` and use `endpoint.url(ws_uri)` when present; falls back to `build_local_devtools_url`. Changed log line to `info!(base_url = %endpoint.base_url, ...)`. Added 3 new tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept `&AppState` (immutable borrow)**: The task file snippet used `&mut AppState`, but the function only reads state so `&AppState` is correct and more restrictive. Kept the existing signature.
+2. **`DevToolsEndpoint { base_url, served_at }` shape**: Task file's testing section referenced `{host, port}` but per the key context override, the actual shape is `{base_url, served_at}`. Tests use the correct shape.
+3. **`endpoint.url()` delegates percent-encoding**: The `DevToolsEndpoint::url()` method in `session.rs` handles encoding internally, so no duplication in the handler.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app handler::devtools` — Passed (201 tests)
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+
+### Risks/Limitations
+
+1. **Legacy fallback unchanged**: When no endpoint is present, the legacy DDS-path URL is used unchanged. Task 07 will add the recovery toast for this case.

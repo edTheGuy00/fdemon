@@ -42,16 +42,16 @@ Four-phase fix routing browser DevTools through the Flutter daemon's `devtools.s
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 0 | [00-research-daemon-devtools-rpc](tasks/00-research-daemon-devtools-rpc.md) | Not Started | — | 1-2h | `RESEARCH.md` (output only) |
-| 1 | [01-daemon-command-serve-devtools](tasks/01-daemon-command-serve-devtools.md) | Not Started | 00 | 1-2h | `daemon/commands.rs` |
-| 2 | [02-daemon-message-devtools-served](tasks/02-daemon-message-devtools-served.md) | Not Started | 01 | 0.5-1h | `core/events.rs` |
-| 3 | [03-protocol-parse-daemon-devtools-event](tasks/03-protocol-parse-daemon-devtools-event.md) | Not Started | 02 | 1-2h | `daemon/protocol.rs` |
-| 4 | [04-session-stores-devtools-url](tasks/04-session-stores-devtools-url.md) | Not Started | 03 | 1h | `session/session.rs`, `message.rs` |
-| 5 | [05-eager-serve-on-vmservice-ready](tasks/05-eager-serve-on-vmservice-ready.md) | Not Started | 04 | 1-2h | `handler/session.rs`, `actions/mod.rs` |
-| 6 | [06-open-browser-uses-served-url](tasks/06-open-browser-uses-served-url.md) | Not Started | 05 | 1-2h | `handler/devtools/mod.rs` |
-| 7 | [07-fallback-and-recovery-toast](tasks/07-fallback-and-recovery-toast.md) | Not Started | 06 | 1h | `handler/devtools/mod.rs`, `state.rs` (toast queue) |
-| 8 | [08-update-keybindings-doc](tasks/08-update-keybindings-doc.md) | Not Started | 07 | 0.5h | `docs/KEYBINDINGS.md` |
-| 9 | [09-update-architecture-doc](tasks/09-update-architecture-doc.md) | Not Started | 07 | 0.5h | `docs/ARCHITECTURE.md` |
+| 0 | [00-research-daemon-devtools-rpc](tasks/00-research-daemon-devtools-rpc.md) | ✅ Done | — | 1-2h | `RESEARCH.md` (output only) |
+| 1 | [01-daemon-command-serve-devtools](tasks/01-daemon-command-serve-devtools.md) | ✅ Done | 00 | 1-2h | `daemon/commands.rs` |
+| 2 | [02-daemon-message-devtools-served](tasks/02-daemon-message-devtools-served.md) | ✅ Done | 01 | 0.5-1h | `core/events.rs` |
+| 3 | [03-protocol-parse-daemon-devtools-event](tasks/03-protocol-parse-daemon-devtools-event.md) | ✅ Done | 02 | 1-2h | `daemon/protocol.rs` |
+| 4 | [04-session-stores-devtools-url](tasks/04-session-stores-devtools-url.md) | ✅ Done | 03 | 1h | `session/session.rs`, `message.rs` |
+| 5 | [05-eager-serve-on-vmservice-ready](tasks/05-eager-serve-on-vmservice-ready.md) | ✅ Done (CONCERN) | 04 | 1-2h | `handler/session.rs`, `actions/mod.rs` |
+| 6 | [06-open-browser-uses-served-url](tasks/06-open-browser-uses-served-url.md) | ✅ Done | 05 | 1-2h | `handler/devtools/mod.rs` |
+| 7 | [07-fallback-and-recovery-toast](tasks/07-fallback-and-recovery-toast.md) | ✅ Done | 06 | 1h | `handler/devtools/mod.rs`, `state.rs` (toast queue) |
+| 8 | [08-update-keybindings-doc](tasks/08-update-keybindings-doc.md) | ✅ Done | 07 | 0.5h | `docs/KEYBINDINGS.md` |
+| 9 | [09-update-architecture-doc](tasks/09-update-architecture-doc.md) | ✅ Done | 07 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 
@@ -100,3 +100,7 @@ This bug fix is mostly a single dependency chain. Only the final doc tasks (08, 
 
 - The exact RPC method name is verified in task 00 — current best guess `daemon.devtools.serve` (returns `{host, port}`); refine after research.
 - Be mindful of `DaemonCommand` serialization shape — must match existing `commands.rs` style.
+
+## Validator Concerns Log
+
+- **Task 05**: Validator flagged a silent-drop edge case in `handler/daemon.rs` when an `app.devTools` event arrives in the same parse step as another action (e.g., `app.debugPort`). The `devtools_msg` is dropped in that collision arm. Mitigated by the fallback eager-serve RPC fired on `VmServiceConnected`. Untested empty-`app_id` branch in the bridge (degenerate RPC-response path). Both deemed minor by validator. No follow-up required for this fix; consider a regression test in a future cleanup.

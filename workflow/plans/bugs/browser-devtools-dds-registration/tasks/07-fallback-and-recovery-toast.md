@@ -83,3 +83,43 @@ fn served_endpoint_no_toast() {
 - If the existing notification system uses a different API surface (e.g., `Message::ShowStatus(...)`), use that instead.
 - Keep toast messages short — terminal real estate is limited.
 - If `state.toasts` doesn't exist yet, this is the time to add it (or punt to a tiny pre-task; user can decide).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `Toast` struct, `ToastLevel` enum, `TOAST_TTL_SECS` constant; added `toasts: Vec<Toast>` field to `AppState`; added `push_toast()` and `expire_toasts()` methods |
+| `crates/fdemon-app/src/handler/update.rs` | Added `state.expire_toasts()` call in the `Tick` arm |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Changed `handle_open_browser_devtools` signature to `&mut AppState`; pushes a `ToastLevel::Warn` toast on fallback (two flavours: pending vs no endpoint); updated all existing tests; added 3 new toast tests |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `render_toasts()` helper and called it at the end of `view()` so toasts appear on top of all other UI elements |
+
+### Notable Decisions/Tradeoffs
+
+1. **No separate toast module**: Toasts are small enough to live directly on `AppState` and `render/mod.rs`. A separate widget module would be over-engineering for a `Vec<Toast>` and a 50-line renderer.
+2. **Pending → still open legacy fallback**: Per the task's "pick the simpler one" guidance, `devtools_serve_pending = true` shows a "still starting" toast but still opens the legacy fallback URL. The alternative (deferring the open) would require a new state machine and is unnecessary complexity.
+3. **`&mut AppState` for the handler**: The signature change is minimal; the call site in `update.rs` already passes `&mut state` so no other callers were affected.
+4. **Toast wording uses ≥ 1.22 (RESEARCH.md)**: The task file says "≥ 3.16" but RESEARCH.md verifies the correct minimum is Flutter ≥ 1.22 (October 2020 stable). The implemented message uses 1.22.
+5. **Right-aligned toast pill**: Toasts are rendered right-aligned so they do not overlap the most important left-aligned log content, and they are visually distinct from search overlays and link-highlight bars.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (2148 + 842 + others, 0 failed)
+  - `fallback_path_emits_toast` — new test, passes
+  - `pending_serve_emits_different_toast` — new test, passes
+  - `served_endpoint_no_toast` — new test, passes
+  - All pre-existing tests pass (signature change is backward-compatible at the update.rs call site)
+
+### Risks/Limitations
+
+1. **Toast TTL is wall-clock based**: Toast expiry uses `Instant::elapsed()` checked on each `Tick`. The `Tick` frequency (100 ms in the TUI event loop) means toasts could persist up to `TOAST_TTL_SECS + 0.1s` — negligible in practice.
+2. **No TUI snapshot tests for toasts**: The existing TUI snapshot tests do not cover the toast overlay because they render without an active `Tick` loop. The handler-layer tests verify the push/no-push behaviour; visual correctness can be confirmed by running the app.

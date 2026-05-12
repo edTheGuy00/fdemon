@@ -30,3 +30,32 @@ Add a short note under the `B` keybinding (no schema changes, no new keys):
 ### Notes
 
 - This is an unmanaged doc; implementor can edit directly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a0c4844a41a85e58f
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Added blockquote note under the `b` key table entry in the DevTools Panel Navigation section explaining served URL behavior on Flutter >= 1.22 vs. legacy fallback with recovery toast |
+
+### Notable Decisions/Tradeoffs
+
+1. **SDK version corrected to 1.22**: Per the critical correction in the dispatch prompt, used Flutter >= 1.22 (October 2020) instead of the 3.16 stated in the task file body.
+2. **Blockquote format**: Used the blockquote ("> ...") format consistent with the existing note at line 334 of KEYBINDINGS.md rather than a separate prose paragraph, keeping the style uniform.
+3. **Placement**: Note placed immediately after the Panel Navigation table (before Debug Overlays) so it's adjacent to the `b` key row it annotates without disrupting the table structure.
+
+### Testing Performed
+
+- Visual inspection of rendered markdown context — Passed
+- No new keybindings introduced — confirmed
+- No code changes, no build/test run needed
+
+### Risks/Limitations
+
+1. **RESEARCH.md absent**: The RESEARCH.md file referenced in the dispatch prompt did not exist in the repo. The SDK version (1.22) and the recovery toast description were taken from the dispatch prompt's "Key correction" block instead.
