@@ -437,6 +437,16 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[fdemon_app::state::Toa
     /// Vertical offset from the bottom edge of `area`.
     /// 2 rows up keeps the toast above the typical bottom metadata bar.
     const BOTTOM_OFFSET: u16 = 2;
+    /// Display-width budget reserved for the leading icon.
+    ///
+    /// The icon string is `"⚠ "` or `"ℹ "` (2 codepoints each: glyph +
+    /// space). The warning/info glyph is a non-ASCII codepoint that some
+    /// terminals render at 2 cells (default-width / emoji presentation) and
+    /// others at 1 cell (text presentation). Plus the trailing space gives
+    /// 2–3 cells in practice. We budget 4 cells to leave a 1–2 cell safety
+    /// margin so the pill never clips the icon — the cost is at most two
+    /// blank cells on the right when text fits exactly.
+    const ICON_DISPLAY_WIDTH: u16 = 4;
 
     // Render most recent toast at the bottom; older ones stack above it.
     for (i, toast) in toasts.iter().rev().enumerate() {
@@ -447,9 +457,10 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[fdemon_app::state::Toa
         }
         let y = area.y + area.height.saturating_sub(row_from_bottom + 1);
 
-        // Truncate the message to fit in the available width (leave 4 chars
-        // for padding and a leading icon).
-        let max_text_chars = area.width.saturating_sub(HORIZONTAL_PADDING * 2 + 4) as usize;
+        // Truncate the message to fit in the available width.
+        let max_text_chars =
+            area.width
+                .saturating_sub(HORIZONTAL_PADDING * 2 + ICON_DISPLAY_WIDTH) as usize;
         let label = if toast.text.chars().count() > max_text_chars {
             format!(
                 "{}…",
@@ -468,8 +479,13 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[fdemon_app::state::Toa
             ToastLevel::Info => (palette::STATUS_BLUE, "ℹ "),
         };
 
-        let text_width =
-            (label.chars().count() + icon.chars().count() + HORIZONTAL_PADDING as usize * 2) as u16;
+        // Use ICON_DISPLAY_WIDTH (not icon.chars().count()) so the toast
+        // rect matches the budget used in `max_text_chars` above. Using
+        // `chars().count() == 2` would undersize the rect on terminals
+        // that render the glyph at 2 cells, clipping the icon.
+        let text_width = (label.chars().count()
+            + ICON_DISPLAY_WIDTH as usize
+            + HORIZONTAL_PADDING as usize * 2) as u16;
         let toast_width = text_width.min(area.width);
         // Right-align the toast pill.
         let x = area

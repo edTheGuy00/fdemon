@@ -55,6 +55,7 @@ pub mod network;
 pub mod performance;
 pub mod stack_trace;
 pub mod types;
+pub mod url;
 pub mod widget_tree;
 
 /// Prelude for common imports used throughout all Flutter Demon crates

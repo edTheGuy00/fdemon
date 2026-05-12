@@ -1526,40 +1526,45 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
 
-            // Start performance monitoring only when DevTools is already active.
-            // When the user is viewing logs (Normal mode), the monitoring task
-            // is not spawned at all — zero overhead until DevTools is opened.
-            // handle_enter_devtools_mode will start it lazily on first entry.
-            // process.rs will hydrate `handle` with the VmRequestHandle from the
-            // session before dispatching the action to handle_action.
+            // Two things must happen on VmServiceConnected:
+            //   (a) Start performance monitoring — but only when DevTools is
+            //       already active. In Normal mode the monitoring task is
+            //       not spawned (zero overhead until DevTools is opened);
+            //       `handle_enter_devtools_mode` starts it lazily on entry.
+            //   (b) Fire the `devtools.serve` fallback RPC if the primary
+            //       `app.devTools` event hasn't populated the endpoint yet
+            //       (belt-and-suspenders for older Flutter builds or
+            //       delayed event ordering). Must run in *both* UI modes —
+            //       a DevTools-first user (DevTools opened before VM
+            //       connected) would otherwise never see the fallback fire.
             //
-            // Also fire the devtools.serve fallback RPC if the primary `app.devTools`
-            // event hasn't populated the endpoint yet (belt-and-suspenders for older
-            // Flutter builds or delayed event ordering). `maybe_serve_devtools` is
-            // idempotent: it returns None when the endpoint is already set.
-            if state.ui_mode == UiMode::DevTools {
-                // Performance monitoring takes action priority in DevTools mode.
-                // The devtools.serve fallback is skipped here — the app.devTools
-                // primary event fires before VmServiceConnected in modern Flutter,
-                // so devtools_endpoint is already set by this point.
-                UpdateResult {
-                    message: follow_up_msg,
-                    action: Some(UpdateAction::StartPerformanceMonitoring {
-                        session_id,
-                        handle: None, // hydrated by process.rs
-                        performance_refresh_ms,
-                        allocation_profile_interval_ms,
-                        mode,
-                    }),
-                }
+            // `UpdateResult` has a single action slot, so we route the
+            // fallback through a `TriggerDevToolsServeFallback` follow-up
+            // message that chains the original `follow_up_msg` as its
+            // continuation. The follow-up's handler is idempotent (no-op
+            // when an endpoint is already set or a previous dispatch is in
+            // flight), so unconditional queuing is safe.
+            //
+            // process.rs hydrates `StartPerformanceMonitoring.handle` with
+            // the VmRequestHandle from the session before dispatch.
+            let perf_action = if state.ui_mode == UiMode::DevTools {
+                Some(UpdateAction::StartPerformanceMonitoring {
+                    session_id,
+                    handle: None, // hydrated by process.rs
+                    performance_refresh_ms,
+                    allocation_profile_interval_ms,
+                    mode,
+                })
             } else {
-                // In Normal (log-view) mode: use the action slot for the devtools.serve
-                // fallback if the endpoint is not yet populated.
-                let devtools_action = maybe_serve_devtools(state, session_id);
-                UpdateResult {
-                    message: follow_up_msg,
-                    action: devtools_action,
-                }
+                None
+            };
+
+            UpdateResult {
+                message: Some(Message::TriggerDevToolsServeFallback {
+                    session_id,
+                    continuation: follow_up_msg.map(Box::new),
+                }),
+                action: perf_action,
             }
         }
 
@@ -1902,9 +1907,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             base_url,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Redact any DDS auth-token path segment before logging.
+                // Logs may be persisted (journald, file sinks) and the
+                // token is a bearer credential.
                 info!(
                     session_id = session_id,
-                    base_url = %base_url,
+                    base_url = %fdemon_core::url::redact_devtools_url(&base_url),
                     "DevTools endpoint ready for session"
                 );
                 handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
@@ -1925,7 +1933,34 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 reason = %reason,
                 "DevTools serve failed; falling back to legacy URL"
             );
+            // Surface the failure to the user, but only if the failing
+            // session is the one currently active in the UI — a background
+            // session's RPC failure should not distract someone focused on
+            // a different session. The toast is informational: the legacy
+            // fallback URL is still available via `B`, so we are not
+            // blocking any user action — just preventing a silent failure.
+            let active_id = state.session_manager.selected().map(|h| h.session.id);
+            if active_id == Some(session_id) {
+                state.push_toast(
+                    crate::state::ToastLevel::Warn,
+                    format!("DevTools serve failed: {reason}"),
+                );
+            }
             UpdateResult::none()
+        }
+
+        Message::TriggerDevToolsServeFallback {
+            session_id,
+            continuation,
+        } => {
+            // Idempotent: maybe_serve_devtools no-ops when the endpoint is
+            // already set (e.g. the `app.devTools` primary event won the race)
+            // or a previous dispatch is in flight.
+            let action = maybe_serve_devtools(state, session_id);
+            UpdateResult {
+                message: continuation.map(|b| *b),
+                action,
+            }
         }
 
         Message::RequestWidgetTree { session_id } => {

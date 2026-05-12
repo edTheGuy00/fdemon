@@ -1,7 +1,6 @@
 //! Per-device session state — logs, filters, search, and lifecycle.
 
 use std::collections::VecDeque;
-use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
@@ -10,6 +9,7 @@ use crate::config::LaunchConfig;
 use crate::handler::helpers::{detect_raw_line_level, is_block_end, is_block_start};
 use crate::hyperlinks::LinkHighlightState;
 use crate::log_view_state::LogViewState;
+use fdemon_core::url::percent_encode_uri;
 use fdemon_core::{
     strip_ansi_codes, AppPhase, ExceptionBlockParser, FeedResult, FilterState, LogEntry, LogLevel,
     LogSource, SearchState,
@@ -26,29 +26,6 @@ use super::performance::PerformanceState;
 // ─────────────────────────────────────────────────────────────────────────────
 // DevTools Endpoint (browser DevTools integration)
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Percent-encode a URI for use as a query parameter (RFC 3986).
-///
-/// Encodes all characters except the unreserved set (A-Z, a-z, 0-9, `-`, `_`,
-/// `.`, `~`). Uses uppercase hex digits per RFC 3986 §2.1.
-///
-/// This duplicates the helper in `handler/devtools/mod.rs` to avoid a
-/// dependency from the session layer into the handler layer.
-fn percent_encode_uri(input: &str) -> String {
-    let mut encoded = String::with_capacity(input.len() * 3);
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            // write! to String is infallible
-            _ => {
-                let _ = write!(encoded, "%{:02X}", byte);
-            }
-        }
-    }
-    encoded
-}
 
 /// The DevTools server endpoint associated with a Flutter session.
 ///

@@ -12136,4 +12136,137 @@ mod devtools_served_handler {
              reconnect can fire the fallback again"
         );
     }
+
+    // -- TriggerDevToolsServeFallback chained follow-up ----------------------
+
+    fn attach_cmd_sender(state: &mut AppState, session_id: SessionId) {
+        let sender = fdemon_daemon::CommandSender::new_for_test();
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.cmd_sender = Some(sender);
+        }
+    }
+
+    #[test]
+    fn trigger_devtools_serve_fallback_emits_action() {
+        let (mut state, session_id) = make_state_with_session();
+        attach_cmd_sender(&mut state, session_id);
+
+        let result = update(
+            &mut state,
+            Message::TriggerDevToolsServeFallback {
+                session_id,
+                continuation: None,
+            },
+        );
+
+        assert!(
+            matches!(
+                result.action,
+                Some(crate::handler::UpdateAction::SendDaemonCommand { .. })
+            ),
+            "expected SendDaemonCommand action, got {:?}",
+            result.action
+        );
+        assert!(result.message.is_none(), "no continuation queued");
+    }
+
+    #[test]
+    fn trigger_devtools_serve_fallback_chains_continuation() {
+        let (mut state, session_id) = make_state_with_session();
+        // No cmd_sender — guard short-circuits, action is None, but
+        // continuation MUST still be threaded through.
+        let continuation = Box::new(Message::RequestWidgetTree { session_id });
+
+        let result = update(
+            &mut state,
+            Message::TriggerDevToolsServeFallback {
+                session_id,
+                continuation: Some(continuation),
+            },
+        );
+
+        assert!(result.action.is_none(), "no action when guard fails");
+        assert!(
+            matches!(result.message, Some(Message::RequestWidgetTree { .. })),
+            "continuation should be the next follow-up message"
+        );
+    }
+
+    #[test]
+    fn devtools_serve_failed_emits_toast_for_active_session() {
+        let (mut state, session_id) = make_state_with_session();
+        // create_session typically auto-selects; verify and force-select if not.
+        let active = state.session_manager.selected().map(|h| h.session.id);
+        assert_eq!(
+            active,
+            Some(session_id),
+            "test precondition: session should be active"
+        );
+
+        update(
+            &mut state,
+            Message::DevToolsServeFailed {
+                session_id,
+                reason: "Method not supported on this Flutter SDK".to_string(),
+            },
+        );
+
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("DevTools serve failed")),
+            "Expected a 'DevTools serve failed' toast for the active session"
+        );
+    }
+
+    #[test]
+    fn devtools_serve_failed_no_toast_for_background_session() {
+        // Create two sessions; foreground = first, background = second.
+        let (mut state, foreground_id) = make_state_with_session();
+        let device = test_device("device-2", "Pixel 7");
+        let background_id = state.session_manager.create_session(&device).unwrap();
+        // Force the foreground session to remain active.
+        let _ = state.session_manager.select_by_id(foreground_id);
+
+        update(
+            &mut state,
+            Message::DevToolsServeFailed {
+                session_id: background_id,
+                reason: "Method not supported".to_string(),
+            },
+        );
+
+        assert!(
+            state.toasts.is_empty(),
+            "Background-session failure must not emit a toast"
+        );
+    }
+
+    #[test]
+    fn trigger_devtools_serve_fallback_idempotent_when_endpoint_set() {
+        let (mut state, session_id) = make_state_with_session();
+        attach_cmd_sender(&mut state, session_id);
+        populate_devtools_state(&mut state, session_id);
+        // Reset pending to ensure ONLY the endpoint-is-some guard trips:
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .devtools_serve_pending = false;
+
+        let result = update(
+            &mut state,
+            Message::TriggerDevToolsServeFallback {
+                session_id,
+                continuation: None,
+            },
+        );
+
+        assert!(
+            result.action.is_none(),
+            "should no-op when endpoint already set"
+        );
+    }
 }

@@ -921,6 +921,21 @@ pub enum Message {
         reason: String,
     },
 
+    /// Internal: dispatch the `devtools.serve` fallback RPC if the session
+    /// still needs it (idempotent — no-op when an endpoint is already set or
+    /// a previous dispatch is in flight).
+    ///
+    /// Emitted as a follow-up from `VmServiceConnected` so the fallback can
+    /// fire alongside `StartPerformanceMonitoring`, which would otherwise
+    /// monopolise the single action slot when the user is already in
+    /// DevTools mode at VM-connection time. The `continuation` field chains
+    /// the original `VmServiceConnected` follow-up (widget-tree fetch,
+    /// auto-overlay) so it is not lost.
+    TriggerDevToolsServeFallback {
+        session_id: SessionId,
+        continuation: Option<Box<Message>>,
+    },
+
     /// Request a widget tree refresh from the VM Service.
     RequestWidgetTree { session_id: SessionId },
 

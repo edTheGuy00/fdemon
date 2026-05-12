@@ -28,6 +28,7 @@ use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::DebugOverlayKind;
 use crate::session::SessionId;
 use crate::state::{AppState, DevToolsError, DevToolsPanel, ToastLevel, VmConnectionStatus};
+use fdemon_core::url::percent_encode_uri;
 
 /// Map a raw RPC error string to a user-friendly [`DevToolsError`].
 ///
@@ -421,7 +422,10 @@ pub fn handle_open_browser_devtools(state: &mut AppState) -> UpdateResult {
 
     let url = match devtools_endpoint {
         Some(ref endpoint) => {
-            tracing::info!(base_url = %endpoint.base_url, "Opening served DevTools URL");
+            tracing::info!(
+                base_url = %fdemon_core::url::redact_devtools_url(&endpoint.base_url),
+                "Opening served DevTools URL"
+            );
             endpoint.url(&ws_uri)
         }
         None => {
@@ -493,24 +497,6 @@ fn build_local_devtools_url(ws_uri: &str, encoded_ws_uri: &str) -> String {
     let base = base.trim_end_matches('/');
 
     format!("{base}/devtools/?uri={encoded_ws_uri}")
-}
-
-/// Percent-encode a URI for use as a query parameter (RFC 3986).
-fn percent_encode_uri(input: &str) -> String {
-    use std::fmt::Write as _;
-    let mut encoded = String::with_capacity(input.len() * 3);
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            // write! to String is infallible
-            _ => {
-                let _ = write!(encoded, "%{:02X}", byte);
-            }
-        }
-    }
-    encoded
 }
 
 #[cfg(test)]
