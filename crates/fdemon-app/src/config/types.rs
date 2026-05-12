@@ -393,6 +393,29 @@ pub struct DevToolsSettings {
     #[serde(default = "default_network_poll_interval_ms")]
     pub network_poll_interval_ms: u64,
 
+    /// Number of `isWidgetTreeReady` poll attempts before proceeding with the
+    /// fetch anyway.
+    ///
+    /// Default: 2. Worst-case budget = attempts × (call_timeout + interval).
+    /// With the defaults (2 × (1000 ms + 250 ms) = 2.5 s) this leaves the
+    /// outer `inspector_fetch_timeout_secs` window plenty of headroom.
+    #[serde(default = "default_readiness_poll_attempts")]
+    pub readiness_poll_attempts: u32,
+
+    /// Milliseconds to sleep between consecutive `isWidgetTreeReady` poll calls.
+    ///
+    /// Default: 250 ms. Combined with `readiness_poll_call_timeout_ms` this
+    /// determines the per-attempt cost of the readiness poll.
+    #[serde(default = "default_readiness_poll_interval_ms")]
+    pub readiness_poll_interval_ms: u64,
+
+    /// Per-call timeout in milliseconds for each `isWidgetTreeReady` RPC.
+    ///
+    /// A timed-out call is treated as "not ready" and the loop continues to
+    /// the next attempt. Default: 1000 ms.
+    #[serde(default = "default_readiness_poll_call_timeout_ms")]
+    pub readiness_poll_call_timeout_ms: u64,
+
     /// Logging sub-settings
     #[serde(default)]
     pub logging: DevToolsLoggingSettings,
@@ -414,6 +437,9 @@ impl Default for DevToolsSettings {
             max_network_entries: default_max_network_entries(),
             network_auto_record: default_network_auto_record(),
             network_poll_interval_ms: default_network_poll_interval_ms(),
+            readiness_poll_attempts: default_readiness_poll_attempts(),
+            readiness_poll_interval_ms: default_readiness_poll_interval_ms(),
+            readiness_poll_call_timeout_ms: default_readiness_poll_call_timeout_ms(),
             logging: DevToolsLoggingSettings::default(),
         }
     }
@@ -449,6 +475,25 @@ fn default_network_poll_interval_ms() -> u64 {
 
 fn default_inspector_fetch_timeout_secs() -> u64 {
     60
+}
+
+/// Default number of readiness-poll attempts before proceeding anyway.
+///
+/// Derived from worst-case budget: 2 × (1 s call timeout + 250 ms sleep) = 2.5 s,
+/// which leaves the outer `inspector_fetch_timeout_secs` (60 s default) plenty of
+/// headroom and matches browser DevTools behaviour (no readiness poll at all).
+fn default_readiness_poll_attempts() -> u32 {
+    2
+}
+
+/// Default sleep interval (ms) between `isWidgetTreeReady` poll attempts.
+fn default_readiness_poll_interval_ms() -> u64 {
+    250
+}
+
+/// Default per-call timeout (ms) for each `isWidgetTreeReady` RPC.
+fn default_readiness_poll_call_timeout_ms() -> u64 {
+    1000
 }
 
 /// Logging sub-settings for the hybrid VM Service + daemon log pipeline.
@@ -1743,6 +1788,10 @@ theme = "default"
         assert_eq!(settings.max_network_entries, 500);
         assert!(settings.network_auto_record);
         assert_eq!(settings.network_poll_interval_ms, 1000);
+        // Readiness poll defaults
+        assert_eq!(settings.readiness_poll_attempts, 2);
+        assert_eq!(settings.readiness_poll_interval_ms, 250);
+        assert_eq!(settings.readiness_poll_call_timeout_ms, 1000);
     }
 
     #[test]
@@ -1800,6 +1849,44 @@ theme = "default"
         assert_eq!(settings.max_network_entries, 200);
         assert!(!settings.network_auto_record);
         assert_eq!(settings.network_poll_interval_ms, 2000);
+    }
+
+    #[test]
+    fn settings_readiness_poll_defaults_to_2_attempts() {
+        // Default readiness budget: 2 × (1000 ms + 250 ms) = 2.5 s ≤ task spec max.
+        let settings = DevToolsSettings::default();
+        assert_eq!(
+            settings.readiness_poll_attempts, 2,
+            "default readiness poll attempts should be 2"
+        );
+        assert_eq!(
+            settings.readiness_poll_interval_ms, 250,
+            "default readiness poll interval should be 250 ms"
+        );
+        assert_eq!(
+            settings.readiness_poll_call_timeout_ms, 1000,
+            "default readiness poll call timeout should be 1000 ms"
+        );
+        // Worst-case budget in ms: attempts × (call_timeout + interval)
+        let worst_case_ms = u64::from(settings.readiness_poll_attempts)
+            * (settings.readiness_poll_call_timeout_ms + settings.readiness_poll_interval_ms);
+        assert!(
+            worst_case_ms <= 2500,
+            "default readiness poll budget ({worst_case_ms} ms) exceeds 2500 ms"
+        );
+    }
+
+    #[test]
+    fn settings_readiness_poll_custom_values_deserialize() {
+        let toml = r#"
+            readiness_poll_attempts = 5
+            readiness_poll_interval_ms = 100
+            readiness_poll_call_timeout_ms = 500
+        "#;
+        let settings: DevToolsSettings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.readiness_poll_attempts, 5);
+        assert_eq!(settings.readiness_poll_interval_ms, 100);
+        assert_eq!(settings.readiness_poll_call_timeout_ms, 500);
     }
 
     #[test]

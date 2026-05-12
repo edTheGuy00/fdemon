@@ -37,8 +37,9 @@ const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// The fetch operation includes:
 /// 1. **Readiness polling** — calls `ext.flutter.inspector.isWidgetTreeReady`
-///    up to 8 times (500ms apart, 2s per-call timeout) before attempting the
-///    tree fetch. A timed-out poll is treated as "not ready".
+///    up to `readiness_poll_attempts` times (configurable, default 2) before
+///    attempting the tree fetch. A timed-out poll is treated as "not ready".
+///    Exhausting the poll budget is **not** an error — the fetch proceeds anyway.
 /// 2. **API fallback** — tries `getRootWidgetTree` first, falls back to
 ///    `getRootWidgetSummaryTree` on "method not found".
 /// 3. **Configurable outer timeout** — `fetch_timeout_secs` (min 5s) wraps the
@@ -47,12 +48,16 @@ const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Sends `Message::WidgetTreeFetched` on success,
 /// `Message::WidgetTreeFetchFailed` on error, or
 /// `Message::WidgetTreeFetchTimeout` on timeout.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_fetch_widget_tree(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     tree_max_depth: u32,
     fetch_timeout_secs: u64,
+    readiness_poll_attempts: u32,
+    readiness_poll_interval_ms: u64,
+    readiness_poll_call_timeout_ms: u64,
 ) {
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(fetch_timeout_secs.max(5));
@@ -78,7 +83,12 @@ pub(super) fn spawn_fetch_widget_tree(
             );
 
             // Step 2: Poll widget tree readiness.
-            widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id).await;
+            let poll_cfg = widget_tree::ReadinessPollConfig {
+                attempts: readiness_poll_attempts,
+                interval_ms: readiness_poll_interval_ms,
+                call_timeout_ms: readiness_poll_call_timeout_ms,
+            };
+            widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id, &poll_cfg).await;
 
             tracing::info!(
                 session_id = %session_id,

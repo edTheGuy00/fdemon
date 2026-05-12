@@ -251,6 +251,9 @@ pub fn handle_action(
             vm_handle,
             tree_max_depth,
             fetch_timeout_secs,
+            readiness_poll_attempts,
+            readiness_poll_interval_ms,
+            readiness_poll_call_timeout_ms,
         } => {
             if let Some(handle) = vm_handle {
                 inspector::spawn_fetch_widget_tree(
@@ -259,6 +262,9 @@ pub fn handle_action(
                     msg_tx,
                     tree_max_depth,
                     fetch_timeout_secs,
+                    readiness_poll_attempts,
+                    readiness_poll_interval_ms,
+                    readiness_poll_call_timeout_ms,
                 );
             } else {
                 warn!(

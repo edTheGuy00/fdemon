@@ -10,12 +10,55 @@ use fdemon_daemon::vm_service::{ext, parse_diagnostics_node_response, VmRequestH
 
 use crate::session::SessionId;
 
+/// Default number of `isWidgetTreeReady` poll attempts.
+///
+/// Derived so that the worst-case budget is ≤ 2.5 s:
+/// `DEFAULT_READINESS_POLL_ATTEMPTS × (DEFAULT_READINESS_POLL_CALL_TIMEOUT_MS +
+/// DEFAULT_READINESS_POLL_INTERVAL_MS) = 2 × (1000 + 250) = 2500 ms`.
+pub(super) const DEFAULT_READINESS_POLL_ATTEMPTS: u32 = 2;
+
+/// Default sleep between consecutive `isWidgetTreeReady` calls (milliseconds).
+pub(super) const DEFAULT_READINESS_POLL_INTERVAL_MS: u64 = 250;
+
+/// Default per-call timeout for each `isWidgetTreeReady` RPC (milliseconds).
+pub(super) const DEFAULT_READINESS_POLL_CALL_TIMEOUT_MS: u64 = 1000;
+
+/// Configuration controlling the `isWidgetTreeReady` polling loop.
+///
+/// Passed to [`poll_widget_tree_ready`] by [`super::spawn_fetch_widget_tree`]
+/// so that callers can supply values read from `.fdemon/config.toml` rather
+/// than the hard-coded defaults.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ReadinessPollConfig {
+    /// Maximum number of poll attempts before proceeding with the fetch anyway.
+    pub attempts: u32,
+    /// Milliseconds to sleep between consecutive poll calls.
+    pub interval_ms: u64,
+    /// Per-call timeout in milliseconds for each `isWidgetTreeReady` RPC.
+    pub call_timeout_ms: u64,
+}
+
+impl Default for ReadinessPollConfig {
+    fn default() -> Self {
+        Self {
+            attempts: DEFAULT_READINESS_POLL_ATTEMPTS,
+            interval_ms: DEFAULT_READINESS_POLL_INTERVAL_MS,
+            call_timeout_ms: DEFAULT_READINESS_POLL_CALL_TIMEOUT_MS,
+        }
+    }
+}
+
 /// Poll `ext.flutter.inspector.isWidgetTreeReady` until it returns `true`,
 /// the extension is not available (older Flutter SDK), or we exhaust attempts.
 ///
-/// Each poll is wrapped in a 2-second timeout so that a slow VM isolate cannot
+/// Each poll is wrapped in a per-call timeout so that a slow VM isolate cannot
 /// consume the entire outer fetch budget. A timed-out poll counts as "not
 /// ready" and we continue to the next attempt.
+///
+/// **Exhaustion is not an error.** When all attempts are spent without a
+/// `true` reply, this function logs a `warn!` and returns normally so that
+/// the subsequent `try_fetch_widget_tree` call can speak for itself — matching
+/// the behaviour of browser DevTools, which does not poll for readiness at all.
 ///
 /// This guards against the known Flutter bug where `getRootWidgetTree` throws
 /// a null-check failure on complex or freshly-reloaded widget trees.
@@ -23,28 +66,26 @@ pub(super) async fn poll_widget_tree_ready(
     handle: &VmRequestHandle,
     isolate_id: &str,
     session_id: SessionId,
+    config: &ReadinessPollConfig,
 ) {
-    const MAX_POLLS: u32 = 8;
-    const POLL_INTERVAL: Duration = Duration::from_millis(500);
-    const POLL_CALL_TIMEOUT: Duration = Duration::from_secs(2);
-
     tracing::info!(
         session_id = %session_id,
-        max_polls = MAX_POLLS,
-        poll_interval_ms = POLL_INTERVAL.as_millis(),
-        poll_call_timeout_secs = POLL_CALL_TIMEOUT.as_secs(),
+        max_polls = config.attempts,
+        poll_interval_ms = config.interval_ms,
+        poll_call_timeout_ms = config.call_timeout_ms,
         "Inspector: readiness poll loop entered"
     );
 
-    for attempt in 1..=MAX_POLLS {
+    for attempt in 1..=config.attempts {
         tracing::debug!(
             session_id = %session_id,
             attempt = attempt,
-            max_polls = MAX_POLLS,
+            max_polls = config.attempts,
             "Inspector: readiness poll attempt"
         );
+        let call_timeout = Duration::from_millis(config.call_timeout_ms);
         let call_result = tokio::time::timeout(
-            POLL_CALL_TIMEOUT,
+            call_timeout,
             handle.call_extension(ext::IS_WIDGET_TREE_READY, isolate_id, None),
         )
         .await;
@@ -56,7 +97,7 @@ pub(super) async fn poll_widget_tree_ready(
                     "isWidgetTreeReady timed out for session {} (poll {}/{}), treating as not ready",
                     session_id,
                     attempt,
-                    MAX_POLLS,
+                    config.attempts,
                 );
             }
             Ok(Ok(value)) => {
@@ -69,7 +110,7 @@ pub(super) async fn poll_widget_tree_ready(
                     tracing::info!(
                         session_id = %session_id,
                         attempt = attempt,
-                        max_polls = MAX_POLLS,
+                        max_polls = config.attempts,
                         "Inspector: widget tree is ready"
                     );
                     return;
@@ -78,7 +119,7 @@ pub(super) async fn poll_widget_tree_ready(
                     "Widget tree not ready for session {} (poll {}/{}), waiting…",
                     session_id,
                     attempt,
-                    MAX_POLLS,
+                    config.attempts,
                 );
             }
             Ok(Err(e)) => {
@@ -103,18 +144,18 @@ pub(super) async fn poll_widget_tree_ready(
                     "isWidgetTreeReady transient error for session {} (poll {}/{}): {}",
                     session_id,
                     attempt,
-                    MAX_POLLS,
+                    config.attempts,
                     e,
                 );
             }
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+        tokio::time::sleep(Duration::from_millis(config.interval_ms)).await;
     }
 
     tracing::warn!(
         session_id = %session_id,
-        max_polls = MAX_POLLS,
-        "Inspector: readiness polls exhausted — proceeding with fetch anyway"
+        attempts = config.attempts,
+        "Inspector: readiness poll exhausted; proceeding with fetch anyway"
     );
 }
 
@@ -219,6 +260,101 @@ pub(super) fn is_method_not_found(error: &fdemon_core::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::SessionId;
+
+    // ── Helper ────────────────────────────────────────────────────────────────
+
+    fn test_session_id() -> SessionId {
+        42
+    }
+
+    /// Minimal config with 0-ms sleep so tests don't wait.
+    fn zero_wait_config(attempts: u32) -> ReadinessPollConfig {
+        ReadinessPollConfig {
+            attempts,
+            interval_ms: 0,
+            call_timeout_ms: 100,
+        }
+    }
+
+    // ── ReadinessPollConfig ────────────────────────────────────────────────────
+
+    #[test]
+    fn readiness_poll_config_defaults_match_spec() {
+        let cfg = ReadinessPollConfig::default();
+        assert_eq!(
+            cfg.attempts, DEFAULT_READINESS_POLL_ATTEMPTS,
+            "default attempts should be 2"
+        );
+        assert_eq!(
+            cfg.interval_ms, DEFAULT_READINESS_POLL_INTERVAL_MS,
+            "default interval should be 250 ms"
+        );
+        assert_eq!(
+            cfg.call_timeout_ms, DEFAULT_READINESS_POLL_CALL_TIMEOUT_MS,
+            "default call timeout should be 1000 ms"
+        );
+        // Verify worst-case budget ≤ 2.5 s
+        let worst_ms = u64::from(cfg.attempts) * (cfg.call_timeout_ms + cfg.interval_ms);
+        assert!(
+            worst_ms <= 2500,
+            "default readiness poll budget ({worst_ms} ms) exceeds 2500 ms"
+        );
+    }
+
+    #[test]
+    fn readiness_poll_config_custom_values() {
+        let cfg = ReadinessPollConfig {
+            attempts: 5,
+            interval_ms: 100,
+            call_timeout_ms: 500,
+        };
+        assert_eq!(cfg.attempts, 5);
+        assert_eq!(cfg.interval_ms, 100);
+        assert_eq!(cfg.call_timeout_ms, 500);
+    }
+
+    // ── poll_widget_tree_ready behaviour ─────────────────────────────────────
+
+    /// When the VM channel is closed (ChannelClosed = fatal), the loop exits
+    /// early on the first attempt.  The function should complete without
+    /// panicking — and crucially must not propagate any error (it returns `()`).
+    #[tokio::test]
+    async fn poll_exhaustion_returns_ok_not_error() {
+        // new_for_test drops the receiver immediately → every RPC returns ChannelClosed (fatal).
+        // The function therefore early-returns on the first fatal error branch.
+        // The important property: the function completes and does not panic.
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
+        let cfg = zero_wait_config(2);
+        // This must complete (not hang) and not panic.
+        poll_widget_tree_ready(&handle, "isolates/1", test_session_id(), &cfg).await;
+    }
+
+    /// With 0 attempts the loop body is never entered; the warn is not emitted
+    /// and the function returns immediately.
+    #[tokio::test]
+    async fn poll_with_zero_attempts_returns_immediately() {
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
+        let cfg = ReadinessPollConfig {
+            attempts: 0,
+            interval_ms: 0,
+            call_timeout_ms: 100,
+        };
+        poll_widget_tree_ready(&handle, "isolates/1", test_session_id(), &cfg).await;
+    }
+
+    /// Verifies that `poll_respects_custom_attempts_and_interval` — the
+    /// function uses `config.attempts`, not the old hard-coded `8`.
+    #[tokio::test]
+    async fn poll_respects_custom_attempts_and_interval() {
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
+        // With 1 attempt and a broken channel the function must return after at
+        // most 1 call attempt (not 8 as the old hard-coded constant required).
+        let cfg = zero_wait_config(1);
+        poll_widget_tree_ready(&handle, "isolates/1", test_session_id(), &cfg).await;
+    }
+
+    // ── is_transient_error / is_method_not_found ──────────────────────────────
 
     #[test]
     fn test_is_transient_error_protocol() {

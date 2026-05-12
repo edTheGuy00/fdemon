@@ -201,6 +201,9 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
         vm_handle,
         tree_max_depth,
         fetch_timeout_secs,
+        readiness_poll_attempts,
+        readiness_poll_interval_ms,
+        readiness_poll_call_timeout_ms,
     } = action
     {
         tracing::info!(
@@ -215,6 +218,9 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
                 vm_handle,
                 tree_max_depth,
                 fetch_timeout_secs,
+                readiness_poll_attempts,
+                readiness_poll_interval_ms,
+                readiness_poll_call_timeout_ms,
             });
         }
         let handle = state
@@ -235,6 +241,9 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
             vm_handle: handle,
             tree_max_depth,
             fetch_timeout_secs,
+            readiness_poll_attempts,
+            readiness_poll_interval_ms,
+            readiness_poll_call_timeout_ms,
         });
     }
     Some(action)

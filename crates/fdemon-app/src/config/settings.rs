@@ -479,6 +479,10 @@ allocation_profile_interval_ms = 5000 # Class allocation fetch interval (min 100
 max_network_entries = 500             # Max HTTP entries per session (FIFO eviction)
 network_auto_record = true            # Auto-start recording when entering Network tab
 network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
+# Inspector readiness-poll budget: attempts × (call_timeout_ms + interval_ms) ≤ 2500 ms
+readiness_poll_attempts = 2           # isWidgetTreeReady poll attempts before proceeding
+readiness_poll_interval_ms = 250      # Sleep between poll attempts (ms)
+readiness_poll_call_timeout_ms = 1000 # Per-call timeout for isWidgetTreeReady RPC (ms)
 
 [editor]
 # Editor command (leave empty for auto-detection)
@@ -683,6 +687,10 @@ allocation_profile_interval_ms = 5000 # Class allocation fetch interval (min 100
 max_network_entries = 500             # Max HTTP entries per session (FIFO eviction)
 network_auto_record = true            # Auto-start recording when entering Network tab
 network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
+# Inspector readiness-poll budget: attempts × (call_timeout_ms + interval_ms) ≤ 2500 ms
+readiness_poll_attempts = 2           # isWidgetTreeReady poll attempts before proceeding
+readiness_poll_interval_ms = 250      # Sleep between poll attempts (ms)
+readiness_poll_call_timeout_ms = 1000 # Per-call timeout for isWidgetTreeReady RPC (ms)
 
 [editor]
 # Editor command (leave empty for auto-detection)

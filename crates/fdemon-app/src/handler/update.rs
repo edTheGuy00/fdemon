@@ -1997,6 +1997,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
+                    readiness_poll_attempts: state.settings.devtools.readiness_poll_attempts,
+                    readiness_poll_interval_ms: state.settings.devtools.readiness_poll_interval_ms,
+                    readiness_poll_call_timeout_ms: state
+                        .settings
+                        .devtools
+                        .readiness_poll_call_timeout_ms,
                 })
             } else {
                 warn!(

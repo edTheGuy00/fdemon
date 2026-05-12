@@ -224,6 +224,12 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
+                    readiness_poll_attempts: state.settings.devtools.readiness_poll_attempts,
+                    readiness_poll_interval_ms: state.settings.devtools.readiness_poll_interval_ms,
+                    readiness_poll_call_timeout_ms: state
+                        .settings
+                        .devtools
+                        .readiness_poll_call_timeout_ms,
                 });
             }
         }
@@ -322,6 +328,18 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                                 .settings
                                 .devtools
                                 .inspector_fetch_timeout_secs,
+                            readiness_poll_attempts: state
+                                .settings
+                                .devtools
+                                .readiness_poll_attempts,
+                            readiness_poll_interval_ms: state
+                                .settings
+                                .devtools
+                                .readiness_poll_interval_ms,
+                            readiness_poll_call_timeout_ms: state
+                                .settings
+                                .devtools
+                                .readiness_poll_call_timeout_ms,
                         });
                     }
                 }

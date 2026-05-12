@@ -238,6 +238,15 @@ pub enum UpdateAction {
         /// Overall timeout for the fetch operation including readiness polling
         /// and retries. From `settings.devtools.inspector_fetch_timeout_secs`.
         fetch_timeout_secs: u64,
+        /// Number of `isWidgetTreeReady` poll attempts.
+        /// From `settings.devtools.readiness_poll_attempts`.
+        readiness_poll_attempts: u32,
+        /// Sleep interval (ms) between readiness poll calls.
+        /// From `settings.devtools.readiness_poll_interval_ms`.
+        readiness_poll_interval_ms: u64,
+        /// Per-call timeout (ms) for each `isWidgetTreeReady` RPC.
+        /// From `settings.devtools.readiness_poll_call_timeout_ms`.
+        readiness_poll_call_timeout_ms: u64,
     },
 
     /// Fetch layout data for a specific widget node.
