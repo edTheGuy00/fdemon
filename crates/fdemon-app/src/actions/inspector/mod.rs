@@ -65,9 +65,9 @@ pub(super) fn spawn_fetch_widget_tree(
         );
 
         let fetch_result = tokio::time::timeout(timeout_dur, async {
-            // Step 1: Get isolate ID.
+            // Step 1: Get isolate ID (prefers the Flutter UI isolate with ext.flutter.* RPCs).
             let isolate_id = handle
-                .main_isolate_id()
+                .resolve_flutter_ui_isolate()
                 .await
                 .map_err(|e| format!("Could not get isolate ID: {e}"))?;
 
@@ -190,7 +190,7 @@ pub(super) fn spawn_toggle_overlay(
     msg_tx: mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
+        let isolate_id = match handle.resolve_flutter_ui_isolate().await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -296,7 +296,7 @@ pub(super) fn spawn_fetch_layout_data(
     msg_tx: mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
+        let isolate_id = match handle.resolve_flutter_ui_isolate().await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -458,7 +458,7 @@ pub(super) fn spawn_fetch_layout_data(
 /// when a group does not exist is also safe.
 pub(super) fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmRequestHandle) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
+        let isolate_id = match handle.resolve_flutter_ui_isolate().await {
             Ok(id) => id,
             Err(e) => {
                 tracing::debug!(

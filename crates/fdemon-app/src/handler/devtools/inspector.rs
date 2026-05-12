@@ -1544,11 +1544,7 @@ mod tests {
             "Debounce should be active while loading"
         );
 
-        handle_widget_tree_fetch_failed(
-            &mut state,
-            session_id,
-            "some rpc error".to_string(),
-        );
+        handle_widget_tree_fetch_failed(&mut state, session_id, "some rpc error".to_string());
 
         assert!(
             !state.devtools_view_state.inspector.is_fetch_debounced(),
@@ -1559,7 +1555,11 @@ mod tests {
             "loading should be false after failure"
         );
         assert!(
-            state.devtools_view_state.inspector.last_fetch_time.is_none(),
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_none(),
             "last_fetch_time should be None after clear_fetch_debounce"
         );
     }
@@ -1587,7 +1587,11 @@ mod tests {
             "loading should be false after timeout"
         );
         assert!(
-            state.devtools_view_state.inspector.last_fetch_time.is_none(),
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_none(),
             "last_fetch_time should be None after clear_fetch_debounce"
         );
     }
@@ -1639,7 +1643,11 @@ mod tests {
             "loading should be false after successful fetch"
         );
         assert!(
-            state.devtools_view_state.inspector.last_fetch_time.is_some(),
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_some(),
             "last_fetch_time should remain Some after successful fetch"
         );
     }

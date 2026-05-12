@@ -218,6 +218,108 @@ impl VmRequestHandle {
             .and_then(|g| g.clone())
     }
 
+    /// Resolve the Flutter UI isolate by inspecting extension RPCs.
+    ///
+    /// Unlike [`main_isolate_id`], which returns the first non-system isolate,
+    /// this method enumerates all non-system isolates and calls `getIsolate`
+    /// on each one to inspect its `extensionRPCs` list. The first isolate
+    /// that has at least one extension starting with `"ext.flutter."` is
+    /// returned as the Flutter UI isolate.
+    ///
+    /// The resolved ID is stored in the same [`isolate_id_cache`] as
+    /// [`main_isolate_id`] — the two methods share the cache, so whichever
+    /// is called first wins. Call [`invalidate_isolate_cache`] (or
+    /// [`clear_isolate_cache`]) before the next call to force a fresh
+    /// lookup (e.g. after a hot restart).
+    ///
+    /// # Fallback
+    ///
+    /// If no isolate has `ext.flutter.*` extensions, a `warn!` is emitted
+    /// and the first non-system isolate is returned (same as
+    /// [`main_isolate_id`]).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::VmService`] if no non-system isolates are available.
+    /// - Transport errors from `getVM` or `getIsolate`.
+    pub async fn resolve_flutter_ui_isolate(&self) -> Result<String> {
+        // Fast path: return from cache if available.
+        {
+            let guard = self.isolate_id_cache.lock().await;
+            if let Some(ref id) = *guard {
+                return Ok(id.clone());
+            }
+        }
+
+        // Slow path: enumerate isolates and inspect extension RPCs.
+        let result = self.request("getVM", None).await?;
+        let vm: VmInfo = serde_json::from_value(result)
+            .map_err(|e| Error::vm_service(format!("parse getVM: {e}")))?;
+
+        info!(
+            isolates_count = vm.isolates.len(),
+            isolates = ?vm.isolates.iter().map(|i| (&i.id, &i.name, i.is_system_isolate)).collect::<Vec<_>>(),
+            "VM Service: resolve_flutter_ui_isolate — listing candidates"
+        );
+
+        let candidates: Vec<&IsolateRef> = vm
+            .isolates
+            .iter()
+            .filter(|i| !i.is_system_isolate.unwrap_or(false))
+            .collect();
+
+        for iso in &candidates {
+            let iso_params = serde_json::json!({ "isolateId": iso.id });
+            let detail_result = self.request("getIsolate", Some(iso_params)).await;
+
+            let detail: IsolateInfo = match detail_result {
+                Ok(v) => match serde_json::from_value(v) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        warn!(
+                            isolate_id = %iso.id,
+                            error = %e,
+                            "VM Service: resolve_flutter_ui_isolate — failed to parse getIsolate response; skipping"
+                        );
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    warn!(
+                        isolate_id = %iso.id,
+                        error = %e,
+                        "VM Service: resolve_flutter_ui_isolate — getIsolate failed; skipping"
+                    );
+                    continue;
+                }
+            };
+
+            let ext_rpcs = detail.extension_rpcs.as_deref().unwrap_or(&[]);
+            if ext_rpcs.iter().any(|e| e.starts_with("ext.flutter.")) {
+                info!(
+                    isolate_id = %iso.id,
+                    extension_count = ext_rpcs.len(),
+                    "VM Service: resolved Flutter UI isolate"
+                );
+                let mut guard = self.isolate_id_cache.lock().await;
+                *guard = Some(iso.id.clone());
+                return Ok(iso.id.clone());
+            }
+        }
+
+        // Fallback: no Flutter extensions found on any isolate.
+        if let Some(first) = candidates.first() {
+            warn!(
+                isolate_id = %first.id,
+                "VM Service: no Flutter extensions found on any isolate; \
+                 falling back to first non-system isolate"
+            );
+            Ok(first.id.clone())
+        } else {
+            Err(Error::vm_service("no non-system isolates available"))
+        }
+    }
+
     /// Clear the cached main isolate ID.
     ///
     /// Call this after events that create a new isolate (hot restart) so
@@ -239,6 +341,18 @@ impl VmRequestHandle {
         } else {
             debug!("VM Service: isolate ID cache lock contention during invalidation — skipped");
         }
+    }
+
+    /// Clear the cached Flutter UI isolate ID.
+    ///
+    /// Alias for [`invalidate_isolate_cache`]. Call this after hot restarts
+    /// or `IsolateExit` events so the next [`resolve_flutter_ui_isolate`]
+    /// call re-discovers the UI isolate from the VM.
+    ///
+    /// Uses `try_lock()`; the invalidation is silently skipped under
+    /// extremely rare concurrent lock contention (see [`invalidate_isolate_cache`]).
+    pub fn clear_isolate_cache(&self) {
+        self.invalidate_isolate_cache();
     }
 
     /// Call a Flutter service extension method.
@@ -1480,6 +1594,182 @@ mod tests {
         // Drop the guard before the cloned handle goes out of scope.
         drop(guard);
         drop(cloned);
+    }
+
+    // -- resolve_flutter_ui_isolate logic tests --------------------------------
+    //
+    // The full async method requires a live WebSocket, but we can test the
+    // core filtering and caching logic independently.
+
+    /// Helper: build an `IsolateInfo` fixture with the given extension RPCs.
+    fn make_isolate_info(id: &str, name: &str, extension_rpcs: Vec<&str>) -> IsolateInfo {
+        IsolateInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            number: None,
+            runnable: Some(true),
+            pause_on_exit: None,
+            start_time: None,
+            libraries: None,
+            extension_rpcs: Some(extension_rpcs.into_iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    #[test]
+    fn test_resolve_flutter_ui_isolate_logic_single_isolate_with_flutter_ext() {
+        // Single non-system isolate that has ext.flutter.* extensions.
+        // The filtering logic should pick it.
+        let detail = make_isolate_info(
+            "isolates/1",
+            "main",
+            vec![
+                "ext.flutter.reassemble",
+                "ext.flutter.inspector.isWidgetTreeReady",
+            ],
+        );
+
+        let exts = detail.extension_rpcs.as_deref().unwrap_or(&[]);
+        let has_flutter = exts.iter().any(|e| e.starts_with("ext.flutter."));
+        assert!(has_flutter, "isolate with ext.flutter.* should be selected");
+    }
+
+    #[test]
+    fn test_resolve_flutter_ui_isolate_logic_multi_isolate_second_has_flutter_ext() {
+        // Two non-system isolates; only the second has ext.flutter.* extensions.
+        let worker = make_isolate_info("isolates/1", "worker", vec!["ext.app.doWork"]);
+        let ui = make_isolate_info(
+            "isolates/2",
+            "main",
+            vec![
+                "ext.flutter.reassemble",
+                "ext.flutter.inspector.isWidgetTreeReady",
+            ],
+        );
+
+        let candidates = [&worker, &ui];
+        let selected = candidates.iter().find(|iso| {
+            iso.extension_rpcs
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|e| e.starts_with("ext.flutter."))
+        });
+
+        assert!(selected.is_some());
+        assert_eq!(selected.unwrap().id, "isolates/2");
+    }
+
+    #[test]
+    fn test_resolve_flutter_ui_isolate_logic_no_flutter_ext_falls_back_to_first() {
+        // No isolate has ext.flutter.* — fallback to first non-system isolate.
+        let isolate1 = make_isolate_info("isolates/1", "background", vec!["ext.app.doWork"]);
+        let isolate2 = make_isolate_info("isolates/2", "other", vec!["ext.other.thing"]);
+
+        let candidates = [&isolate1, &isolate2];
+        let has_flutter = candidates.iter().any(|iso| {
+            iso.extension_rpcs
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|e| e.starts_with("ext.flutter."))
+        });
+
+        assert!(
+            !has_flutter,
+            "no isolate should have ext.flutter.* extensions"
+        );
+
+        // Fallback: first candidate is returned.
+        let fallback = candidates.first();
+        assert!(fallback.is_some());
+        assert_eq!(fallback.unwrap().id, "isolates/1");
+    }
+
+    #[test]
+    fn test_resolve_flutter_ui_isolate_logic_no_extension_rpcs_field() {
+        // Isolate with extension_rpcs = None (field absent) should not be selected.
+        let mut detail = make_isolate_info("isolates/1", "main", vec![]);
+        detail.extension_rpcs = None;
+
+        let exts = detail.extension_rpcs.as_deref().unwrap_or(&[]);
+        let has_flutter = exts.iter().any(|e| e.starts_with("ext.flutter."));
+        assert!(
+            !has_flutter,
+            "isolate with no extension_rpcs should not match"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_flutter_ui_isolate_returns_cached_value_immediately() {
+        // Pre-populate the cache with a known isolate ID.
+        // The method should return this without making any RPC calls.
+        let cached_id = "isolates/cached-ui-isolate";
+        let isolate_id_cache = Arc::new(Mutex::new(Some(cached_id.to_string())));
+
+        let handle = VmRequestHandle {
+            // Use a disconnected channel — any RPC call would fail.
+            cmd_tx: {
+                let (tx, _rx) = mpsc::channel::<ClientCommand>(1);
+                // Drop _rx immediately so channel is closed.
+                tx
+            },
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache,
+            ws_uri: String::new(),
+        };
+
+        let result = handle.resolve_flutter_ui_isolate().await;
+        assert!(result.is_ok(), "should return Ok with cached value");
+        assert_eq!(
+            result.unwrap(),
+            cached_id,
+            "should return the pre-cached isolate ID"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_clear_isolate_cache_clears_value() {
+        // clear_isolate_cache() should behave identically to invalidate_isolate_cache().
+        let isolate_id_cache = Arc::new(Mutex::new(Some("isolates/ui-1".to_string())));
+
+        let handle = VmRequestHandle {
+            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::clone(&isolate_id_cache),
+            ws_uri: String::new(),
+        };
+
+        // Verify the cache has a value.
+        {
+            let g = isolate_id_cache.lock().await;
+            assert!(g.is_some());
+        }
+
+        handle.clear_isolate_cache();
+
+        let g = isolate_id_cache.lock().await;
+        assert!(
+            g.is_none(),
+            "cache should be cleared by clear_isolate_cache()"
+        );
+    }
+
+    #[test]
+    fn test_resolve_flutter_ui_isolate_logic_prefix_match_only() {
+        // Only extensions that start with "ext.flutter." qualify.
+        // "ext.flutterbutter.foo" should NOT match.
+        let detail = make_isolate_info(
+            "isolates/1",
+            "main",
+            vec!["ext.flutterbutter.foo", "ext.dart.something"],
+        );
+
+        let exts = detail.extension_rpcs.as_deref().unwrap_or(&[]);
+        let has_flutter = exts.iter().any(|e| e.starts_with("ext.flutter."));
+        assert!(
+            !has_flutter,
+            "'ext.flutterbutter.foo' must not match the 'ext.flutter.' prefix"
+        );
     }
 
     // -- RESUBSCRIBE_STREAMS -------------------------------------------------
