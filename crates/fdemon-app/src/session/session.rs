@@ -41,12 +41,6 @@ use super::performance::PerformanceState;
 pub struct DevToolsEndpoint {
     /// Base DevTools server URL without trailing `?uri=` parameter.
     pub base_url: String,
-
-    /// When this endpoint was recorded.
-    ///
-    /// Retained for potential staleness detection in future tasks. Not used by
-    /// any handler in this task.
-    pub served_at: Instant,
 }
 
 impl DevToolsEndpoint {
@@ -59,11 +53,9 @@ impl DevToolsEndpoint {
     /// # Example
     ///
     /// ```
-    /// # use std::time::Instant;
     /// # use fdemon_app::session::DevToolsEndpoint;
     /// let ep = DevToolsEndpoint {
     ///     base_url: "http://127.0.0.1:9100".into(),
-    ///     served_at: Instant::now(),
     /// };
     /// let url = ep.url("ws://127.0.0.1:1234/abc=/ws");
     /// assert_eq!(url, "http://127.0.0.1:9100?uri=ws%3A%2F%2F127.0.0.1%3A1234%2Fabc%3D%2Fws");

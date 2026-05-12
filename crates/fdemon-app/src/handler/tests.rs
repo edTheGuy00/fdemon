@@ -12074,7 +12074,6 @@ mod devtools_served_handler {
         h.session.app_id = Some("test-app".to_string());
         h.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
             base_url: "http://127.0.0.1:9100".to_string(),
-            served_at: std::time::Instant::now(),
         });
         h.session.devtools_serve_pending = true;
     }

@@ -1915,10 +1915,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     base_url = %fdemon_core::url::redact_devtools_url(&base_url),
                     "DevTools endpoint ready for session"
                 );
-                handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
-                    base_url,
-                    served_at: std::time::Instant::now(),
-                });
+                handle.session.devtools_endpoint =
+                    Some(crate::session::DevToolsEndpoint { base_url });
                 handle.session.devtools_serve_pending = false;
             }
             UpdateResult::none()

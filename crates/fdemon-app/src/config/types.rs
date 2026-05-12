@@ -321,7 +321,21 @@ pub struct DevToolsSettings {
     #[serde(default)]
     pub auto_open: bool,
 
-    /// Browser to use (empty = system default)
+    /// Browser to use (empty = system default).
+    ///
+    /// # Security
+    ///
+    /// This value is used directly as the executable path in
+    /// `std::process::Command::new(...)` when launching DevTools. Setting it
+    /// from an untrusted `.fdemon/config.toml` (e.g. a freshly cloned third-
+    /// party Flutter project) executes whatever binary that path resolves to,
+    /// which is a local-code-execution risk.
+    ///
+    /// Review project-level config before opening DevTools, and prefer
+    /// keeping `browser` empty (system default opener) unless you have a
+    /// specific reason to override it. The URL passed as the argument is
+    /// always scheme-validated (http/https only) in `open_url_in_browser`,
+    /// but the *browser binary itself* is taken on trust.
     #[serde(default)]
     pub browser: String,
 

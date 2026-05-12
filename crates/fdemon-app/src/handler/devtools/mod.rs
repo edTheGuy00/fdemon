@@ -810,14 +810,12 @@ mod tests {
     #[test]
     fn open_browser_uses_served_endpoint_when_available() {
         use crate::session::DevToolsEndpoint;
-        use std::time::Instant;
 
         let mut state = make_state_with_session();
         let handle = state.session_manager.selected_mut().unwrap();
         handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
         handle.session.devtools_endpoint = Some(DevToolsEndpoint {
             base_url: "http://127.0.0.1:9100".into(),
-            served_at: Instant::now(),
         });
 
         let result = handle_open_browser_devtools(&mut state);
@@ -846,14 +844,12 @@ mod tests {
     fn open_browser_uses_served_endpoint_dds_integrated_format() {
         // DDS-integrated DevTools (Flutter ≥ 3.24) — base_url has auth-token path.
         use crate::session::DevToolsEndpoint;
-        use std::time::Instant;
 
         let mut state = make_state_with_session();
         let handle = state.session_manager.selected_mut().unwrap();
         handle.session.ws_uri = Some("ws://127.0.0.1:59123/tbrR0DzW2j8=/ws".to_string());
         handle.session.devtools_endpoint = Some(DevToolsEndpoint {
             base_url: "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools".into(),
-            served_at: Instant::now(),
         });
 
         let result = handle_open_browser_devtools(&mut state);
@@ -956,14 +952,12 @@ mod tests {
     fn served_endpoint_no_toast() {
         // When a devtools_endpoint is available no toast should be pushed.
         use crate::session::DevToolsEndpoint;
-        use std::time::Instant;
 
         let mut state = make_state_with_session();
         let handle = state.session_manager.selected_mut().unwrap();
         handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
         handle.session.devtools_endpoint = Some(DevToolsEndpoint {
             base_url: "http://127.0.0.1:9100".into(),
-            served_at: Instant::now(),
         });
 
         handle_open_browser_devtools(&mut state);

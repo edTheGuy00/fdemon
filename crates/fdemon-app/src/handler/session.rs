@@ -711,7 +711,6 @@ mod tests {
             let handle = state.session_manager.get_mut(session_id).unwrap();
             handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
                 base_url: "http://127.0.0.1:9100".to_string(),
-                served_at: std::time::Instant::now(),
             });
         }
 

@@ -925,8 +925,10 @@ pub enum ToastLevel {
 
 /// How long a toast stays visible before it is automatically dismissed.
 ///
-/// Derived from a comfortable reading speed for the longest expected message
-/// (~80 characters at 250 wpm ≈ 4 seconds).
+/// Derived from a comfortable reading speed for the longest expected message:
+/// ~80 characters at 250 wpm reads in ~4 seconds, plus a 1-second buffer so a
+/// user who glances at the terminal late in the cycle still has time to
+/// finish the sentence.
 pub const TOAST_TTL_SECS: u64 = 5;
 
 /// A transient user-facing notification displayed as a one-line overlay.
