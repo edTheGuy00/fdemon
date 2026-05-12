@@ -1965,9 +1965,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Cooldown: suppress rapid refreshes while loading or within 2 seconds
             // of the last fetch. This prevents RPC spam when the user holds `r`.
             let inspector = &state.devtools_view_state.inspector;
-            let last_fetch_elapsed = inspector
-                .last_fetch_time
-                .map(|t| t.elapsed().as_millis());
+            let last_fetch_elapsed = inspector.last_fetch_time.map(|t| t.elapsed().as_millis());
             if inspector.is_fetch_debounced() {
                 info!(
                     session_id = session_id,

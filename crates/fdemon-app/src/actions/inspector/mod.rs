@@ -166,10 +166,10 @@ pub(super) fn spawn_fetch_widget_tree(
         );
 
         if let Err(e) = msg_tx.send(msg).await {
-            tracing::warn!(
+            tracing::error!(
                 session_id = %session_id,
-                error = %e,
-                "Inspector: failed to send result message to engine"
+                error = ?e,
+                "Inspector: failed to send terminal message — receiver dropped"
             );
         }
     });
@@ -264,12 +264,19 @@ pub(super) fn spawn_toggle_overlay(
             }
         };
 
-        let _ = msg_tx
+        if let Err(e) = msg_tx
             .send(Message::DebugOverlayToggled {
                 extension,
                 enabled: new_state,
             })
-            .await;
+            .await
+        {
+            tracing::error!(
+                session_id = %session_id,
+                error = ?e,
+                "Inspector: failed to send terminal message — receiver dropped"
+            );
+        }
     });
 }
 
@@ -297,12 +304,19 @@ pub(super) fn spawn_fetch_layout_data(
                     session_id,
                     e
                 );
-                let _ = msg_tx
+                if let Err(send_err) = msg_tx
                     .send(Message::LayoutDataFetchFailed {
                         session_id,
                         error: format!("Could not get isolate ID: {e}"),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = ?send_err,
+                        "Inspector: failed to send terminal message — receiver dropped"
+                    );
+                }
                 return;
             }
         };
@@ -352,9 +366,16 @@ pub(super) fn spawn_fetch_layout_data(
                     "FetchLayoutData timed out after 10s for session {}",
                     session_id
                 );
-                let _ = msg_tx
+                if let Err(e) = msg_tx
                     .send(Message::LayoutDataFetchTimeout { session_id })
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = ?e,
+                        "Inspector: failed to send terminal message — receiver dropped"
+                    );
+                }
                 return;
             }
             Ok(Ok(v)) => v,
@@ -364,12 +385,19 @@ pub(super) fn spawn_fetch_layout_data(
                     session_id,
                     e
                 );
-                let _ = msg_tx
+                if let Err(send_err) = msg_tx
                     .send(Message::LayoutDataFetchFailed {
                         session_id,
                         error: e.to_string(),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = ?send_err,
+                        "Inspector: failed to send terminal message — receiver dropped"
+                    );
+                }
                 return;
             }
         };
@@ -385,22 +413,36 @@ pub(super) fn spawn_fetch_layout_data(
                         session_id,
                         e
                     );
-                    let _ = msg_tx
+                    if let Err(send_err) = msg_tx
                         .send(Message::LayoutDataFetchFailed {
                             session_id,
                             error: format!("Failed to parse layout data: {e}"),
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            session_id = %session_id,
+                            error = ?send_err,
+                            "Inspector: failed to send terminal message — receiver dropped"
+                        );
+                    }
                     return;
                 }
             };
 
-        let _ = msg_tx
+        if let Err(e) = msg_tx
             .send(Message::LayoutDataFetched {
                 session_id,
                 layout: Box::new(layout),
             })
-            .await;
+            .await
+        {
+            tracing::error!(
+                session_id = %session_id,
+                error = ?e,
+                "Inspector: failed to send terminal message — receiver dropped"
+            );
+        }
     });
 }
 

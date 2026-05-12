@@ -88,28 +88,52 @@ pub fn process_message(
                 // fetch actions so the loading spinner is not stuck forever.
                 match &pre_hydration_action {
                     UpdateAction::FetchWidgetTree { session_id, .. } => {
-                        if let Err(e) = msg_tx.try_send(Message::WidgetTreeFetchFailed {
+                        match msg_tx.try_send(Message::WidgetTreeFetchFailed {
                             session_id: *session_id,
                             error: "VM Service handle unavailable".to_string(),
                         }) {
-                            tracing::warn!(
+                            Ok(()) => tracing::debug!(
                                 session_id = %session_id,
-                                error = %e,
-                                "Inspector: failed to send WidgetTreeFetchFailed fallback message"
-                            );
+                                "Inspector: dispatched fallback WidgetTreeFetchFailed after hydration drop"
+                            ),
+                            Err(e) => tracing::error!(
+                                session_id = %session_id,
+                                error = ?e,
+                                "Inspector: failed to dispatch fallback WidgetTreeFetchFailed — inspector may stay stuck"
+                            ),
                         }
                     }
                     UpdateAction::FetchLayoutData { session_id, .. } => {
-                        let _ = msg_tx.try_send(Message::LayoutDataFetchFailed {
+                        match msg_tx.try_send(Message::LayoutDataFetchFailed {
                             session_id: *session_id,
                             error: "VM Service handle unavailable".to_string(),
-                        });
+                        }) {
+                            Ok(()) => tracing::debug!(
+                                session_id = %session_id,
+                                "Inspector: dispatched fallback LayoutDataFetchFailed after hydration drop"
+                            ),
+                            Err(e) => tracing::error!(
+                                session_id = %session_id,
+                                error = ?e,
+                                "Inspector: failed to dispatch fallback LayoutDataFetchFailed — layout panel may stay stuck"
+                            ),
+                        }
                     }
                     UpdateAction::FetchHttpRequestDetail { session_id, .. } => {
-                        let _ = msg_tx.try_send(Message::VmServiceHttpRequestDetailFailed {
+                        match msg_tx.try_send(Message::VmServiceHttpRequestDetailFailed {
                             session_id: *session_id,
                             error: "VM Service handle unavailable".to_string(),
-                        });
+                        }) {
+                            Ok(()) => tracing::debug!(
+                                session_id = %session_id,
+                                "Inspector: dispatched fallback VmServiceHttpRequestDetailFailed after hydration drop"
+                            ),
+                            Err(e) => tracing::error!(
+                                session_id = %session_id,
+                                error = ?e,
+                                "Inspector: failed to dispatch fallback VmServiceHttpRequestDetailFailed — network panel may stay stuck"
+                            ),
+                        }
                     }
                     _ => {}
                 }
