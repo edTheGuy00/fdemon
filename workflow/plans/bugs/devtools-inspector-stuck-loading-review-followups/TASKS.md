@@ -36,18 +36,18 @@ Phase 3 (Minor — post-release OK)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-cache-fallback-isolate-resolution](tasks/01-cache-fallback-isolate-resolution.md) | Not Started | — | 0.5-1h | `vm_service/client.rs` |
-| 2 | [02-remove-autorehydrate-variant](tasks/02-remove-autorehydrate-variant.md) | Not Started | — | 0.5-1h | `handler/mod.rs`, `actions/inspector/mod.rs`, `lib.rs` |
-| 3 | [03-update-architecture-autorehydrate](tasks/03-update-architecture-autorehydrate.md) | Not Started | 2 | 0.25h | `docs/ARCHITECTURE.md` |
-| 4 | [04-invalidate-cache-on-isolate-exit](tasks/04-invalidate-cache-on-isolate-exit.md) | Not Started | — | 0.5-1h | `handler/devtools/debug.rs` |
-| 5 | [05-redact-vm-service-uri-in-logs](tasks/05-redact-vm-service-uri-in-logs.md) | Not Started | 1 | 1-2h | `vm_service/client.rs`, `actions/vm_service.rs`, new helper |
-| 6 | [06-clear-render-flag-on-hot-restart](tasks/06-clear-render-flag-on-hot-restart.md) | Not Started | — | 0.5-1h | `handler/update.rs`, `state.rs` |
-| 7 | [07-use-record-fetch-start-at-auto-fetch-sites](tasks/07-use-record-fetch-start-at-auto-fetch-sites.md) | Not Started | — | 0.5h | `handler/devtools/mod.rs` |
-| 8 | [08-clamp-readiness-poll-config](tasks/08-clamp-readiness-poll-config.md) | Not Started | 7 | 1-2h | `handler/devtools/mod.rs` |
-| 9 | [09-rename-readiness-poll-config-keys](tasks/09-rename-readiness-poll-config-keys.md) | Not Started | 8 | 1h | `config/types.rs`, `config/settings.rs`, dispatch sites |
-| 10 | [10-api-hygiene-cleanup](tasks/10-api-hygiene-cleanup.md) | Not Started | — | 1-2h | `lib.rs`, `vm_service/client.rs`, `state.rs` |
-| 11 | [11-code-style-sweep](tasks/11-code-style-sweep.md) | Not Started | — | 1-2h | `actions/inspector/`, `vm_service/client.rs` |
-| 12 | [12-observability-followups](tasks/12-observability-followups.md) | Not Started | — | 1h | `actions/inspector/mod.rs`, `vm_service/client.rs` |
+| 1 | [01-cache-fallback-isolate-resolution](tasks/01-cache-fallback-isolate-resolution.md) | Done | — | 0.5-1h | `vm_service/client.rs` |
+| 2 | [02-remove-autorehydrate-variant](tasks/02-remove-autorehydrate-variant.md) | Done | — | 0.5-1h | `handler/mod.rs`, `actions/inspector/mod.rs`, `lib.rs` |
+| 3 | [03-update-architecture-autorehydrate](tasks/03-update-architecture-autorehydrate.md) | Done | 2 | 0.25h | `docs/ARCHITECTURE.md` |
+| 4 | [04-invalidate-cache-on-isolate-exit](tasks/04-invalidate-cache-on-isolate-exit.md) | Done | — | 0.5-1h | `handler/devtools/debug.rs` |
+| 5 | [05-redact-vm-service-uri-in-logs](tasks/05-redact-vm-service-uri-in-logs.md) | Done | 1 | 1-2h | `vm_service/client.rs`, `actions/vm_service.rs`, new helper |
+| 6 | [06-clear-render-flag-on-hot-restart](tasks/06-clear-render-flag-on-hot-restart.md) | Done | — | 0.5-1h | `handler/update.rs`, `state.rs` |
+| 7 | [07-use-record-fetch-start-at-auto-fetch-sites](tasks/07-use-record-fetch-start-at-auto-fetch-sites.md) | Done | — | 0.5h | `handler/devtools/mod.rs` |
+| 8 | [08-clamp-readiness-poll-config](tasks/08-clamp-readiness-poll-config.md) | Done | 7 | 1-2h | `handler/devtools/mod.rs` |
+| 9 | [09-rename-readiness-poll-config-keys](tasks/09-rename-readiness-poll-config-keys.md) | Done | 8 | 1h | `config/types.rs`, `config/settings.rs`, dispatch sites |
+| 10 | [10-api-hygiene-cleanup](tasks/10-api-hygiene-cleanup.md) | Done | — | 1-2h | `lib.rs`, `vm_service/client.rs`, `state.rs` |
+| 11 | [11-code-style-sweep](tasks/11-code-style-sweep.md) | Done | — | 1-2h | `actions/inspector/`, `vm_service/client.rs` |
+| 12 | [12-observability-followups](tasks/12-observability-followups.md) | Done (concern: warn not asserted via tracing capture — no `tracing-test` dep in workspace; warn path exercised by mock-responder test) | — | 1h | `actions/inspector/mod.rs`, `vm_service/client.rs` |
 
 ## File Overlap Analysis
 

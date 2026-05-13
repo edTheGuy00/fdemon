@@ -79,3 +79,32 @@ async fn test_resolve_flutter_ui_isolate_caches_fallback_value() {
 - The cache is shared with `main_isolate_id` ("first caller wins"). Both methods write the same field; no protocol change.
 - Hot restart still invalidates via the existing `invalidate_isolate_cache()` path — no change there.
 - The fallback was originally documented as "retry on eventual ext.flutter.* registration". User direction is to cache the fallback now; if a future need emerges for retry semantics, add an explicit `invalidate_isolate_cache_if_no_flutter_ext()` mechanism instead.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added cache write in fallback branch of `resolve_flutter_ui_isolate` (lines 311-319); added `test_resolve_flutter_ui_isolate_caches_fallback_value` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Cache write pattern**: Mirrors the success branch exactly — acquires mutex, sets `Some(id.clone())`, releases before returning. Inner block scope used to ensure the lock is dropped before `Ok(id)` is returned, matching lines 304-306.
+2. **Test uses fake channel responder**: Since the slow path requires live RPC responses, the test spawns a tokio task on `cmd_rx` that answers `getVM` (one non-system isolate, no `ext.flutter.*`) and `getIsolate` (same, no flutter extensions). After the responder drops `cmd_rx`, the second call proves the fast path (cache hit) is taken.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon --lib -- vm_service::client::tests::test_resolve_flutter_ui_isolate` - Passed (7 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (773 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-daemon -- --check` - Passed (after applying fmt)
+
+### Risks/Limitations
+
+1. **None**: Change is a trivial one-liner fix with direct precedent from the success branch. The new test exercises both the cache population and the subsequent cache-hit path.

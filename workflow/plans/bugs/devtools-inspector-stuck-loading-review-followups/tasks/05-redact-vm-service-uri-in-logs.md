@@ -103,3 +103,39 @@ mod tests {
 - The previous review (`workflow/reviews/bugs/browser-devtools-dds-registration/REVIEW.md:79`) flagged this category; this task closes the gap permanently.
 - Do NOT demote the `info!` to `debug!` as a workaround — the connection event is genuinely useful at `info!` level. The redaction is the correct fix.
 - If you need to reach into the daemon crate's helper from `fdemon-app/src/actions/vm_service.rs`, ensure the helper is exported as `pub fn` from `fdemon-daemon`'s `vm_service` module (or re-exported from the daemon crate root).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1af140323ddbf685
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub fn redact_vm_service_token(uri: &str) -> String` with 6 unit tests and 1 doc-test |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Applied `super::redact_vm_service_token(ws_uri)` at the `info!` log site (line 520) |
+| `crates/fdemon-app/src/actions/vm_service.rs` | Imported `redact_vm_service_token` from `fdemon_daemon::vm_service`; applied redaction at the timeout `warn!` site |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement in `vm_service/mod.rs` not a new file**: The helper is small enough to live directly in `mod.rs` as `pub fn`. A separate `redact.rs` would be premature — `mod.rs` already exports many small helpers.
+2. **String parsing over `url` crate**: Consistent with `fdemon-core/src/url.rs` patterns. No need to add the `url` crate to `fdemon-daemon`'s Cargo.toml — the URI structure is sufficiently constrained for string manipulation.
+3. **`pub fn` visibility (not `pub(crate)`)**: The task notes suggest `pub(crate)` but `fdemon-app` is a different crate and imports via `fdemon_daemon::vm_service`, so `pub` is required. The function does not leak security-sensitive data itself (it only handles redaction) so `pub` is safe.
+4. **`wss://` scheme supported**: Added defensively alongside `ws://` for completeness and forward-compatibility.
+5. **URI-without-auth-token returns unchanged**: A URI with only one path segment (e.g. `ws://127.0.0.1:8080/ws`) has no auth token to redact — it is returned as-is, matching acceptance criterion 2.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon -- redact` — 6 unit tests + 1 doc-test: PASS
+- `cargo test --workspace --lib` — all 1,018+ tests: PASS (0 failures)
+- `cargo clippy -p fdemon-daemon -p fdemon-app` — PASS (no warnings)
+- `cargo build --workspace` — PASS
+- `git grep -En 'ws_uri' crates/` filtered through log macros — no raw `ws_uri` at production log sites
+
+### Risks/Limitations
+
+1. **IPv6 URIs**: Not tested, but the string approach handles them correctly since it finds the first `/` after the scheme prefix, which works regardless of whether the authority is an IP, hostname, or bracketed IPv6 address.
+2. **No re-export from daemon crate root**: `redact_vm_service_token` is accessible via `fdemon_daemon::vm_service::redact_vm_service_token`. The task notes mention optionally re-exporting from daemon root — omitted as `fdemon-app` already imports many items from the `vm_service` sub-module path directly.

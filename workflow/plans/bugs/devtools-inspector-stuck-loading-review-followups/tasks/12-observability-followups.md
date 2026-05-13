@@ -86,3 +86,43 @@ async fn test_resolve_flutter_ui_isolate_warns_on_multiple_flutter_candidates() 
 - The `TODO(stabilization)` markers exist so a future single-PR pass can mechanically downgrade all 34 sites to `debug!` once the fix is verified in production for one release cycle. This task does NOT do the downgrade — only adds the markers.
 - The multi-isolate warning is purely diagnostic — it doesn't change selection behavior. Future work could implement a smarter selection (e.g., prefer the isolate named `main`); not in scope here.
 - Suggested tracking issue title for the eventual downgrade: "Downgrade Inspector instrumentation to debug! after one release cycle".
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Added 7 `TODO(stabilization)` markers before Inspector `info!` sites |
+| `crates/fdemon-app/src/actions/inspector/widget_tree.rs` | Added 3 `TODO(stabilization)` markers before readiness poll `info!` sites |
+| `crates/fdemon-app/src/handler/update.rs` | Added 3 `TODO(stabilization)` markers before debounce/refresh `info!` sites |
+| `crates/fdemon-app/src/process.rs` | Added 1 `TODO(stabilization)` marker before hydration `info!` site |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added 4 `TODO(stabilization)` markers; restructured `resolve_flutter_ui_isolate` for two-pass candidate collection with multi-isolate `warn!`; added 2 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **18 markers vs task's ~34 estimate**: The diff from `fb0fdbe..HEAD` shows 19 new `info!` call sites (one is a modification of an existing log, not truly new). Added one marker per truly-new `info!` site = 18. The "~34" in the task was a planning estimate. `git grep "TODO(stabilization)" crates/` returns 18 matches, covering all new Inspector `info!` log sites.
+
+2. **Two-pass refactor for multi-isolate detection**: The original `resolve_flutter_ui_isolate` returned early on the first match, making it impossible to count total Flutter candidates. Refactored to collect all candidates first, then check count before returning. Behavior is identical for the common single-candidate case.
+
+3. **Test approach without tracing-test**: `tracing-test` is not in the workspace dependencies. Wrote a mock-responder async test (matching existing patterns in the file) that validates the first-pick determinism with two Flutter isolates. A pure logic test independently validates the two-pass collection logic. The `warn!` code path is guaranteed exercised by the mock test when `flutter_candidates.len() > 1`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test results: 0 failed across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (fixed `useless_vec` lint in test)
+- `cargo test -p fdemon-daemon -- resolve_flutter_ui_isolate` - 8/8 passed
+- `cargo test -p fdemon-daemon -- multi_flutter` - 1/1 passed
+
+### Risks/Limitations
+
+1. **Marker count vs task estimate**: 18 markers vs the task's "~34" estimate. The discrepancy is because the estimate was made during planning and likely counted individual log fields as separate sites, or included sites that were not actually added by this branch. The actual new `info!` call sites number 18-19 (depending on whether the redact refactor counts). All genuinely new sites are marked.
+
+2. **No tracing capture in tests**: The multi-isolate `warn!` is tested by exercising the code path (verified by the first-pick assertion succeeding, which requires the collection pass to complete), not by capturing tracing output. This is acceptable given the existing test patterns in the file and the absence of `tracing-test` in the dependency tree.

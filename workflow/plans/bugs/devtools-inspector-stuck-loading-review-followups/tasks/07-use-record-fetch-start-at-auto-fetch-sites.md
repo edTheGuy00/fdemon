@@ -94,3 +94,38 @@ Additionally consider a generic "no naked loading assignment" lint via grep in `
 - This task is purely a centralization refactor — no behavior change for the happy path.
 - The protection it adds: future code-paths that mark `loading=true` will go through the canonical helper and won't introduce divergent invariants.
 - If a future task wants a "hung fetch" watchdog (timestamp-based recovery), the invariant established here is what makes the watchdog implementable.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Replaced 3 direct `inspector.loading = true` assignments with `record_fetch_start()`; added 3 new unit tests; added explanatory comments at each site |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Formatting-only fixes produced by `cargo fmt` (line-wrapping long assertions) |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Formatting-only fix produced by `cargo fmt` (line-wrapping a `tracing::info!` call) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Lint test pattern**: The `test_lint_no_naked_inspector_loading_assignment_in_handler` test uses `include_str!("mod.rs")` and filters only lines starting with `state.` to avoid false positives from the pattern string appearing in comments and assert messages within the test itself. Using `concat!()` to split the needle across string boundaries was considered but the `starts_with("state.")` filter is cleaner and more semantically correct.
+
+2. **Site 1 comment**: Added a code comment explaining the intentional debounce-collision concern raised by the reviewer. The follow-up `RequestWidgetTree` queued at site 1 will be debounce-blocked (since `record_fetch_start()` sets both `loading=true` and `last_fetch_time=Some(now)`), which is the pre-existing intended behavior — the actual tree fetch is dispatched via the `StartPerformanceMonitoring` action, not the follow-up message.
+
+3. **Format-only changes committed**: `cargo fmt --all` was required to satisfy the quality gate. This produced formatting changes in `debug.rs` and `client.rs` that pre-existed on the branch. These are included in the commit rather than creating separate noise.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites green; 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `git grep "inspector.loading = true" crates/fdemon-app/src/handler/devtools/mod.rs` - Returns no production matches (acceptance criterion 2 satisfied)
+
+### Risks/Limitations
+
+1. **Debounce-collision at site 1**: The comment added documents the known interaction where the follow-up `RequestWidgetTree` hits `is_fetch_debounced()`. This is pre-existing behavior and unchanged by this refactor, but should be investigated if a future task changes the `StartPerformanceMonitoring` path.

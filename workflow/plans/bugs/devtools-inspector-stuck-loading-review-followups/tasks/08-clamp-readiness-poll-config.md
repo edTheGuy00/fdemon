@@ -133,3 +133,38 @@ fn test_clamped_readiness_poll_passes_through_normal_values() {
 - The bounds are conservative defaults. If a user has a documented reason to exceed them, raise the bound rather than disabling the clamp.
 - The clamp is applied at the *handler* layer, not at deserialization, so the raw value remains in `DevToolsSettings` for visibility/debugging. The handler is the single point of read.
 - After task 09 renames the keys to `inspector_readiness_poll_*`, this helper continues to work — it reads `settings.devtools.<key>` directly. Update field names if/when task 09 lands first.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added 5 constants, `clamped_readiness_poll_config()` helper (`pub(crate)`), updated 2 `FetchWidgetTree` dispatch sites, added 7 unit tests + 1 grep-lint test |
+| `crates/fdemon-app/src/handler/update.rs` | Updated the 3rd `FetchWidgetTree` dispatch site (in `RequestWidgetTree` handler) to use the helper |
+
+### Notable Decisions/Tradeoffs
+
+1. **Third dispatch site was in `update.rs`, not `mod.rs`**: The task's "Files Modified" section listed only `mod.rs`, but a third raw read existed in `handler/update.rs`. Made the helper `pub(crate)` so it could be called from `update.rs` via the already-imported `devtools::` path, satisfying the acceptance criterion that no raw reads remain outside the helper.
+
+2. **Struct init syntax in tests**: Clippy's `field_reassign_with_default` lint required test settings to be constructed using `DevToolsSettings { field: value, ..Default::default() }` rather than post-construction field assignment. Used this pattern throughout the new tests.
+
+3. **Grep-lint test added**: Added `test_lint_no_raw_readiness_poll_reads_at_dispatch_sites` to guard against future regressions where someone bypasses the helper in `mod.rs`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2208 fdemon-app unit tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-app --lib "clamped_readiness_poll"` - Passed (7/7 new tests)
+
+### Risks/Limitations
+
+1. **No min-floor on `readiness_poll_attempts`**: The task sets `Max=20` but no lower bound (0 is intentional to skip polling entirely). This matches the spec; 0 is a valid "disable" value.
+2. **Lint test covers only `mod.rs`**: The grep-lint in `mod.rs` only checks that file. If someone adds a 4th dispatch site elsewhere (e.g., another handler), the lint won't catch it. The `update.rs` site is covered implicitly by the compilation + test suite verifying correct behavior.

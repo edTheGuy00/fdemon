@@ -99,3 +99,38 @@ No behavior change — existing tests should pass. Verify by:
 
 - After task 02 removes `AutoRehydrate`, the `FetchTrigger` re-export may already be unnecessary. Verify the actual export state before editing.
 - The `clear_isolate_cache` alias was added in task 04 of the original fix because the implementor wanted "two names for the same thing for clarity". The reviewer flagged this as API surface duplication; `invalidate_isolate_cache` is the canonical name (used in production code).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Changed `pub enum FetchTrigger` to `pub(crate)`. Added `#[allow(private_interfaces)]` to `UpdateAction` (needed because `FetchWidgetTree::trigger: FetchTrigger` is in a pub enum — the variant is only constructed/matched internally). |
+| `crates/fdemon-app/src/lib.rs` | Removed `FetchTrigger` from the `pub use handler::{...}` re-export. |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Removed `clear_isolate_cache()` alias function and its dedicated test (`test_clear_isolate_cache_clears_value`). Updated Scenario 9 test to call `invalidate_isolate_cache()`. Updated `isolate_id_cache` field docstring to describe dual writers and all four invalidation sources. Updated `resolve_flutter_ui_isolate` docstring to remove stale `clear_isolate_cache` reference. |
+| `crates/fdemon-app/src/state.rs` | Added inline comment in `InspectorState::reset()` documenting the intentional non-reset of `has_ever_rendered_tree`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[allow(private_interfaces)]` on `UpdateAction`**: `FetchWidgetTree::trigger` uses `FetchTrigger` (now `pub(crate)`) in a `pub` enum, which triggers the `private_interfaces` lint. Since `UpdateAction` is not actually used by external crates (no matches in fdemon-tui or the binary), the allow attribute is a minimal, well-commented fix rather than making `UpdateAction` also `pub(crate)` (a larger scope change). The comment explains the rationale.
+
+2. **Removed `test_clear_isolate_cache_clears_value` test**: This test existed solely to verify the removed alias behaved identically to `invalidate_isolate_cache`. With the alias gone, the test has no purpose. The Scenario 9 test (`test_hot_restart_clears_cache_forces_new_resolution`) was updated to use `invalidate_isolate_cache` directly instead.
+
+3. **Doc comment references in `state.rs`**: The three remaining grep hits from the AC1 check are `///` doc comments in `state.rs` that name `FetchTrigger` as documentation context — not code references. These are acceptable and would require restructuring the docstrings to remove.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (5,456+ tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: Pure API hygiene — no behavior changes.

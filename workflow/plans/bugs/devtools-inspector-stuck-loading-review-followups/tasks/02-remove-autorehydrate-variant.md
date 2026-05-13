@@ -68,3 +68,33 @@ No new tests needed. Verify existing tests still cover both surviving variants:
 - The ARCHITECTURE.md mention of `AutoRehydrate` is cleaned up in task 03 (doc_maintainer). Code changes are independent.
 - If future work needs a third trigger variant, the type system will guide the reintroduction. `cargo check` will flag every site that needs an updated match arm.
 - Per user direction: YAGNI removal is preferred over "make AutoRehydrate skip the poll".
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Removed `AutoRehydrate` variant and its doc-comment from `FetchTrigger` enum (lines 91-94). Enum now has only `Initial` and `Refresh`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Only one file required changes**: `git grep "AutoRehydrate" crates/` confirmed the variant appeared only in `handler/mod.rs`. `actions/inspector/mod.rs` and `lib.rs` required no changes — the poll-skip guard `if trigger != FetchTrigger::Refresh` remains semantically correct, and the re-export of `FetchTrigger` is unaffected.
+2. **Remaining `AutoRehydrate` references are in docs/workflow only**: The `docs/ARCHITECTURE.md` mention is handled by task 03 (doc_maintainer agent). Workflow and review files reference it historically and do not need cleanup.
+
+### Testing Performed
+
+- `git grep "AutoRehydrate" crates/` — no matches (variant fully eliminated from source)
+- `cargo check --workspace --all-targets` — Passed (clean build, 0 errors/warnings)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+- `cargo test --workspace` — Passed (2190+ tests, 0 failures)
+- Three named tests confirmed passing: `refresh_after_render_uses_refresh_trigger`, `refresh_before_first_render_uses_initial_trigger`, `switch_panel_inspector_uses_initial_trigger`
+
+### Risks/Limitations
+
+1. **ARCHITECTURE.md still mentions AutoRehydrate**: This is intentionally deferred to task 03 (doc_maintainer). The code is clean; the doc lag is tracked.

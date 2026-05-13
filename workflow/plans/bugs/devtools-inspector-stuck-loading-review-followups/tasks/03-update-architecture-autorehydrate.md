@@ -40,3 +40,25 @@ This line is removed entirely. The surrounding paragraph should describe `FetchT
 - Follow content boundaries strictly — see `~/.claude/skills/doc-standards/schemas.md`.
 - Make a targeted edit; do not rewrite the entire section.
 - This is purely a documentation sync — the code change in task 02 is the source of truth.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Removed `AutoRehydrate` bullet; updated `FetchTrigger` intro sentence to list only `Initial` and `Refresh` |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Targeted removal only**: Removed the `AutoRehydrate` bullet and updated the introductory sentence enumerating variants. The surrounding paragraph (`has_ever_rendered_tree` cross-reference) needed no changes and was left intact.

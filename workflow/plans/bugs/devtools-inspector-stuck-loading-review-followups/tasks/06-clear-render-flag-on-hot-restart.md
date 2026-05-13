@@ -118,3 +118,35 @@ fn test_post_restart_request_uses_initial_trigger() {
 - This may produce a single error-toast cycle on the first post-restart `r` press if the framework finishes warming before the poll budget expires, but that's the design — better than the current "skip the poll, hit a not-ready framework" race.
 - The existing `try_fetch_widget_tree` transient-error fallback (`getRootWidgetSummaryTree`) further mitigates the cold path.
 - Consider whether `inspector.reset()` should also reset the flag — answer: NO. `reset()` is called on session switch (not hot restart) where the user explicitly navigates away and the cached state is still valid for the previous session. Keep the existing `reset()` semantics.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Added reset of `has_ever_rendered_tree` in `Message::SessionRestartCompleted` arm |
+| `crates/fdemon-app/src/state.rs` | Updated docstring on `has_ever_rendered_tree` field and getter to list hot restart as an explicit reset point |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 new tests: `session_restart_clears_has_ever_rendered_tree`, `post_restart_request_uses_initial_trigger`, `hot_reload_does_not_clear_has_ever_rendered_tree` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Direct field access in update.rs**: The implementation accesses `state.devtools_view_state.inspector.has_ever_rendered_tree` directly (field is `pub`) rather than adding a dedicated method. This keeps the reset one-liner consistent with how other state is cleared inline in `update.rs`.
+2. **Conditional reset**: Used `if state.devtools_view_state.inspector.has_ever_rendered_tree { ... = false; }` rather than an unconditional assignment, matching the pattern in the task spec exactly.
+3. **Third test added**: Added `hot_reload_does_not_clear_has_ever_rendered_tree` beyond what the task spec required, to explicitly guard the contract that hot reload (a different message) does NOT touch the flag.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed (after running `cargo fmt --all` to fix pre-existing style issues in other files)
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2196 + all other crate tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: The change is additive, touching only the hot-restart handler and docstrings. All acceptance criteria met.

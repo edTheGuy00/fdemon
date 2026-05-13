@@ -94,3 +94,36 @@ No new tests. Verify that:
 
 - Be careful with structured-field conversion — `%session_id` is Display formatting, `?session_id` is Debug. Match the existing style in `widget_tree.rs` (mostly `%` for IDs, `?` for complex types).
 - The const extraction may surface other call sites in test code that pass string literals. Update them too if their meaning is the same group name.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Added `INSPECTOR_OBJECT_GROUP` and `LAYOUT_OBJECT_GROUP` constants; replaced all 3 code-site string literals with those constants |
+| `crates/fdemon-app/src/actions/inspector/widget_tree.rs` | Converted 5 format-string tracing calls to structured fields; renamed 5 tests; updated `try_fetch_widget_tree` docstring; replaced test literal `"fdemon-inspector-1"` with `super::super::INSPECTOR_OBJECT_GROUP` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Docstring literals in mod.rs preserved**: The two docstring mentions of `"fdemon-inspector-1"` and `"devtools-layout"` (in `///` comments) were left as string literals — they document the actual string value of the constants, which is the right content for readers. Only code-site usages were replaced with the constants.
+2. **Two extra tracing calls converted**: Lines ~203 and ~226 in `try_fetch_widget_tree` also used positional format strings; these were converted to structured fields to satisfy the "all calls" wording of acceptance criterion 2 and maintain consistency.
+3. **Test literal replaced with `super::super::` path**: The test in `widget_tree.rs` that passed `"fdemon-inspector-1"` to `try_fetch_widget_tree` was updated to use `super::super::INSPECTOR_OBJECT_GROUP` — `super` = `widget_tree` module, `super::super` = `inspector` module where the constant lives. This compiles cleanly since child modules can access parent private items in Rust.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed (no output = clean)
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (2208 tests)
+- `cargo test -p fdemon-app "test_readiness_poll_config"` - Passed (2 renamed tests)
+- `cargo test -p fdemon-app "test_poll_widget_tree_ready"` - Passed (3 renamed tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None significant**: All changes are pure renaming, constant extraction, and style normalization — no behavioral changes.

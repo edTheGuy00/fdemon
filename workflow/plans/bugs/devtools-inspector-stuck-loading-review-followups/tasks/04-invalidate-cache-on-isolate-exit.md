@@ -70,3 +70,33 @@ async fn test_isolate_exit_clears_resolved_isolate_cache() {
 - Use `invalidate_isolate_cache()` (the canonical name), not the redundant `clear_isolate_cache` alias. Task 10 removes the alias.
 - This fulfills the explicit "Edge Cases & Risks" commitment from the original `BUG.md`.
 - No change needed in `fdemon-daemon` — only the handler-layer call site is missing.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Added `invalidate_isolate_cache()` call to `IsolateEvent::IsolateExit` arm; added 3 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Three tests added instead of one**: The task specified one test, but three were added to cover all acceptance criteria cleanly: (1) basic cache invalidation, (2) cache invalidated even when exiting isolate is not the paused one, and (3) no panic when `vm_request_handle` is `None`. This mirrors the pattern used for `SessionRestartCompleted` tests in `handler/tests.rs`.
+
+2. **No import changes needed**: `vm_request_handle` is already accessible via the session handle in this handler. The `invalidate_isolate_cache()` method is on the `VmRequestHandle` type already in scope through `handle.vm_request_handle`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app handler::devtools::debug` — Passed (57 tests, including 3 new)
+- `cargo test -p fdemon-app --lib` — Passed (2193 tests, 0 failed)
+- `cargo clippy -p fdemon-app` — No warnings in modified file
+
+### Risks/Limitations
+
+1. **Cache invalidated on any IsolateExit**: The cache is invalidated whenever any isolate exits, not only the cached isolate. This is intentional and conservative — isolate IDs can change on exit and re-registration, and re-resolution via `getVM` is cheap. This matches the task's intent (acceptance criterion 3).
