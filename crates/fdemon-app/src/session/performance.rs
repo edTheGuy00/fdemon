@@ -1,5 +1,7 @@
 //! Performance monitoring state — memory, GC, and frame timing.
 
+use std::cell::Cell;
+
 use fdemon_core::performance::{
     AllocationProfile, FrameTiming, GcEvent, MemorySample, MemoryUsage, PerformanceStats,
     RingBuffer,
@@ -13,8 +15,8 @@ pub(crate) const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
 /// are filtered out in the handler. Major GCs are rare, so 50 slots provides
 /// ample history without wasting memory.
 pub(crate) const DEFAULT_GC_HISTORY_SIZE: usize = 50;
-/// Default number of frame timings to keep.
-pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 300;
+/// 30 seconds at 60 FPS — enables meaningful scroll-back.
+pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 1800;
 /// Memory sample buffer size: 120 samples at 500ms polling = 60 seconds of history.
 pub(crate) const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
 
@@ -26,6 +28,40 @@ pub enum AllocationSortColumn {
     BySize,
     /// Sort by total instance count (descending).
     ByInstances,
+}
+
+/// Active section within the Performance DevTools panel.
+///
+/// Used for `Tab`/`Shift+Tab` navigation between the three sub-sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PerfSection {
+    /// Frame timing bar chart (default section on open).
+    #[default]
+    FrameChart,
+    /// Memory usage time-series chart.
+    MemoryChart,
+    /// Class allocation table (from `getAllocationProfile`).
+    MemoryList,
+}
+
+impl PerfSection {
+    /// Return the next section in Tab order (wraps around).
+    pub fn next(self) -> Self {
+        match self {
+            PerfSection::FrameChart => PerfSection::MemoryChart,
+            PerfSection::MemoryChart => PerfSection::MemoryList,
+            PerfSection::MemoryList => PerfSection::FrameChart,
+        }
+    }
+
+    /// Return the previous section in Tab order (wraps around).
+    pub fn prev(self) -> Self {
+        match self {
+            PerfSection::FrameChart => PerfSection::MemoryList,
+            PerfSection::MemoryChart => PerfSection::FrameChart,
+            PerfSection::MemoryList => PerfSection::MemoryChart,
+        }
+    }
 }
 
 /// Performance monitoring state for a session.
@@ -68,6 +104,42 @@ pub struct PerformanceState {
 
     /// Column by which the class allocation table is sorted.
     pub allocation_sort: AllocationSortColumn,
+
+    // ── Navigation / scroll state (Phase 2 interactivity) ────────────────────
+    /// Which sub-section of the Performance panel currently has keyboard focus.
+    pub focused_section: PerfSection,
+
+    /// How many frames the frame chart has been scrolled back from the live edge.
+    ///
+    /// `0` means the chart is at the live edge (newest frames visible).
+    pub frame_chart_scroll_offset: usize,
+
+    /// How many samples the memory chart has been scrolled back from the live edge.
+    pub memory_chart_scroll_offset: usize,
+
+    /// Row index of the selected row in the allocation table, if any.
+    pub alloc_table_selected_row: Option<usize>,
+
+    /// Scroll offset for the allocation table (number of rows scrolled past the top).
+    pub alloc_table_scroll_offset: usize,
+
+    /// Render-hint: visible width (in columns) of the frame chart from the last rendered frame.
+    ///
+    /// Defaults to `0`, signalling "not yet rendered — use fallback".
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
+    pub frame_chart_visible_width: Cell<usize>,
+
+    /// Render-hint: visible width (in columns) of the memory chart from the last rendered frame.
+    ///
+    /// Defaults to `0`, signalling "not yet rendered — use fallback".
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
+    pub memory_chart_visible_width: Cell<usize>,
+
+    /// Render-hint: visible height (in rows) of the allocation table from the last rendered frame.
+    ///
+    /// Defaults to `0`, signalling "not yet rendered — use fallback".
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
+    pub alloc_table_visible_height: Cell<usize>,
 }
 
 impl Default for PerformanceState {
@@ -82,6 +154,14 @@ impl Default for PerformanceState {
             selected_frame: None,
             allocation_profile: None,
             allocation_sort: AllocationSortColumn::default(),
+            focused_section: PerfSection::default(),
+            frame_chart_scroll_offset: 0,
+            memory_chart_scroll_offset: 0,
+            alloc_table_selected_row: None,
+            alloc_table_scroll_offset: 0,
+            frame_chart_visible_width: Cell::new(0),
+            memory_chart_visible_width: Cell::new(0),
+            alloc_table_visible_height: Cell::new(0),
         }
     }
 }
@@ -107,6 +187,14 @@ impl PerformanceState {
             selected_frame: None,
             allocation_profile: None,
             allocation_sort: AllocationSortColumn::default(),
+            focused_section: PerfSection::default(),
+            frame_chart_scroll_offset: 0,
+            memory_chart_scroll_offset: 0,
+            alloc_table_selected_row: None,
+            alloc_table_scroll_offset: 0,
+            frame_chart_visible_width: Cell::new(0),
+            memory_chart_visible_width: Cell::new(0),
+            alloc_table_visible_height: Cell::new(0),
         }
     }
 }
@@ -290,6 +378,58 @@ impl PerformanceState {
 mod tests {
     use super::*;
     use fdemon_core::performance::FrameTiming;
+
+    // ── PerfSection navigation ───────────────────────────────────────────────
+
+    #[test]
+    fn perf_section_next_cycles_forward() {
+        assert_eq!(PerfSection::FrameChart.next(), PerfSection::MemoryChart);
+        assert_eq!(PerfSection::MemoryChart.next(), PerfSection::MemoryList);
+        assert_eq!(PerfSection::MemoryList.next(), PerfSection::FrameChart);
+    }
+
+    #[test]
+    fn perf_section_prev_cycles_backward() {
+        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::MemoryList);
+        assert_eq!(PerfSection::MemoryList.prev(), PerfSection::MemoryChart);
+        assert_eq!(PerfSection::MemoryChart.prev(), PerfSection::FrameChart);
+    }
+
+    #[test]
+    fn perf_section_default_is_frame_chart() {
+        assert_eq!(PerfSection::default(), PerfSection::FrameChart);
+    }
+
+    // ── PerformanceState new fields: defaults ────────────────────────────────
+
+    #[test]
+    fn performance_state_defaults() {
+        let s = PerformanceState::default();
+        assert_eq!(s.focused_section, PerfSection::FrameChart);
+        assert_eq!(s.frame_chart_scroll_offset, 0);
+        assert_eq!(s.memory_chart_scroll_offset, 0);
+        assert_eq!(s.alloc_table_selected_row, None);
+        assert_eq!(s.alloc_table_scroll_offset, 0);
+        assert_eq!(s.frame_chart_visible_width.get(), 0);
+        assert_eq!(s.memory_chart_visible_width.get(), 0);
+        assert_eq!(s.alloc_table_visible_height.get(), 0);
+    }
+
+    #[test]
+    fn performance_state_frame_history_capacity_is_1800() {
+        let s = PerformanceState::default();
+        assert_eq!(s.frame_history.capacity(), DEFAULT_FRAME_HISTORY_SIZE);
+        assert_eq!(DEFAULT_FRAME_HISTORY_SIZE, 1800);
+    }
+
+    #[test]
+    fn with_memory_history_size_initializes_new_fields() {
+        let s = PerformanceState::with_memory_history_size(30);
+        assert_eq!(s.focused_section, PerfSection::FrameChart);
+        assert_eq!(s.frame_chart_scroll_offset, 0);
+        assert_eq!(s.alloc_table_selected_row, None);
+        assert_eq!(s.frame_chart_visible_width.get(), 0);
+    }
 
     // ── Test helper ─────────────────────────────────────────────────────────
 

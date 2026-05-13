@@ -133,13 +133,16 @@ impl DevToolsView<'_> {
             DevToolsPanel::Performance => {
                 // Safety fallback for when no session is active.
                 // In practice DevTools mode is only reachable when a session exists.
-                static DEFAULT_PERF: std::sync::LazyLock<PerformanceState> =
-                    std::sync::LazyLock::new(PerformanceState::default);
-
-                let (perf, vm_connected) = self
-                    .session
-                    .map(|s| (&s.session.performance, s.session.vm_connected))
-                    .unwrap_or_else(|| (&*DEFAULT_PERF, false));
+                // Note: PerformanceState contains Cell<usize> render-hint fields, which are
+                // !Sync, so a stack-local default is used instead of a LazyLock static.
+                let default_perf;
+                let (perf, vm_connected) = match self.session {
+                    Some(s) => (&s.session.performance, s.session.vm_connected),
+                    None => {
+                        default_perf = PerformanceState::default();
+                        (&default_perf, false)
+                    }
+                };
 
                 let widget = PerformancePanel::new(
                     perf,

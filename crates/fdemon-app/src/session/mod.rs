@@ -23,7 +23,7 @@ pub use log_batcher::LogBatcher;
 pub use native_tags::NativeTagState;
 pub use network::{NetworkDetailTab, NetworkState};
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
-pub use performance::{AllocationSortColumn, PerformanceState};
+pub use performance::{AllocationSortColumn, PerfSection, PerformanceState};
 pub use session::{DevToolsEndpoint, Session};
 
 // SessionId and next_session_id live here in mod.rs
