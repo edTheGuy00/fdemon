@@ -87,11 +87,6 @@ pub enum FetchTrigger {
     /// The `isWidgetTreeReady` poll is **skipped** because the Flutter
     /// framework is already running, so the RPC fires within ~100 ms.
     Refresh,
-
-    /// Programmatic re-fetch (e.g., after a focused-panel change).
-    ///
-    /// Uses the full poll budget for safety, same as `Initial`.
-    AutoRehydrate,
 }
 
 /// Actions that the event loop should perform after update
