@@ -5,6 +5,7 @@ use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::{NetworkDetailTab, SessionId};
+use crate::session::performance::PerfSection;
 use crate::state::DevToolsPanel;
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
@@ -1090,6 +1091,24 @@ pub enum Message {
     // ── Performance Panel UI Messages ─────────────────────────────────────────
     /// Toggle the allocation table sort column (Size ↔ Instances).
     ToggleAllocationSort,
+
+    // --- Performance panel interactivity ---
+    /// Move keyboard focus to the given sub-section within the Performance panel.
+    PerfFocusSection(PerfSection),
+    /// Scroll the focused Performance panel section up by one row/bar.
+    PerfScrollUp,
+    /// Scroll the focused Performance panel section down by one row/bar.
+    PerfScrollDown,
+    /// Scroll the focused Performance panel section up by one page.
+    PerfPageUp,
+    /// Scroll the focused Performance panel section down by one page.
+    PerfPageDown,
+    /// Jump to the first item in the focused Performance panel section.
+    PerfJumpToStart,
+    /// Jump to the last item in the focused Performance panel section.
+    PerfJumpToEnd,
+    /// Select a row in the allocation table, or clear selection when `index` is `None`.
+    PerfSelectAllocRow { index: Option<usize> },
 
     // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)

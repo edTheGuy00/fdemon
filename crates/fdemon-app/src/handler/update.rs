@@ -2254,6 +2254,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             devtools::performance::handle_toggle_allocation_sort(state)
         }
 
+        // --- Performance panel interactivity (Phase 2 handlers — stubs) ------
+        Message::PerfFocusSection(_section) => UpdateResult::none(),
+        Message::PerfScrollUp => UpdateResult::none(),
+        Message::PerfScrollDown => UpdateResult::none(),
+        Message::PerfPageUp => UpdateResult::none(),
+        Message::PerfPageDown => UpdateResult::none(),
+        Message::PerfJumpToStart => UpdateResult::none(),
+        Message::PerfJumpToEnd => UpdateResult::none(),
+        Message::PerfSelectAllocRow { index: _ } => UpdateResult::none(),
+
         // ─────────────────────────────────────────────────────────────────────
         // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 03)
         // ─────────────────────────────────────────────────────────────────────
