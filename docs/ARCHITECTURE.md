@@ -926,11 +926,10 @@ Before fetching the widget tree on first load, fdemon polls `ext.flutter.inspect
 
 **Fetch triggers and poll bypass** (`FetchTrigger`):
 
-Each widget-tree fetch carries a `FetchTrigger` variant — `Initial`, `Refresh`, or `AutoRehydrate` — that controls how the fetch is handled:
+Each widget-tree fetch carries a `FetchTrigger` variant — `Initial` or `Refresh` — that controls how the fetch is handled:
 
 - `Initial` — first load for the session; runs the full readiness poll.
 - `Refresh` — user-initiated `r` press after a tree has been rendered at least once; skips the readiness poll and fetches immediately, avoiding an unnecessary 2.5 s wait when the framework is already running.
-- `AutoRehydrate` — background refresh triggered when the Inspector panel becomes visible again after a panel switch; follows the same bypass logic as `Refresh`.
 
 The sticky `has_ever_rendered_tree` flag on `InspectorState` gates whether `r` dispatches a `Refresh` or an `Initial` trigger.
 
