@@ -260,14 +260,14 @@ pub enum UpdateAction {
         /// and retries. From `settings.devtools.inspector_fetch_timeout_secs`.
         fetch_timeout_secs: u64,
         /// Number of `isWidgetTreeReady` poll attempts.
-        /// From `settings.devtools.readiness_poll_attempts`.
-        readiness_poll_attempts: u32,
+        /// From `settings.devtools.inspector_readiness_poll_attempts`.
+        inspector_readiness_poll_attempts: u32,
         /// Sleep interval (ms) between readiness poll calls.
-        /// From `settings.devtools.readiness_poll_interval_ms`.
-        readiness_poll_interval_ms: u64,
+        /// From `settings.devtools.inspector_readiness_poll_interval_ms`.
+        inspector_readiness_poll_interval_ms: u64,
         /// Per-call timeout (ms) for each `isWidgetTreeReady` RPC.
-        /// From `settings.devtools.readiness_poll_call_timeout_ms`.
-        readiness_poll_call_timeout_ms: u64,
+        /// From `settings.devtools.inspector_readiness_poll_call_timeout_ms`.
+        inspector_readiness_poll_call_timeout_ms: u64,
         /// Why this fetch was initiated.
         ///
         /// Used by `spawn_fetch_widget_tree` to decide whether to skip the

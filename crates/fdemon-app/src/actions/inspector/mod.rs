@@ -38,7 +38,7 @@ const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// The fetch operation includes:
 /// 1. **Readiness polling** — calls `ext.flutter.inspector.isWidgetTreeReady`
-///    up to `readiness_poll_attempts` times (configurable, default 2) before
+///    up to `inspector_readiness_poll_attempts` times (configurable, default 2) before
 ///    attempting the tree fetch. A timed-out poll is treated as "not ready".
 ///    Exhausting the poll budget is **not** an error — the fetch proceeds anyway.
 /// 2. **API fallback** — tries `getRootWidgetTree` first, falls back to
@@ -56,9 +56,9 @@ pub(super) fn spawn_fetch_widget_tree(
     msg_tx: mpsc::Sender<Message>,
     tree_max_depth: u32,
     fetch_timeout_secs: u64,
-    readiness_poll_attempts: u32,
-    readiness_poll_interval_ms: u64,
-    readiness_poll_call_timeout_ms: u64,
+    inspector_readiness_poll_attempts: u32,
+    inspector_readiness_poll_interval_ms: u64,
+    inspector_readiness_poll_call_timeout_ms: u64,
     trigger: FetchTrigger,
 ) {
     tokio::spawn(async move {
@@ -92,9 +92,9 @@ pub(super) fn spawn_fetch_widget_tree(
             // budget that only adds latency.
             if trigger != FetchTrigger::Refresh {
                 let poll_cfg = widget_tree::ReadinessPollConfig {
-                    attempts: readiness_poll_attempts,
-                    interval_ms: readiness_poll_interval_ms,
-                    call_timeout_ms: readiness_poll_call_timeout_ms,
+                    attempts: inspector_readiness_poll_attempts,
+                    interval_ms: inspector_readiness_poll_interval_ms,
+                    call_timeout_ms: inspector_readiness_poll_call_timeout_ms,
                 };
                 widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id, &poll_cfg)
                     .await;

@@ -52,44 +52,44 @@ const MAX_READINESS_POLL_CALL_TIMEOUT_MS: u64 = 10_000;
 ///
 /// Values within the ranges pass through unchanged (no log noise). Values
 /// outside the bounds are clamped to the nearest limit so that a typo such as
-/// `readiness_poll_attempts = 4294967295` cannot saturate the Tokio runtime.
+/// `inspector_readiness_poll_attempts = 4294967295` cannot saturate the Tokio runtime.
 ///
-/// This is the **single read point** for the three `readiness_poll_*` settings.
+/// This is the **single read point** for the three `inspector_readiness_poll_*` settings.
 /// All `FetchWidgetTree` dispatch sites must call this helper rather than
-/// reading `state.settings.devtools.readiness_poll_*` directly.
+/// reading `state.settings.devtools.inspector_readiness_poll_*` directly.
 pub(crate) fn clamped_readiness_poll_config(settings: &DevToolsSettings) -> (u32, u64, u64) {
     let attempts = settings
-        .readiness_poll_attempts
+        .inspector_readiness_poll_attempts
         .min(MAX_READINESS_POLL_ATTEMPTS);
-    if attempts != settings.readiness_poll_attempts {
+    if attempts != settings.inspector_readiness_poll_attempts {
         tracing::warn!(
-            requested = settings.readiness_poll_attempts,
+            requested = settings.inspector_readiness_poll_attempts,
             clamped_to = attempts,
-            "readiness_poll_attempts clamped to bounded range"
+            "inspector_readiness_poll_attempts clamped to bounded range"
         );
     }
 
-    let interval = settings.readiness_poll_interval_ms.clamp(
+    let interval = settings.inspector_readiness_poll_interval_ms.clamp(
         MIN_READINESS_POLL_INTERVAL_MS,
         MAX_READINESS_POLL_INTERVAL_MS,
     );
-    if interval != settings.readiness_poll_interval_ms {
+    if interval != settings.inspector_readiness_poll_interval_ms {
         tracing::warn!(
-            requested_ms = settings.readiness_poll_interval_ms,
+            requested_ms = settings.inspector_readiness_poll_interval_ms,
             clamped_to_ms = interval,
-            "readiness_poll_interval_ms clamped to bounded range"
+            "inspector_readiness_poll_interval_ms clamped to bounded range"
         );
     }
 
-    let timeout = settings.readiness_poll_call_timeout_ms.clamp(
+    let timeout = settings.inspector_readiness_poll_call_timeout_ms.clamp(
         MIN_READINESS_POLL_CALL_TIMEOUT_MS,
         MAX_READINESS_POLL_CALL_TIMEOUT_MS,
     );
-    if timeout != settings.readiness_poll_call_timeout_ms {
+    if timeout != settings.inspector_readiness_poll_call_timeout_ms {
         tracing::warn!(
-            requested_ms = settings.readiness_poll_call_timeout_ms,
+            requested_ms = settings.inspector_readiness_poll_call_timeout_ms,
             clamped_to_ms = timeout,
-            "readiness_poll_call_timeout_ms clamped to bounded range"
+            "inspector_readiness_poll_call_timeout_ms clamped to bounded range"
         );
     }
 
@@ -305,9 +305,9 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
-                    readiness_poll_attempts: poll_attempts,
-                    readiness_poll_interval_ms: poll_interval_ms,
-                    readiness_poll_call_timeout_ms: poll_call_timeout_ms,
+                    inspector_readiness_poll_attempts: poll_attempts,
+                    inspector_readiness_poll_interval_ms: poll_interval_ms,
+                    inspector_readiness_poll_call_timeout_ms: poll_call_timeout_ms,
                     trigger: FetchTrigger::Initial,
                 });
             }
@@ -413,9 +413,9 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                                 .settings
                                 .devtools
                                 .inspector_fetch_timeout_secs,
-                            readiness_poll_attempts: poll_attempts,
-                            readiness_poll_interval_ms: poll_interval_ms,
-                            readiness_poll_call_timeout_ms: poll_call_timeout_ms,
+                            inspector_readiness_poll_attempts: poll_attempts,
+                            inspector_readiness_poll_interval_ms: poll_interval_ms,
+                            inspector_readiness_poll_call_timeout_ms: poll_call_timeout_ms,
                             trigger: FetchTrigger::Initial,
                         });
                     }
@@ -1694,7 +1694,7 @@ mod tests {
     fn test_clamped_readiness_poll_attempts_capped_at_max() {
         // u32::MAX must be clamped down to MAX_READINESS_POLL_ATTEMPTS.
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_attempts: u32::MAX,
+            inspector_readiness_poll_attempts: u32::MAX,
             ..Default::default()
         };
         let (attempts, _, _) = clamped_readiness_poll_config(&settings);
@@ -1705,7 +1705,7 @@ mod tests {
     fn test_clamped_readiness_poll_interval_floored_at_min() {
         // 0 ms is below the minimum; must be raised to MIN_READINESS_POLL_INTERVAL_MS.
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_interval_ms: 0,
+            inspector_readiness_poll_interval_ms: 0,
             ..Default::default()
         };
         let (_, interval, _) = clamped_readiness_poll_config(&settings);
@@ -1716,7 +1716,7 @@ mod tests {
     fn test_clamped_readiness_poll_interval_capped_at_max() {
         // u64::MAX must be clamped down to MAX_READINESS_POLL_INTERVAL_MS.
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_interval_ms: u64::MAX,
+            inspector_readiness_poll_interval_ms: u64::MAX,
             ..Default::default()
         };
         let (_, interval, _) = clamped_readiness_poll_config(&settings);
@@ -1727,7 +1727,7 @@ mod tests {
     fn test_clamped_readiness_poll_call_timeout_floored_at_min() {
         // 0 ms is below the minimum; must be raised to MIN_READINESS_POLL_CALL_TIMEOUT_MS.
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_call_timeout_ms: 0,
+            inspector_readiness_poll_call_timeout_ms: 0,
             ..Default::default()
         };
         let (_, _, timeout) = clamped_readiness_poll_config(&settings);
@@ -1738,7 +1738,7 @@ mod tests {
     fn test_clamped_readiness_poll_call_timeout_capped_at_max() {
         // u64::MAX must be clamped down to MAX_READINESS_POLL_CALL_TIMEOUT_MS.
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_call_timeout_ms: u64::MAX,
+            inspector_readiness_poll_call_timeout_ms: u64::MAX,
             ..Default::default()
         };
         let (_, _, timeout) = clamped_readiness_poll_config(&settings);
@@ -1749,9 +1749,9 @@ mod tests {
     fn test_clamped_readiness_poll_passes_through_normal_values() {
         // Values within range must be returned unchanged (no clamping, no log noise).
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_attempts: 3,
-            readiness_poll_interval_ms: 200,
-            readiness_poll_call_timeout_ms: 1500,
+            inspector_readiness_poll_attempts: 3,
+            inspector_readiness_poll_interval_ms: 200,
+            inspector_readiness_poll_call_timeout_ms: 1500,
             ..Default::default()
         };
         let (a, i, t) = clamped_readiness_poll_config(&settings);
@@ -1762,9 +1762,9 @@ mod tests {
     fn test_clamped_readiness_poll_boundary_values_pass_through() {
         // Values exactly at the boundary must pass through unchanged.
         let settings = crate::config::DevToolsSettings {
-            readiness_poll_attempts: MAX_READINESS_POLL_ATTEMPTS,
-            readiness_poll_interval_ms: MIN_READINESS_POLL_INTERVAL_MS,
-            readiness_poll_call_timeout_ms: MAX_READINESS_POLL_CALL_TIMEOUT_MS,
+            inspector_readiness_poll_attempts: MAX_READINESS_POLL_ATTEMPTS,
+            inspector_readiness_poll_interval_ms: MIN_READINESS_POLL_INTERVAL_MS,
+            inspector_readiness_poll_call_timeout_ms: MAX_READINESS_POLL_CALL_TIMEOUT_MS,
             ..Default::default()
         };
         let (a, i, t) = clamped_readiness_poll_config(&settings);
@@ -1777,8 +1777,8 @@ mod tests {
     fn test_lint_no_raw_readiness_poll_reads_at_dispatch_sites() {
         // Grep-based lint: no FetchWidgetTree struct literal in mod.rs (or the
         // follow-on VmConnected path in update.rs) should read
-        // `state.settings.devtools.readiness_poll_*` directly. All three sites
-        // must go through clamped_readiness_poll_config().
+        // `state.settings.devtools.inspector_readiness_poll_*` directly. All three
+        // sites must go through clamped_readiness_poll_config().
         let source = include_str!("mod.rs");
         let raw_reads = source
             .lines()
@@ -1788,12 +1788,12 @@ mod tests {
                 // (i.e. inside a struct literal). Comments and the helper
                 // function body are excluded by the `state.settings.devtools`
                 // prefix check.
-                t.starts_with("state.settings.devtools.readiness_poll_")
+                t.starts_with("state.settings.devtools.inspector_readiness_poll_")
             })
             .count();
         assert_eq!(
             raw_reads, 0,
-            "Found {raw_reads} raw `state.settings.devtools.readiness_poll_*` read(s) \
+            "Found {raw_reads} raw `state.settings.devtools.inspector_readiness_poll_*` read(s) \
              in handler/devtools/mod.rs. All dispatch sites must use \
              clamped_readiness_poll_config() instead."
         );
