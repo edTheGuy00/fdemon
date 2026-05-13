@@ -290,6 +290,9 @@ impl InspectorState {
         self.selected_index = 0;
         self.loading = false;
         self.error = None;
+        // has_ever_rendered_tree intentionally NOT reset — sticky for session lifetime.
+        // Cleared on hot restart (handler/update.rs::SessionRestartCompleted) and
+        // session drop.
         self.has_object_group = false;
         self.last_fetch_time = None;
         // Layout fields

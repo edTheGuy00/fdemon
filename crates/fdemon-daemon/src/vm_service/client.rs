@@ -62,7 +62,14 @@ use super::protocol::{
 pub struct VmRequestHandle {
     cmd_tx: mpsc::Sender<ClientCommand>,
     state: Arc<std::sync::RwLock<ConnectionState>>,
-    /// Cached main isolate ID. Cleared by the background task on reconnection.
+    /// Cached Flutter UI isolate ID. Populated by either `main_isolate_id()`
+    /// (first non-system isolate heuristic) or `resolve_flutter_ui_isolate()`
+    /// (first isolate with `ext.flutter.*` extension RPCs). First caller wins.
+    /// Cleared by:
+    ///  - the background task on reconnection,
+    ///  - `invalidate_isolate_cache()` calls from the handler layer,
+    ///  - hot restart (`Message::SessionRestartCompleted`),
+    ///  - isolate exit (`IsolateEvent::IsolateExit`).
     isolate_id_cache: Arc<Mutex<Option<String>>>,
     /// The WebSocket URI this handle is connected to.
     ws_uri: String,
@@ -228,9 +235,8 @@ impl VmRequestHandle {
     ///
     /// The resolved ID is stored in the same [`isolate_id_cache`] as
     /// [`main_isolate_id`] — the two methods share the cache, so whichever
-    /// is called first wins. Call [`invalidate_isolate_cache`] (or
-    /// [`clear_isolate_cache`]) before the next call to force a fresh
-    /// lookup (e.g. after a hot restart).
+    /// is called first wins. Call [`invalidate_isolate_cache`] before the
+    /// next call to force a fresh lookup (e.g. after a hot restart).
     ///
     /// # Fallback
     ///
@@ -346,18 +352,6 @@ impl VmRequestHandle {
         } else {
             debug!("VM Service: isolate ID cache lock contention during invalidation — skipped");
         }
-    }
-
-    /// Clear the cached Flutter UI isolate ID.
-    ///
-    /// Alias for [`invalidate_isolate_cache`]. Call this after hot restarts
-    /// or `IsolateExit` events so the next [`resolve_flutter_ui_isolate`]
-    /// call re-discovers the UI isolate from the VM.
-    ///
-    /// Uses `try_lock()`; the invalidation is silently skipped under
-    /// extremely rare concurrent lock contention (see [`invalidate_isolate_cache`]).
-    pub fn clear_isolate_cache(&self) {
-        self.invalidate_isolate_cache();
     }
 
     /// Call a Flutter service extension method.
@@ -1735,33 +1729,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_clear_isolate_cache_clears_value() {
-        // clear_isolate_cache() should behave identically to invalidate_isolate_cache().
-        let isolate_id_cache = Arc::new(Mutex::new(Some("isolates/ui-1".to_string())));
-
-        let handle = VmRequestHandle {
-            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
-            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
-            isolate_id_cache: Arc::clone(&isolate_id_cache),
-            ws_uri: String::new(),
-        };
-
-        // Verify the cache has a value.
-        {
-            let g = isolate_id_cache.lock().await;
-            assert!(g.is_some());
-        }
-
-        handle.clear_isolate_cache();
-
-        let g = isolate_id_cache.lock().await;
-        assert!(
-            g.is_none(),
-            "cache should be cleared by clear_isolate_cache()"
-        );
-    }
-
     #[test]
     fn test_resolve_flutter_ui_isolate_logic_prefix_match_only() {
         // Only extensions that start with "ext.flutter." qualify.
@@ -1857,7 +1824,7 @@ mod tests {
     ///
     /// The sequence:
     /// 1. Cache pre-populated (simulating a prior successful resolution).
-    /// 2. Hot restart event → `clear_isolate_cache()` called.
+    /// 2. Hot restart event → `invalidate_isolate_cache()` called.
     /// 3. `cached_isolate_id()` returns `None` — confirming the cache is empty.
     /// 4. The next `resolve_flutter_ui_isolate()` would go through the slow path
     ///    (verified by cache being empty; actual RPC not possible without a live
@@ -1874,8 +1841,8 @@ mod tests {
             "cache should be populated before hot restart (scenario 9)"
         );
 
-        // Step 2: hot restart event → clear cache.
-        handle.clear_isolate_cache();
+        // Step 2: hot restart event → invalidate cache.
+        handle.invalidate_isolate_cache();
 
         // Step 3: cache is now empty — confirmed via inspection.
         assert!(

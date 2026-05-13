@@ -74,7 +74,7 @@ pub(crate) use keys::handle_key;
 /// `spawn_fetch_widget_tree` so that the readiness poll can be skipped on
 /// user-triggered refreshes where the Flutter framework is already running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchTrigger {
+pub(crate) enum FetchTrigger {
     /// First fetch after entering DevTools or switching to the Inspector panel.
     ///
     /// The full `isWidgetTreeReady` poll budget applies because the framework
@@ -90,6 +90,10 @@ pub enum FetchTrigger {
 }
 
 /// Actions that the event loop should perform after update
+// FetchWidgetTree::trigger uses FetchTrigger (pub(crate)); this is intentional —
+// UpdateAction is technically pub but the FetchWidgetTree variant is only constructed
+// and matched within fdemon-app.
+#[allow(private_interfaces)]
 #[derive(Debug, Clone)]
 pub enum UpdateAction {
     /// Spawn a background task
