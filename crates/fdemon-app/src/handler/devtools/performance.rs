@@ -31,7 +31,12 @@ pub(crate) enum ScrollDir {
 /// `delta` is the signed change (+1 scrolls back, -1 scrolls toward live edge).
 ///
 /// Returns the new offset clamped to `[0, buffer_len.saturating_sub(visible_width.max(1))]`.
-fn clamp_chart_scroll(buffer_len: usize, visible_width: usize, current: usize, delta: i64) -> usize {
+fn clamp_chart_scroll(
+    buffer_len: usize,
+    visible_width: usize,
+    current: usize,
+    delta: i64,
+) -> usize {
     let max_back = buffer_len.saturating_sub(visible_width.max(1));
     let new = current as i64 + delta;
     new.clamp(0, max_back as i64) as usize
@@ -111,7 +116,10 @@ pub(crate) fn handle_toggle_allocation_sort(state: &mut AppState) -> UpdateResul
 /// Move keyboard focus to the given sub-section within the Performance panel.
 ///
 /// Sets `perf_state.focused_section = section`. No-op when no session is selected.
-pub(crate) fn handle_perf_focus_section(state: &mut AppState, section: PerfSection) -> UpdateResult {
+pub(crate) fn handle_perf_focus_section(
+    state: &mut AppState,
+    section: PerfSection,
+) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         handle.session.performance.focused_section = section;
     }
@@ -179,7 +187,11 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
     match perf.focused_section {
         PerfSection::FrameChart => {
             let visible = perf.frame_chart_visible_width.get();
-            let page = if visible == 0 { DEFAULT_PERF_PAGE_SIZE } else { visible } as i64;
+            let page = if visible == 0 {
+                DEFAULT_PERF_PAGE_SIZE
+            } else {
+                visible
+            } as i64;
             let buf_len = perf.frame_history.len();
             let delta: i64 = match direction {
                 ScrollDir::Up => page,
@@ -190,7 +202,11 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
         }
         PerfSection::MemoryChart => {
             let visible = perf.memory_chart_visible_width.get();
-            let page = if visible == 0 { DEFAULT_PERF_PAGE_SIZE } else { visible } as i64;
+            let page = if visible == 0 {
+                DEFAULT_PERF_PAGE_SIZE
+            } else {
+                visible
+            } as i64;
             let buf_len = perf.memory_samples.len();
             let delta: i64 = match direction {
                 ScrollDir::Up => page,
@@ -202,7 +218,11 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
         PerfSection::MemoryList => {
             let page = {
                 let h = perf.alloc_table_visible_height.get();
-                if h == 0 { DEFAULT_PERF_PAGE_SIZE } else { h }
+                if h == 0 {
+                    DEFAULT_PERF_PAGE_SIZE
+                } else {
+                    h
+                }
             };
             scroll_alloc_table(perf, direction, page);
         }
@@ -275,10 +295,13 @@ pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
                 // Scroll to show the last row.
                 let visible = {
                     let h = perf.alloc_table_visible_height.get();
-                    if h == 0 { DEFAULT_PERF_PAGE_SIZE } else { h }
+                    if h == 0 {
+                        DEFAULT_PERF_PAGE_SIZE
+                    } else {
+                        h
+                    }
                 };
-                perf.alloc_table_scroll_offset =
-                    (row_count).saturating_sub(visible);
+                perf.alloc_table_scroll_offset = (row_count).saturating_sub(visible);
             } else {
                 perf.alloc_table_selected_row = None;
             }
@@ -290,7 +313,13 @@ pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
 
 /// Select a row in the allocation table by index, or clear the selection when `index` is `None`.
 ///
-/// Sets `focused_section = MemoryList` so the panel focus follows the selection.
+/// When `index` is `Some(_)`, also sets `focused_section = MemoryList` so the panel focus
+/// follows the selection (used for both keyboard Enter and mouse click on a row).
+///
+/// When `index` is `None` (click outside a row, or explicit clear), only clears the
+/// selection; focus is intentionally left unchanged so the user's current section
+/// focus is not disturbed.
+///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_select_alloc_row(
     state: &mut AppState,
@@ -298,7 +327,12 @@ pub(crate) fn handle_perf_select_alloc_row(
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         handle.session.performance.alloc_table_selected_row = index;
-        handle.session.performance.focused_section = PerfSection::MemoryList;
+        // Only pull focus to MemoryList when a concrete row is selected.
+        // Clearing the selection (index = None) must not disturb the current
+        // focused_section — a mouse click outside any row should not jump focus.
+        if index.is_some() {
+            handle.session.performance.focused_section = PerfSection::MemoryList;
+        }
     }
     UpdateResult::none()
 }
@@ -342,7 +376,11 @@ fn scroll_alloc_table(
     // Nudge scroll offset to keep new_row within the visible window.
     let visible_height = {
         let h = perf.alloc_table_visible_height.get();
-        if h == 0 { DEFAULT_PERF_PAGE_SIZE } else { h }
+        if h == 0 {
+            DEFAULT_PERF_PAGE_SIZE
+        } else {
+            h
+        }
     };
 
     // Scroll forward if selection moved past the bottom of the visible window.
@@ -951,8 +989,10 @@ mod tests {
 
     // ── Phase 2 keyboard interactivity tests ─────────────────────────────────
 
-    use super::{ScrollDir, handle_perf_focus_section, handle_perf_scroll, handle_perf_page,
-                handle_perf_jump_to_start, handle_perf_jump_to_end, handle_perf_select_alloc_row};
+    use super::{
+        handle_perf_focus_section, handle_perf_jump_to_end, handle_perf_jump_to_start,
+        handle_perf_page, handle_perf_scroll, handle_perf_select_alloc_row, ScrollDir,
+    };
     use crate::session::performance::PerfSection;
     use fdemon_core::performance::ClassHeapStats;
 
@@ -960,14 +1000,18 @@ mod tests {
     fn push_memory_samples(state: &mut AppState, count: usize) {
         if let Some(handle) = state.session_manager.selected_mut() {
             for _ in 0..count {
-                handle.session.performance.memory_samples.push(MemorySample {
-                    dart_heap: 1_000_000,
-                    dart_native: 100_000,
-                    raster_cache: 50_000,
-                    allocated: 2_000_000,
-                    rss: 5_000_000,
-                    timestamp: chrono::Local::now(),
-                });
+                handle
+                    .session
+                    .performance
+                    .memory_samples
+                    .push(MemorySample {
+                        dart_heap: 1_000_000,
+                        dart_native: 100_000,
+                        raster_cache: 50_000,
+                        allocated: 2_000_000,
+                        rss: 5_000_000,
+                        timestamp: chrono::Local::now(),
+                    });
             }
         }
     }
@@ -1071,7 +1115,10 @@ mod tests {
         let (mut state, _) = make_state_in_performance_panel();
         // Shift+Tab = PerfFocusSection(focused_section.prev())
         // Default section FrameChart.prev() == MemoryList
-        dispatch(&mut state, Message::Key(crate::input_key::InputKey::BackTab));
+        dispatch(
+            &mut state,
+            Message::Key(crate::input_key::InputKey::BackTab),
+        );
         assert_eq!(perf_focused_section(&state), PerfSection::MemoryList);
     }
 
@@ -1092,8 +1139,11 @@ mod tests {
         // edge. Let's first scroll Up (back), then Down (toward live).
         // Actually with offset=0 and Down (-1 delta), clamp(0 + (-1), 0, max) = 0.
         // So assert offset stays 0 (clamped).
-        assert_eq!(perf_frame_scroll(&state), 0,
-            "Scrolling Down at live edge should stay clamped at 0");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            0,
+            "Scrolling Down at live edge should stay clamped at 0"
+        );
     }
 
     #[test]
@@ -1107,8 +1157,11 @@ mod tests {
 
         handle_perf_scroll(&mut state, ScrollDir::Up);
 
-        assert_eq!(perf_frame_scroll(&state), 1,
-            "Scrolling Up should increment offset by 1");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            1,
+            "Scrolling Up should increment offset by 1"
+        );
     }
 
     #[test]
@@ -1125,8 +1178,11 @@ mod tests {
         // Try to scroll further back — should stay at max.
         handle_perf_scroll(&mut state, ScrollDir::Up);
 
-        assert_eq!(perf_frame_scroll(&state), 50,
-            "Scrolling Up at max offset should be clamped");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            50,
+            "Scrolling Up at max offset should be clamped"
+        );
     }
 
     #[test]
@@ -1141,8 +1197,11 @@ mod tests {
 
         handle_perf_scroll(&mut state, ScrollDir::Down);
 
-        assert_eq!(perf_frame_scroll(&state), 0,
-            "Scrolling Down at offset 0 should remain at live edge");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            0,
+            "Scrolling Down at offset 0 should remain at live edge"
+        );
     }
 
     // ── handle_perf_scroll — MemoryChart ─────────────────────────────────────
@@ -1151,7 +1210,11 @@ mod tests {
     fn perf_scroll_up_in_memory_chart_increments_offset() {
         let (mut state, _) = make_state_in_performance_panel();
         if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.performance.memory_chart_visible_width.set(10);
+            handle
+                .session
+                .performance
+                .memory_chart_visible_width
+                .set(10);
             handle.session.performance.focused_section = PerfSection::MemoryChart;
         }
         push_memory_samples(&mut state, 100);
@@ -1165,7 +1228,11 @@ mod tests {
     fn perf_scroll_memory_chart_clamps_at_zero() {
         let (mut state, _) = make_state_in_performance_panel();
         if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.performance.memory_chart_visible_width.set(10);
+            handle
+                .session
+                .performance
+                .memory_chart_visible_width
+                .set(10);
             handle.session.performance.focused_section = PerfSection::MemoryChart;
         }
         push_memory_samples(&mut state, 100);
@@ -1187,8 +1254,11 @@ mod tests {
 
         handle_perf_scroll(&mut state, ScrollDir::Down);
 
-        assert_eq!(perf_alloc_row(&state), Some(1),
-            "Scrolling Down from row 0 should select row 1");
+        assert_eq!(
+            perf_alloc_row(&state),
+            Some(1),
+            "Scrolling Down from row 0 should select row 1"
+        );
     }
 
     #[test]
@@ -1201,8 +1271,11 @@ mod tests {
 
         handle_perf_scroll(&mut state, ScrollDir::Up);
 
-        assert_eq!(perf_alloc_row(&state), Some(0),
-            "Scrolling Up from row 0 should stay at 0");
+        assert_eq!(
+            perf_alloc_row(&state),
+            Some(0),
+            "Scrolling Up from row 0 should stay at 0"
+        );
     }
 
     // ── handle_perf_page ─────────────────────────────────────────────────────
@@ -1218,8 +1291,11 @@ mod tests {
 
         handle_perf_page(&mut state, ScrollDir::Up);
 
-        assert_eq!(perf_frame_scroll(&state), 20,
-            "Page Up in FrameChart should jump by visible_width = 20");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            20,
+            "Page Up in FrameChart should jump by visible_width = 20"
+        );
     }
 
     #[test]
@@ -1233,8 +1309,11 @@ mod tests {
 
         handle_perf_page(&mut state, ScrollDir::Up);
 
-        assert_eq!(perf_frame_scroll(&state), super::DEFAULT_PERF_PAGE_SIZE,
-            "Page Up with hint=0 should use DEFAULT_PERF_PAGE_SIZE");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            super::DEFAULT_PERF_PAGE_SIZE,
+            "Page Up with hint=0 should use DEFAULT_PERF_PAGE_SIZE"
+        );
     }
 
     #[test]
@@ -1253,8 +1332,11 @@ mod tests {
         handle_perf_page(&mut state, ScrollDir::Down);
 
         // Down in a list moves toward higher indices: 10 + 5 = 15.
-        assert_eq!(perf_alloc_row(&state), Some(15),
-            "Page Down on MemoryList from row 10 with page=5 should land on row 15");
+        assert_eq!(
+            perf_alloc_row(&state),
+            Some(15),
+            "Page Down on MemoryList from row 10 with page=5 should land on row 15"
+        );
     }
 
     #[test]
@@ -1273,8 +1355,11 @@ mod tests {
         handle_perf_page(&mut state, ScrollDir::Up);
 
         // Up in a list moves toward lower indices: 10 - 5 = 5.
-        assert_eq!(perf_alloc_row(&state), Some(5),
-            "Page Up on MemoryList from row 10 with page=5 should land on row 5");
+        assert_eq!(
+            perf_alloc_row(&state),
+            Some(5),
+            "Page Up on MemoryList from row 10 with page=5 should land on row 5"
+        );
     }
 
     // ── handle_perf_jump_to_start / end ──────────────────────────────────────
@@ -1291,8 +1376,11 @@ mod tests {
 
         handle_perf_jump_to_end(&mut state);
 
-        assert_eq!(perf_frame_scroll(&state), 0,
-            "Jump to end should set offset to 0 (live edge)");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            0,
+            "Jump to end should set offset to 0 (live edge)"
+        );
     }
 
     #[test]
@@ -1306,8 +1394,11 @@ mod tests {
 
         handle_perf_jump_to_start(&mut state);
 
-        assert_eq!(perf_frame_scroll(&state), 1000 - 50,
-            "Jump to start should set offset to buffer_len - visible_width");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            1000 - 50,
+            "Jump to start should set offset to buffer_len - visible_width"
+        );
     }
 
     #[test]
@@ -1322,10 +1413,16 @@ mod tests {
 
         handle_perf_jump_to_start(&mut state);
 
-        assert_eq!(perf_alloc_row(&state), Some(0),
-            "Jump to start in MemoryList should select row 0");
-        assert_eq!(perf_alloc_scroll(&state), 0,
-            "Jump to start in MemoryList should reset scroll offset to 0");
+        assert_eq!(
+            perf_alloc_row(&state),
+            Some(0),
+            "Jump to start in MemoryList should select row 0"
+        );
+        assert_eq!(
+            perf_alloc_scroll(&state),
+            0,
+            "Jump to start in MemoryList should reset scroll offset to 0"
+        );
     }
 
     #[test]
@@ -1339,8 +1436,11 @@ mod tests {
 
         handle_perf_jump_to_end(&mut state);
 
-        assert_eq!(perf_alloc_row(&state), Some(19),
-            "Jump to end in MemoryList should select last row (index 19)");
+        assert_eq!(
+            perf_alloc_row(&state),
+            Some(19),
+            "Jump to end in MemoryList should select last row (index 19)"
+        );
     }
 
     // ── handle_perf_select_alloc_row ─────────────────────────────────────────
@@ -1364,16 +1464,28 @@ mod tests {
     }
 
     #[test]
-    fn perf_select_alloc_row_none_clears_selection() {
+    fn perf_select_alloc_row_none_clears_selection_without_changing_focus() {
         let (mut state, _) = make_state_in_performance_panel();
+        // Start with focus on FrameChart (not MemoryList).
         if let Some(handle) = state.session_manager.selected_mut() {
             handle.session.performance.alloc_table_selected_row = Some(5);
+            handle.session.performance.focused_section = PerfSection::FrameChart;
         }
 
         handle_perf_select_alloc_row(&mut state, None);
 
-        assert_eq!(perf_alloc_row(&state), None);
-        assert_eq!(perf_focused_section(&state), PerfSection::MemoryList);
+        assert_eq!(
+            perf_alloc_row(&state),
+            None,
+            "index=None should clear the alloc row selection"
+        );
+        // Focus must NOT have jumped to MemoryList — clearing a selection from
+        // outside a row (mouse click on empty space) should leave focus alone.
+        assert_eq!(
+            perf_focused_section(&state),
+            PerfSection::FrameChart,
+            "index=None must not change focused_section"
+        );
     }
 
     // ── Via Message variants (integration) ───────────────────────────────────
@@ -1382,7 +1494,10 @@ mod tests {
     fn perf_focus_section_message_routes_correctly() {
         let (mut state, _) = make_state_in_performance_panel();
 
-        update(&mut state, Message::PerfFocusSection(PerfSection::MemoryChart));
+        update(
+            &mut state,
+            Message::PerfFocusSection(PerfSection::MemoryChart),
+        );
 
         assert_eq!(perf_focused_section(&state), PerfSection::MemoryChart);
     }
@@ -1398,8 +1513,11 @@ mod tests {
 
         update(&mut state, Message::PerfScrollUp);
 
-        assert_eq!(perf_frame_scroll(&state), 1,
-            "PerfScrollUp message should increment frame chart offset");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            1,
+            "PerfScrollUp message should increment frame chart offset"
+        );
     }
 
     #[test]
@@ -1414,8 +1532,11 @@ mod tests {
 
         update(&mut state, Message::PerfScrollDown);
 
-        assert_eq!(perf_frame_scroll(&state), 4,
-            "PerfScrollDown message should decrement frame chart offset");
+        assert_eq!(
+            perf_frame_scroll(&state),
+            4,
+            "PerfScrollDown message should decrement frame chart offset"
+        );
     }
 
     #[test]
@@ -1441,5 +1562,95 @@ mod tests {
 
         assert_eq!(perf_alloc_row(&state), Some(7));
         assert_eq!(perf_focused_section(&state), PerfSection::MemoryList);
+    }
+
+    // ── Task 04: mouse/keyboard equivalence tests ─────────────────────────────
+    //
+    // The Phase 3 widget layer will register MouseRegions that emit the same
+    // Message variants as keyboard handlers. These tests verify that the
+    // handler produces identical state mutations regardless of input origin.
+
+    /// `PerfFocusSection` via keyboard and mouse paths produces the same state.
+    ///
+    /// In production, the keyboard handler emits `PerfFocusSection(next_section)`
+    /// and a Phase 3 mouse region will emit the same message directly. Both paths
+    /// hit the identical `update()` branch; this test documents and guards that
+    /// contract.
+    #[test]
+    fn perf_focus_section_via_mouse_or_keyboard_yields_same_state() {
+        let (mut state_keyboard, _) = make_state_in_performance_panel();
+        let (mut state_mouse, _) = make_state_in_performance_panel();
+
+        // Keyboard-style dispatch (Tab from FrameChart → MemoryChart, then direct message).
+        update(
+            &mut state_keyboard,
+            Message::PerfFocusSection(PerfSection::MemoryChart),
+        );
+        // Mouse-style dispatch (same message — mouse region emits it directly).
+        update(
+            &mut state_mouse,
+            Message::PerfFocusSection(PerfSection::MemoryChart),
+        );
+
+        assert_eq!(
+            perf_focused_section(&state_keyboard),
+            perf_focused_section(&state_mouse),
+            "keyboard and mouse PerfFocusSection dispatch must yield identical focused_section"
+        );
+        assert_eq!(
+            perf_focused_section(&state_keyboard),
+            PerfSection::MemoryChart,
+        );
+    }
+
+    /// `PerfSelectAllocRow { index: Some(_) }` sets both the selected row AND
+    /// moves focus to MemoryList — whether triggered by keyboard or mouse.
+    #[test]
+    fn perf_select_alloc_row_with_some_focuses_memory_list() {
+        let (mut state, _) = make_state_in_performance_panel();
+        // Start in a different section so the focus change is detectable.
+        if let Some(handle) = state.session_manager.selected_mut() {
+            handle.session.performance.focused_section = PerfSection::FrameChart;
+        }
+
+        update(&mut state, Message::PerfSelectAllocRow { index: Some(2) });
+
+        let perf = state.session_manager.selected().unwrap();
+        assert_eq!(
+            perf.session.performance.alloc_table_selected_row,
+            Some(2),
+            "PerfSelectAllocRow {{ index: Some(2) }} must set alloc_table_selected_row = Some(2)"
+        );
+        assert_eq!(
+            perf.session.performance.focused_section,
+            PerfSection::MemoryList,
+            "PerfSelectAllocRow {{ index: Some(_) }} must focus MemoryList"
+        );
+    }
+
+    /// `PerfSelectAllocRow { index: None }` clears the row selection but must
+    /// not change `focused_section`. A mouse click outside any row should not
+    /// hijack the user's current section focus.
+    #[test]
+    fn perf_select_alloc_row_with_none_does_not_change_focus() {
+        let (mut state, _) = make_state_in_performance_panel();
+        // Park focus on MemoryChart; this is the focus that must survive.
+        if let Some(handle) = state.session_manager.selected_mut() {
+            handle.session.performance.alloc_table_selected_row = Some(3);
+            handle.session.performance.focused_section = PerfSection::MemoryChart;
+        }
+
+        update(&mut state, Message::PerfSelectAllocRow { index: None });
+
+        let perf = state.session_manager.selected().unwrap();
+        assert_eq!(
+            perf.session.performance.alloc_table_selected_row, None,
+            "PerfSelectAllocRow {{ index: None }} must clear alloc_table_selected_row"
+        );
+        assert_eq!(
+            perf.session.performance.focused_section,
+            PerfSection::MemoryChart,
+            "PerfSelectAllocRow {{ index: None }} must NOT change focused_section"
+        );
     }
 }
