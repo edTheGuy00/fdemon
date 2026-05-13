@@ -98,3 +98,43 @@ fn settings_readiness_poll_defaults_to_2_attempts() { /* ... */ }
 - The instrumentation from task 01 should now produce `warn!` lines whenever a real production session hits exhaustion — that signal helps future-tuning.
 - If the existing config module has a `[devtools]` or `[devtools.inspector]` table, reuse it. Otherwise add it under the existing pattern.
 - Per CLAUDE.md, default constants should be named (e.g., `DEFAULT_READINESS_POLL_ATTEMPTS: usize = 2`) with doc comments explaining derivation.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `readiness_poll_attempts`, `readiness_poll_interval_ms`, `readiness_poll_call_timeout_ms` fields to `DevToolsSettings`; added default functions with doc comments; updated `Default` impl; added 2 new tests (`settings_readiness_poll_defaults_to_2_attempts`, `settings_readiness_poll_custom_values_deserialize`); updated existing test to assert new defaults |
+| `crates/fdemon-app/src/config/settings.rs` | Added new config keys to both `init_config_dir` and `generate_config_header` default content strings (both occurrences replaced) |
+| `crates/fdemon-app/src/actions/inspector/widget_tree.rs` | Added `ReadinessPollConfig` struct with `Default` impl and named constants; updated `poll_widget_tree_ready` to take `&ReadinessPollConfig`; reduced defaults from 8/500ms/2s to 2/250ms/1000ms; added 4 unit tests |
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Updated `spawn_fetch_widget_tree` signature with 3 new params; constructs `ReadinessPollConfig` and passes to `poll_widget_tree_ready`; added `#[allow(clippy::too_many_arguments)]` |
+| `crates/fdemon-app/src/actions/mod.rs` | Destructures and passes the 3 new fields through `handle_action` dispatch |
+| `crates/fdemon-app/src/handler/mod.rs` | Added 3 new fields to `UpdateAction::FetchWidgetTree` variant |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Passes `readiness_poll_*` fields from settings at both `FetchWidgetTree` construction sites |
+| `crates/fdemon-app/src/handler/update.rs` | Passes `readiness_poll_*` fields from settings at `RequestWidgetTree` handler |
+| `crates/fdemon-app/src/process.rs` | Updated `hydrate_fetch_widget_tree` to destructure and pass through 3 new fields |
+
+### Notable Decisions/Tradeoffs
+
+1. **Flat keys under `[devtools]` instead of a new `[devtools.inspector]` table**: The existing codebase uses flat keys on `DevToolsSettings` (e.g., `inspector_fetch_timeout_secs`). Adding a nested sub-table would require a new struct and a more invasive change. Consistent with existing pattern.
+
+2. **`poll_widget_tree_ready` return type stays `()`**: The function already returned `()` on exhaustion (it warned and fell through). The task's "return `Ok(())`" was written assuming the function returned `Result`. No return-type change was needed.
+
+3. **`#[allow(clippy::too_many_arguments)]` on `spawn_fetch_widget_tree`**: The function now takes 8 arguments. Alternative would be a config struct parameter, but since the callers immediately have the individual values, a flat signature avoids an extra struct at the call site. The `ReadinessPollConfig` is assembled in the function body before the async block.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (2179 + all other crate tests pass, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Exhaustion path not tested with live "not ready" responses**: The `poll_widget_tree_ready` tests use a handle with a dropped receiver (`ChannelClosed` = fatal error → early return). A true "exhaustion" test (all N attempts see `false`) would require a mock channel responder, which requires access to the private `ClientCommand` enum in `fdemon-daemon`. The constants and config tests fully cover the acceptance criteria; the async behaviour is covered by the channel-closed path.

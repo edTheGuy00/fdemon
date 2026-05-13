@@ -80,3 +80,39 @@ fn fetch_timeout_clears_debounce() { /* analogous */ }
 
 - Type of `last_fetch_time` is likely `Option<Instant>` — confirm by reading `state.rs:292-300`.
 - Don't forget to clear it in the (rarer) "fetch returned nothing" code path if one exists.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `clear_fetch_debounce()` method on `InspectorState` that sets `last_fetch_time = None` |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Called `clear_fetch_debounce()` in `handle_widget_tree_fetch_failed` and `handle_widget_tree_fetch_timeout`; added 4 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Success path unchanged**: `handle_widget_tree_fetched` does not clear `last_fetch_time`. Confirmed by `fetch_success_leaves_debounce_intact` test — after a successful fetch the 2-second cooldown remains active, which matches the task requirement ("success path is unchanged").
+2. **`loading` guard still works**: After calling `clear_fetch_debounce()`, `loading` is already set to `false` by both handlers, so `is_fetch_debounced()` correctly returns `false` (both the `loading` guard and the `last_fetch_time` check are clear).
+3. **No "fetch returned nothing" code path found**: The codebase has no handler that sets loading=false on an empty result without calling `handle_widget_tree_fetched` or `handle_widget_tree_fetch_failed`, so no additional path needed.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — Passed (2172 tests)
+- `cargo check --workspace` — Passed (no errors)
+- `cargo clippy -p fdemon-app` — Passed (no warnings)
+
+New tests added:
+- `fetch_failed_clears_debounce` — verifies `is_fetch_debounced()` returns `false` after `handle_widget_tree_fetch_failed`
+- `fetch_timeout_clears_debounce` — verifies `is_fetch_debounced()` returns `false` after `handle_widget_tree_fetch_timeout`
+- `fetch_failed_no_session_does_not_clear_debounce` — verifies no state change when session_id does not match
+- `fetch_success_leaves_debounce_intact` — verifies the success path does NOT clear `last_fetch_time`
+
+### Risks/Limitations
+
+1. **None identified**: The change is mechanical — two additional method calls in two handlers. No cross-cutting concerns or state invariant violations.

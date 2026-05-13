@@ -84,3 +84,44 @@ Invalidation: subscribe to `Isolate.Runnable` and `Service.IsolateExit` streams 
 - Annotate the cache field with `// EXCEPTION` if it crosses any TEA boundary (it shouldn't — this is daemon-layer state).
 - If `Isolate.Runnable` is not currently subscribed to, decide in this task whether to wire it up (probably yes) or punt to a follow-up.
 - The `Error::vm_service(...)` helper may need to be added to `fdemon-core/error.rs` if missing.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `resolve_flutter_ui_isolate()` to `VmRequestHandle` (enumerates isolates, inspects `extensionRPCs`, caches result, falls back with `warn!`). Added `clear_isolate_cache()` alias for `invalidate_isolate_cache()`. Added 7 unit tests. |
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Replaced all 4 `handle.main_isolate_id()` calls with `handle.resolve_flutter_ui_isolate()` in `spawn_fetch_widget_tree`, `spawn_toggle_overlay`, `spawn_fetch_layout_data`, and `spawn_dispose_devtools_groups`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Shared cache**: `resolve_flutter_ui_isolate` reuses the same `isolate_id_cache` field as `main_isolate_id`. This means whichever is called first fills the cache. No new field was needed since both methods are looking for the same thing (the Flutter UI isolate).
+
+2. **Scope of replacement**: Only replaced calls in `inspector/mod.rs` as specified. Calls in `network.rs`, `performance.rs`, `vm_service.rs` etc. were left using `main_isolate_id()` per task scope — those callers don't need the Flutter-extension-specific logic.
+
+3. **IsolateInfo.extension_rpcs**: Already existed as `Option<Vec<String>>` in `protocol.rs` — no schema changes needed.
+
+4. **Cache invalidation**: The existing `invalidate_isolate_cache()` method already handles hot restart invalidation. The new `clear_isolate_cache()` is a public alias for discoverability.
+
+5. **Fallback**: When no `ext.flutter.*` extensions are found, falls back silently to the first non-system isolate with a `warn!` log (matching the task sketch exactly).
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (769 fdemon-daemon tests including 7 new; all workspace tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Extra RPC calls on cold path**: Each call to `resolve_flutter_ui_isolate` on an empty cache triggers one `getVM` and up to N `getIsolate` calls (one per non-system isolate). This is the intended design — the result is cached immediately after, so subsequent calls hit the fast path.
+
+2. **Fallback does not cache**: If no `ext.flutter.*` isolate is found, the fallback returns the first non-system isolate but does NOT cache it (matching the task sketch). This means every call on a Flutter app with no registered extensions re-issues `getVM` + `getIsolate`. This is intentional — it will retry discovery when extensions eventually become registered.
+
+3. **`Isolate.Runnable` subscription**: The task mentioned potentially wiring up the `Isolate.Runnable` event subscription. The `ISOLATE` stream is already in `RESUBSCRIBE_STREAMS` (added in a prior fix), so `IsolateRunnable` events are already received. Cache invalidation on `IsolateExit` is handled by `invalidate_isolate_cache()` / `clear_isolate_cache()` which callers invoke on hot restart (wired in `handler/update.rs`).

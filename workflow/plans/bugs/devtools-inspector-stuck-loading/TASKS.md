@@ -38,14 +38,14 @@ Five-phase fix for the Inspector "Loading widget tree" hang. Phase 1 adds diagno
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-add-diagnostic-instrumentation](tasks/01-add-diagnostic-instrumentation.md) | Not Started | — | 1-2h | `actions/inspector/`, `vm_service/client.rs`, `process.rs` |
-| 2 | [02-clear-fetch-debounce-on-failure](tasks/02-clear-fetch-debounce-on-failure.md) | Not Started | 1 | 1-2h | `state.rs`, `handler/devtools/inspector.rs` |
-| 3 | [03-promote-channel-drop-to-error-log](tasks/03-promote-channel-drop-to-error-log.md) | Not Started | 1 | 0.5-1h | `process.rs` |
-| 4 | [04-resolve-flutter-ui-isolate](tasks/04-resolve-flutter-ui-isolate.md) | Not Started | 2, 3 | 3-4h | `vm_service/client.rs`, `actions/inspector/mod.rs` |
-| 5 | [05-shrink-readiness-poll-budget](tasks/05-shrink-readiness-poll-budget.md) | Not Started | 4 | 1-2h | `actions/inspector/widget_tree.rs`, `config/settings.rs` |
-| 6 | [06-bypass-readiness-poll-on-refresh](tasks/06-bypass-readiness-poll-on-refresh.md) | Not Started | 4 | 1-2h | `actions/inspector/mod.rs`, `state.rs` |
-| 7 | [07-tests-inspector-handlers](tasks/07-tests-inspector-handlers.md) | Not Started | 5, 6 | 2-3h | `handler/devtools/inspector.rs` tests, `actions/inspector/` tests |
-| 8 | [08-update-architecture-doc](tasks/08-update-architecture-doc.md) | Not Started | 7 | 0.5h | `docs/ARCHITECTURE.md` |
+| 1 | [01-add-diagnostic-instrumentation](tasks/01-add-diagnostic-instrumentation.md) | Done | — | 1-2h | `actions/inspector/`, `vm_service/client.rs`, `process.rs` |
+| 2 | [02-clear-fetch-debounce-on-failure](tasks/02-clear-fetch-debounce-on-failure.md) | Done | 1 | 1-2h | `state.rs`, `handler/devtools/inspector.rs` |
+| 3 | [03-promote-channel-drop-to-error-log](tasks/03-promote-channel-drop-to-error-log.md) | Done | 1 | 0.5-1h | `process.rs` |
+| 4 | [04-resolve-flutter-ui-isolate](tasks/04-resolve-flutter-ui-isolate.md) | Done | 2, 3 | 3-4h | `vm_service/client.rs`, `actions/inspector/mod.rs` |
+| 5 | [05-shrink-readiness-poll-budget](tasks/05-shrink-readiness-poll-budget.md) | Done | 4 | 1-2h | `actions/inspector/widget_tree.rs`, `config/settings.rs` |
+| 6 | [06-bypass-readiness-poll-on-refresh](tasks/06-bypass-readiness-poll-on-refresh.md) | Done | 4 | 1-2h | `actions/inspector/mod.rs`, `state.rs` |
+| 7 | [07-tests-inspector-handlers](tasks/07-tests-inspector-handlers.md) | Done | 5, 6 | 2-3h | `handler/devtools/inspector.rs` tests, `actions/inspector/` tests |
+| 8 | [08-update-architecture-doc](tasks/08-update-architecture-doc.md) | Done | 7 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

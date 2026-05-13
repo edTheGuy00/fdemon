@@ -57,3 +57,36 @@ if let Err(e) = msg_tx.send(msg).await {
 
 - Do not introduce error chains that ignore the underlying `mpsc::error::SendError`/`TrySendError` cause. Always include `error = ?e` in the trace.
 - This task is small but high-value: it's the last-resort observability for the "task spawned but message lost" hypothesis.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ade93b5d77da4c5ef
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/process.rs` | Promoted all three hydration-fallback `try_send` calls (`FetchWidgetTree`, `FetchLayoutData`, `FetchHttpRequestDetail`) from silent `let _ =` / `warn!` to `match` with `debug!` on success and `error!(error = ?e, ...)` on channel failure |
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Promoted terminal `msg_tx.send(msg).await` error in `spawn_fetch_widget_tree` from `warn!` to `error!(error = ?e, ...)`; promoted all `let _ = msg_tx.send(...).await` calls in `spawn_toggle_overlay` and `spawn_fetch_layout_data` (5 call sites: isolate-id failure, timeout, extension-call failure, parse failure, success path) to `if let Err(e) = ... { error!(error = ?e, ...) }` |
+| `crates/fdemon-app/src/handler/update.rs` | Reformatted by `cargo fmt` (pre-existing style drift, no logic change) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`FetchWidgetTree` fallback upgraded from `warn!` to `error!`**: The task specified `error!` throughout. The pre-existing `warn!` in `process.rs` lines 95-99 was also a `try_send` failure path (not the send itself), so it was replaced with the `match`+`debug!/error!` pattern as specified.
+2. **All `spawn_fetch_layout_data` send paths covered**: There were 5 distinct `let _ = msg_tx.send(...).await` sites in that function (isolate failure, timeout, extension failure, parse failure, success). All are now instrumented with `error!` on failure.
+3. **No new unit tests added**: Task explicitly stated none required for this narrow log-promotion change.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-app` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo test -p fdemon-app --lib` — Passed (2168 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **`spawn_toggle_overlay` success path coverage**: The success `send` at the end of `spawn_toggle_overlay` was also a silent `let _ =` — it is now instrumented. This matches acceptance criterion 1 ("every send in the inspector dispatch path").
+2. **`error!` severity on success-path send failures**: A channel-closed error on the success path (e.g., `LayoutDataFetched`) is also `error!`-level — appropriate since it means the UI will stay in a loading state with no recovery path.
