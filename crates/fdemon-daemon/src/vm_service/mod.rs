@@ -116,3 +116,137 @@ pub use timeline::{
     enable_frame_tracking, flutter_extension_kind, is_frame_event, parse_frame_timing,
     parse_str_u64,
 };
+
+/// Redact the auth token from a Dart VM Service WebSocket URI.
+///
+/// The Dart VM Service URI has the form:
+/// ```text
+/// ws://127.0.0.1:PORT/AUTH_TOKEN/ws
+/// ```
+/// Where `AUTH_TOKEN` is a random session token that authorises RPC calls.
+/// Logging this URI in plain text exposes the token to anyone who can read
+/// log files, allowing them to execute arbitrary VM Service RPCs (hot reload,
+/// heap reads, service extension invocations).
+///
+/// This function replaces the first path segment (the auth token) with
+/// `[REDACTED]` so the connection event can still be logged at `info!` level
+/// without leaking credentials.
+///
+/// Returns the input unchanged if it does not match the expected shape —
+/// defensive behaviour that prevents the redaction step from blocking logging
+/// on unexpected input.
+///
+/// # Examples
+///
+/// ```
+/// use fdemon_daemon::vm_service::redact_vm_service_token;
+///
+/// // Normal VM Service URI — token is hidden.
+/// let safe = redact_vm_service_token("ws://127.0.0.1:8080/AbC123/ws");
+/// assert!(safe.contains("[REDACTED]"));
+/// assert!(!safe.contains("AbC123"));
+/// assert!(safe.starts_with("ws://127.0.0.1:8080/"));
+///
+/// // URI without an auth token (local dev with no auth) — returned unchanged.
+/// assert_eq!(
+///     redact_vm_service_token("ws://127.0.0.1:8080/ws"),
+///     "ws://127.0.0.1:8080/ws",
+/// );
+/// ```
+pub fn redact_vm_service_token(uri: &str) -> String {
+    // Identify the scheme+authority prefix (everything up to the first path '/').
+    let scheme_end = if let Some(rest) = uri.strip_prefix("ws://") {
+        uri.len() - rest.len()
+    } else if let Some(rest) = uri.strip_prefix("wss://") {
+        uri.len() - rest.len()
+    } else {
+        // Unknown scheme — return unchanged rather than panic or corrupt.
+        return uri.to_string();
+    };
+
+    // Find the first '/' that starts the path component (after the authority).
+    let path_start = match uri[scheme_end..].find('/') {
+        Some(rel) => scheme_end + rel,
+        // No path at all — nothing to redact.
+        None => return uri.to_string(),
+    };
+
+    let (authority, path) = uri.split_at(path_start);
+    // `path` starts with '/'. Strip the leading slash to inspect segments.
+    let path_body = &path[1..];
+
+    // Split path into segments.  The expected form is `AUTH_TOKEN/ws` (2+ segments).
+    // If there is only one segment (e.g. just `/ws`) there is no auth token —
+    // return unchanged.
+    let slash_pos = match path_body.find('/') {
+        Some(p) => p,
+        None => return uri.to_string(),
+    };
+
+    // Everything after the first path segment is the remainder (e.g. `/ws`).
+    let remainder = &path_body[slash_pos..];
+
+    let mut out = String::with_capacity(authority.len() + "[REDACTED]".len() + remainder.len() + 2);
+    out.push_str(authority);
+    out.push('/');
+    out.push_str("[REDACTED]");
+    out.push_str(remainder);
+    out
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_vm_service_token;
+
+    #[test]
+    fn test_redact_normal_vm_service_uri() {
+        let raw = "ws://127.0.0.1:8080/AbCdEf123XyZ/ws";
+        let red = redact_vm_service_token(raw);
+        assert!(!red.contains("AbCdEf123XyZ"));
+        assert!(red.contains("[REDACTED]"));
+        assert!(red.starts_with("ws://127.0.0.1:8080/"));
+        assert_eq!(red, "ws://127.0.0.1:8080/[REDACTED]/ws");
+    }
+
+    #[test]
+    fn test_redact_uri_without_path_returns_unchanged() {
+        // Only one path segment — no auth token, leave as-is.
+        let raw = "ws://127.0.0.1:8080/ws";
+        let red = redact_vm_service_token(raw);
+        assert_eq!(red, raw);
+    }
+
+    #[test]
+    fn test_redact_uri_trailing_slash_only_returns_unchanged() {
+        // Trailing slash only → single empty segment.
+        let raw = "ws://127.0.0.1:8080/";
+        let red = redact_vm_service_token(raw);
+        assert_eq!(red, raw);
+    }
+
+    #[test]
+    fn test_redact_malformed_uri_does_not_panic() {
+        // Must not panic; output is implementation-defined.
+        let _ = redact_vm_service_token("not a uri");
+        let _ = redact_vm_service_token("");
+    }
+
+    #[test]
+    fn test_redact_wss_scheme() {
+        let raw = "wss://example.com:443/SECRET_TOKEN/ws";
+        let red = redact_vm_service_token(raw);
+        assert!(!red.contains("SECRET_TOKEN"));
+        assert!(red.contains("[REDACTED]"));
+        assert_eq!(red, "wss://example.com:443/[REDACTED]/ws");
+    }
+
+    #[test]
+    fn test_redact_longer_path() {
+        // Token followed by more than one trailing segment.
+        let raw = "ws://127.0.0.1:9999/TOKEN123=/ws/extra";
+        let red = redact_vm_service_token(raw);
+        assert!(!red.contains("TOKEN123="));
+        assert!(red.contains("[REDACTED]"));
+        assert_eq!(red, "ws://127.0.0.1:9999/[REDACTED]/ws/extra");
+    }
+}

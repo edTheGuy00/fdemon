@@ -517,7 +517,7 @@ impl VmServiceClient {
 
         // Attempt the first connection before returning so callers know whether
         // the URI is reachable.
-        info!("Connecting to VM Service at {}", ws_uri);
+        info!("Connecting to VM Service at {}", super::redact_vm_service_token(ws_uri));
         let ws_stream = connect_ws(ws_uri).await?;
 
         {

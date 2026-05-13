@@ -22,8 +22,8 @@ use crate::session::SessionId;
 use fdemon_daemon::vm_service::protocol::stream_id;
 use fdemon_daemon::vm_service::{
     enable_frame_tracking, flutter_error_to_log_entry, parse_debug_event, parse_flutter_error,
-    parse_frame_timing, parse_gc_event, parse_isolate_event, parse_log_record, vm_log_to_log_entry,
-    VmClientEvent, VmServiceClient,
+    parse_frame_timing, parse_gc_event, parse_isolate_event, parse_log_record,
+    redact_vm_service_token, vm_log_to_log_entry, VmClientEvent, VmServiceClient,
 };
 
 /// Maximum time to wait for the initial VM Service WebSocket connection.
@@ -53,7 +53,8 @@ pub(super) fn spawn_vm_service_connection(
             Err(_) => {
                 warn!(
                     "VM Service: connection timed out for session {} ({})",
-                    session_id, ws_uri
+                    session_id,
+                    redact_vm_service_token(&ws_uri)
                 );
                 let _ = msg_tx
                     .send(Message::VmServiceConnectionFailed {
