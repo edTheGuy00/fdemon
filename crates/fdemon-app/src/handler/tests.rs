@@ -9695,6 +9695,106 @@ fn test_enter_devtools_starts_monitoring_when_vm_connected() {
 }
 
 #[test]
+fn test_enter_devtools_lazy_start_followup_dispatches_fetch_widget_tree() {
+    // Regression for the "Inspector stuck on Loading widget tree" bug
+    // (see workflow/plans/bugs/devtools-inspector-stuck-loading/).
+    //
+    // The lazy-start path of `handle_enter_devtools_mode` (DevTools opened
+    // while no perf task is running) returns BOTH a StartPerformanceMonitoring
+    // action AND a RequestWidgetTree follow-up message. The follow-up is
+    // processed in the same `update()` cycle.
+    //
+    // Prior bug: the lazy-start path called `inspector.record_fetch_start()`
+    // before queuing the follow-up, which set `loading=true`. The follow-up
+    // RequestWidgetTree handler then saw `is_fetch_debounced() == true` and
+    // bailed without dispatching FetchWidgetTree — the spawn task never ran,
+    // and the inspector stayed on "Loading widget tree..." forever.
+    //
+    // This test asserts that:
+    //  (1) handle_enter_devtools_mode does NOT set loading=true at the lazy-
+    //      start site (so the follow-up isn't self-debounced);
+    //  (2) processing the follow-up RequestWidgetTree DOES produce a
+    //      FetchWidgetTree action.
+    use crate::handler::devtools::handle_enter_devtools_mode;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state
+        .session_manager
+        .get_mut(session_id)
+        .unwrap()
+        .session
+        .vm_connected = true;
+    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
+    // Inspector is the default panel ("inspector"); no tree is loaded; not loading.
+    assert!(state.devtools_view_state.inspector.root.is_none());
+    assert!(!state.devtools_view_state.inspector.loading);
+    assert!(state
+        .devtools_view_state
+        .inspector
+        .last_fetch_time
+        .is_none());
+
+    let result = handle_enter_devtools_mode(&mut state);
+
+    // (a) Returns StartPerformanceMonitoring as the action.
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "lazy-start path should return StartPerformanceMonitoring action"
+    );
+
+    // (b) Returns RequestWidgetTree as the follow-up message.
+    let followup = result
+        .message
+        .expect("lazy-start path with Inspector panel should queue a follow-up message");
+    assert!(
+        matches!(followup, Message::RequestWidgetTree { .. }),
+        "follow-up should be RequestWidgetTree, got {followup:?}"
+    );
+
+    // (c) THE REGRESSION GUARD: inspector.loading must remain false so the
+    //     follow-up RequestWidgetTree is not debounced.
+    assert!(
+        !state.devtools_view_state.inspector.loading,
+        "loading=true at lazy-start site would cause the follow-up RequestWidgetTree \
+         to be debounced — re-introducing the stuck-loading bug"
+    );
+    assert!(
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetch_time
+            .is_none(),
+        "last_fetch_time=Some(...) at lazy-start site would also engage the debounce \
+         and re-introduce the stuck-loading bug"
+    );
+
+    // (d) Drive the follow-up message through the handler — it MUST dispatch
+    //     FetchWidgetTree, otherwise the bug recurs.
+    let followup_result = update(&mut state, followup);
+    assert!(
+        matches!(
+            followup_result.action,
+            Some(UpdateAction::FetchWidgetTree { .. })
+        ),
+        "follow-up RequestWidgetTree must dispatch FetchWidgetTree, got {:?}",
+        followup_result.action
+    );
+    // After the follow-up: loading is set true (by RequestWidgetTree's own
+    // record_fetch_start call), and the spawn task is in flight.
+    assert!(state.devtools_view_state.inspector.loading);
+    assert!(state
+        .devtools_view_state
+        .inspector
+        .last_fetch_time
+        .is_some());
+}
+
+#[test]
 fn test_enter_devtools_does_not_start_when_vm_disconnected() {
     use crate::handler::devtools::handle_enter_devtools_mode;
 

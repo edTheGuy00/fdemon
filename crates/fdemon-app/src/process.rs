@@ -92,7 +92,7 @@ pub fn process_message(
                             session_id: *session_id,
                             error: "VM Service handle unavailable".to_string(),
                         }) {
-                            Ok(()) => tracing::debug!(
+                            Ok(()) => tracing::info!(
                                 session_id = %session_id,
                                 "Inspector: dispatched fallback WidgetTreeFetchFailed after hydration drop"
                             ),

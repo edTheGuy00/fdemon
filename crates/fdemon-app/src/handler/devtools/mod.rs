@@ -222,17 +222,11 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             && state.devtools_view_state.inspector.root.is_none()
             && !state.devtools_view_state.inspector.loading
         {
-            // Use record_fetch_start() to enforce the invariant that loading=true
-            // is always paired with last_fetch_time=Some(now). This matters for
-            // timeout/watchdog recovery: if the terminal message is lost the
-            // timestamp lets us detect a hung fetch.
-            //
-            // NOTE: The follow-up RequestWidgetTree message queued here will hit
-            // the is_fetch_debounced() check (which returns true while loading=true
-            // AND last_fetch_time is recent). That is intentional — the actual tree
-            // fetch is dispatched via the StartPerformanceMonitoring action path,
-            // not through this follow-up message directly.
-            state.devtools_view_state.inspector.record_fetch_start();
+            // Queue RequestWidgetTree as a follow-up. Do NOT call record_fetch_start()
+            // here — that engages the debounce (`loading=true`), and the follow-up
+            // RequestWidgetTree handler in update.rs would then see itself as
+            // already-in-flight and bail. The follow-up handler calls
+            // record_fetch_start() itself just before dispatching FetchWidgetTree.
             Some(crate::message::Message::RequestWidgetTree { session_id })
         } else if state.devtools_view_state.active_panel == DevToolsPanel::Network {
             Some(crate::message::Message::SwitchDevToolsPanel(
