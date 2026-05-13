@@ -1487,7 +1487,11 @@ mod tests {
         // Cache must be cleared regardless of whether the isolate was paused.
         let h = state.session_manager.get(session_id).unwrap();
         assert!(
-            h.vm_request_handle.as_ref().unwrap().cached_isolate_id().is_none(),
+            h.vm_request_handle
+                .as_ref()
+                .unwrap()
+                .cached_isolate_id()
+                .is_none(),
             "isolate cache should be cleared after IsolateExit"
         );
     }
@@ -1537,7 +1541,11 @@ mod tests {
         // Cache must still be cleared even though it was a different isolate.
         let h = state.session_manager.get(session_id).unwrap();
         assert!(
-            h.vm_request_handle.as_ref().unwrap().cached_isolate_id().is_none(),
+            h.vm_request_handle
+                .as_ref()
+                .unwrap()
+                .cached_isolate_id()
+                .is_none(),
             "cache should be cleared after any IsolateExit, not just the paused one"
         );
         // Pause state for isolate 1 is preserved — only isolate 99 exited.

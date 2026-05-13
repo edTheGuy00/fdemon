@@ -156,7 +156,17 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             && state.devtools_view_state.inspector.root.is_none()
             && !state.devtools_view_state.inspector.loading
         {
-            state.devtools_view_state.inspector.loading = true;
+            // Use record_fetch_start() to enforce the invariant that loading=true
+            // is always paired with last_fetch_time=Some(now). This matters for
+            // timeout/watchdog recovery: if the terminal message is lost the
+            // timestamp lets us detect a hung fetch.
+            //
+            // NOTE: The follow-up RequestWidgetTree message queued here will hit
+            // the is_fetch_debounced() check (which returns true while loading=true
+            // AND last_fetch_time is recent). That is intentional — the actual tree
+            // fetch is dispatched via the StartPerformanceMonitoring action path,
+            // not through this follow-up message directly.
+            state.devtools_view_state.inspector.record_fetch_start();
             Some(crate::message::Message::RequestWidgetTree { session_id })
         } else if state.devtools_view_state.active_panel == DevToolsPanel::Network {
             Some(crate::message::Message::SwitchDevToolsPanel(
@@ -218,7 +228,10 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
         if let Some(handle) = state.session_manager.selected() {
             if handle.session.vm_connected {
                 let session_id = handle.session.id;
-                state.devtools_view_state.inspector.loading = true;
+                // Use record_fetch_start() to enforce the invariant that loading=true
+                // is always paired with last_fetch_time=Some(now). Without the
+                // timestamp a lost terminal message would leave loading=true forever.
+                state.devtools_view_state.inspector.record_fetch_start();
                 return UpdateResult::action(UpdateAction::FetchWidgetTree {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
@@ -320,7 +333,11 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                 if let Some(handle) = state.session_manager.selected() {
                     if handle.session.vm_connected {
                         let session_id = handle.session.id;
-                        state.devtools_view_state.inspector.loading = true;
+                        // Use record_fetch_start() to enforce the invariant that
+                        // loading=true is always paired with last_fetch_time=Some(now).
+                        // Without the timestamp a lost terminal message would leave
+                        // loading=true forever, re-introducing the stuck-loading bug.
+                        state.devtools_view_state.inspector.record_fetch_start();
                         return UpdateResult::action(UpdateAction::FetchWidgetTree {
                             session_id,
                             vm_handle: None, // hydrated by process.rs
@@ -1518,6 +1535,97 @@ mod tests {
         assert!(
             *rx.borrow(),
             "switching between non-Network panels should not change network pause state"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // record_fetch_start invariant tests (Task 07: use-record-fetch-start)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a state with an active vm-connected session on the Inspector
+    /// panel, with no widget tree loaded. This is the scenario that triggers
+    /// a FetchWidgetTree action on `handle_enter_devtools_mode` and
+    /// `handle_switch_panel(Inspector)`.
+    fn make_state_with_vm_connected_inspector() -> AppState {
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.vm_connected = true;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        // Ensure no tree is loaded and loading is false (triggers the fetch path).
+        state.devtools_view_state.inspector.root = None;
+        state.devtools_view_state.inspector.loading = false;
+        state.devtools_view_state.inspector.last_fetch_time = None;
+        state
+    }
+
+    #[test]
+    fn test_handle_enter_devtools_mode_records_fetch_start_invariant() {
+        // When handle_enter_devtools_mode sets loading=true it must also set
+        // last_fetch_time via record_fetch_start(). Without the timestamp a
+        // lost terminal message would leave loading=true forever.
+        let mut state = make_state_with_vm_connected_inspector();
+
+        let _ = handle_enter_devtools_mode(&mut state);
+
+        let inspector = &state.devtools_view_state.inspector;
+        if inspector.loading {
+            assert!(
+                inspector.last_fetch_time.is_some(),
+                "loading=true must be paired with last_fetch_time=Some(...) — \
+                 use record_fetch_start() instead of direct assignment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_switch_panel_inspector_records_fetch_start_invariant() {
+        // When handle_switch_panel(Inspector) sets loading=true it must also
+        // set last_fetch_time via record_fetch_start().
+        let mut state = make_state_with_vm_connected_inspector();
+        // Start on Performance so we are actually switching TO Inspector.
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        let _ = handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        let inspector = &state.devtools_view_state.inspector;
+        if inspector.loading {
+            assert!(
+                inspector.last_fetch_time.is_some(),
+                "loading=true must be paired with last_fetch_time=Some(...) — \
+                 use record_fetch_start() instead of direct assignment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lint_no_naked_inspector_loading_assignment_in_handler() {
+        // Grep-based lint: no bare assignment of the form
+        //   inspector.loading = true;
+        // must remain in the production code of handler/devtools/mod.rs.
+        // All auto-fetch sites must go through record_fetch_start() so the
+        // loading+last_fetch_time invariant is always maintained together.
+        //
+        // The search pattern is split across a concat!() to avoid the lint
+        // matching the pattern string itself.
+        let needle = concat!("inspector", ".loading = true");
+        let source = include_str!("mod.rs");
+        let naked_count = source
+            .lines()
+            // Exclude lines that are Rust comments (// ...) or inside string
+            // literals (contain a leading `"`). Production assignments always
+            // begin with whitespace then `state.`.
+            .filter(|l| {
+                let trimmed = l.trim_start();
+                trimmed.starts_with("state.") && trimmed.contains(needle)
+            })
+            .count();
+        assert_eq!(
+            naked_count,
+            0,
+            "Found {naked_count} naked `inspector.loading = true` statement(s) in \
+             handler/devtools/mod.rs. Replace each with \
+             `state.devtools_view_state.inspector.record_fetch_start()` to \
+             enforce the loading+last_fetch_time invariant."
         );
     }
 }
