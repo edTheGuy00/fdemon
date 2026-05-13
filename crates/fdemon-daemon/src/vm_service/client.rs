@@ -314,7 +314,12 @@ impl VmRequestHandle {
                 "VM Service: no Flutter extensions found on any isolate; \
                  falling back to first non-system isolate"
             );
-            Ok(first.id.clone())
+            let id = first.id.clone();
+            {
+                let mut guard = self.isolate_id_cache.lock().await;
+                *guard = Some(id.clone());
+            }
+            Ok(id)
         } else {
             Err(Error::vm_service("no non-system isolates available"))
         }
@@ -1883,6 +1888,106 @@ mod tests {
             result.is_err(),
             "with empty cache and no live VM, resolve must attempt RPCs and fail \
              (confirming slow path was taken after hot restart) (scenario 9)"
+        );
+    }
+
+    /// Scenario: fallback path writes to cache.
+    ///
+    /// Build a fake VM with one non-system isolate that has NO `ext.flutter.*`
+    /// extensions (so the resolver falls through to the fallback branch).
+    ///
+    /// After the first call:
+    ///   - `resolve_flutter_ui_isolate` returns `Ok("isolates/1")`.
+    ///   - `cached_isolate_id()` returns `Some("isolates/1")`.
+    ///
+    /// After the second call (channel disconnected to prove cache hit):
+    ///   - The method returns `Ok("isolates/1")` immediately from the cache.
+    #[tokio::test]
+    async fn test_resolve_flutter_ui_isolate_caches_fallback_value() {
+        // Build a channel — the test acts as the fake VM responder.
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<ClientCommand>(8);
+        let isolate_id_cache = Arc::new(Mutex::new(None::<String>));
+
+        let handle = VmRequestHandle {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::clone(&isolate_id_cache),
+            ws_uri: String::new(),
+        };
+
+        // Spawn a fake responder: answers getVM + getIsolate, then stops.
+        // The isolate has no ext.flutter.* extensions → fallback path taken.
+        let responder = tokio::spawn(async move {
+            // First message: getVM
+            if let Some(ClientCommand::SendRequest {
+                method,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVM", "expected getVM as first RPC");
+                let vm_json = serde_json::json!({
+                    "name": "vm",
+                    "version": "3.0.0",
+                    "isolates": [
+                        { "id": "isolates/1", "name": "main", "isSystemIsolate": false }
+                    ]
+                });
+                let _ = response_tx.send(Ok(vm_json));
+            }
+            // Second message: getIsolate for "isolates/1"
+            if let Some(ClientCommand::SendRequest {
+                method,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getIsolate", "expected getIsolate as second RPC");
+                // Return an isolate with no ext.flutter.* extensions.
+                let iso_json = serde_json::json!({
+                    "id": "isolates/1",
+                    "name": "main",
+                    "extensionRPCs": ["ext.app.doWork"]
+                });
+                let _ = response_tx.send(Ok(iso_json));
+            }
+            // Drop cmd_rx — further requests will fail (proves cache is used).
+        });
+
+        // First call: slow path (no cache) → fallback branch → caches "isolates/1".
+        let result = handle.resolve_flutter_ui_isolate().await;
+        assert!(
+            result.is_ok(),
+            "first call should succeed via fallback: {:?}",
+            result
+        );
+        assert_eq!(
+            result.unwrap(),
+            "isolates/1",
+            "fallback should return the first non-system isolate"
+        );
+
+        // Wait for the responder to finish (and drop cmd_rx).
+        let _ = responder.await;
+
+        // Cache must be populated after the fallback path.
+        assert_eq!(
+            handle.cached_isolate_id().as_deref(),
+            Some("isolates/1"),
+            "fallback path must write the resolved id to isolate_id_cache"
+        );
+
+        // Second call: channel is now closed — fast path (cache hit) must be taken.
+        // If the slow path were taken it would return Err(ChannelClosed), not Ok.
+        let second = handle.resolve_flutter_ui_isolate().await;
+        assert!(
+            second.is_ok(),
+            "second call should succeed via cache hit (no RPC needed)"
+        );
+        assert_eq!(
+            second.unwrap(),
+            "isolates/1",
+            "second call must return cached value without issuing RPCs"
         );
     }
 
