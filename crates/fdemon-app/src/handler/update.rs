@@ -2254,15 +2254,27 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             devtools::performance::handle_toggle_allocation_sort(state)
         }
 
-        // --- Performance panel interactivity (Phase 2 handlers — stubs) ------
-        Message::PerfFocusSection(_section) => UpdateResult::none(),
-        Message::PerfScrollUp => UpdateResult::none(),
-        Message::PerfScrollDown => UpdateResult::none(),
-        Message::PerfPageUp => UpdateResult::none(),
-        Message::PerfPageDown => UpdateResult::none(),
-        Message::PerfJumpToStart => UpdateResult::none(),
-        Message::PerfJumpToEnd => UpdateResult::none(),
-        Message::PerfSelectAllocRow { index: _ } => UpdateResult::none(),
+        // ── Performance panel interactivity (Phase 2 handlers) ───────────────
+        Message::PerfFocusSection(section) => {
+            devtools::performance::handle_perf_focus_section(state, section)
+        }
+        Message::PerfScrollUp => {
+            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Up)
+        }
+        Message::PerfScrollDown => {
+            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Down)
+        }
+        Message::PerfPageUp => {
+            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Up)
+        }
+        Message::PerfPageDown => {
+            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Down)
+        }
+        Message::PerfJumpToStart => devtools::performance::handle_perf_jump_to_start(state),
+        Message::PerfJumpToEnd => devtools::performance::handle_perf_jump_to_end(state),
+        Message::PerfSelectAllocRow { index } => {
+            devtools::performance::handle_perf_select_alloc_row(state, index)
+        }
 
         // ─────────────────────────────────────────────────────────────────────
         // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 03)
