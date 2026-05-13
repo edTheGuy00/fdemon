@@ -314,6 +314,11 @@ pub fn handle_isolate_event(
             if handle.session.debug.paused_isolate_id.as_deref() == Some(&isolate.id) {
                 handle.session.debug.mark_resumed();
             }
+            // Drop the cached Flutter UI isolate id — the cached value may point
+            // to the exiting isolate. Next fetch will re-resolve via getVM RPC.
+            if let Some(ref vm_handle) = handle.vm_request_handle {
+                vm_handle.invalidate_isolate_cache();
+            }
         }
         IsolateEvent::IsolateUpdate { .. } => {
             // Name/metadata change — no action needed for debug state.
@@ -1439,6 +1444,129 @@ mod tests {
         assert!(
             result.action.is_none(),
             "ServiceExtensionAdded should not produce a ForwardDapDebugEvents action"
+        );
+    }
+
+    #[test]
+    fn test_isolate_exit_clears_resolved_isolate_cache() {
+        // Regression guard: IsolateExit must invalidate the cached Flutter UI
+        // isolate id.  Without this, a dead isolate id leaks into subsequent RPC
+        // calls, producing "method not found" errors.
+        let (mut state, session_id) = make_state_with_session();
+
+        // Attach a VmRequestHandle with a pre-populated cache.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.vm_request_handle =
+                Some(fdemon_daemon::vm_service::VmRequestHandle::new_for_test(
+                    Some("isolates/42".to_string()),
+                ));
+        }
+
+        // Confirm cache is populated before the event.
+        {
+            let h = state.session_manager.get(session_id).unwrap();
+            assert_eq!(
+                h.vm_request_handle.as_ref().unwrap().cached_isolate_id(),
+                Some("isolates/42".to_string()),
+                "cache should be populated before IsolateExit"
+            );
+        }
+
+        // Dispatch IsolateExit.
+        handle_isolate_event(
+            &mut state,
+            session_id,
+            IsolateEvent::IsolateExit {
+                isolate: IsolateRef {
+                    id: "isolates/42".into(),
+                    name: None,
+                },
+            },
+        );
+
+        // Cache must be cleared regardless of whether the isolate was paused.
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.vm_request_handle.as_ref().unwrap().cached_isolate_id().is_none(),
+            "isolate cache should be cleared after IsolateExit"
+        );
+    }
+
+    #[test]
+    fn test_isolate_exit_clears_cache_even_when_not_paused_isolate() {
+        // The cache is invalidated regardless of whether the exiting isolate is
+        // the currently-paused one.  (Acceptance criterion 3.)
+        let (mut state, session_id) = make_state_with_session();
+
+        // Pause on isolate 1.
+        handle_debug_event(
+            &mut state,
+            session_id,
+            DebugEvent::PauseBreakpoint {
+                isolate: IsolateRef {
+                    id: "isolates/1".into(),
+                    name: None,
+                },
+                top_frame: None,
+                breakpoint: None,
+                pause_breakpoints: vec![],
+                at_async_suspension: false,
+            },
+        );
+
+        // Populate the cache (simulating the inspector having resolved a UI isolate).
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.vm_request_handle =
+                Some(fdemon_daemon::vm_service::VmRequestHandle::new_for_test(
+                    Some("isolates/99".to_string()),
+                ));
+        }
+
+        // Isolate 99 exits (different from the paused isolate 1).
+        handle_isolate_event(
+            &mut state,
+            session_id,
+            IsolateEvent::IsolateExit {
+                isolate: IsolateRef {
+                    id: "isolates/99".into(),
+                    name: None,
+                },
+            },
+        );
+
+        // Cache must still be cleared even though it was a different isolate.
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.vm_request_handle.as_ref().unwrap().cached_isolate_id().is_none(),
+            "cache should be cleared after any IsolateExit, not just the paused one"
+        );
+        // Pause state for isolate 1 is preserved — only isolate 99 exited.
+        assert!(
+            h.session.debug.paused,
+            "pause state for isolate 1 should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_isolate_exit_without_vm_handle_does_not_panic() {
+        // IsolateExit must succeed even when vm_request_handle is None.
+        let (mut state, session_id) = make_state_with_session();
+        // vm_request_handle is None by default — no extra setup needed.
+
+        let result = handle_isolate_event(
+            &mut state,
+            session_id,
+            IsolateEvent::IsolateExit {
+                isolate: IsolateRef {
+                    id: "isolates/1".into(),
+                    name: None,
+                },
+            },
+        );
+        // Should not panic, and a DAP IsolateExit event should be returned.
+        assert!(
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "IsolateExit should produce a ForwardDapDebugEvents action even without vm_handle"
         );
     }
 
