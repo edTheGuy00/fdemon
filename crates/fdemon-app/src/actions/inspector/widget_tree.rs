@@ -94,10 +94,10 @@ pub(super) async fn poll_widget_tree_ready(
             Err(_timeout) => {
                 // Per-call timeout — treat as "not ready" and continue.
                 tracing::debug!(
-                    "isWidgetTreeReady timed out for session {} (poll {}/{}), treating as not ready",
-                    session_id,
-                    attempt,
-                    config.attempts,
+                    session_id = %session_id,
+                    attempt = attempt,
+                    max_polls = config.attempts,
+                    "isWidgetTreeReady timed out; treating as not ready"
                 );
             }
             Ok(Ok(value)) => {
@@ -116,10 +116,10 @@ pub(super) async fn poll_widget_tree_ready(
                     return;
                 }
                 tracing::debug!(
-                    "Widget tree not ready for session {} (poll {}/{}), waiting…",
-                    session_id,
-                    attempt,
-                    config.attempts,
+                    session_id = %session_id,
+                    attempt = attempt,
+                    max_polls = config.attempts,
+                    "Widget tree not ready; waiting"
                 );
             }
             Ok(Err(e)) => {
@@ -141,11 +141,11 @@ pub(super) async fn poll_widget_tree_ready(
                     return;
                 }
                 tracing::debug!(
-                    "isWidgetTreeReady transient error for session {} (poll {}/{}): {}",
-                    session_id,
-                    attempt,
-                    config.attempts,
-                    e,
+                    session_id = %session_id,
+                    attempt = attempt,
+                    max_polls = config.attempts,
+                    error = %e,
+                    "isWidgetTreeReady transient error; continuing"
                 );
             }
         }
@@ -165,11 +165,11 @@ pub(super) async fn poll_widget_tree_ready(
 /// Flutter-side exception that spams the user's log):
 ///
 /// 1. Try `getRootWidgetTree` (newer API, supports `subtreeDepth`).
-/// 2. If "method not found" → permanent fallback to `getRootWidgetSummaryTree`.
-/// 3. If transient error (e.g. null-check failure on large trees) → fall back
-///    to `getRootWidgetSummaryTree` which uses a different code path
-///    (`_getRootWidgetSummaryTree`) and avoids the known null-check bug.
-/// 4. Fatal errors (ChannelClosed, Io) → fail immediately.
+/// 2. If any transient error occurs (including "method not found" for older
+///    Flutter SDKs, or the known null-check failure on complex trees) →
+///    fall back to `getRootWidgetSummaryTree` which uses a different code path
+///    (`_getRootWidgetSummaryTree`) and avoids the null-check bug.
+/// 3. Fatal errors (ChannelClosed, Io) → fail immediately without fallback.
 pub(super) async fn try_fetch_widget_tree(
     handle: &VmRequestHandle,
     isolate_id: &str,
@@ -201,10 +201,9 @@ pub(super) async fn try_fetch_widget_tree(
             // This covers both "method not found" (older Flutter) and the
             // null-check bug in _getRootWidgetTree on complex trees.
             tracing::debug!(
-                "getRootWidgetTree failed for session {}, \
-                 falling back to getRootWidgetSummaryTree: {}",
-                session_id,
-                e,
+                session_id = %session_id,
+                error = %e,
+                "getRootWidgetTree failed; falling back to getRootWidgetSummaryTree"
             );
         }
     }
@@ -224,9 +223,9 @@ pub(super) async fn try_fetch_widget_tree(
         Ok(value) => parse_diagnostics_node_response(&value),
         Err(e) => {
             tracing::debug!(
-                "getRootWidgetSummaryTree also failed for session {}: {}",
-                session_id,
-                e,
+                session_id = %session_id,
+                error = %e,
+                "getRootWidgetSummaryTree also failed"
             );
             Err(e)
         }
@@ -280,7 +279,7 @@ mod tests {
     // ── ReadinessPollConfig ────────────────────────────────────────────────────
 
     #[test]
-    fn readiness_poll_config_defaults_match_spec() {
+    fn test_readiness_poll_config_default_matches_spec() {
         let cfg = ReadinessPollConfig::default();
         assert_eq!(
             cfg.attempts, DEFAULT_READINESS_POLL_ATTEMPTS,
@@ -303,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn readiness_poll_config_custom_values() {
+    fn test_readiness_poll_config_custom_values_are_stored() {
         let cfg = ReadinessPollConfig {
             attempts: 5,
             interval_ms: 100,
@@ -320,7 +319,7 @@ mod tests {
     /// early on the first attempt.  The function should complete without
     /// panicking — and crucially must not propagate any error (it returns `()`).
     #[tokio::test]
-    async fn poll_exhaustion_returns_ok_not_error() {
+    async fn test_poll_widget_tree_ready_exhausted_returns_unit() {
         // new_for_test drops the receiver immediately → every RPC returns ChannelClosed (fatal).
         // The function therefore early-returns on the first fatal error branch.
         // The important property: the function completes and does not panic.
@@ -333,7 +332,7 @@ mod tests {
     /// With 0 attempts the loop body is never entered; the warn is not emitted
     /// and the function returns immediately.
     #[tokio::test]
-    async fn poll_with_zero_attempts_returns_immediately() {
+    async fn test_poll_widget_tree_ready_zero_attempts_returns_immediately() {
         let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
         let cfg = ReadinessPollConfig {
             attempts: 0,
@@ -346,7 +345,7 @@ mod tests {
     /// Verifies that `poll_respects_custom_attempts_and_interval` — the
     /// function uses `config.attempts`, not the old hard-coded `8`.
     #[tokio::test]
-    async fn poll_respects_custom_attempts_and_interval() {
+    async fn test_poll_widget_tree_ready_custom_attempts_bound_loop() {
         let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
         // With 1 attempt and a broken channel the function must return after at
         // most 1 call attempt (not 8 as the old hard-coded constant required).
@@ -415,7 +414,7 @@ mod tests {
         let result = try_fetch_widget_tree(
             &handle,
             "isolates/1",
-            "fdemon-inspector-1",
+            super::super::INSPECTOR_OBJECT_GROUP,
             0,
             test_session_id(),
         )

@@ -25,6 +25,14 @@ use fdemon_daemon::vm_service::{
 /// Timeout for a single `getLayoutExplorerNode` RPC call.
 const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// VM object group for the widget inspector. Scopes `valueId` references
+/// returned by `getRootWidgetTree`.
+const INSPECTOR_OBJECT_GROUP: &str = "fdemon-inspector-1";
+
+/// VM object group for the layout explorer. Scopes `valueId` references
+/// returned by `getLayoutExplorerNode`.
+const LAYOUT_OBJECT_GROUP: &str = "devtools-layout";
+
 /// Spawn a background task that fetches the root widget tree via VM Service.
 ///
 /// Uses `ext.flutter.inspector.getRootWidgetTree` (with automatic fallback to
@@ -111,7 +119,7 @@ pub(super) fn spawn_fetch_widget_tree(
             }
 
             // Step 3: Dispose previous object group.
-            let object_group = "fdemon-inspector-1";
+            let object_group = INSPECTOR_OBJECT_GROUP;
             {
                 let mut dispose_args = HashMap::new();
                 dispose_args.insert("objectGroup".to_string(), object_group.to_string());
@@ -347,7 +355,7 @@ pub(super) fn spawn_fetch_layout_data(
         };
 
         // Use a dedicated object group for the layout explorer.
-        let layout_group = "devtools-layout";
+        let layout_group = LAYOUT_OBJECT_GROUP;
 
         // Dispose the previous layout object group before creating a new one.
         // This releases VM references from any prior layout fetch and prevents
@@ -496,7 +504,7 @@ pub(super) fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmReq
             }
         };
 
-        for group in &["fdemon-inspector-1", "devtools-layout"] {
+        for group in &[INSPECTOR_OBJECT_GROUP, LAYOUT_OBJECT_GROUP] {
             let mut args = HashMap::new();
             args.insert("objectGroup".to_string(), (*group).to_string());
             if let Err(e) = handle
