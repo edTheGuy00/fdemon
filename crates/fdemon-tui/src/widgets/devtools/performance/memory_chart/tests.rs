@@ -3,6 +3,69 @@
 use super::*;
 use fdemon_core::performance::{AllocationProfile, ClassHeapStats, GcEvent, MemoryUsage};
 
+// ── visible_memory_window tests ──────────────────────────────────────────────
+
+/// Build a `MemorySample` where `dart_heap` encodes the sample index so tests
+/// can assert which samples are in the visible window without a `tick_index`.
+fn sample_at(i: u64) -> MemorySample {
+    MemorySample {
+        dart_heap: i, // use as a proxy for "index"
+        dart_native: 0,
+        raster_cache: 0,
+        allocated: 0,
+        rss: 0,
+        timestamp: chrono::Local::now(),
+    }
+}
+
+#[test]
+fn memory_chart_window_at_offset() {
+    let samples: Vec<MemorySample> = (0..120).map(sample_at).collect();
+    let window = visible_memory_window(&samples, 60, 30);
+    assert_eq!(window.len(), 60);
+    // end = 120 - 30 = 90, start = 90 - 60 = 30
+    // window[0] is sample_at(30) → dart_heap == 30
+    assert_eq!(window.first().unwrap().dart_heap, 30);
+    // window[59] is sample_at(89) → dart_heap == 89
+    assert_eq!(window.last().unwrap().dart_heap, 89);
+}
+
+#[test]
+fn memory_chart_window_at_live_edge() {
+    let samples: Vec<MemorySample> = (0..120).map(sample_at).collect();
+    let window = visible_memory_window(&samples, 60, 0);
+    // end = 120 - 0 = 120, start = 120 - 60 = 60
+    // Last sample is sample_at(119) → dart_heap == 119
+    assert_eq!(window.last().unwrap().dart_heap, 119);
+    assert_eq!(window.len(), 60);
+}
+
+#[test]
+fn memory_chart_window_fewer_samples_than_width() {
+    // Only 10 samples, visible_width = 60 → return all 10
+    let samples: Vec<MemorySample> = (0..10).map(sample_at).collect();
+    let window = visible_memory_window(&samples, 60, 0);
+    assert_eq!(window.len(), 10);
+}
+
+#[test]
+fn memory_chart_window_offset_beyond_len_returns_empty() {
+    // offset > len → end saturates to 0 → empty window
+    let samples: Vec<MemorySample> = (0..10).map(sample_at).collect();
+    let window = visible_memory_window(&samples, 60, 20);
+    assert_eq!(window.len(), 0);
+}
+
+#[test]
+fn memory_chart_window_exact_fit() {
+    // Exactly visible_width samples, offset 0 → whole slice
+    let samples: Vec<MemorySample> = (0..60).map(sample_at).collect();
+    let window = visible_memory_window(&samples, 60, 0);
+    assert_eq!(window.len(), 60);
+    assert_eq!(window.first().unwrap().dart_heap, 0);
+    assert_eq!(window.last().unwrap().dart_heap, 59);
+}
+
 // ── BrailleCanvas tests ──────────────────────────────────────────────────
 
 #[test]

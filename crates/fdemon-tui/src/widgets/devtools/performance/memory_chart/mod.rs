@@ -30,6 +30,10 @@ use crate::widgets::MouseCtx;
 use super::styles::{format_number, gauge_style_for_utilization};
 use crate::theme::palette;
 
+// Re-export the scroll window helper so tests.rs can use it via `use super::*`.
+#[cfg(test)]
+pub(super) use chart::visible_memory_window;
+
 // ── Layout constants ──────────────────────────────────────────────────────────
 
 pub(super) const LEGEND_HEIGHT: u16 = 1;
@@ -80,6 +84,15 @@ pub(crate) struct MemoryChart<'a> {
     allocation_profile: Option<&'a AllocationProfile>,
     allocation_sort: AllocationSortColumn,
     icons: bool,
+    // ── Time-series chart scroll / focus (set via with_chart_state) ──────────
+    /// How many samples the time-series chart has been scrolled back from the
+    /// live edge (0 = live-edge mode, same as FrameChart Model A).
+    chart_scroll_offset: usize,
+    /// Whether the time-series chart section currently has keyboard focus.
+    chart_focused: bool,
+    /// Render-hint Cell written each frame with the visible sample column count.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    chart_visible_width_cell: Option<&'a Cell<usize>>,
     // ── Alloc table interactivity (set via with_alloc_state) ──────────────────
     /// How many rows the allocation table is scrolled past the top.
     alloc_scroll_offset: usize,
@@ -109,11 +122,36 @@ impl<'a> MemoryChart<'a> {
             allocation_profile,
             allocation_sort,
             icons,
+            chart_scroll_offset: 0,
+            chart_focused: false,
+            chart_visible_width_cell: None,
             alloc_scroll_offset: 0,
             alloc_selected_row: None,
             alloc_focused: false,
             alloc_visible_height_cell: None,
         }
+    }
+
+    /// Attach time-series chart interactivity state.
+    ///
+    /// When set, the braille chart respects `scroll_offset` (Model A — samples
+    /// back from the live edge) and applies a focus highlight to the section.
+    ///
+    /// # Arguments
+    /// * `scroll_offset`         — Samples scrolled back from the live edge (0 = live).
+    /// * `focused`               — Whether this section currently holds keyboard focus.
+    /// * `visible_width_cell`    — Render-hint Cell written every frame with the
+    ///   number of visible sample columns.
+    pub(crate) fn with_chart_state(
+        mut self,
+        scroll_offset: usize,
+        focused: bool,
+        visible_width_cell: &'a Cell<usize>,
+    ) -> Self {
+        self.chart_scroll_offset = scroll_offset;
+        self.chart_focused = focused;
+        self.chart_visible_width_cell = Some(visible_width_cell);
+        self
     }
 
     /// Attach allocation table interactivity state.
@@ -183,6 +221,8 @@ impl<'a> MemoryChart<'a> {
                 self.memory_samples,
                 self.memory_history,
                 self.gc_history,
+                self.chart_scroll_offset,
+                self.chart_visible_width_cell,
                 chart_area,
                 buf,
             );
@@ -211,6 +251,8 @@ impl<'a> MemoryChart<'a> {
                 self.memory_samples,
                 self.memory_history,
                 self.gc_history,
+                self.chart_scroll_offset,
+                self.chart_visible_width_cell,
                 area,
                 buf,
             );
@@ -294,6 +336,8 @@ fn render_chart_area(
     samples: &RingBuffer<MemorySample>,
     history: &RingBuffer<MemoryUsage>,
     gc_history: &RingBuffer<GcEvent>,
+    scroll_offset: usize,
+    visible_width_cell: Option<&Cell<usize>>,
     area: Rect,
     buf: &mut Buffer,
 ) {
@@ -330,7 +374,16 @@ fn render_chart_area(
 
     // Decide which data source to use
     if !samples.is_empty() {
-        render_sample_chart(samples, gc_history, plot_area, area, Y_AXIS_WIDTH, buf);
+        render_sample_chart(
+            samples,
+            gc_history,
+            scroll_offset,
+            visible_width_cell,
+            plot_area,
+            area,
+            Y_AXIS_WIDTH,
+            buf,
+        );
     } else if !history.is_empty() {
         render_history_chart(history, plot_area, area, Y_AXIS_WIDTH, buf);
     } else {
