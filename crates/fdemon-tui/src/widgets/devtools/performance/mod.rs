@@ -237,6 +237,8 @@ impl PerformancePanel<'_> {
             );
         }
 
+        // Use as_deref_mut() so ctx is only borrowed here — ownership is
+        // retained for the MemoryChart call below.
         FrameChart::new(
             &self.performance.frame_history,
             self.performance.selected_frame,
@@ -245,12 +247,11 @@ impl PerformancePanel<'_> {
             self.performance.frame_chart_scroll_offset,
             &self.performance.frame_chart_visible_width,
         )
-        .render_with_regions(frame_inner, buf, ctx);
+        .render_with_regions(frame_inner, buf, ctx.as_deref_mut());
 
-        // Memory section — no clicks in Phase 4. Use Borders::TOP only to
-        // maximise inner height. The top border carries the title; no
-        // bottom/side borders are needed because the footer hint line occupies
-        // the row below.
+        // Memory section — Use Borders::TOP only to maximise inner height.
+        // The top border carries the title; no bottom/side borders are needed
+        // because the footer hint line occupies the row below.
         let memory_block = Block::default()
             .title(format!(" {} Memory ", self.icons.cpu()))
             .borders(Borders::TOP)
@@ -268,7 +269,13 @@ impl PerformancePanel<'_> {
             self.performance.allocation_sort,
             false,
         )
-        .render(memory_inner, buf);
+        .with_alloc_state(
+            self.performance.alloc_table_scroll_offset,
+            self.performance.alloc_table_selected_row,
+            self.performance.focused_section == PerfSection::MemoryList,
+            &self.performance.alloc_table_visible_height,
+        )
+        .render_with_regions(memory_inner, buf, ctx);
     }
 
     // ── Disconnected / no-data state ─────────────────────────────────────────

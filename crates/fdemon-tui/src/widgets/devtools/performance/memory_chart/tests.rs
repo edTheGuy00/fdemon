@@ -826,3 +826,304 @@ fn test_allocation_table_by_instances_shows_class_b_first() {
         "ByInstances: ClassB (more instances) should appear before ClassA"
     );
 }
+
+// ── AllocationTable struct tests (Task 07 acceptance criteria) ────────────────
+
+/// Build a profile with `n` classes named "Class0", "Class1", ... "ClassN-1".
+/// Each class has a unique size so sorting is deterministic.
+fn mock_profile_with_n_classes(n: usize) -> AllocationProfile {
+    let members = (0..n)
+        .map(|i| ClassHeapStats {
+            class_name: format!("Class{i}"),
+            library_uri: None,
+            new_space_instances: (i as u64) + 1,
+            new_space_size: ((n - i) as u64) * 1_000, // Class0 is biggest by size
+            old_space_instances: 0,
+            old_space_size: 0,
+        })
+        .collect();
+    AllocationProfile {
+        members,
+        timestamp: chrono::Local::now(),
+    }
+}
+
+#[test]
+fn alloc_table_visible_height_cell_written_each_frame() {
+    // area height = 12 → visible_height = 12 - TABLE_HEADER_ROWS = 10
+    let profile = mock_profile_with_n_classes(50);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let table = AllocationTable {
+        profile: &profile,
+        sort_column: AllocationSortColumn::BySize,
+        scroll_offset: 0,
+        selected_row: None,
+        focused: false,
+        visible_height_cell: &cell,
+    };
+    table.render(area, &mut buf, None);
+
+    assert_eq!(
+        cell.get(),
+        10,
+        "visible_height should be area.height({}) - TABLE_HEADER_ROWS({})",
+        area.height,
+        table::TABLE_HEADER_ROWS
+    );
+}
+
+#[test]
+fn alloc_table_renders_windowed_slice_at_offset_zero() {
+    // With 5 classes sorted by size (BySize), first visible row at offset 0
+    // should be the largest class: "Class0" (size = 5*1000 = 5000).
+    let profile = mock_profile_with_n_classes(5);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let table = AllocationTable {
+        profile: &profile,
+        sort_column: AllocationSortColumn::BySize,
+        scroll_offset: 0,
+        selected_row: None,
+        focused: false,
+        visible_height_cell: &cell,
+    };
+    table.render(area, &mut buf, None);
+
+    let content = buffer_content(&buf, area);
+    assert!(
+        content.contains("Class0"),
+        "First visible row at offset 0 should be Class0 (largest size)"
+    );
+}
+
+#[test]
+fn alloc_table_renders_windowed_slice_at_positive_offset() {
+    // With 50 classes sorted by size (BySize: Class0 biggest, Class49 smallest),
+    // at scroll_offset = 20 the first visible row should be Class20.
+    let profile = mock_profile_with_n_classes(50);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let table = AllocationTable {
+        profile: &profile,
+        sort_column: AllocationSortColumn::BySize,
+        scroll_offset: 20,
+        selected_row: None,
+        focused: false,
+        visible_height_cell: &cell,
+    };
+    table.render(area, &mut buf, None);
+
+    let content = buffer_content(&buf, area);
+    // Class0..Class19 should NOT appear (scrolled past); Class20 should appear.
+    assert!(
+        content.contains("Class20"),
+        "Class20 should be the first visible row at scroll_offset=20; content: {content:?}"
+    );
+    assert!(
+        !content.contains("Class0"),
+        "Class0 should be scrolled out of view; content: {content:?}"
+    );
+}
+
+#[test]
+fn alloc_table_selected_row_highlighted_when_visible() {
+    // Selected row 25 at scroll_offset 20 → global_idx 25 is row 5 in the visible slice.
+    // The selected row should have a distinct (non-default) background colour.
+    let profile = mock_profile_with_n_classes(50);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let table = AllocationTable {
+        profile: &profile,
+        sort_column: AllocationSortColumn::BySize,
+        scroll_offset: 20,
+        selected_row: Some(25),
+        focused: true,
+        visible_height_cell: &cell,
+    };
+    table.render(area, &mut buf, None);
+
+    // The selected row renders at y = TABLE_HEADER_ROWS + (25 - 20) = 2 + 5 = 7.
+    let selected_y = table::TABLE_HEADER_ROWS as u16 + (25 - 20) as u16;
+    // At least one cell in the selected row should have a non-default background.
+    let has_highlight = (0..area.width)
+        .filter_map(|x| buf.cell((area.x + x, area.y + selected_y)))
+        .any(|c| c.bg != ratatui::style::Color::Reset);
+    assert!(
+        has_highlight,
+        "Selected row at y={selected_y} should have a highlighted background"
+    );
+}
+
+#[test]
+fn alloc_table_selected_row_not_highlighted_when_scrolled_past() {
+    // Global index 5 is not visible when scroll_offset = 20.
+    let profile = mock_profile_with_n_classes(50);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let table = AllocationTable {
+        profile: &profile,
+        sort_column: AllocationSortColumn::BySize,
+        scroll_offset: 20,
+        selected_row: Some(5), // global_idx 5 is above the visible window
+        focused: true,
+        visible_height_cell: &cell,
+    };
+    table.render(area, &mut buf, None);
+
+    // None of the data rows should have a highlighted background because the
+    // selected row is scrolled out of view.
+    let any_highlight = (table::TABLE_HEADER_ROWS as u16..area.height)
+        .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+        .filter_map(|(x, y)| buf.cell((area.x + x, area.y + y)))
+        .any(|c| c.bg != ratatui::style::Color::Reset);
+    assert!(
+        !any_highlight,
+        "No data rows should be highlighted when selected_row is out of the visible window"
+    );
+}
+
+#[test]
+fn alloc_table_clicking_row_emits_correct_global_index() {
+    use fdemon_app::{Message, MouseButton, MouseRegions};
+
+    let profile = mock_profile_with_n_classes(50);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+
+        let table = AllocationTable {
+            profile: &profile,
+            sort_column: AllocationSortColumn::BySize,
+            scroll_offset: 20,
+            selected_row: None,
+            focused: false,
+            visible_height_cell: &cell,
+        };
+        table.render(area, &mut buf, Some(&mut ctx));
+    }
+
+    // Row 0 in the visible slice = global index 20.
+    // That row is at y = TABLE_HEADER_ROWS = 2, x = 0.
+    let click_y = area.y + table::TABLE_HEADER_ROWS as u16;
+    let hit = regions.hit_test(area.x, click_y, MouseButton::Left);
+    assert!(
+        hit.is_some(),
+        "Should have a click region at row 0 of data area"
+    );
+
+    let msg = hit
+        .and_then(|e| e.on_left.as_ref())
+        .and_then(|a| a.as_emit());
+    assert!(
+        matches!(msg, Some(Message::PerfSelectAllocRow { index: Some(20) })),
+        "Clicking the first visible row at scroll_offset=20 should emit global index 20; got {msg:?}"
+    );
+}
+
+#[test]
+fn alloc_table_empty_space_emits_focus_section() {
+    use fdemon_app::session::PerfSection;
+    use fdemon_app::{Message, MouseButton, MouseRegions};
+
+    // 3 classes, area height = 12 → visible_height = 10.
+    // Only 3 rows are used; remaining 7 rows should emit PerfFocusSection(MemoryList).
+    let profile = mock_profile_with_n_classes(3);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+
+        let table = AllocationTable {
+            profile: &profile,
+            sort_column: AllocationSortColumn::BySize,
+            scroll_offset: 0,
+            selected_row: None,
+            focused: false,
+            visible_height_cell: &cell,
+        };
+        table.render(area, &mut buf, Some(&mut ctx));
+    }
+
+    // Empty space starts at y = TABLE_HEADER_ROWS + 3 (used rows) = 5.
+    let empty_y = area.y + table::TABLE_HEADER_ROWS as u16 + 3;
+    let hit = regions.hit_test(area.x, empty_y, MouseButton::Left);
+    let msg = hit
+        .and_then(|e| e.on_left.as_ref())
+        .and_then(|a| a.as_emit());
+    assert!(
+        matches!(
+            msg,
+            Some(Message::PerfFocusSection(PerfSection::MemoryList))
+        ),
+        "Clicking empty space below rows should emit PerfFocusSection(MemoryList); got {msg:?}"
+    );
+}
+
+#[test]
+fn alloc_table_no_focus_region_when_rows_fill_area() {
+    use fdemon_app::{Message, MouseButton, MouseRegions};
+
+    // 50 classes, area height = 12 → visible_height = 10 rows exactly.
+    // All 10 rows are used; there is no empty space, so no PerfFocusSection region.
+    let profile = mock_profile_with_n_classes(50);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let cell = std::cell::Cell::new(0usize);
+
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+
+        let table = AllocationTable {
+            profile: &profile,
+            sort_column: AllocationSortColumn::BySize,
+            scroll_offset: 0,
+            selected_row: None,
+            focused: false,
+            visible_height_cell: &cell,
+        };
+        table.render(area, &mut buf, Some(&mut ctx));
+    }
+
+    // There should be no region at y = area.height (out of bounds).
+    let beyond_last_y = area.y + area.height; // y=12, outside the area
+    let oob_hit = regions.hit_test(area.x, beyond_last_y, MouseButton::Left);
+    assert!(
+        oob_hit.is_none(),
+        "No click region should exist beyond the table area"
+    );
+
+    // Also verify that we have exactly 10 row regions (no focus-section region).
+    // The last data row is at y = TABLE_HEADER_ROWS + 9 = 11.
+    let last_row_y = area.y + table::TABLE_HEADER_ROWS as u16 + 9;
+    let last_hit = regions.hit_test(area.x, last_row_y, MouseButton::Left);
+    let last_msg = last_hit
+        .and_then(|e| e.on_left.as_ref())
+        .and_then(|a| a.as_emit())
+        .cloned();
+    assert!(
+        matches!(last_msg, Some(Message::PerfSelectAllocRow { .. })),
+        "Last visible row should emit PerfSelectAllocRow"
+    );
+}
