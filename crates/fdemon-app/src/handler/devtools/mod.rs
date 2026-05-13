@@ -24,11 +24,77 @@ pub(crate) use performance::{
     handle_select_performance_frame,
 };
 
+use crate::config::DevToolsSettings;
 use crate::handler::{FetchTrigger, UpdateAction, UpdateResult};
 use crate::message::DebugOverlayKind;
 use crate::session::SessionId;
 use crate::state::{AppState, DevToolsError, DevToolsPanel, ToastLevel, VmConnectionStatus};
 use fdemon_core::url::percent_encode_uri;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Readiness-poll config clamping
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Upper bound on readiness-poll attempts. 0 = skip poll; 20 × 5 s call
+/// timeout × 5 s interval = 200 s worst case (capped by the outer fetch timeout).
+const MAX_READINESS_POLL_ATTEMPTS: u32 = 20;
+/// Lower bound on poll interval: sub-10 ms is pointless overhead.
+const MIN_READINESS_POLL_INTERVAL_MS: u64 = 10;
+/// Upper bound on poll interval: 5 s + 20 attempts = 100 s outer budget.
+const MAX_READINESS_POLL_INTERVAL_MS: u64 = 5_000;
+/// Lower bound on per-call timeout: sub-100 ms is unrealistic for an RPC round-trip.
+const MIN_READINESS_POLL_CALL_TIMEOUT_MS: u64 = 100;
+/// Upper bound on per-call timeout: 10 s per attempt is the upper sane limit.
+const MAX_READINESS_POLL_CALL_TIMEOUT_MS: u64 = 10_000;
+
+/// Clamp the three readiness-poll config values to bounded ranges and emit a
+/// `warn!` for each value that required clamping.
+///
+/// Values within the ranges pass through unchanged (no log noise). Values
+/// outside the bounds are clamped to the nearest limit so that a typo such as
+/// `readiness_poll_attempts = 4294967295` cannot saturate the Tokio runtime.
+///
+/// This is the **single read point** for the three `readiness_poll_*` settings.
+/// All `FetchWidgetTree` dispatch sites must call this helper rather than
+/// reading `state.settings.devtools.readiness_poll_*` directly.
+pub(crate) fn clamped_readiness_poll_config(settings: &DevToolsSettings) -> (u32, u64, u64) {
+    let attempts = settings
+        .readiness_poll_attempts
+        .min(MAX_READINESS_POLL_ATTEMPTS);
+    if attempts != settings.readiness_poll_attempts {
+        tracing::warn!(
+            requested = settings.readiness_poll_attempts,
+            clamped_to = attempts,
+            "readiness_poll_attempts clamped to bounded range"
+        );
+    }
+
+    let interval = settings.readiness_poll_interval_ms.clamp(
+        MIN_READINESS_POLL_INTERVAL_MS,
+        MAX_READINESS_POLL_INTERVAL_MS,
+    );
+    if interval != settings.readiness_poll_interval_ms {
+        tracing::warn!(
+            requested_ms = settings.readiness_poll_interval_ms,
+            clamped_to_ms = interval,
+            "readiness_poll_interval_ms clamped to bounded range"
+        );
+    }
+
+    let timeout = settings.readiness_poll_call_timeout_ms.clamp(
+        MIN_READINESS_POLL_CALL_TIMEOUT_MS,
+        MAX_READINESS_POLL_CALL_TIMEOUT_MS,
+    );
+    if timeout != settings.readiness_poll_call_timeout_ms {
+        tracing::warn!(
+            requested_ms = settings.readiness_poll_call_timeout_ms,
+            clamped_to_ms = timeout,
+            "readiness_poll_call_timeout_ms clamped to bounded range"
+        );
+    }
+
+    (attempts, interval, timeout)
+}
 
 /// Map a raw RPC error string to a user-friendly [`DevToolsError`].
 ///
@@ -232,17 +298,16 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                 // is always paired with last_fetch_time=Some(now). Without the
                 // timestamp a lost terminal message would leave loading=true forever.
                 state.devtools_view_state.inspector.record_fetch_start();
+                let (poll_attempts, poll_interval_ms, poll_call_timeout_ms) =
+                    clamped_readiness_poll_config(&state.settings.devtools);
                 return UpdateResult::action(UpdateAction::FetchWidgetTree {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
-                    readiness_poll_attempts: state.settings.devtools.readiness_poll_attempts,
-                    readiness_poll_interval_ms: state.settings.devtools.readiness_poll_interval_ms,
-                    readiness_poll_call_timeout_ms: state
-                        .settings
-                        .devtools
-                        .readiness_poll_call_timeout_ms,
+                    readiness_poll_attempts: poll_attempts,
+                    readiness_poll_interval_ms: poll_interval_ms,
+                    readiness_poll_call_timeout_ms: poll_call_timeout_ms,
                     trigger: FetchTrigger::Initial,
                 });
             }
@@ -338,6 +403,8 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                         // Without the timestamp a lost terminal message would leave
                         // loading=true forever, re-introducing the stuck-loading bug.
                         state.devtools_view_state.inspector.record_fetch_start();
+                        let (poll_attempts, poll_interval_ms, poll_call_timeout_ms) =
+                            clamped_readiness_poll_config(&state.settings.devtools);
                         return UpdateResult::action(UpdateAction::FetchWidgetTree {
                             session_id,
                             vm_handle: None, // hydrated by process.rs
@@ -346,18 +413,9 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                                 .settings
                                 .devtools
                                 .inspector_fetch_timeout_secs,
-                            readiness_poll_attempts: state
-                                .settings
-                                .devtools
-                                .readiness_poll_attempts,
-                            readiness_poll_interval_ms: state
-                                .settings
-                                .devtools
-                                .readiness_poll_interval_ms,
-                            readiness_poll_call_timeout_ms: state
-                                .settings
-                                .devtools
-                                .readiness_poll_call_timeout_ms,
+                            readiness_poll_attempts: poll_attempts,
+                            readiness_poll_interval_ms: poll_interval_ms,
+                            readiness_poll_call_timeout_ms: poll_call_timeout_ms,
                             trigger: FetchTrigger::Initial,
                         });
                     }
@@ -1620,12 +1678,124 @@ mod tests {
             })
             .count();
         assert_eq!(
-            naked_count,
-            0,
+            naked_count, 0,
             "Found {naked_count} naked `inspector.loading = true` statement(s) in \
              handler/devtools/mod.rs. Replace each with \
              `state.devtools_view_state.inspector.record_fetch_start()` to \
              enforce the loading+last_fetch_time invariant."
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // clamped_readiness_poll_config tests (Task 08: clamp-readiness-poll-config)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_clamped_readiness_poll_attempts_capped_at_max() {
+        // u32::MAX must be clamped down to MAX_READINESS_POLL_ATTEMPTS.
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_attempts: u32::MAX,
+            ..Default::default()
+        };
+        let (attempts, _, _) = clamped_readiness_poll_config(&settings);
+        assert_eq!(attempts, MAX_READINESS_POLL_ATTEMPTS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_interval_floored_at_min() {
+        // 0 ms is below the minimum; must be raised to MIN_READINESS_POLL_INTERVAL_MS.
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_interval_ms: 0,
+            ..Default::default()
+        };
+        let (_, interval, _) = clamped_readiness_poll_config(&settings);
+        assert_eq!(interval, MIN_READINESS_POLL_INTERVAL_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_interval_capped_at_max() {
+        // u64::MAX must be clamped down to MAX_READINESS_POLL_INTERVAL_MS.
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_interval_ms: u64::MAX,
+            ..Default::default()
+        };
+        let (_, interval, _) = clamped_readiness_poll_config(&settings);
+        assert_eq!(interval, MAX_READINESS_POLL_INTERVAL_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_call_timeout_floored_at_min() {
+        // 0 ms is below the minimum; must be raised to MIN_READINESS_POLL_CALL_TIMEOUT_MS.
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_call_timeout_ms: 0,
+            ..Default::default()
+        };
+        let (_, _, timeout) = clamped_readiness_poll_config(&settings);
+        assert_eq!(timeout, MIN_READINESS_POLL_CALL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_call_timeout_capped_at_max() {
+        // u64::MAX must be clamped down to MAX_READINESS_POLL_CALL_TIMEOUT_MS.
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_call_timeout_ms: u64::MAX,
+            ..Default::default()
+        };
+        let (_, _, timeout) = clamped_readiness_poll_config(&settings);
+        assert_eq!(timeout, MAX_READINESS_POLL_CALL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_passes_through_normal_values() {
+        // Values within range must be returned unchanged (no clamping, no log noise).
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_attempts: 3,
+            readiness_poll_interval_ms: 200,
+            readiness_poll_call_timeout_ms: 1500,
+            ..Default::default()
+        };
+        let (a, i, t) = clamped_readiness_poll_config(&settings);
+        assert_eq!((a, i, t), (3, 200, 1500));
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_boundary_values_pass_through() {
+        // Values exactly at the boundary must pass through unchanged.
+        let settings = crate::config::DevToolsSettings {
+            readiness_poll_attempts: MAX_READINESS_POLL_ATTEMPTS,
+            readiness_poll_interval_ms: MIN_READINESS_POLL_INTERVAL_MS,
+            readiness_poll_call_timeout_ms: MAX_READINESS_POLL_CALL_TIMEOUT_MS,
+            ..Default::default()
+        };
+        let (a, i, t) = clamped_readiness_poll_config(&settings);
+        assert_eq!(a, MAX_READINESS_POLL_ATTEMPTS);
+        assert_eq!(i, MIN_READINESS_POLL_INTERVAL_MS);
+        assert_eq!(t, MAX_READINESS_POLL_CALL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn test_lint_no_raw_readiness_poll_reads_at_dispatch_sites() {
+        // Grep-based lint: no FetchWidgetTree struct literal in mod.rs (or the
+        // follow-on VmConnected path in update.rs) should read
+        // `state.settings.devtools.readiness_poll_*` directly. All three sites
+        // must go through clamped_readiness_poll_config().
+        let source = include_str!("mod.rs");
+        let raw_reads = source
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                // Only flag lines that are reading the field directly off state
+                // (i.e. inside a struct literal). Comments and the helper
+                // function body are excluded by the `state.settings.devtools`
+                // prefix check.
+                t.starts_with("state.settings.devtools.readiness_poll_")
+            })
+            .count();
+        assert_eq!(
+            raw_reads, 0,
+            "Found {raw_reads} raw `state.settings.devtools.readiness_poll_*` read(s) \
+             in handler/devtools/mod.rs. All dispatch sites must use \
+             clamped_readiness_poll_config() instead."
         );
     }
 }
