@@ -1973,6 +1973,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let inspector = &state.devtools_view_state.inspector;
             let last_fetch_elapsed = inspector.last_fetch_time.map(|t| t.elapsed().as_millis());
             if inspector.is_fetch_debounced() {
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                 info!(
                     session_id = session_id,
                     loading = inspector.loading,
@@ -1982,6 +1983,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 return UpdateResult::none();
             }
 
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
             info!(
                 session_id = session_id,
                 last_fetch_elapsed_ms = ?last_fetch_elapsed,
@@ -2008,6 +2010,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     FetchTrigger::Initial
                 };
 
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                 info!(
                     session_id = session_id,
                     trigger = ?trigger,

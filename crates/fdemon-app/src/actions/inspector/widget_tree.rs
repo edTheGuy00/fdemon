@@ -68,6 +68,7 @@ pub(super) async fn poll_widget_tree_ready(
     session_id: SessionId,
     config: &ReadinessPollConfig,
 ) {
+    // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
     tracing::info!(
         session_id = %session_id,
         max_polls = config.attempts,
@@ -107,6 +108,7 @@ pub(super) async fn poll_widget_tree_ready(
                     .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
                     .unwrap_or(false);
                 if ready {
+                    // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                     tracing::info!(
                         session_id = %session_id,
                         attempt = attempt,
@@ -125,6 +127,7 @@ pub(super) async fn poll_widget_tree_ready(
             Ok(Err(e)) => {
                 if is_method_not_found(&e) {
                     // Extension not available (older Flutter SDK) — skip polling.
+                    // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                     tracing::info!(
                         session_id = %session_id,
                         "Inspector: isWidgetTreeReady not available (older Flutter SDK) — skipping readiness poll"

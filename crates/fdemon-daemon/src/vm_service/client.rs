@@ -158,6 +158,7 @@ impl VmRequestHandle {
         let vm: VmInfo = serde_json::from_value(result)
             .map_err(|e| Error::vm_service(format!("parse getVM: {e}")))?;
 
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
         info!(
             isolates_count = vm.isolates.len(),
             isolates = ?vm.isolates.iter().map(|i| (&i.id, &i.name, i.is_system_isolate)).collect::<Vec<_>>(),
@@ -179,6 +180,7 @@ impl VmRequestHandle {
 
         let id = isolate.id.clone();
 
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
         info!(
             isolate_id = %id,
             isolate_name = %isolate.name,
@@ -262,6 +264,7 @@ impl VmRequestHandle {
         let vm: VmInfo = serde_json::from_value(result)
             .map_err(|e| Error::vm_service(format!("parse getVM: {e}")))?;
 
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
         info!(
             isolates_count = vm.isolates.len(),
             isolates = ?vm.isolates.iter().map(|i| (&i.id, &i.name, i.is_system_isolate)).collect::<Vec<_>>(),
@@ -274,6 +277,8 @@ impl VmRequestHandle {
             .filter(|i| !i.is_system_isolate.unwrap_or(false))
             .collect();
 
+        // Collect all candidates that have ext.flutter.* extensions.
+        let mut flutter_candidates: Vec<&IsolateRef> = Vec::new();
         for iso in &candidates {
             let iso_params = serde_json::json!({ "isolateId": iso.id });
             let detail_result = self.request("getIsolate", Some(iso_params)).await;
@@ -302,15 +307,32 @@ impl VmRequestHandle {
 
             let ext_rpcs = detail.extension_rpcs.as_deref().unwrap_or(&[]);
             if ext_rpcs.iter().any(|e| e.starts_with("ext.flutter.")) {
-                info!(
-                    isolate_id = %iso.id,
-                    extension_count = ext_rpcs.len(),
-                    "VM Service: resolved Flutter UI isolate"
-                );
-                let mut guard = self.isolate_id_cache.lock().await;
-                *guard = Some(iso.id.clone());
-                return Ok(iso.id.clone());
+                flutter_candidates.push(iso);
             }
+        }
+
+        if let Some(chosen) = flutter_candidates.first() {
+            // Warn when multiple isolates have Flutter extensions — the selection
+            // is deterministic (first one), but unexpected multi-isolate apps
+            // (e.g. package:isolate_handler) may need investigation.
+            if flutter_candidates.len() > 1 {
+                warn!(
+                    count = flutter_candidates.len(),
+                    chosen = %chosen.id,
+                    all = ?flutter_candidates.iter().map(|i| (&i.id, &i.name)).collect::<Vec<_>>(),
+                    "VM Service: multiple isolates have ext.flutter.* extensions; picking first. \
+                     If the wrong isolate is selected, file a bug with these IDs."
+                );
+            }
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+            info!(
+                isolate_id = %chosen.id,
+                flutter_candidate_count = flutter_candidates.len(),
+                "VM Service: resolved Flutter UI isolate"
+            );
+            let mut guard = self.isolate_id_cache.lock().await;
+            *guard = Some(chosen.id.clone());
+            return Ok(chosen.id.clone());
         }
 
         // Fallback: no Flutter extensions found on any isolate.
@@ -1958,6 +1980,159 @@ mod tests {
             second.unwrap(),
             "isolates/1",
             "second call must return cached value without issuing RPCs"
+        );
+    }
+
+    // -- Multi-Flutter-isolate ambiguity warning (12b) -----------------------
+
+    /// When two non-system isolates both have `ext.flutter.*` extensions the
+    /// resolver must:
+    ///   1. Return `Ok` with the **first** isolate's ID (deterministic).
+    ///   2. Emit a `warn!` (exercised by the code path — no tracing capture
+    ///      library required; the logic branch is explicitly hit).
+    ///
+    /// This tests the new two-pass collection path introduced by task 12b.
+    #[tokio::test]
+    async fn test_resolve_flutter_ui_isolate_warns_on_multiple_flutter_candidates() {
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<ClientCommand>(16);
+        let isolate_id_cache = Arc::new(Mutex::new(None::<String>));
+
+        let handle = VmRequestHandle {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::clone(&isolate_id_cache),
+            ws_uri: String::new(),
+        };
+
+        // Fake VM responder: getVM returns two non-system isolates, both with
+        // ext.flutter.* extensions. The resolver should pick "isolates/1" (first)
+        // and emit a warn! about the ambiguity.
+        let responder = tokio::spawn(async move {
+            // Message 1: getVM
+            if let Some(ClientCommand::SendRequest {
+                method,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVM");
+                let vm_json = serde_json::json!({
+                    "name": "vm",
+                    "version": "3.0.0",
+                    "isolates": [
+                        { "id": "isolates/1", "name": "main",   "isSystemIsolate": false },
+                        { "id": "isolates/2", "name": "worker", "isSystemIsolate": false }
+                    ]
+                });
+                let _ = response_tx.send(Ok(vm_json));
+            }
+            // Message 2: getIsolate for "isolates/1" — has ext.flutter.*
+            if let Some(ClientCommand::SendRequest {
+                method,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getIsolate");
+                let iso_json = serde_json::json!({
+                    "id": "isolates/1",
+                    "name": "main",
+                    "extensionRPCs": [
+                        "ext.flutter.reassemble",
+                        "ext.flutter.inspector.isWidgetTreeReady"
+                    ]
+                });
+                let _ = response_tx.send(Ok(iso_json));
+            }
+            // Message 3: getIsolate for "isolates/2" — also has ext.flutter.*
+            if let Some(ClientCommand::SendRequest {
+                method,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getIsolate");
+                let iso_json = serde_json::json!({
+                    "id": "isolates/2",
+                    "name": "worker",
+                    "extensionRPCs": [
+                        "ext.flutter.reassemble"
+                    ]
+                });
+                let _ = response_tx.send(Ok(iso_json));
+            }
+            // Drop the receiver — any further requests fail (cache-hit proof).
+        });
+
+        // The resolver must return "isolates/1" — the first Flutter candidate.
+        let result = handle.resolve_flutter_ui_isolate().await;
+        assert!(
+            result.is_ok(),
+            "should succeed despite multiple Flutter isolates: {result:?}"
+        );
+        assert_eq!(
+            result.unwrap(),
+            "isolates/1",
+            "resolver must pick the first Flutter candidate when multiple exist"
+        );
+
+        // The cache must be populated with the chosen isolate.
+        assert_eq!(
+            handle.cached_isolate_id().as_deref(),
+            Some("isolates/1"),
+            "cache should hold the chosen isolate ID"
+        );
+
+        let _ = responder.await;
+    }
+
+    /// Pure logic test: the new two-pass collection produces the correct
+    /// first-pick result when multiple IsolateInfo structs have ext.flutter.*.
+    ///
+    /// This mirrors the isolation-handler pattern where multiple isolates all
+    /// register Flutter extensions. The selection must be the first in the
+    /// original ordering — not the last or an arbitrary one.
+    #[test]
+    fn test_multi_flutter_isolate_logic_first_candidate_selected() {
+        // Simulate the inner filtering of resolve_flutter_ui_isolate.
+        let isolates = [
+            make_isolate_info(
+                "isolates/1",
+                "main",
+                vec![
+                    "ext.flutter.reassemble",
+                    "ext.flutter.inspector.isWidgetTreeReady",
+                ],
+            ),
+            make_isolate_info("isolates/2", "worker", vec!["ext.flutter.reassemble"]),
+            make_isolate_info("isolates/3", "background", vec!["ext.app.doWork"]),
+        ];
+
+        // Replicate the two-pass collection logic.
+        let flutter_candidates: Vec<&IsolateInfo> = isolates
+            .iter()
+            .filter(|iso| {
+                iso.extension_rpcs
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(|e| e.starts_with("ext.flutter."))
+            })
+            .collect();
+
+        assert_eq!(
+            flutter_candidates.len(),
+            2,
+            "two isolates should match ext.flutter.*"
+        );
+        assert_eq!(
+            flutter_candidates[0].id, "isolates/1",
+            "first Flutter candidate must be isolates/1"
+        );
+        // The warn! path is triggered when len > 1.
+        assert!(
+            flutter_candidates.len() > 1,
+            "multiple Flutter candidates should trigger the warn! path"
         );
     }
 

@@ -207,6 +207,7 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
         trigger,
     } = action
     {
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
         tracing::info!(
             session_id = %session_id,
             already_hydrated = vm_handle.is_some(),

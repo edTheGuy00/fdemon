@@ -72,6 +72,7 @@ pub(super) fn spawn_fetch_widget_tree(
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(fetch_timeout_secs.max(5));
 
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
         tracing::info!(
             session_id = %session_id,
             tree_max_depth = tree_max_depth,
@@ -87,6 +88,7 @@ pub(super) fn spawn_fetch_widget_tree(
                 .await
                 .map_err(|e| format!("Could not get isolate ID: {e}"))?;
 
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
             tracing::info!(
                 session_id = %session_id,
                 isolate_id = %isolate_id,
@@ -107,11 +109,13 @@ pub(super) fn spawn_fetch_widget_tree(
                 widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id, &poll_cfg)
                     .await;
 
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                 tracing::info!(
                     session_id = %session_id,
                     "Inspector: readiness poll completed"
                 );
             } else {
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                 tracing::info!(
                     session_id = %session_id,
                     "Inspector: readiness poll skipped (Refresh trigger)"
@@ -137,6 +141,7 @@ pub(super) fn spawn_fetch_widget_tree(
             }
 
             // Step 4: Retry loop — fetch the widget tree.
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
             tracing::info!(
                 session_id = %session_id,
                 "Inspector: RPC call getRootWidgetTree starting"
@@ -152,6 +157,7 @@ pub(super) fn spawn_fetch_widget_tree(
             .map_err(|e| e.to_string());
 
             if let Ok(ref root) = result {
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
                 tracing::info!(
                     session_id = %session_id,
                     root_description = %root.description,
@@ -187,6 +193,7 @@ pub(super) fn spawn_fetch_widget_tree(
             }
         };
 
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
         tracing::info!(
             session_id = %session_id,
             msg_kind = match &msg {
