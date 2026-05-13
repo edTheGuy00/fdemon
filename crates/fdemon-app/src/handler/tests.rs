@@ -12413,6 +12413,92 @@ mod fetch_trigger_tests {
         }
     }
 
+    // ── Hot restart clears has_ever_rendered_tree ─────────────────────────────
+
+    /// After `Message::SessionRestartCompleted`, `has_ever_rendered_tree`
+    /// is reset to `false` so the next fetch uses the full readiness poll.
+    #[test]
+    fn session_restart_clears_has_ever_rendered_tree() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate a prior successful render so the flag is set.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "pre-condition: flag must be true after a successful render"
+        );
+
+        // Hot restart — session must be in Reloading phase for complete_reload() to work.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.start_reload();
+        }
+        update(&mut state, Message::SessionRestartCompleted { session_id });
+
+        assert!(
+            !state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must be cleared after SessionRestartCompleted"
+        );
+    }
+
+    /// After a hot restart the next `RequestWidgetTree` must use
+    /// `FetchTrigger::Initial` so the readiness poll is applied.
+    #[test]
+    fn post_restart_request_uses_initial_trigger() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate a prior successful render so the flag is set.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree());
+
+        // Hot restart resets the flag.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.start_reload();
+        }
+        update(&mut state, Message::SessionRestartCompleted { session_id });
+
+        // Clear the fetch debounce so the next RequestWidgetTree is not suppressed.
+        state.devtools_view_state.inspector.clear_fetch_debounce();
+
+        let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Initial,
+                    "post-restart fetch must use Initial trigger so readiness poll applies"
+                );
+            }
+            other => panic!("Expected FetchWidgetTree action, got: {:?}", other),
+        }
+    }
+
+    /// `has_ever_rendered_tree` is NOT cleared by hot reload
+    /// (`Message::SessionReloadCompleted`) — only hot restart creates a new isolate.
+    #[test]
+    fn hot_reload_does_not_clear_has_ever_rendered_tree() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree());
+
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.start_reload();
+        }
+        update(
+            &mut state,
+            Message::SessionReloadCompleted {
+                session_id,
+                time_ms: 120,
+            },
+        );
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must survive hot reload — only hot restart should clear it"
+        );
+    }
+
     /// `handle_switch_panel(Inspector)` must use `FetchTrigger::Initial`
     /// because the panel always fetches on first open.
     #[test]

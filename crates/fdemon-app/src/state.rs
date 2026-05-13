@@ -248,11 +248,16 @@ pub struct InspectorState {
     pub layout_last_fetch_time: Option<Instant>,
 
     /// Sticky flag that becomes `true` after the first successful widget tree
-    /// render and remains `true` for the lifetime of the session.
+    /// render in the current Flutter isolate.
     ///
     /// **Does not reset on [`Self::reset`], fetch debounce clears, or
-    /// individual fetch failures.** Only cleared when the entire session is
-    /// destroyed (by dropping `InspectorState`).
+    /// individual fetch failures.** Cleared on:
+    /// - session destruction (drop)
+    /// - hot restart (`Message::SessionRestartCompleted`)
+    ///
+    /// Hot restart creates a new isolate and re-initializes the framework, so
+    /// the "framework is warm" invariant the flag encodes is temporarily invalid;
+    /// the next fetch should use the full readiness poll budget.
     ///
     /// Used to choose between `FetchTrigger::Initial` (poll applies) and
     /// `FetchTrigger::Refresh` (poll skipped) when the user presses `r`.
@@ -302,6 +307,8 @@ impl InspectorState {
     /// This flag is sticky: it is set to `true` by
     /// [`crate::handler::devtools::handle_widget_tree_fetched`] and never
     /// cleared by [`Self::reset`], debounce clears, or fetch failures.
+    /// It is explicitly cleared on hot restart (`Message::SessionRestartCompleted`)
+    /// because hot restart creates a new isolate and re-initializes the framework.
     ///
     /// Used by `Message::RequestWidgetTree` handler to pick
     /// `FetchTrigger::Refresh` (skip readiness poll) when the Flutter

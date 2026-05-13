@@ -234,6 +234,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     vm_handle.invalidate_isolate_cache();
                 }
             }
+            // Hot restart creates a new isolate with a fresh framework state.
+            // Reset the sticky render flag so the next fetch polls readiness
+            // instead of skipping it with FetchTrigger::Refresh.
+            if state.devtools_view_state.inspector.has_ever_rendered_tree {
+                state.devtools_view_state.inspector.has_ever_rendered_tree = false;
+            }
             UpdateResult::none()
         }
 
