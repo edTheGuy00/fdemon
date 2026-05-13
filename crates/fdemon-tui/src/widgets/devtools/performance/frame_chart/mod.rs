@@ -9,6 +9,8 @@
 mod bars;
 mod detail;
 
+use std::cell::Cell;
+
 use fdemon_core::performance::{FrameTiming, PerformanceStats, RingBuffer};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -18,10 +20,11 @@ use ratatui::widgets::Widget;
 use crate::widgets::MouseCtx;
 
 // Re-export pure helpers so tests.rs (which uses `use super::*;`) can access them.
-// bar_colors and ms_to_half_blocks are pub(crate) in bars.rs to allow this re-export.
+// bar_colors, ms_to_half_blocks, and compute_visible_range are pub(crate)/pub in
+// bars.rs to allow this re-export.
 // The cfg(test) guard prevents an unused-import warning in non-test builds.
 #[cfg(test)]
-pub(super) use bars::{bar_colors, ms_to_half_blocks};
+pub(super) use bars::{bar_colors, compute_visible_range, ms_to_half_blocks};
 
 // Layout constants
 
@@ -69,6 +72,12 @@ pub(crate) struct FrameChart<'a> {
     pub(super) selected_frame: Option<usize>,
     pub(super) stats: &'a PerformanceStats,
     pub(super) icons: bool,
+    /// How many frames to scroll back from the live edge (0 = live-edge mode).
+    pub(super) scroll_offset: usize,
+    /// Render-hint Cell for the visible frame count. Written each frame so the
+    /// keyboard handler can use the real viewport width for scroll clamping.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    pub(super) frame_chart_visible_width: &'a Cell<usize>,
 }
 
 impl<'a> FrameChart<'a> {
@@ -79,17 +88,24 @@ impl<'a> FrameChart<'a> {
     /// * `selected_frame` - Optional index into `frame_history` for the selected frame.
     /// * `stats` - Aggregated performance statistics for the summary line.
     /// * `icons` - Whether to use Unicode icon characters (disabled for narrow/ASCII terminals).
+    /// * `scroll_offset` - Frames scrolled back from the live edge (0 = live mode).
+    /// * `frame_chart_visible_width` - Render-hint Cell updated each frame with the
+    ///   visible bar count.
     pub fn new(
         frame_history: &'a RingBuffer<FrameTiming>,
         selected_frame: Option<usize>,
         stats: &'a PerformanceStats,
         icons: bool,
+        scroll_offset: usize,
+        frame_chart_visible_width: &'a Cell<usize>,
     ) -> Self {
         Self {
             frame_history,
             selected_frame,
             stats,
             icons,
+            scroll_offset,
+            frame_chart_visible_width,
         }
     }
 }
