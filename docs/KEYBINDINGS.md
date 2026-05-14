@@ -459,14 +459,42 @@ The Inspector panel shows a 50/50 split: widget tree on one side, layout explore
 
 When the Performance panel is active:
 
+#### Section Focus
+
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Left` | Previous Frame | Select the previous frame in the bar chart |
-| `Right` | Next Frame | Select the next frame in the bar chart |
-| `Esc` | Deselect Frame | Clear frame selection (show summary instead of detail) |
-| `s` | Toggle Sort | Toggle allocation table sort (Size / Instances) |
+| `Tab` | Focus Next Section | Cycle focus forward: Frame Chart → Memory Chart → Allocation List → Frame Chart |
+| `Shift+Tab` | Focus Previous Section | Cycle focus backward through sections |
+| Click section | Focus Section | Click anywhere in a section to focus it |
 
-The Performance panel shows a frame timing bar chart (top) and memory time-series chart with class allocation table (bottom).
+#### Scrolling (applies to the focused section)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `↑` / `k` | Scroll Up | Scroll focused section up one step (or move row selection up in Allocation List) |
+| `↓` / `j` | Scroll Down | Scroll focused section down one step (or move row selection down in Allocation List) |
+| `PageUp` | Page Up | Scroll focused section up one viewport |
+| `PageDown` | Page Down | Scroll focused section down one viewport |
+| `Home` | Jump to Oldest | Jump to oldest sample / first row (maximum scroll back in time) |
+| `End` | Jump to Live Edge | Jump to live edge (scroll offset = 0, present time) |
+
+#### Frame Selection (Frame Chart section)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `←` | Previous Frame | Select the previous frame in the bar chart |
+| `→` | Next Frame | Select the next frame in the bar chart |
+| `Esc` | Deselect Frame | Clear frame selection (show summary instead of detail) |
+| Click frame bar | Select Frame | Click a bar to select that frame |
+
+#### Allocation List (Allocation List section)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `s` | Toggle Sort | Toggle allocation table sort column (Size / Instances) |
+| Click alloc row | Select Row | Focus the Allocation List and select the clicked row |
+
+The Performance panel shows a frame timing bar chart (top) and memory time-series chart with class allocation table (bottom). Each section can be independently focused and scrolled. `Home` scrolls back to the oldest buffered sample; `End` returns to the live edge.
 
 ### Network Panel
 
