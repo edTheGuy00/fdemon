@@ -642,7 +642,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fdemon-app"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "color-eyre",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-daemon"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -708,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-dap"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "fdemon-core",
  "percent-encoding",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-tui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "crossterm",
@@ -763,9 +763,9 @@ dependencies = [
 
 [[package]]
 name = "filetime"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d5b2eef6fafbf69f877e55509ce5b11a760690ac9700a2921be067aa6afaef6"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
 dependencies = [
  "cfg-if",
  "libc",
@@ -791,7 +791,7 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flutter-demon"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "clap",
@@ -1306,9 +1306,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue-sys"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "285efcf12ef41bec907b3000d5ffaeb54191d4d9d83c0d6157e6cbc2db255e64"
+checksum = "07293a4e297ac234359b510362495713f75ea345d5307140414f20c69ffeb087"
 dependencies = [
  "bitflags 2.11.1",
  "libc",
@@ -3657,9 +3657,9 @@ dependencies = [
 
 [[package]]
 name = "zerofrom"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69faa1f2a1ea75661980b013019ed6687ed0e83d069bc1114e2cc74c6c04c4df"
+checksum = "0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272"
 dependencies = [
  "zerofrom-derive",
 ]
