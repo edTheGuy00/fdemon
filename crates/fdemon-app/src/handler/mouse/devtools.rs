@@ -3,7 +3,9 @@
 //! **Scroll** dispatches by `state.devtools_view_state.active_panel`:
 //! - Inspector → tree row navigation (Up/Down with no modifiers; any modifier
 //!   returns None because there is no page-step analogue for the inspector tree)
-//! - Performance → no-op (frame timeline is keyboard Left/Right only)
+//! - Performance → section scroll (Up/Down → `PerfScrollUp`/`PerfScrollDown`;
+//!   Shift+Up/Down → `PerfPageUp`/`PerfPageDown`; Ctrl/Alt → no-op;
+//!   horizontal wheel → no-op). The keyboard handler routes by `focused_section`.
 //! - Network → request-list navigation (Up/Down; Shift → PageUp/PageDown);
 //!   no-op when filter input is active
 //!
@@ -91,7 +93,7 @@ pub(super) fn handle_press(
 pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     match state.devtools_view_state.active_panel {
         DevToolsPanel::Inspector => handle_inspector_scroll(dir, mods),
-        DevToolsPanel::Performance => None,
+        DevToolsPanel::Performance => handle_performance_scroll(dir, mods),
         DevToolsPanel::Network => handle_network_scroll(state, dir, mods),
     }
 }
@@ -106,6 +108,28 @@ fn handle_inspector_scroll(dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     match dir {
         ScrollDir::Up => Some(Message::DevToolsInspectorNavigate(InspectorNav::Up)),
         ScrollDir::Down => Some(Message::DevToolsInspectorNavigate(InspectorNav::Down)),
+        ScrollDir::Left | ScrollDir::Right => None,
+    }
+}
+
+fn handle_performance_scroll(dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
+    // Shift+wheel → page step (mirrors handle_network_scroll / link_highlight.rs).
+    if mods.is_shift_only() {
+        return match dir {
+            ScrollDir::Up => Some(Message::PerfPageUp),
+            ScrollDir::Down => Some(Message::PerfPageDown),
+            ScrollDir::Left | ScrollDir::Right => None,
+        };
+    }
+
+    // Ctrl or Alt (alone or combined) → no-op, consistent with other panels.
+    if mods.ctrl || mods.alt {
+        return None;
+    }
+
+    match dir {
+        ScrollDir::Up => Some(Message::PerfScrollUp),
+        ScrollDir::Down => Some(Message::PerfScrollDown),
         ScrollDir::Left | ScrollDir::Right => None,
     }
 }
@@ -174,17 +198,56 @@ mod tests {
     }
 
     #[test]
-    fn performance_wheel_is_always_none() {
+    fn performance_wheel_up_emits_perf_scroll_up() {
         let s = state_with_panel(DevToolsPanel::Performance);
-        for dir in [ScrollDir::Up, ScrollDir::Down] {
-            for mods in [
-                KeyModSet::NONE,
-                KeyModSet::new(true, false, false),
-                KeyModSet::new(false, true, false),
-            ] {
-                assert!(handle_scroll(&s, dir, mods).is_none());
-            }
-        }
+        let msg = handle_scroll(&s, ScrollDir::Up, KeyModSet::NONE);
+        assert!(matches!(msg, Some(Message::PerfScrollUp)));
+    }
+
+    #[test]
+    fn performance_wheel_down_emits_perf_scroll_down() {
+        let s = state_with_panel(DevToolsPanel::Performance);
+        let msg = handle_scroll(&s, ScrollDir::Down, KeyModSet::NONE);
+        assert!(matches!(msg, Some(Message::PerfScrollDown)));
+    }
+
+    #[test]
+    fn performance_shift_wheel_up_emits_perf_page_up() {
+        let s = state_with_panel(DevToolsPanel::Performance);
+        let mods = KeyModSet::new(true, false, false);
+        let msg = handle_scroll(&s, ScrollDir::Up, mods);
+        assert!(matches!(msg, Some(Message::PerfPageUp)));
+    }
+
+    #[test]
+    fn performance_shift_wheel_down_emits_perf_page_down() {
+        let s = state_with_panel(DevToolsPanel::Performance);
+        let mods = KeyModSet::new(true, false, false);
+        let msg = handle_scroll(&s, ScrollDir::Down, mods);
+        assert!(matches!(msg, Some(Message::PerfPageDown)));
+    }
+
+    #[test]
+    fn performance_ctrl_modifier_returns_none() {
+        let s = state_with_panel(DevToolsPanel::Performance);
+        let mods = KeyModSet::new(false, true, false);
+        assert!(handle_scroll(&s, ScrollDir::Up, mods).is_none());
+        assert!(handle_scroll(&s, ScrollDir::Down, mods).is_none());
+    }
+
+    #[test]
+    fn performance_alt_modifier_returns_none() {
+        let s = state_with_panel(DevToolsPanel::Performance);
+        let mods = KeyModSet::new(false, false, true);
+        assert!(handle_scroll(&s, ScrollDir::Up, mods).is_none());
+        assert!(handle_scroll(&s, ScrollDir::Down, mods).is_none());
+    }
+
+    #[test]
+    fn performance_horizontal_wheel_returns_none() {
+        let s = state_with_panel(DevToolsPanel::Performance);
+        assert!(handle_scroll(&s, ScrollDir::Left, KeyModSet::NONE).is_none());
+        assert!(handle_scroll(&s, ScrollDir::Right, KeyModSet::NONE).is_none());
     }
 
     #[test]

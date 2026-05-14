@@ -10493,14 +10493,14 @@ mod mouse_scroll {
         assert!(result.action.is_none(), "scroll must not produce an action");
     }
 
-    // 5. UiMode::DevTools, Performance panel, Up Shift-only → None
+    // 5. UiMode::DevTools, Performance panel, Up Shift-only → PerfPageUp
     #[test]
-    fn mouse_scroll_devtools_performance_shift_up_produces_none() {
+    fn mouse_scroll_devtools_performance_shift_up_produces_perf_page_up() {
         let mut state = AppState::new();
         state.ui_mode = UiMode::DevTools;
         state.devtools_view_state.active_panel = DevToolsPanel::Performance;
         let shift = KeyModSet::new(true, false, false);
-        assert_scroll_routes_to_nothing(&mut state, ScrollDir::Up, shift);
+        assert_scroll_routes_to(&mut state, ScrollDir::Up, shift, Message::PerfPageUp);
     }
 
     // 6. UiMode::DevTools, Network panel (filter inactive), Up no mods → Message::NetworkNavigate(NetworkNav::Up)
