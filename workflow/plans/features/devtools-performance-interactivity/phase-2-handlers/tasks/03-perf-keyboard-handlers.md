@@ -111,3 +111,40 @@ fn perf_select_alloc_row_focuses_memory_list() { /* ... */ }
 - Use the existing `last_known_visible_height` pattern (Principle 3 of CODE_STANDARDS.md) — if hint == 0, fall back to a constant like `DEFAULT_PERF_PAGE_SIZE = 10`.
 - Do not duplicate existing Left/Right or `s` handlers — they remain untouched.
 - Be careful with `in_performance` guard placement — must precede generic `in_devtools` handlers.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Added `ScrollDir` enum, `clamp_chart_scroll` helper, `DEFAULT_PERF_PAGE_SIZE` constant, and 6 new public handler functions (`handle_perf_focus_section`, `handle_perf_scroll`, `handle_perf_page`, `handle_perf_jump_to_start`, `handle_perf_jump_to_end`, `handle_perf_select_alloc_row`) plus private helpers (`alloc_row_count`, `scroll_alloc_table`). Added 42 unit tests. |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `in_performance` guard block before main `match key` in `handle_key_devtools`; binds Tab/Shift+Tab → `PerfFocusSection`, Up/k/Down/j → `PerfScrollUp/Down`, PageUp/PageDown → `PerfPageUp/Down`, Home → `PerfJumpToStart`, End → `PerfJumpToEnd`. |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced 7 Phase 2 stub `UpdateResult::none()` arms with real routing calls to the new handler functions. |
+
+### Notable Decisions/Tradeoffs
+
+1. **ScrollDir semantics for charts vs lists**: For charts, "Up" increments the scroll offset (scrolls back in time) and "Down" decrements it (toward live edge). For the MemoryList, "Down" increments the row index (moves toward end) and "Up" decrements it. This matches standard TUI conventions where Up/Down move the visual cursor, but charts scroll their viewport.
+
+2. **in_performance guard is an early-return block**: Rather than polluting the main `match` with many `if in_performance` guards, all 8 new bindings are handled in an early-return `if in_performance { match key { ... } }` block before the main match. This avoids conflicts with Tab (session navigation in normal devtools) and j/k (inspector navigation).
+
+3. **Left/Right and `s` bindings preserved untouched**: The existing frame selection (Left/Right) and sort toggle (`s`) bindings remain in the main `match` with their `in_performance` guards as before — not moved into the new guard block.
+
+4. **`scroll_alloc_table` shared helper**: Both `handle_perf_scroll` and `handle_perf_page` delegate list scrolling to a private `scroll_alloc_table(perf, direction, steps)` function, avoiding duplication.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — PASS (2241 tests, 0 failed)
+- `cargo test --workspace` — PASS (all crates)
+- `cargo clippy --workspace -- -D warnings` — PASS (0 warnings)
+
+### Risks/Limitations
+
+1. **Tab key now consumed by Performance panel**: When in the Performance panel, Tab/Shift+Tab cycles sections instead of switching DevTools sub-panels. Users must use `i`, `p`, `n` keys to change panels. This is the intended behavior per task spec.
+
+2. **alloc_table_scroll_offset nudge uses `visible_height - 1` formula**: The keep-visible logic uses `visible_height - 1` as the scroll threshold. If `visible_height` is 1, this correctly keeps the single visible row in frame.

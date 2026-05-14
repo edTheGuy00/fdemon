@@ -18,8 +18,10 @@ Wire the Phase 1 messages into key bindings, `update()` routing, and per-section
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 3 | [03-perf-keyboard-handlers](tasks/03-perf-keyboard-handlers.md) | Not Started | Phase 1 | 4-5h | `handler/keys.rs`, `handler/devtools/performance.rs`, `handler/update.rs` |
-| 4 | [04-perf-mouse-handlers](tasks/04-perf-mouse-handlers.md) | Not Started | Phase 1 | 2-3h | `handler/devtools/performance.rs`, `handler/update.rs` |
+| 3 | [03-perf-keyboard-handlers](tasks/03-perf-keyboard-handlers.md) | Done (CONCERN) | Phase 1 | 4-5h | `handler/keys.rs`, `handler/devtools/performance.rs`, `handler/update.rs` |
+| 4 | [04-perf-mouse-handlers](tasks/04-perf-mouse-handlers.md) | Done | Phase 1 | 2-3h | `handler/devtools/performance.rs`, `handler/update.rs` |
+
+**Concern (task 03):** Spec at task lines 31-32 says `jump_to_start`→last alloc row and `jump_to_end`→row 0 for MemoryList. Implementor inverted this (Home=row 0, End=last row) to match conventional TUI semantics. Charts follow spec correctly (start=oldest visible, end=live edge). Treat the implementation as canonical; spec text appears to be authoring error. Downstream tasks (e.g. mouse) should align with implementation.
 
 ## File Overlap Analysis
 

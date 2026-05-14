@@ -71,3 +71,42 @@ fn perf_select_alloc_row_with_some_focuses_memory_list() {
 
 - This is a light-weight task; most work happens at the widget layer in Phase 3.
 - The mouse region registry pattern (CODE_STANDARDS.md "Region Registry Pattern") guarantees regions are recreated every frame; no persistence concerns at the handler layer.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Fixed `handle_perf_select_alloc_row` to only set `focused_section = MemoryList` when `index.is_some()`. Fixed existing test `perf_select_alloc_row_none_clears_selection` (renamed + corrected assertion). Added 3 new mouse/keyboard equivalence tests. Applied `cargo fmt` reformatting throughout. |
+| `crates/fdemon-app/src/message.rs` | `cargo fmt` reordered a `use` statement (import sort). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Focus semantics fix**: `handle_perf_select_alloc_row(state, None)` previously unconditionally set `focused_section = MemoryList`. Fixed so only `Some(i)` triggers the focus change. A mouse click on empty space in the alloc table would previously steal focus from whichever section the user was navigating.
+
+2. **Test rename**: `perf_select_alloc_row_none_clears_selection` was renamed to `perf_select_alloc_row_none_clears_selection_without_changing_focus` and its assertion was corrected — the old test was asserting the wrong (broken) behavior.
+
+3. **Three new tests added** per task spec:
+   - `perf_focus_section_via_mouse_or_keyboard_yields_same_state` — guards the keyboard/mouse equivalence contract
+   - `perf_select_alloc_row_with_some_focuses_memory_list` — covers acceptance criterion #2
+   - `perf_select_alloc_row_with_none_does_not_change_focus` — covers acceptance criterion note about `index: None`
+
+4. **update.rs audit**: All Performance panel message variants (`PerfFocusSection`, `PerfScrollUp/Down`, `PerfPageUp/Down`, `PerfJumpToStart/End`, `PerfSelectAllocRow`) were already routed correctly from task 03. No routing changes needed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test -p fdemon-app -- handler::devtools::performance` - PASS (48 tests)
+- `cargo test --workspace` - PASS (all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
+### Risks/Limitations
+
+1. **None**: This is a pure logic fix with no new functionality. Phase 3 widget-side mouse region registration will exercise these handlers at runtime.

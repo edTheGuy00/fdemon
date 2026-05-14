@@ -18,8 +18,8 @@ Add `PerfSection` enum, scroll/focus/render-hint fields on `PerformanceState`, a
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-perf-section-enum-and-state-fields](tasks/01-perf-section-enum-and-state-fields.md) | Not Started | — | 1-2h | `session/performance.rs` |
-| 2 | [02-perf-message-variants](tasks/02-perf-message-variants.md) | Not Started | — | 1h | `message.rs` |
+| 1 | [01-perf-section-enum-and-state-fields](tasks/01-perf-section-enum-and-state-fields.md) | Done | — | 1-2h | `session/performance.rs` |
+| 2 | [02-perf-message-variants](tasks/02-perf-message-variants.md) | Done | — | 1h | `message.rs` |
 
 ## File Overlap Analysis
 

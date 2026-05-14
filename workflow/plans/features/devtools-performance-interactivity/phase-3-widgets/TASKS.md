@@ -19,9 +19,11 @@ Make widgets honor focus, scroll offsets, and selection. Register mouse regions 
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 5 | [05-frame-chart-scroll-and-focus](tasks/05-frame-chart-scroll-and-focus.md) | Not Started | Phase 2 | 3-4h | `widgets/devtools/performance/frame_chart/`, `widgets/devtools/performance/mod.rs` |
-| 6 | [06-memory-chart-scroll-and-focus](tasks/06-memory-chart-scroll-and-focus.md) | Not Started | Phase 2 | 3-4h | `widgets/devtools/performance/memory_chart/mod.rs`, `chart.rs`, `widgets/devtools/performance/mod.rs` |
-| 7 | [07-alloc-table-scroll-and-selection](tasks/07-alloc-table-scroll-and-selection.md) | Not Started | Phase 2 | 2-4h | `widgets/devtools/performance/memory_chart/table.rs` |
+| 5 | [05-frame-chart-scroll-and-focus](tasks/05-frame-chart-scroll-and-focus.md) | Done | Phase 2 | 3-4h | `widgets/devtools/performance/frame_chart/`, `widgets/devtools/performance/mod.rs` |
+| 6 | [06-memory-chart-scroll-and-focus](tasks/06-memory-chart-scroll-and-focus.md) | Done | Phase 2 | 3-4h | `widgets/devtools/performance/memory_chart/mod.rs`, `chart.rs`, `widgets/devtools/performance/mod.rs` |
+| 7 | [07-alloc-table-scroll-and-selection](tasks/07-alloc-table-scroll-and-selection.md) | Done (re-dispatched) | Phase 2 | 2-4h | `widgets/devtools/performance/memory_chart/table.rs` |
+
+**Note (task 07):** First attempt (worktree) hit a merge conflict in `performance/mod.rs` because both 05 and 07 modified it. Re-dispatched sequentially on top of merged 05 — clean implementation, validator PASS, no conflict.
 
 ## File Overlap Analysis
 

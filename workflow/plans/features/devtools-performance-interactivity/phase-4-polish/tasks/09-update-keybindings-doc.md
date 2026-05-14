@@ -44,3 +44,33 @@ Add a section in the DevTools area listing:
 
 - Unmanaged doc — implementor can edit directly.
 - Keep `Home`/`End` semantics clear: Home = back-in-time, End = present.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a7c743386c915fe96
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Expanded "Performance Panel" section with four subsections: Section Focus, Scrolling, Frame Selection, Allocation List. All 13 bindings from PLAN.md Keyboard Shortcuts Summary documented. |
+| `workflow/plans/features/devtools-performance-interactivity/phase-4-polish/tasks/09-update-keybindings-doc.md` | Added this completion summary. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Subsection structure**: Used `####` headers to group bindings by functional area (Section Focus, Scrolling, Frame Selection, Allocation List) rather than a flat table. This mirrors the pattern used in the Network Panel and Settings Panel sections, and makes the distinctions between behaviors clear (e.g., `↑`/`k` behavior differs by focused section).
+2. **Mouse interactions in KEYBINDINGS.md**: Included click interactions (Click section, Click frame bar, Click alloc row) in the keyboard doc since they were specified in the task table. The existing doc already mixes mouse and keyboard in the Performance section header note ("Mouse interactions are documented separately") but these are interactive selection/focus triggers that belong alongside the keyboard equivalents.
+3. **ToC not updated**: The new `####`-level subsections are below the granularity tracked in the Table of Contents, consistent with how the Network Filter Mode and Settings value-type subsections are handled.
+
+### Testing Performed
+
+- Visual inspection of KEYBINDINGS.md — all 13 bindings from PLAN.md Keyboard Shortcuts Summary present and correctly described.
+- Format verified consistent with existing entries (three-column table: Key / Action / Description).
+- `Home`/`End` semantics documented clearly: Home = oldest/back-in-time, End = live edge/present.
+
+### Risks/Limitations
+
+1. **Mouse doc overlap**: The doc header notes mouse interactions are in MOUSE.md, but click interactions are also listed here (matching the existing approach in the pre-existing Performance Panel section). If MOUSE.md is updated, it should cross-reference the Performance Panel click interactions.

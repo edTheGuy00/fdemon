@@ -19,9 +19,15 @@ Live-edge drift tests, key-bindings doc, architecture doc. Last gate before merg
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 8 | [08-live-edge-drift-tests](tasks/08-live-edge-drift-tests.md) | Not Started | Phase 3 | 1h | `widgets/devtools/performance/` tests |
-| 9 | [09-update-keybindings-doc](tasks/09-update-keybindings-doc.md) | Not Started | Phase 3 | 0.5h | `docs/KEYBINDINGS.md` |
-| 10 | [10-update-architecture-doc](tasks/10-update-architecture-doc.md) | Not Started | Phase 3 | 0.5h | `docs/ARCHITECTURE.md` (doc_maintainer) |
+| 8 | [08-live-edge-drift-tests](tasks/08-live-edge-drift-tests.md) | ⚠️ Blocked | Phase 3 | 1h | `widgets/devtools/performance/` tests |
+| 9 | [09-update-keybindings-doc](tasks/09-update-keybindings-doc.md) | Done | Phase 3 | 0.5h | `docs/KEYBINDINGS.md` |
+| 10 | [10-update-architecture-doc](tasks/10-update-architecture-doc.md) | Done | Phase 3 | 0.5h | `docs/ARCHITECTURE.md` (doc_maintainer) |
+
+### Blocker Notes
+
+- **08**: Validator returned **FAIL** on acceptance criterion 3 — the task requires documented manual smoke verification (launch fdemon against `example/app2`, Tab through sections, scroll, click, press End), and the completion summary explicitly stated "Manual smoke testing was not performed (no running Flutter project available in CI environment)". The implementation itself is sound: all 7 tests pass, `cargo test --workspace` and `cargo clippy` are clean, the KNOWN DEFECT in test 4 (`left_right_arrow_clears_scroll_offset`) is surfaced correctly per the task Notes section.
+  - Worktree branch preserved for inspection: `worktree-agent-aac496bb780a4e002`
+  - To unblock: run the smoke verification manually, append results to the task's Completion Summary, then merge the branch.
 
 ## File Overlap Analysis
 

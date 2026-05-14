@@ -60,3 +60,30 @@ No new tests at the data-type layer; the message types are exercised by handlers
 - If `Message` has a `Debug` impl that prints each variant, no change needed — `#[derive(Debug)]` covers it.
 - Don't add handlers here — Phase 2's job. Just the variants.
 - Existing `match` blocks on `Message` will get warnings about non-exhaustive patterns if `Message` doesn't have a catch-all. Use a wildcard `_ => {}` only at the routing layer; in `update.rs` (Phase 2) we will route each variant explicitly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `use crate::session::performance::PerfSection` import; added 7 new variants (`PerfFocusSection`, `PerfScrollUp`, `PerfScrollDown`, `PerfPageUp`, `PerfPageDown`, `PerfJumpToStart`, `PerfJumpToEnd`, `PerfSelectAllocRow`) under `// --- Performance panel interactivity ---` section comment |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub match arms for all 7 new variants returning `UpdateResult::none()`, keeping the match exhaustive until Phase 2 handlers are wired in |
+
+### Notable Decisions/Tradeoffs
+
+1. **Stub arms in update.rs**: The task says not to add handlers (Phase 2's job), but `update.rs` has an exhaustive match so the code would not compile without arms. Added `UpdateResult::none()` stubs with a comment noting they are Phase 2 stubs — minimal and clearly labeled for replacement.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace --lib` - Passed (1018 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **Stub arms**: The 7 new variants are silently no-ops until Phase 2 wires them up. Any key events dispatching these messages before Phase 2 will be quietly dropped.

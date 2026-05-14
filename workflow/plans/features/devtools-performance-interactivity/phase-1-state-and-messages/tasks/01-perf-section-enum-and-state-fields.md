@@ -104,3 +104,36 @@ fn performance_state_defaults() {
 - Don't touch widgets or handlers in this task — they're Phase 2 / Phase 3.
 - `PerformanceState`'s `with_memory_history_size(...)` constructor (if it exists) needs the new fields wired through.
 - The frame-history bump may break tests that assume `len() == 300`; fix those alongside this task.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Added `PerfSection` enum with `next`/`prev` helpers; added 5 behavioral fields + 3 `Cell<usize>` render-hint fields to `PerformanceState`; bumped `DEFAULT_FRAME_HISTORY_SIZE` to 1800 with doc comment; updated `Default` impl and `with_memory_history_size` constructor; added 8 new unit tests |
+| `crates/fdemon-app/src/session/mod.rs` | Exported `PerfSection` from the session module |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Replaced `static LazyLock<PerformanceState>` fallback with a stack-local variable — `Cell<usize>` is `!Sync` so `LazyLock` (which requires `Sync`) no longer compiled |
+
+### Notable Decisions/Tradeoffs
+
+1. **Cell<usize> Sync issue**: `Cell<usize>` is `!Sync`, so `LazyLock<PerformanceState>` in `fdemon-tui` was no longer valid. Fixed by initialising the fallback `PerformanceState` on the stack inside the `match` arm instead of as a static. The comment in the code already noted "in practice DevTools mode is only reachable when a session exists", so this path is never hot.
+
+2. **DEFAULT_FRAME_HISTORY_SIZE bump from 300 to 1800**: All existing tests reference the constant symbolically, not as a literal `300`, so no test logic broke. The loop-based tests that fill the buffer now iterate 1800 times instead of 300 — semantically identical, marginally slower in test runs.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (5,470+ tests across all crates, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Test runtime**: The two handler tests that fill the frame buffer (previously 300 iterations, now 1800) run 6× more update cycles. In practice these are still fast (sub-second), but it is worth noting if CI benchmarks become sensitive.
+2. **Cell render-hints uninitialized**: `Cell::new(0)` means "not yet rendered". Handler code in Phase 2/3 must handle the `0` case with a sensible fallback height/width, as documented in the EXCEPTION annotations and CODE_STANDARDS.md Principle 3.

@@ -130,3 +130,38 @@ fn alloc_table_clicking_row_emits_correct_global_index() { /* ... */ }
 - Per CODE_STANDARDS.md, no magic numbers — define `TABLE_HEADER_ROWS: usize = 2` (or however many) and use the constant.
 - `MAX_TABLE_ROWS` constant can be removed entirely; if it's used elsewhere (e.g., in `profile.top_by_size(MAX_TABLE_ROWS)` callers), audit and replace those call sites.
 - Sort cost: with up to thousands of classes, an inline sort per render frame may be expensive. Profile after this lands; if needed, add a cached-sorted-handle to `AllocationProfile`. Out of scope here.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/table.rs` | Replaced free-function with `AllocationTable` struct; scrollable window via `scroll_offset` + `visible_height`; selected-row highlight with `palette::ACCENT` background; per-row click regions (`PerfSelectAllocRow`); empty-space focus region (`PerfFocusSection(MemoryList)`); `visible_height_cell` written every frame with EXCEPTION annotation; `TABLE_HEADER_ROWS` named constant; `MAX_TABLE_ROWS` removed; legacy `render_allocation_table` wrapper preserved for existing tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/mod.rs` | Added `alloc_scroll_offset`, `alloc_selected_row`, `alloc_focused`, `alloc_visible_height_cell` fields to `MemoryChart`; added `with_alloc_state()` builder method; split `Widget::render` into `render_impl` + `render_with_regions`; ctx threading to `AllocationTable`; removed unused `TABLE_HEADER_HEIGHT` constant |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Updated `render_impl` to pass `alloc_table_scroll_offset`, `alloc_table_selected_row`, `focused_section == MemoryList`, and `alloc_table_visible_height` to `MemoryChart`; use `ctx.as_deref_mut()` for FrameChart so MemoryChart retains ownership of `ctx` for its own click regions |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/tests.rs` | Added 8 new acceptance-criteria tests: `alloc_table_visible_height_cell_written_each_frame`, `alloc_table_renders_windowed_slice_at_offset_zero`, `alloc_table_renders_windowed_slice_at_positive_offset`, `alloc_table_selected_row_highlighted_when_visible`, `alloc_table_selected_row_not_highlighted_when_scrolled_past`, `alloc_table_clicking_row_emits_correct_global_index`, `alloc_table_empty_space_emits_focus_section`, `alloc_table_no_focus_region_when_rows_fill_area` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Legacy wrapper preserved**: `render_allocation_table` free-function left as a thin wrapper over `AllocationTable` (scroll=0, selected=None, no visible_height_cell). This keeps the ~20 existing tests green without refactoring them.
+2. **`focused` field is dead code**: wired for future visual distinction (focused-border style) but not yet read. Annotated with `#[allow(dead_code)]` to pass clippy with `-D warnings`.
+3. **Reborrow pattern for dual ctx use**: `ctx.as_deref_mut()` is passed to `FrameChart`, then `ctx` is passed by value to `MemoryChart::render_with_regions`. This allows both sections to register click regions in one `render_impl` call without cloning.
+4. **Inline sort per frame**: `sort_by_key` with `Reverse` is used. Performance concern noted in task Notes — deferred.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (1032 fdemon-tui tests, 0 failures; all workspace tests green)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Sort per frame**: Sorting all class members on every render call may be slow for profiles with thousands of classes. The task notes this as out of scope; a cached-sorted handle in `AllocationProfile` would be the mitigation path.
+2. **Scroll clamping is visual-only**: If `alloc_table_scroll_offset` exceeds `sorted.len()-1`, the render clamps silently but the handler-layer state retains the out-of-range value. The handler should enforce clamping using the `alloc_table_visible_height` Cell feedback; this is the expected TEA pattern.
