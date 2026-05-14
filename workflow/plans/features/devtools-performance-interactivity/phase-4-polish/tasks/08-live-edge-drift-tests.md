@@ -51,3 +51,49 @@ Tests to add:
 
 - Manual smoke results go in the Completion Summary at the bottom of this task file.
 - If a test reveals a design defect (Model A vs B mismatch), surface it as a follow-up task rather than silently fixing.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aac496bb780a4e002
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Added 7 Task 08 live-edge drift + integration tests in the `tests` module |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test location**: All 7 tests were placed in the existing `tests` module of `crates/fdemon-app/src/handler/devtools/performance.rs` rather than split across widget test files. The tests operate at the handler/state level where the Model A semantics live, making the handler the canonical home. Widget-level tests (frame_chart/tests.rs, memory_chart/tests.rs) already cover `compute_visible_range` and `visible_memory_window` — the task's acceptance criteria are better expressed at the state-mutation level.
+
+2. **Test 4 — Model A/B defect surface**: `left_right_arrow_clears_scroll_offset` reveals that the current Phase 2 implementation does NOT clear `frame_chart_scroll_offset` when the Left key selects a frame. `compute_visible_range` (Phase 3) gives `scroll_offset` priority over `selected_frame`, so the selected frame won't scroll into view if an offset is active. The test documents the current behaviour (offset stays at 50) with a `KNOWN DEFECT` note rather than silently fixing the issue — the fix would need the Left/Right key handler to also emit `PerfJumpToEnd` when transitioning from `None` to a concrete selection. This is tracked as a follow-up.
+
+3. **`push_frames` ring buffer saturation**: The frame history defaults to 1800 capacity. Tests push ≤ 1000 frames to stay within bounds. The `scroll_offset_persists_under_new_arrivals` test pushes 500+20 frames to stay well within capacity.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib -- "scroll_offset_persists_under_new_arrivals" "jump_to_end_resets_scroll_offset_to_zero" "jump_to_start_sets_max_back" "left_right_arrow_clears_scroll_offset" "tab_cycles_focus_through_three_sections" "mouse_click_on_alloc_row_focuses_section" "alloc_table_scroll_keeps_selection_visible"` — **7 passed**
+- `cargo test --workspace` — PASS (all workspace tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS (no warnings)
+- `cargo fmt --all -- --check` — PASS
+
+### Manual Smoke Verification
+
+Verified against `example/app2` (2026-05-14, user sign-off):
+
+| Check | Result |
+|-------|--------|
+| Launch fdemon against `example/app2`, enter DevTools, switch to Performance | ✅ |
+| Tab through sections — observe border highlight | ✅ |
+| Scroll each section via keyboard (↑/↓/j/k/PageUp/PageDown) — observe values change | ✅ |
+| Click sections + alloc rows — observe focus + selection | ✅ |
+| Press End — return to live edge | ✅ |
+
+### Risks/Limitations
+
+1. **Known defect (follow-up)**: Left/Right arrow does not clear `frame_chart_scroll_offset` when transitioning from `None` selection to a frame index. This means the scrolled-back window stays in place even after keyboard frame selection. The `left_right_arrow_clears_scroll_offset` test documents this behaviour as a known defect with a `KNOWN DEFECT` annotation in the assertion message. A follow-up task should modify the Left/Right key handler (or `handle_select_performance_frame`) to also reset `frame_chart_scroll_offset = 0` when making a new selection from `None`.
+
+2. **Mouse-wheel scroll gap (follow-up)**: During smoke verification the user reported that mouse-wheel scroll inside Performance sections does not scroll. Mouse-wheel routing was not in scope for any of this feature's 10 tasks — `crates/fdemon-tui/src/event.rs` already lifts `crossterm` `MouseEventKind::ScrollUp/Down` into `MouseInput::Scroll`, but task 04 (`04-perf-mouse-handlers`) only wired click handlers (`PerfFocusSection`, `PerfSelectAllocRow`, frame-bar click) — no consumer dispatches `PerfScrollUp/Down` from a wheel event. Tracked as a follow-up task: add wheel-to-`PerfScrollUp/Down` routing in the Performance panel's `MouseRegions`, keyed off the wheel event's row landing inside a section's click region (with focus side-effect mirroring keyboard scroll semantics).
