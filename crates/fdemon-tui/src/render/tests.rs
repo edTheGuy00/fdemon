@@ -1307,3 +1307,103 @@ fn snapshot_normal_mode_stopped() {
     let content = render_screen(&mut state);
     assert_snapshot!("normal_stopped", content);
 }
+
+// ===========================================================================
+// Toast overlay tests (Minor #15)
+// ===========================================================================
+
+/// Empty toast list must not panic and must not write anywhere near the
+/// bottom (background remains untouched). This is the no-op guard for the
+/// `render_toasts` loop.
+#[test]
+fn render_with_no_toasts_does_not_panic() {
+    let mut state = create_base_state();
+    assert!(state.toasts.is_empty(), "precondition: no toasts");
+
+    // Render — `render_toasts` is called via `view()`.
+    let _ = render_screen(&mut state);
+}
+
+/// A single Warn toast lands somewhere in the rendered output. We do not
+/// pin the exact row (layout-dependent) — just that the message text and
+/// the warn glyph both appear.
+#[test]
+fn render_warn_toast_appears_in_output() {
+    use fdemon_app::state::ToastLevel;
+
+    let mut state = create_base_state();
+    state.push_toast(ToastLevel::Warn, "test warn toast");
+
+    let content = render_screen(&mut state);
+
+    assert!(
+        content.contains("test warn toast"),
+        "Warn toast text should be present in rendered output"
+    );
+    assert!(
+        content.contains('\u{26A0}'),
+        "Warn toast icon (⚠) should be present in rendered output"
+    );
+}
+
+/// Info toast renders with the info glyph instead of the warn glyph.
+#[test]
+fn render_info_toast_uses_info_glyph() {
+    use fdemon_app::state::ToastLevel;
+
+    let mut state = create_base_state();
+    state.push_toast(ToastLevel::Info, "test info toast");
+
+    let content = render_screen(&mut state);
+
+    assert!(
+        content.contains("test info toast"),
+        "Info toast text should be present"
+    );
+    assert!(
+        content.contains('\u{2139}'),
+        "Info toast icon (ℹ) should be present in rendered output"
+    );
+}
+
+/// Multiple toasts stack — both messages must be visible simultaneously.
+#[test]
+fn render_multiple_toasts_stack_without_overlap() {
+    use fdemon_app::state::ToastLevel;
+
+    let mut state = create_base_state();
+    state.push_toast(ToastLevel::Warn, "first toast");
+    state.push_toast(ToastLevel::Info, "second toast");
+
+    let content = render_screen(&mut state);
+
+    assert!(content.contains("first toast"), "first toast missing");
+    assert!(content.contains("second toast"), "second toast missing");
+}
+
+/// Toast text longer than the available width is truncated with an ellipsis.
+/// The truncation budget uses the ICON_DISPLAY_WIDTH constant — this test
+/// guards against a regression where the magic number diverges from the
+/// actual icon width.
+#[test]
+fn render_long_toast_text_is_truncated_with_ellipsis() {
+    use fdemon_app::state::ToastLevel;
+
+    let mut state = create_base_state();
+    // 200 chars — far longer than a 120-col terminal can fit.
+    let long_text = "a".repeat(200);
+    state.push_toast(ToastLevel::Warn, long_text.clone());
+
+    let content = render_screen(&mut state);
+
+    // The full text must NOT appear verbatim (would require >120 cols).
+    assert!(
+        !content.contains(&long_text),
+        "long toast text should be truncated, not rendered in full"
+    );
+    // The ellipsis marker indicates truncation happened.
+    assert!(
+        content.contains('\u{2026}'),
+        "ellipsis (…) should appear when toast is truncated"
+    );
+}

@@ -425,6 +425,54 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         }
     }
 
+    // ── Performance panel — section navigation and scroll ────────────────────
+    //
+    // These bindings MUST be evaluated before the generic `match key` block so
+    // that Tab/Shift+Tab, j/k, Up/Down, PageUp/Down, Home/End are intercepted
+    // when the Performance panel is active instead of falling through to the
+    // generic DevTools handlers (which have no bindings for those keys here).
+    //
+    // Left/Right (frame selection) and `s` (sort toggle) remain in the main
+    // match below with their `in_performance` guards — they are not moved here.
+    if in_performance {
+        // Ctrl+C and Esc must NOT be intercepted here — they are global and
+        // handled by the main match below.
+        match key {
+            // ── Section focus cycling ─────────────────────────────────────────
+            InputKey::Tab => {
+                let next = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.performance.focused_section.next())
+                    .unwrap_or_default();
+                return Some(Message::PerfFocusSection(next));
+            }
+            InputKey::BackTab => {
+                let prev = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.performance.focused_section.prev())
+                    .unwrap_or_default();
+                return Some(Message::PerfFocusSection(prev));
+            }
+
+            // ── Row / bar scroll ──────────────────────────────────────────────
+            InputKey::Up | InputKey::Char('k') => return Some(Message::PerfScrollUp),
+            InputKey::Down | InputKey::Char('j') => return Some(Message::PerfScrollDown),
+
+            // ── Page scroll ───────────────────────────────────────────────────
+            InputKey::PageUp => return Some(Message::PerfPageUp),
+            InputKey::PageDown => return Some(Message::PerfPageDown),
+
+            // ── Jump to oldest / live edge ────────────────────────────────────
+            InputKey::Home => return Some(Message::PerfJumpToStart),
+            InputKey::End => return Some(Message::PerfJumpToEnd),
+
+            // All other keys fall through to the main match.
+            _ => {}
+        }
+    }
+
     match key {
         // ── Exit DevTools / deselect frame ────────────────────────────────────
         //

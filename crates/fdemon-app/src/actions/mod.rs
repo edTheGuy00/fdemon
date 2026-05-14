@@ -251,6 +251,10 @@ pub fn handle_action(
             vm_handle,
             tree_max_depth,
             fetch_timeout_secs,
+            inspector_readiness_poll_attempts,
+            inspector_readiness_poll_interval_ms,
+            inspector_readiness_poll_call_timeout_ms,
+            trigger,
         } => {
             if let Some(handle) = vm_handle {
                 inspector::spawn_fetch_widget_tree(
@@ -259,6 +263,10 @@ pub fn handle_action(
                     msg_tx,
                     tree_max_depth,
                     fetch_timeout_secs,
+                    inspector_readiness_poll_attempts,
+                    inspector_readiness_poll_interval_ms,
+                    inspector_readiness_poll_call_timeout_ms,
+                    trigger,
                 );
             } else {
                 warn!(
@@ -850,6 +858,48 @@ pub fn handle_action(
                     }
                 }
             });
+        }
+
+        UpdateAction::SendDaemonCommand {
+            session_id,
+            command,
+            cmd_sender,
+        } => {
+            // Fire-and-forget: send the command to the session's Flutter process stdin.
+            // Responses arrive as `DaemonMessage::Response` and are routed in
+            // `process::route_session_daemon_response`:
+            //   * Numeric-ID responses go through `RequestTracker` (the awaiting
+            //     future resolves).
+            //   * String-ID `devtools-serve-*` responses are parsed via
+            //     `parse_devtools_serve_response` and forwarded as synthetic
+            //     `Message::DevToolsServed` / `Message::DevToolsServeFailed`.
+            // The `app.devTools` daemon event (primary, modern Flutter) is handled
+            // separately in `handler/daemon.rs`.
+            //
+            // `cmd_sender` is hydrated by `process.rs`; if it is still None at this
+            // point it means the session's process has not yet attached a sender,
+            // which should not happen (process.rs discards the action when None).
+            if let Some(sender) = cmd_sender {
+                tokio::spawn(async move {
+                    if let Err(e) = sender.send_fire_and_forget(command).await {
+                        tracing::warn!(
+                            session_id = session_id,
+                            error = %e,
+                            "devtools.serve fire-and-forget failed"
+                        );
+                    } else {
+                        tracing::debug!(
+                            session_id = session_id,
+                            "devtools.serve command sent to Flutter daemon"
+                        );
+                    }
+                });
+            } else {
+                tracing::debug!(
+                    session_id = session_id,
+                    "SendDaemonCommand: cmd_sender is None (process not attached); skipping"
+                );
+            }
         }
     }
 }

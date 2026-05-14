@@ -11,9 +11,11 @@ mod braille_canvas;
 mod chart;
 mod table;
 
+use std::cell::Cell;
+
 use braille_canvas::BrailleCanvas;
 use chart::{render_history_chart, render_legend, render_sample_chart, render_x_axis_labels};
-use table::render_allocation_table;
+use table::{render_allocation_table, AllocationTable};
 
 use fdemon_app::session::AllocationSortColumn;
 use fdemon_core::performance::{AllocationProfile, GcEvent, MemorySample, MemoryUsage, RingBuffer};
@@ -23,8 +25,14 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::widgets::MouseCtx;
+
 use super::styles::{format_number, gauge_style_for_utilization};
 use crate::theme::palette;
+
+// Re-export the scroll window helper so tests.rs can use it via `use super::*`.
+#[cfg(test)]
+pub(super) use chart::visible_memory_window;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -33,8 +41,6 @@ pub(super) const MIN_CHART_HEIGHT: u16 = 6;
 /// Minimum inner height for the allocation table section.
 /// Accepts header (1 row) + 1 data row, which is the smallest useful view.
 pub(super) const MIN_TABLE_HEIGHT: u16 = 2;
-pub(super) const TABLE_HEADER_HEIGHT: u16 = 2; // header + separator
-pub(super) const MAX_TABLE_ROWS: usize = 10;
 const CHART_PROPORTION: f64 = 0.6; // 60% chart, 40% table
 /// Width of the Y-axis label column in characters (e.g., "128 MB ").
 const Y_AXIS_WIDTH: u16 = 7;
@@ -78,6 +84,25 @@ pub(crate) struct MemoryChart<'a> {
     allocation_profile: Option<&'a AllocationProfile>,
     allocation_sort: AllocationSortColumn,
     icons: bool,
+    // ── Time-series chart scroll / focus (set via with_chart_state) ──────────
+    /// How many samples the time-series chart has been scrolled back from the
+    /// live edge (0 = live-edge mode, same as FrameChart Model A).
+    chart_scroll_offset: usize,
+    /// Whether the time-series chart section currently has keyboard focus.
+    chart_focused: bool,
+    /// Render-hint Cell written each frame with the visible sample column count.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    chart_visible_width_cell: Option<&'a Cell<usize>>,
+    // ── Alloc table interactivity (set via with_alloc_state) ──────────────────
+    /// How many rows the allocation table is scrolled past the top.
+    alloc_scroll_offset: usize,
+    /// Global index of the currently selected allocation table row.
+    alloc_selected_row: Option<usize>,
+    /// Whether the allocation table section currently has keyboard focus.
+    alloc_focused: bool,
+    /// Render-hint Cell written each frame with the visible row count.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    alloc_visible_height_cell: Option<&'a Cell<usize>>,
 }
 
 impl<'a> MemoryChart<'a> {
@@ -97,12 +122,68 @@ impl<'a> MemoryChart<'a> {
             allocation_profile,
             allocation_sort,
             icons,
+            chart_scroll_offset: 0,
+            chart_focused: false,
+            chart_visible_width_cell: None,
+            alloc_scroll_offset: 0,
+            alloc_selected_row: None,
+            alloc_focused: false,
+            alloc_visible_height_cell: None,
         }
     }
-}
 
-impl Widget for MemoryChart<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+    /// Attach time-series chart interactivity state.
+    ///
+    /// When set, the braille chart respects `scroll_offset` (Model A — samples
+    /// back from the live edge) and applies a focus highlight to the section.
+    ///
+    /// # Arguments
+    /// * `scroll_offset`         — Samples scrolled back from the live edge (0 = live).
+    /// * `focused`               — Whether this section currently holds keyboard focus.
+    /// * `visible_width_cell`    — Render-hint Cell written every frame with the
+    ///   number of visible sample columns.
+    pub(crate) fn with_chart_state(
+        mut self,
+        scroll_offset: usize,
+        focused: bool,
+        visible_width_cell: &'a Cell<usize>,
+    ) -> Self {
+        self.chart_scroll_offset = scroll_offset;
+        self.chart_focused = focused;
+        self.chart_visible_width_cell = Some(visible_width_cell);
+        self
+    }
+
+    /// Attach allocation table interactivity state.
+    ///
+    /// When set, the allocation table renders as a scrollable, selectable list
+    /// and registers per-row click regions (if a `MouseCtx` is also provided via
+    /// [`render_with_regions`]).
+    ///
+    /// # Arguments
+    /// * `scroll_offset` — First row of the sorted list to render.
+    /// * `selected_row`  — Global index of the highlighted row (`None` = no highlight).
+    /// * `focused`       — Whether this section currently holds keyboard focus.
+    /// * `visible_height_cell` — Render-hint Cell written every frame with the
+    ///   number of visible data rows.
+    pub(crate) fn with_alloc_state(
+        mut self,
+        scroll_offset: usize,
+        selected_row: Option<usize>,
+        focused: bool,
+        visible_height_cell: &'a Cell<usize>,
+    ) -> Self {
+        self.alloc_scroll_offset = scroll_offset;
+        self.alloc_selected_row = selected_row;
+        self.alloc_focused = focused;
+        self.alloc_visible_height_cell = Some(visible_height_cell);
+        self
+    }
+
+    // ── Shared render implementation ──────────────────────────────────────────
+
+    /// Core render logic shared by [`Widget::render`] and [`render_with_regions`].
+    fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -140,24 +221,65 @@ impl Widget for MemoryChart<'_> {
                 self.memory_samples,
                 self.memory_history,
                 self.gc_history,
+                self.chart_scroll_offset,
+                self.chart_visible_width_cell,
                 chart_area,
                 buf,
             );
-            render_allocation_table(
-                self.allocation_profile,
-                self.allocation_sort,
-                table_area,
-                buf,
-            );
+
+            // Render allocation table — use AllocationTable struct if interactivity
+            // state was provided, otherwise fall back to the legacy free-function.
+            match (self.allocation_profile, self.alloc_visible_height_cell) {
+                (Some(profile), Some(cell)) => {
+                    let table = AllocationTable {
+                        profile,
+                        sort_column: self.allocation_sort,
+                        scroll_offset: self.alloc_scroll_offset,
+                        selected_row: self.alloc_selected_row,
+                        focused: self.alloc_focused,
+                        visible_height_cell: cell,
+                    };
+                    table.render(table_area, buf, ctx);
+                }
+                (profile, _) => {
+                    // No interactivity cell — use the legacy free-function.
+                    render_allocation_table(profile, self.allocation_sort, table_area, buf);
+                }
+            }
         } else {
             render_chart_area(
                 self.memory_samples,
                 self.memory_history,
                 self.gc_history,
+                self.chart_scroll_offset,
+                self.chart_visible_width_cell,
                 area,
                 buf,
             );
         }
+    }
+
+    /// Render the memory chart, optionally recording clickable regions.
+    ///
+    /// Pass `Some(ctx)` to register per-row click regions in the allocation
+    /// table. Pass `None` to skip region recording (output is identical to
+    /// [`Widget::render`]).
+    ///
+    /// Call [`with_alloc_state`] before this method to enable scrolling,
+    /// selection, and click regions.
+    pub(crate) fn render_with_regions(
+        self,
+        area: Rect,
+        buf: &mut Buffer,
+        ctx: Option<&mut MouseCtx<'_>>,
+    ) {
+        self.render_impl(area, buf, ctx);
+    }
+}
+
+impl Widget for MemoryChart<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_impl(area, buf, None);
     }
 }
 
@@ -214,6 +336,8 @@ fn render_chart_area(
     samples: &RingBuffer<MemorySample>,
     history: &RingBuffer<MemoryUsage>,
     gc_history: &RingBuffer<GcEvent>,
+    scroll_offset: usize,
+    visible_width_cell: Option<&Cell<usize>>,
     area: Rect,
     buf: &mut Buffer,
 ) {
@@ -250,7 +374,16 @@ fn render_chart_area(
 
     // Decide which data source to use
     if !samples.is_empty() {
-        render_sample_chart(samples, gc_history, plot_area, area, Y_AXIS_WIDTH, buf);
+        render_sample_chart(
+            samples,
+            gc_history,
+            scroll_offset,
+            visible_width_cell,
+            plot_area,
+            area,
+            Y_AXIS_WIDTH,
+            buf,
+        );
     } else if !history.is_empty() {
         render_history_chart(history, plot_area, area, Y_AXIS_WIDTH, buf);
     } else {

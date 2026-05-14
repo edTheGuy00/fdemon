@@ -68,7 +68,32 @@ pub(crate) use helpers::detect_raw_line_level;
 #[cfg(test)]
 pub(crate) use keys::handle_key;
 
+/// Indicates why a widget tree fetch was initiated.
+///
+/// Passed through `UpdateAction::FetchWidgetTree` and into
+/// `spawn_fetch_widget_tree` so that the readiness poll can be skipped on
+/// user-triggered refreshes where the Flutter framework is already running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchTrigger {
+    /// First fetch after entering DevTools or switching to the Inspector panel.
+    ///
+    /// The full `isWidgetTreeReady` poll budget applies because the framework
+    /// may still be warming up.
+    Initial,
+
+    /// User pressed `r` to refresh the widget tree and the inspector has
+    /// already rendered a tree at least once.
+    ///
+    /// The `isWidgetTreeReady` poll is **skipped** because the Flutter
+    /// framework is already running, so the RPC fires within ~100 ms.
+    Refresh,
+}
+
 /// Actions that the event loop should perform after update
+// FetchWidgetTree::trigger uses FetchTrigger (pub(crate)); this is intentional —
+// UpdateAction is technically pub but the FetchWidgetTree variant is only constructed
+// and matched within fdemon-app.
+#[allow(private_interfaces)]
 #[derive(Debug, Clone)]
 pub enum UpdateAction {
     /// Spawn a background task
@@ -238,6 +263,21 @@ pub enum UpdateAction {
         /// Overall timeout for the fetch operation including readiness polling
         /// and retries. From `settings.devtools.inspector_fetch_timeout_secs`.
         fetch_timeout_secs: u64,
+        /// Number of `isWidgetTreeReady` poll attempts.
+        /// From `settings.devtools.inspector_readiness_poll_attempts`.
+        inspector_readiness_poll_attempts: u32,
+        /// Sleep interval (ms) between readiness poll calls.
+        /// From `settings.devtools.inspector_readiness_poll_interval_ms`.
+        inspector_readiness_poll_interval_ms: u64,
+        /// Per-call timeout (ms) for each `isWidgetTreeReady` RPC.
+        /// From `settings.devtools.inspector_readiness_poll_call_timeout_ms`.
+        inspector_readiness_poll_call_timeout_ms: u64,
+        /// Why this fetch was initiated.
+        ///
+        /// Used by `spawn_fetch_widget_tree` to decide whether to skip the
+        /// `isWidgetTreeReady` poll (skipped when `Refresh` and the inspector
+        /// has already rendered a tree at least once).
+        trigger: FetchTrigger,
     },
 
     /// Fetch layout data for a specific widget node.
@@ -576,6 +616,24 @@ pub enum UpdateAction {
         /// Flutter executable from `state.resolved_sdk` at action creation time.
         /// `None` when no SDK is resolved — action is skipped.
         executable: Option<fdemon_daemon::FlutterExecutable>,
+    },
+
+    /// Fire-and-forget a daemon command on the session's Flutter process stdin.
+    ///
+    /// Used by the eager DevTools serve path to send `devtools.serve` to the
+    /// Flutter daemon after the VM Service URI becomes known (on `app.debugPort`).
+    ///
+    /// The `cmd_sender` field is `None` until hydrated by `process.rs` from the
+    /// session's `cmd_sender`. `handle_action` silently skips the command when
+    /// `cmd_sender` remains `None` (process not yet attached or already exited).
+    SendDaemonCommand {
+        /// Session whose Flutter process stdin should receive the command.
+        session_id: SessionId,
+        /// The daemon command to send.
+        command: fdemon_daemon::DaemonCommand,
+        /// The session's command sender.
+        /// `None` until hydrated by `process.rs`.
+        cmd_sender: Option<fdemon_daemon::CommandSender>,
     },
 }
 

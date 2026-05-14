@@ -24,10 +24,77 @@ pub(crate) use performance::{
     handle_select_performance_frame,
 };
 
-use crate::handler::{UpdateAction, UpdateResult};
+use crate::config::DevToolsSettings;
+use crate::handler::{FetchTrigger, UpdateAction, UpdateResult};
 use crate::message::DebugOverlayKind;
 use crate::session::SessionId;
-use crate::state::{AppState, DevToolsError, DevToolsPanel, VmConnectionStatus};
+use crate::state::{AppState, DevToolsError, DevToolsPanel, ToastLevel, VmConnectionStatus};
+use fdemon_core::url::percent_encode_uri;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Readiness-poll config clamping
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Upper bound on readiness-poll attempts. 0 = skip poll; 20 × 5 s call
+/// timeout × 5 s interval = 200 s worst case (capped by the outer fetch timeout).
+const MAX_READINESS_POLL_ATTEMPTS: u32 = 20;
+/// Lower bound on poll interval: sub-10 ms is pointless overhead.
+const MIN_READINESS_POLL_INTERVAL_MS: u64 = 10;
+/// Upper bound on poll interval: 5 s + 20 attempts = 100 s outer budget.
+const MAX_READINESS_POLL_INTERVAL_MS: u64 = 5_000;
+/// Lower bound on per-call timeout: sub-100 ms is unrealistic for an RPC round-trip.
+const MIN_READINESS_POLL_CALL_TIMEOUT_MS: u64 = 100;
+/// Upper bound on per-call timeout: 10 s per attempt is the upper sane limit.
+const MAX_READINESS_POLL_CALL_TIMEOUT_MS: u64 = 10_000;
+
+/// Clamp the three readiness-poll config values to bounded ranges and emit a
+/// `warn!` for each value that required clamping.
+///
+/// Values within the ranges pass through unchanged (no log noise). Values
+/// outside the bounds are clamped to the nearest limit so that a typo such as
+/// `inspector_readiness_poll_attempts = 4294967295` cannot saturate the Tokio runtime.
+///
+/// This is the **single read point** for the three `inspector_readiness_poll_*` settings.
+/// All `FetchWidgetTree` dispatch sites must call this helper rather than
+/// reading `state.settings.devtools.inspector_readiness_poll_*` directly.
+pub(crate) fn clamped_readiness_poll_config(settings: &DevToolsSettings) -> (u32, u64, u64) {
+    let attempts = settings
+        .inspector_readiness_poll_attempts
+        .min(MAX_READINESS_POLL_ATTEMPTS);
+    if attempts != settings.inspector_readiness_poll_attempts {
+        tracing::warn!(
+            requested = settings.inspector_readiness_poll_attempts,
+            clamped_to = attempts,
+            "inspector_readiness_poll_attempts clamped to bounded range"
+        );
+    }
+
+    let interval = settings.inspector_readiness_poll_interval_ms.clamp(
+        MIN_READINESS_POLL_INTERVAL_MS,
+        MAX_READINESS_POLL_INTERVAL_MS,
+    );
+    if interval != settings.inspector_readiness_poll_interval_ms {
+        tracing::warn!(
+            requested_ms = settings.inspector_readiness_poll_interval_ms,
+            clamped_to_ms = interval,
+            "inspector_readiness_poll_interval_ms clamped to bounded range"
+        );
+    }
+
+    let timeout = settings.inspector_readiness_poll_call_timeout_ms.clamp(
+        MIN_READINESS_POLL_CALL_TIMEOUT_MS,
+        MAX_READINESS_POLL_CALL_TIMEOUT_MS,
+    );
+    if timeout != settings.inspector_readiness_poll_call_timeout_ms {
+        tracing::warn!(
+            requested_ms = settings.inspector_readiness_poll_call_timeout_ms,
+            clamped_to_ms = timeout,
+            "inspector_readiness_poll_call_timeout_ms clamped to bounded range"
+        );
+    }
+
+    (attempts, interval, timeout)
+}
 
 /// Map a raw RPC error string to a user-friendly [`DevToolsError`].
 ///
@@ -155,7 +222,11 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             && state.devtools_view_state.inspector.root.is_none()
             && !state.devtools_view_state.inspector.loading
         {
-            state.devtools_view_state.inspector.loading = true;
+            // Queue RequestWidgetTree as a follow-up. Do NOT call record_fetch_start()
+            // here — that engages the debounce (`loading=true`), and the follow-up
+            // RequestWidgetTree handler in update.rs would then see itself as
+            // already-in-flight and bail. The follow-up handler calls
+            // record_fetch_start() itself just before dispatching FetchWidgetTree.
             Some(crate::message::Message::RequestWidgetTree { session_id })
         } else if state.devtools_view_state.active_panel == DevToolsPanel::Network {
             Some(crate::message::Message::SwitchDevToolsPanel(
@@ -217,12 +288,21 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
         if let Some(handle) = state.session_manager.selected() {
             if handle.session.vm_connected {
                 let session_id = handle.session.id;
-                state.devtools_view_state.inspector.loading = true;
+                // Use record_fetch_start() to enforce the invariant that loading=true
+                // is always paired with last_fetch_time=Some(now). Without the
+                // timestamp a lost terminal message would leave loading=true forever.
+                state.devtools_view_state.inspector.record_fetch_start();
+                let (poll_attempts, poll_interval_ms, poll_call_timeout_ms) =
+                    clamped_readiness_poll_config(&state.settings.devtools);
                 return UpdateResult::action(UpdateAction::FetchWidgetTree {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
+                    inspector_readiness_poll_attempts: poll_attempts,
+                    inspector_readiness_poll_interval_ms: poll_interval_ms,
+                    inspector_readiness_poll_call_timeout_ms: poll_call_timeout_ms,
+                    trigger: FetchTrigger::Initial,
                 });
             }
         }
@@ -312,7 +392,13 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                 if let Some(handle) = state.session_manager.selected() {
                     if handle.session.vm_connected {
                         let session_id = handle.session.id;
-                        state.devtools_view_state.inspector.loading = true;
+                        // Use record_fetch_start() to enforce the invariant that
+                        // loading=true is always paired with last_fetch_time=Some(now).
+                        // Without the timestamp a lost terminal message would leave
+                        // loading=true forever, re-introducing the stuck-loading bug.
+                        state.devtools_view_state.inspector.record_fetch_start();
+                        let (poll_attempts, poll_interval_ms, poll_call_timeout_ms) =
+                            clamped_readiness_poll_config(&state.settings.devtools);
                         return UpdateResult::action(UpdateAction::FetchWidgetTree {
                             session_id,
                             vm_handle: None, // hydrated by process.rs
@@ -321,6 +407,10 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                                 .settings
                                 .devtools
                                 .inspector_fetch_timeout_secs,
+                            inspector_readiness_poll_attempts: poll_attempts,
+                            inspector_readiness_poll_interval_ms: poll_interval_ms,
+                            inspector_readiness_poll_call_timeout_ms: poll_call_timeout_ms,
+                            trigger: FetchTrigger::Initial,
                         });
                     }
                 }
@@ -382,20 +472,66 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
 }
 
 /// Handle opening Flutter DevTools in the system browser.
-pub fn handle_open_browser_devtools(state: &AppState) -> UpdateResult {
-    let ws_uri = state
-        .session_manager
-        .selected()
-        .and_then(|h| h.session.ws_uri.clone());
-
-    let Some(ws_uri) = ws_uri else {
-        tracing::warn!("Cannot open browser DevTools: no VM Service URI available");
+///
+/// Prefers the served DevTools endpoint (`session.devtools_endpoint`) when
+/// available — this is the URL from the `app.devTools` daemon event or the
+/// `devtools.serve` RPC response.  Falls back to `build_local_devtools_url`
+/// (the legacy DDS-path URL) when no endpoint has been recorded yet.
+///
+/// When falling back, a transient toast is pushed to `state.toasts`:
+/// - If `devtools_serve_pending` is `true`, the message tells the user the
+///   server is still starting.
+/// - Otherwise the message explains that DevTools is not registered with DDS
+///   and provides recovery steps.
+///
+/// **Behaviour choice**: when the endpoint is pending we still open the legacy
+/// fallback URL (rather than deferring the open entirely). This lets the user
+/// access DevTools immediately even if the served URL is not ready yet, while
+/// the toast communicates that a better URL may become available soon.
+pub fn handle_open_browser_devtools(state: &mut AppState) -> UpdateResult {
+    let Some(session_handle) = state.session_manager.selected() else {
         return UpdateResult::none();
     };
 
-    let encoded_uri = percent_encode_uri(&ws_uri);
-    let url = build_local_devtools_url(&ws_uri, &encoded_uri);
+    if session_handle.session.ws_uri.is_none() {
+        tracing::warn!("Cannot open browser DevTools: no VM Service URI available");
+        state.push_toast(
+            ToastLevel::Warn,
+            "VM Service not ready yet \u{2014} \
+             wait for the app to finish launching, then press B again.",
+        );
+        return UpdateResult::none();
+    }
+    let ws_uri = session_handle.session.ws_uri.clone().unwrap_or_default();
+
+    // Clone the data we need before the mutable borrow of `state`.
+    let devtools_endpoint = session_handle.session.devtools_endpoint.clone();
+    let devtools_serve_pending = session_handle.session.devtools_serve_pending;
     let browser = state.settings.devtools.browser.clone();
+
+    let url = match devtools_endpoint {
+        Some(ref endpoint) => {
+            tracing::info!(
+                base_url = %fdemon_core::url::redact_devtools_url(&endpoint.base_url),
+                "Opening served DevTools URL"
+            );
+            endpoint.url(&ws_uri)
+        }
+        None => {
+            tracing::warn!("No served DevTools endpoint — falling back to legacy URL");
+
+            let toast_msg = if devtools_serve_pending {
+                "DevTools server is still starting — try again in a moment."
+            } else {
+                "DevTools is not registered with DDS. \
+                 Update Flutter to \u{2265} 1.22 or run `dart devtools` manually."
+            };
+            state.push_toast(ToastLevel::Warn, toast_msg);
+
+            let encoded = percent_encode_uri(&ws_uri);
+            build_local_devtools_url(&ws_uri, &encoded)
+        }
+    };
 
     UpdateResult::action(UpdateAction::OpenBrowserDevTools { url, browser })
 }
@@ -450,24 +586,6 @@ fn build_local_devtools_url(ws_uri: &str, encoded_ws_uri: &str) -> String {
     let base = base.trim_end_matches('/');
 
     format!("{base}/devtools/?uri={encoded_ws_uri}")
-}
-
-/// Percent-encode a URI for use as a query parameter (RFC 3986).
-fn percent_encode_uri(input: &str) -> String {
-    use std::fmt::Write as _;
-    let mut encoded = String::with_capacity(input.len() * 3);
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            // write! to String is infallible
-            _ => {
-                let _ = write!(encoded, "%{:02X}", byte);
-            }
-        }
-    }
-    encoded
 }
 
 #[cfg(test)]
@@ -671,7 +789,7 @@ mod tests {
         state.session_manager.selected_mut().unwrap().session.ws_uri =
             Some("ws://127.0.0.1:12345/abc=/ws".to_string());
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         assert!(result.action.is_some(), "Expected an action to be returned");
 
@@ -701,7 +819,7 @@ mod tests {
         state.session_manager.selected_mut().unwrap().session.ws_uri =
             Some("wss://127.0.0.1:9999/auth=/ws".to_string());
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         if let Some(UpdateAction::OpenBrowserDevTools { url, .. }) = result.action {
             assert!(
@@ -746,13 +864,197 @@ mod tests {
     #[test]
     fn test_open_browser_devtools_no_ws_uri_returns_none() {
         // A session exists but has no ws_uri set.
-        let state = make_state_with_session();
+        let mut state = make_state_with_session();
 
-        let result = handle_open_browser_devtools(&state);
+        let result = handle_open_browser_devtools(&mut state);
 
         assert!(
             result.action.is_none(),
             "Expected no action when ws_uri is not set"
+        );
+    }
+
+    #[test]
+    fn open_browser_no_ws_uri_emits_toast() {
+        // When ws_uri is not yet set, the user should see a toast explaining
+        // why pressing B did nothing — not a silent no-op.
+        let mut state = make_state_with_session();
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("VM Service not ready")),
+            "Expected a 'VM Service not ready' toast, got: {:?}",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Served URL preference tests (Task 06: open-browser-uses-served-url)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn open_browser_uses_served_endpoint_when_available() {
+        use crate::session::DevToolsEndpoint;
+
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+        handle.session.devtools_endpoint = Some(DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+        });
+
+        let result = handle_open_browser_devtools(&mut state);
+
+        match result.action.unwrap() {
+            UpdateAction::OpenBrowserDevTools { url, .. } => {
+                assert!(
+                    url.starts_with("http://127.0.0.1:9100?uri="),
+                    "URL should start with the served base_url (got: {url})"
+                );
+                assert!(
+                    url.contains("ws%3A%2F%2F127.0.0.1%3A1234"),
+                    "URL should contain percent-encoded ws://127.0.0.1:1234 (got: {url})"
+                );
+                // Must NOT contain /devtools/ — that is the legacy path shape.
+                assert!(
+                    !url.contains("/devtools/"),
+                    "Served URL should not use /devtools/ legacy path (got: {url})"
+                );
+            }
+            _ => panic!("expected OpenBrowserDevTools action"),
+        }
+    }
+
+    #[test]
+    fn open_browser_uses_served_endpoint_dds_integrated_format() {
+        // DDS-integrated DevTools (Flutter ≥ 3.24) — base_url has auth-token path.
+        use crate::session::DevToolsEndpoint;
+
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:59123/tbrR0DzW2j8=/ws".to_string());
+        handle.session.devtools_endpoint = Some(DevToolsEndpoint {
+            base_url: "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools".into(),
+        });
+
+        let result = handle_open_browser_devtools(&mut state);
+
+        match result.action.unwrap() {
+            UpdateAction::OpenBrowserDevTools { url, .. } => {
+                assert!(
+                    url.starts_with("http://127.0.0.1:59123/tbrR0DzW2j8=/devtools?uri="),
+                    "DDS-integrated URL should preserve auth-token path (got: {url})"
+                );
+                assert!(
+                    url.contains("ws%3A%2F%2F"),
+                    "URL should contain percent-encoded ws:// scheme (got: {url})"
+                );
+            }
+            _ => panic!("expected OpenBrowserDevTools action"),
+        }
+    }
+
+    #[test]
+    fn open_browser_falls_back_to_legacy_url_when_no_endpoint() {
+        let mut state = make_state_with_session();
+        state.session_manager.selected_mut().unwrap().session.ws_uri =
+            Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+        // No devtools_endpoint set — remains None.
+
+        let result = handle_open_browser_devtools(&mut state);
+
+        match result.action.unwrap() {
+            UpdateAction::OpenBrowserDevTools { url, .. } => {
+                assert!(
+                    url.contains("/devtools/?uri="),
+                    "Legacy fallback URL should contain /devtools/?uri= (got: {url})"
+                );
+                assert!(
+                    url.contains("ws%3A%2F%2F"),
+                    "Legacy URL should contain percent-encoded ws:// (got: {url})"
+                );
+            }
+            _ => panic!("expected OpenBrowserDevTools action"),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Toast emission tests (Task 07: fallback-and-recovery-toast)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fallback_path_emits_toast() {
+        // When no devtools_endpoint is set (legacy fallback), a toast must be
+        // pushed with the DDS registration failure message.
+        let mut state = make_state_with_session();
+        state.session_manager.selected_mut().unwrap().session.ws_uri =
+            Some("ws://127.0.0.1:9999/abc=/ws".to_string());
+        // No devtools_endpoint → fallback path.
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            !state.toasts.is_empty(),
+            "A toast must be pushed when falling back to the legacy URL"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("not registered with DDS")),
+            "Toast must mention DDS registration (got: {:?})",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn pending_serve_emits_different_toast() {
+        // When devtools_serve_pending is true, the toast should tell the user
+        // to wait rather than report a DDS failure.
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:9999/abc=/ws".to_string());
+        handle.session.devtools_serve_pending = true;
+        // No devtools_endpoint → fallback path with pending flavour.
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            !state.toasts.is_empty(),
+            "A toast must be pushed when devtools_serve_pending is true"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("still starting")),
+            "Toast must mention server is still starting (got: {:?})",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn served_endpoint_no_toast() {
+        // When a devtools_endpoint is available no toast should be pushed.
+        use crate::session::DevToolsEndpoint;
+
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+        handle.session.devtools_endpoint = Some(DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".into(),
+        });
+
+        handle_open_browser_devtools(&mut state);
+
+        assert!(
+            state.toasts.is_empty(),
+            "No toast should be pushed when the served endpoint is available (got: {:?})",
+            state.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
         );
     }
 
@@ -1285,6 +1587,209 @@ mod tests {
         assert!(
             *rx.borrow(),
             "switching between non-Network panels should not change network pause state"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // record_fetch_start invariant tests (Task 07: use-record-fetch-start)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a state with an active vm-connected session on the Inspector
+    /// panel, with no widget tree loaded. This is the scenario that triggers
+    /// a FetchWidgetTree action on `handle_enter_devtools_mode` and
+    /// `handle_switch_panel(Inspector)`.
+    fn make_state_with_vm_connected_inspector() -> AppState {
+        let mut state = make_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.vm_connected = true;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        // Ensure no tree is loaded and loading is false (triggers the fetch path).
+        state.devtools_view_state.inspector.root = None;
+        state.devtools_view_state.inspector.loading = false;
+        state.devtools_view_state.inspector.last_fetch_time = None;
+        state
+    }
+
+    #[test]
+    fn test_handle_enter_devtools_mode_records_fetch_start_invariant() {
+        // When handle_enter_devtools_mode sets loading=true it must also set
+        // last_fetch_time via record_fetch_start(). Without the timestamp a
+        // lost terminal message would leave loading=true forever.
+        let mut state = make_state_with_vm_connected_inspector();
+
+        let _ = handle_enter_devtools_mode(&mut state);
+
+        let inspector = &state.devtools_view_state.inspector;
+        if inspector.loading {
+            assert!(
+                inspector.last_fetch_time.is_some(),
+                "loading=true must be paired with last_fetch_time=Some(...) — \
+                 use record_fetch_start() instead of direct assignment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_switch_panel_inspector_records_fetch_start_invariant() {
+        // When handle_switch_panel(Inspector) sets loading=true it must also
+        // set last_fetch_time via record_fetch_start().
+        let mut state = make_state_with_vm_connected_inspector();
+        // Start on Performance so we are actually switching TO Inspector.
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        let _ = handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        let inspector = &state.devtools_view_state.inspector;
+        if inspector.loading {
+            assert!(
+                inspector.last_fetch_time.is_some(),
+                "loading=true must be paired with last_fetch_time=Some(...) — \
+                 use record_fetch_start() instead of direct assignment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lint_no_naked_inspector_loading_assignment_in_handler() {
+        // Grep-based lint: no bare assignment of the form
+        //   inspector.loading = true;
+        // must remain in the production code of handler/devtools/mod.rs.
+        // All auto-fetch sites must go through record_fetch_start() so the
+        // loading+last_fetch_time invariant is always maintained together.
+        //
+        // The search pattern is split across a concat!() to avoid the lint
+        // matching the pattern string itself.
+        let needle = concat!("inspector", ".loading = true");
+        let source = include_str!("mod.rs");
+        let naked_count = source
+            .lines()
+            // Exclude lines that are Rust comments (// ...) or inside string
+            // literals (contain a leading `"`). Production assignments always
+            // begin with whitespace then `state.`.
+            .filter(|l| {
+                let trimmed = l.trim_start();
+                trimmed.starts_with("state.") && trimmed.contains(needle)
+            })
+            .count();
+        assert_eq!(
+            naked_count, 0,
+            "Found {naked_count} naked `inspector.loading = true` statement(s) in \
+             handler/devtools/mod.rs. Replace each with \
+             `state.devtools_view_state.inspector.record_fetch_start()` to \
+             enforce the loading+last_fetch_time invariant."
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // clamped_readiness_poll_config tests (Task 08: clamp-readiness-poll-config)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_clamped_readiness_poll_attempts_capped_at_max() {
+        // u32::MAX must be clamped down to MAX_READINESS_POLL_ATTEMPTS.
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_attempts: u32::MAX,
+            ..Default::default()
+        };
+        let (attempts, _, _) = clamped_readiness_poll_config(&settings);
+        assert_eq!(attempts, MAX_READINESS_POLL_ATTEMPTS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_interval_floored_at_min() {
+        // 0 ms is below the minimum; must be raised to MIN_READINESS_POLL_INTERVAL_MS.
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_interval_ms: 0,
+            ..Default::default()
+        };
+        let (_, interval, _) = clamped_readiness_poll_config(&settings);
+        assert_eq!(interval, MIN_READINESS_POLL_INTERVAL_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_interval_capped_at_max() {
+        // u64::MAX must be clamped down to MAX_READINESS_POLL_INTERVAL_MS.
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_interval_ms: u64::MAX,
+            ..Default::default()
+        };
+        let (_, interval, _) = clamped_readiness_poll_config(&settings);
+        assert_eq!(interval, MAX_READINESS_POLL_INTERVAL_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_call_timeout_floored_at_min() {
+        // 0 ms is below the minimum; must be raised to MIN_READINESS_POLL_CALL_TIMEOUT_MS.
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_call_timeout_ms: 0,
+            ..Default::default()
+        };
+        let (_, _, timeout) = clamped_readiness_poll_config(&settings);
+        assert_eq!(timeout, MIN_READINESS_POLL_CALL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_call_timeout_capped_at_max() {
+        // u64::MAX must be clamped down to MAX_READINESS_POLL_CALL_TIMEOUT_MS.
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_call_timeout_ms: u64::MAX,
+            ..Default::default()
+        };
+        let (_, _, timeout) = clamped_readiness_poll_config(&settings);
+        assert_eq!(timeout, MAX_READINESS_POLL_CALL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_passes_through_normal_values() {
+        // Values within range must be returned unchanged (no clamping, no log noise).
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_attempts: 3,
+            inspector_readiness_poll_interval_ms: 200,
+            inspector_readiness_poll_call_timeout_ms: 1500,
+            ..Default::default()
+        };
+        let (a, i, t) = clamped_readiness_poll_config(&settings);
+        assert_eq!((a, i, t), (3, 200, 1500));
+    }
+
+    #[test]
+    fn test_clamped_readiness_poll_boundary_values_pass_through() {
+        // Values exactly at the boundary must pass through unchanged.
+        let settings = crate::config::DevToolsSettings {
+            inspector_readiness_poll_attempts: MAX_READINESS_POLL_ATTEMPTS,
+            inspector_readiness_poll_interval_ms: MIN_READINESS_POLL_INTERVAL_MS,
+            inspector_readiness_poll_call_timeout_ms: MAX_READINESS_POLL_CALL_TIMEOUT_MS,
+            ..Default::default()
+        };
+        let (a, i, t) = clamped_readiness_poll_config(&settings);
+        assert_eq!(a, MAX_READINESS_POLL_ATTEMPTS);
+        assert_eq!(i, MIN_READINESS_POLL_INTERVAL_MS);
+        assert_eq!(t, MAX_READINESS_POLL_CALL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn test_lint_no_raw_readiness_poll_reads_at_dispatch_sites() {
+        // Grep-based lint: no FetchWidgetTree struct literal in mod.rs (or the
+        // follow-on VmConnected path in update.rs) should read
+        // `state.settings.devtools.inspector_readiness_poll_*` directly. All three
+        // sites must go through clamped_readiness_poll_config().
+        let source = include_str!("mod.rs");
+        let raw_reads = source
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                // Only flag lines that are reading the field directly off state
+                // (i.e. inside a struct literal). Comments and the helper
+                // function body are excluded by the `state.settings.devtools`
+                // prefix check.
+                t.starts_with("state.settings.devtools.inspector_readiness_poll_")
+            })
+            .count();
+        assert_eq!(
+            raw_reads, 0,
+            "Found {raw_reads} raw `state.settings.devtools.inspector_readiness_poll_*` read(s) \
+             in handler/devtools/mod.rs. All dispatch sites must use \
+             clamped_readiness_poll_config() instead."
         );
     }
 }

@@ -198,6 +198,17 @@ pub enum DaemonCommand {
     ToggleDebugPaint { app_id: String },
     /// Toggle platform (iOS/Android)
     TogglePlatform { app_id: String },
+    /// Request DevTools server from the Flutter daemon.
+    ///
+    /// The `request_id` field, when `Some`, is used as the `"id"` field in the
+    /// JSON-RPC request.  When `None` the numeric ID supplied to [`DaemonCommand::build`]
+    /// is used instead.  Correlating the response requires the same ID that was
+    /// embedded in the outgoing request, so callers that need response tracking
+    /// should supply an explicit string ID **and** register it with [`RequestTracker`]
+    /// before sending.
+    ///
+    /// Emits JSON-RPC method `"devtools.serve"`.  Available in Flutter ≥ 1.22.0.
+    ServeDevTools { request_id: Option<String> },
 }
 
 impl DaemonCommand {
@@ -224,6 +235,21 @@ impl DaemonCommand {
             DaemonCommand::TogglePlatform { app_id } => {
                 ("ext.flutter.platformOverride", json!({ "appId": app_id }))
             }
+            DaemonCommand::ServeDevTools { request_id } => {
+                // devtools.serve: two-part domain.method notation — no three-part form.
+                // Available since Flutter 1.22.0 (Oct 2020).
+                let params = json!({});
+                let effective_id: Value = match request_id.as_deref() {
+                    Some(s) => Value::String(s.to_string()),
+                    None => Value::Number(id.into()),
+                };
+                return json!({
+                    "id": effective_id,
+                    "method": "devtools.serve",
+                    "params": params,
+                })
+                .to_string();
+            }
         };
 
         json!({
@@ -247,6 +273,7 @@ impl DaemonCommand {
             DaemonCommand::Screenshot { .. } => "screenshot",
             DaemonCommand::ToggleDebugPaint { .. } => "toggle debug paint",
             DaemonCommand::TogglePlatform { .. } => "toggle platform",
+            DaemonCommand::ServeDevTools { .. } => "serve devtools",
         }
     }
 }
@@ -549,6 +576,38 @@ mod tests {
         );
         assert_eq!(DaemonCommand::Version.description(), "get version");
         assert_eq!(DaemonCommand::Shutdown.description(), "shutdown daemon");
+        assert_eq!(
+            DaemonCommand::ServeDevTools { request_id: None }.description(),
+            "serve devtools"
+        );
+    }
+
+    #[test]
+    fn serve_devtools_command_serializes_correctly() {
+        let cmd = DaemonCommand::ServeDevTools {
+            request_id: Some("test-1".to_string()),
+        };
+        let json: Value = serde_json::from_str(&cmd.build(0)).unwrap();
+        assert_eq!(json["method"], "devtools.serve");
+        assert!(json["params"].is_object());
+        assert_eq!(json["id"], "test-1");
+    }
+
+    #[test]
+    fn serve_devtools_uses_numeric_id_when_request_id_is_none() {
+        let cmd = DaemonCommand::ServeDevTools { request_id: None };
+        let json: Value = serde_json::from_str(&cmd.build(42)).unwrap();
+        assert_eq!(json["method"], "devtools.serve");
+        assert!(json["params"].is_object());
+        assert_eq!(json["id"], 42);
+    }
+
+    #[test]
+    fn serve_devtools_description() {
+        assert_eq!(
+            DaemonCommand::ServeDevTools { request_id: None }.description(),
+            "serve devtools"
+        );
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 //! Multi-session daemon event handling
 
 use crate::handler::{UpdateAction, UpdateResult};
+use crate::message::Message;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{DaemonEvent, DaemonMessage, LogEntry, LogSource};
@@ -55,6 +56,54 @@ pub fn handle_session_daemon_event(
                 _ => None,
             };
 
+            // Bridge app.devTools event → Message::DevToolsServed.
+            // The `app.devTools` event fires automatically during `flutter run --machine`
+            // startup (Flutter ≥ 1.22.0) and provides the base DevTools server URL.
+            // This is the primary (preferred) path; the devtools.serve RPC fallback
+            // fires later on VmServiceConnected.
+            let devtools_msg: Option<Message> = match &parsed {
+                Some(DaemonMessage::DevToolsServed { app_id, base_url }) => {
+                    // Map app_id → session_id via the session manager.
+                    // Use the session_id passed to this handler when app_id is empty
+                    // (empty means the message came from the devtools.serve RPC response
+                    // which doesn't carry an app_id; in that case the session is already
+                    // known from the request routing).
+                    let resolved_id = if app_id.is_empty() {
+                        Some(session_id)
+                    } else {
+                        match state.session_manager.find_by_app_id(app_id) {
+                            Some(sid) => Some(sid),
+                            None => {
+                                // Non-empty app_id from a real `app.devTools` event
+                                // but no session has registered it. Most likely a
+                                // race between `app.devTools` and the `app.start`
+                                // handler, or a stale message after AppStop cleared
+                                // app_id. Log so this is observable rather than
+                                // silently dropping the endpoint.
+                                tracing::warn!(
+                                    session_id = session_id,
+                                    app_id = %app_id,
+                                    "app.devTools event has no matching session; \
+                                     DevTools endpoint dropped"
+                                );
+                                None
+                            }
+                        }
+                    };
+                    resolved_id.map(|sid| Message::DevToolsServed {
+                        session_id: sid,
+                        base_url: base_url.clone(),
+                    })
+                }
+                Some(DaemonMessage::DevToolsServeFailed { reason }) => {
+                    Some(Message::DevToolsServeFailed {
+                        session_id,
+                        reason: reason.clone(),
+                    })
+                }
+                _ => None,
+            };
+
             // Mutate state (logs the line, updates session phase, etc.).
             handle_session_stdout(state, session_id, &line);
 
@@ -80,10 +129,19 @@ pub fn handle_session_daemon_event(
             };
 
             // Priority: VM service connection > native log capture > app started.
-            // These events are always separate, so at most one action is non-None.
-            match vm_action.or(native_log_action).or(app_started_action) {
-                Some(action) => UpdateResult::action(action),
-                None => UpdateResult::none(),
+            // DevTools events arrive on separate daemon stdout lines from these
+            // events (Flutter daemon writes one JSON-RPC message per line), so
+            // both being `Some` in the same parse step is structurally
+            // unexpected. If it does happen (e.g. a future daemon batches
+            // events differently), we now carry BOTH through via
+            // `message_and_action` rather than silently dropping the
+            // DevTools message.
+            let action = vm_action.or(native_log_action).or(app_started_action);
+            match (action, devtools_msg) {
+                (Some(a), Some(m)) => UpdateResult::message_and_action(m, a),
+                (Some(a), None) => UpdateResult::action(a),
+                (None, Some(m)) => UpdateResult::message(m),
+                (None, None) => UpdateResult::none(),
             }
         }
         DaemonEvent::Stderr(line) => {
@@ -129,6 +187,40 @@ pub fn handle_session_daemon_event(
                 None
             };
 
+            // Bridge DevToolsServed / DevToolsServeFailed → Message::DevTools*.
+            let devtools_msg: Option<Message> = match &msg {
+                DaemonMessage::DevToolsServed { app_id, base_url } => {
+                    let resolved_id = if app_id.is_empty() {
+                        Some(session_id)
+                    } else {
+                        match state.session_manager.find_by_app_id(app_id) {
+                            Some(sid) => Some(sid),
+                            None => {
+                                // See identical guard above in the Stdout arm.
+                                tracing::warn!(
+                                    session_id = session_id,
+                                    app_id = %app_id,
+                                    "app.devTools event has no matching session; \
+                                     DevTools endpoint dropped"
+                                );
+                                None
+                            }
+                        }
+                    };
+                    resolved_id.map(|sid| Message::DevToolsServed {
+                        session_id: sid,
+                        base_url: base_url.clone(),
+                    })
+                }
+                DaemonMessage::DevToolsServeFailed { reason } => {
+                    Some(Message::DevToolsServeFailed {
+                        session_id,
+                        reason: reason.clone(),
+                    })
+                }
+                _ => None,
+            };
+
             // Legacy path - convert typed message
             if let Some(entry_info) = fdemon_daemon::to_log_entry(&msg) {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
@@ -152,10 +244,15 @@ pub fn handle_session_daemon_event(
             };
 
             // Priority: VM service connection (AppDebugPort) > native log capture (AppStart).
-            // These two events are always separate, so at most one action is non-None here.
-            match vm_action.or(native_log_action) {
-                Some(action) => UpdateResult::action(action),
-                None => UpdateResult::none(),
+            // DevTools events are structurally distinct daemon messages. If both
+            // are present in the same step, carry both through via
+            // `message_and_action` so neither is lost.
+            let action = vm_action.or(native_log_action);
+            match (action, devtools_msg) {
+                (Some(a), Some(m)) => UpdateResult::message_and_action(m, a),
+                (Some(a), None) => UpdateResult::action(a),
+                (None, Some(m)) => UpdateResult::message(m),
+                (None, None) => UpdateResult::none(),
             }
         }
     }

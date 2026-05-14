@@ -10,12 +10,13 @@
 use crate::message::{AutoLaunchSuccess, Message};
 use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode, MAX_PENDING_WATCHER_ERRORS};
 use fdemon_core::{AppPhase, LogLevel, LogSource};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::{
     daemon::handle_session_daemon_event, dap, devtools, flutter_version, keys::handle_key,
-    log_view, new_session, scroll, session_lifecycle, settings_dart_defines, settings_extra_args,
-    settings_handlers, Task, UpdateAction, UpdateResult,
+    log_view, new_session, scroll, session::maybe_serve_devtools, session_lifecycle,
+    settings_dart_defines, settings_extra_args, settings_handlers, FetchTrigger, Task,
+    UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state.
@@ -90,6 +91,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
 
             // Note: NewSessionDialog doesn't have animation frames to tick
+
+            // Expire stale toast notifications.
+            state.expire_toasts();
 
             UpdateResult::none()
         }
@@ -229,6 +233,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(ref vm_handle) = handle.vm_request_handle {
                     vm_handle.invalidate_isolate_cache();
                 }
+            }
+            // Hot restart creates a new isolate with a fresh framework state.
+            // Reset the sticky render flag so the next fetch polls readiness
+            // instead of skipping it with FetchTrigger::Refresh.
+            if state.devtools_view_state.inspector.has_ever_rendered_tree {
+                state.devtools_view_state.inspector.has_ever_rendered_tree = false;
             }
             UpdateResult::none()
         }
@@ -1522,28 +1532,45 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
 
-            // Start performance monitoring only when DevTools is already active.
-            // When the user is viewing logs (Normal mode), the monitoring task
-            // is not spawned at all — zero overhead until DevTools is opened.
-            // handle_enter_devtools_mode will start it lazily on first entry.
-            // process.rs will hydrate `handle` with the VmRequestHandle from the
-            // session before dispatching the action to handle_action.
-            if state.ui_mode == UiMode::DevTools {
-                UpdateResult {
-                    message: follow_up_msg,
-                    action: Some(UpdateAction::StartPerformanceMonitoring {
-                        session_id,
-                        handle: None, // hydrated by process.rs
-                        performance_refresh_ms,
-                        allocation_profile_interval_ms,
-                        mode,
-                    }),
-                }
+            // Two things must happen on VmServiceConnected:
+            //   (a) Start performance monitoring — but only when DevTools is
+            //       already active. In Normal mode the monitoring task is
+            //       not spawned (zero overhead until DevTools is opened);
+            //       `handle_enter_devtools_mode` starts it lazily on entry.
+            //   (b) Fire the `devtools.serve` fallback RPC if the primary
+            //       `app.devTools` event hasn't populated the endpoint yet
+            //       (belt-and-suspenders for older Flutter builds or
+            //       delayed event ordering). Must run in *both* UI modes —
+            //       a DevTools-first user (DevTools opened before VM
+            //       connected) would otherwise never see the fallback fire.
+            //
+            // `UpdateResult` has a single action slot, so we route the
+            // fallback through a `TriggerDevToolsServeFallback` follow-up
+            // message that chains the original `follow_up_msg` as its
+            // continuation. The follow-up's handler is idempotent (no-op
+            // when an endpoint is already set or a previous dispatch is in
+            // flight), so unconditional queuing is safe.
+            //
+            // process.rs hydrates `StartPerformanceMonitoring.handle` with
+            // the VmRequestHandle from the session before dispatch.
+            let perf_action = if state.ui_mode == UiMode::DevTools {
+                Some(UpdateAction::StartPerformanceMonitoring {
+                    session_id,
+                    handle: None, // hydrated by process.rs
+                    performance_refresh_ms,
+                    allocation_profile_interval_ms,
+                    mode,
+                })
             } else {
-                UpdateResult {
-                    message: follow_up_msg,
-                    action: None,
-                }
+                None
+            };
+
+            UpdateResult {
+                message: Some(Message::TriggerDevToolsServeFallback {
+                    session_id,
+                    continuation: follow_up_msg.map(Box::new),
+                }),
+                action: perf_action,
             }
         }
 
@@ -1705,6 +1732,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // handles clean exit. Setting to None signals no Network tab
                 // is open for this disconnected session.
                 handle.network_pause_tx = None;
+
+                // Clear DevTools endpoint and pending flag. If the daemon
+                // dies mid-flight, devtools_serve_pending would otherwise
+                // stay `true` forever and block any future fallback dispatch.
+                // The stored base_url may also point at a now-dead DDS port.
+                handle.session.devtools_endpoint = None;
+                handle.session.devtools_serve_pending = false;
             }
             UpdateResult::none()
         }
@@ -1874,12 +1908,87 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
 
+        Message::DevToolsServed {
+            session_id,
+            base_url,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Redact any DDS auth-token path segment before logging.
+                // Logs may be persisted (journald, file sinks) and the
+                // token is a bearer credential.
+                info!(
+                    session_id = session_id,
+                    base_url = %fdemon_core::url::redact_devtools_url(&base_url),
+                    "DevTools endpoint ready for session"
+                );
+                handle.session.devtools_endpoint =
+                    Some(crate::session::DevToolsEndpoint { base_url });
+                handle.session.devtools_serve_pending = false;
+            }
+            UpdateResult::none()
+        }
+
+        Message::DevToolsServeFailed { session_id, reason } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.devtools_serve_pending = false;
+            }
+            warn!(
+                session_id = session_id,
+                reason = %reason,
+                "DevTools serve failed; falling back to legacy URL"
+            );
+            // Surface the failure to the user, but only if the failing
+            // session is the one currently active in the UI — a background
+            // session's RPC failure should not distract someone focused on
+            // a different session. The toast is informational: the legacy
+            // fallback URL is still available via `B`, so we are not
+            // blocking any user action — just preventing a silent failure.
+            let active_id = state.session_manager.selected().map(|h| h.session.id);
+            if active_id == Some(session_id) {
+                state.push_toast(
+                    crate::state::ToastLevel::Warn,
+                    format!("DevTools serve failed: {reason}"),
+                );
+            }
+            UpdateResult::none()
+        }
+
+        Message::TriggerDevToolsServeFallback {
+            session_id,
+            continuation,
+        } => {
+            // Idempotent: maybe_serve_devtools no-ops when the endpoint is
+            // already set (e.g. the `app.devTools` primary event won the race)
+            // or a previous dispatch is in flight.
+            let action = maybe_serve_devtools(state, session_id);
+            UpdateResult {
+                message: continuation.map(|b| *b),
+                action,
+            }
+        }
+
         Message::RequestWidgetTree { session_id } => {
             // Cooldown: suppress rapid refreshes while loading or within 2 seconds
             // of the last fetch. This prevents RPC spam when the user holds `r`.
-            if state.devtools_view_state.inspector.is_fetch_debounced() {
+            let inspector = &state.devtools_view_state.inspector;
+            let last_fetch_elapsed = inspector.last_fetch_time.map(|t| t.elapsed().as_millis());
+            if inspector.is_fetch_debounced() {
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+                info!(
+                    session_id = session_id,
+                    loading = inspector.loading,
+                    last_fetch_elapsed_ms = ?last_fetch_elapsed,
+                    "Inspector: RequestWidgetTree debounced"
+                );
                 return UpdateResult::none();
             }
+
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+            info!(
+                session_id = session_id,
+                last_fetch_elapsed_ms = ?last_fetch_elapsed,
+                "Inspector: refresh requested"
+            );
 
             let vm_connected = state
                 .session_manager
@@ -1888,16 +1997,46 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .unwrap_or(false);
 
             if vm_connected {
+                // Choose the fetch trigger:
+                // - `Refresh` when the inspector has already loaded the tree at least
+                //   once; the Flutter framework is already running so the readiness
+                //   poll is wasted latency.
+                // - `Initial` when the user pressed `r` before the tree ever loaded
+                //   (unusual, but possible); polling still applies because the
+                //   framework may still be warming up.
+                let trigger = if state.devtools_view_state.inspector.has_ever_rendered_tree() {
+                    FetchTrigger::Refresh
+                } else {
+                    FetchTrigger::Initial
+                };
+
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+                info!(
+                    session_id = session_id,
+                    trigger = ?trigger,
+                    "Inspector: RequestWidgetTree trigger selected"
+                );
+
                 // Clear any previous error so a fresh fetch starts cleanly.
                 state.devtools_view_state.inspector.error = None;
                 state.devtools_view_state.inspector.record_fetch_start();
+                let (poll_attempts, poll_interval_ms, poll_call_timeout_ms) =
+                    devtools::clamped_readiness_poll_config(&state.settings.devtools);
                 UpdateResult::action(UpdateAction::FetchWidgetTree {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
                     fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
+                    inspector_readiness_poll_attempts: poll_attempts,
+                    inspector_readiness_poll_interval_ms: poll_interval_ms,
+                    inspector_readiness_poll_call_timeout_ms: poll_call_timeout_ms,
+                    trigger,
                 })
             } else {
+                warn!(
+                    session_id = session_id,
+                    "Inspector: RequestWidgetTree skipped — VM not connected"
+                );
                 state.devtools_view_state.inspector.error = Some(DevToolsError::new(
                     "VM Service not available",
                     "Ensure the app is running in debug mode",
@@ -2113,6 +2252,28 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ── Performance Panel UI Messages ─────────────────────────────────────
         Message::ToggleAllocationSort => {
             devtools::performance::handle_toggle_allocation_sort(state)
+        }
+
+        // ── Performance panel interactivity (Phase 2 handlers) ───────────────
+        Message::PerfFocusSection(section) => {
+            devtools::performance::handle_perf_focus_section(state, section)
+        }
+        Message::PerfScrollUp => {
+            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Up)
+        }
+        Message::PerfScrollDown => {
+            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Down)
+        }
+        Message::PerfPageUp => {
+            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Up)
+        }
+        Message::PerfPageDown => {
+            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Down)
+        }
+        Message::PerfJumpToStart => devtools::performance::handle_perf_jump_to_start(state),
+        Message::PerfJumpToEnd => devtools::performance::handle_perf_jump_to_end(state),
+        Message::PerfSelectAllocRow { index } => {
+            devtools::performance::handle_perf_select_alloc_row(state, index)
         }
 
         // ─────────────────────────────────────────────────────────────────────

@@ -5,14 +5,44 @@
 
 use super::*;
 
+// ── Scroll window helper ──────────────────────────────────────────────────────
+
+/// Return the slice of `samples` that should be rendered given the current
+/// scroll position and available display width.
+///
+/// Model A ("samples back from the live edge"):
+/// - `scroll_offset == 0`: always shows the most recent `visible_width` samples
+///   (live-edge mode).
+/// - `scroll_offset > 0`: the window ends at `len - scroll_offset`, anchoring
+///   the view at that many samples back from the latest data point. As new
+///   samples arrive the absolute window drifts forward, preserving the
+///   "N samples back" mental model.
+///
+/// If the slice would be shorter than `visible_width` (e.g. at session start)
+/// the available samples are returned without padding; the caller renders as-is.
+pub(crate) fn visible_memory_window(
+    samples: &[MemorySample],
+    visible_width: usize,
+    scroll_offset: usize,
+) -> &[MemorySample] {
+    let end = samples.len().saturating_sub(scroll_offset);
+    let start = end.saturating_sub(visible_width);
+    &samples[start..end]
+}
+
 // ── Sample-based chart (rich MemorySample data) ───────────────────────────────
 
 // MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
 #[allow(clippy::manual_is_multiple_of)]
+// Scroll offset and visible-width cell are needed alongside the existing args;
+// grouping them all into a struct here would be premature.
+#[allow(clippy::too_many_arguments)]
 /// Render the stacked braille chart from `MemorySample` data.
 pub(super) fn render_sample_chart(
     samples: &RingBuffer<MemorySample>,
     gc_history: &RingBuffer<GcEvent>,
+    scroll_offset: usize,
+    visible_width_cell: Option<&Cell<usize>>,
     plot_area: Rect,
     full_area: Rect,
     y_axis_width: u16,
@@ -26,8 +56,24 @@ pub(super) fn render_sample_chart(
     let pw = plot_area.width as usize;
     let ph = plot_area.height as usize;
 
-    // Compute max value for y-axis scaling
-    let max_bytes: u64 = samples
+    // EXCEPTION (TEA): render-hint Cell write-back — see docs/CODE_STANDARDS.md
+    // Principle 3 and "Region Registry Pattern".
+    if let Some(cell) = visible_width_cell {
+        cell.set(pw);
+    }
+
+    // Collect all samples (max 120), then apply the scroll window so that
+    // scroll_offset anchors the right edge of the chart at `len - offset`.
+    let all_samples: Vec<MemorySample> = samples.iter().cloned().collect();
+    let sample_data = visible_memory_window(&all_samples, pw, scroll_offset);
+
+    let n = sample_data.len();
+    if n == 0 {
+        return;
+    }
+
+    // Compute max value for y-axis scaling over the *visible* window only.
+    let max_bytes: u64 = sample_data
         .iter()
         .map(|s| s.rss.max(s.dart_heap + s.dart_native + s.raster_cache))
         .max()
@@ -40,9 +86,6 @@ pub(super) fn render_sample_chart(
     // Canvas dimensions in dot-space: width*2, height*4
     let dot_w = pw * 2;
     let dot_h = ph * 4;
-
-    // Collect samples into fixed-width columns
-    let sample_data: Vec<&MemorySample> = samples.iter().collect();
 
     // Helper: map a byte value to a dot-space y coordinate.
     // y=0 is the top, y=dot_h-1 is the bottom (highest memory value).
@@ -72,8 +115,8 @@ pub(super) fn render_sample_chart(
     let mut canvas_allocated = BrailleCanvas::new(pw, ph);
     let mut canvas_rss = BrailleCanvas::new(pw, ph);
 
-    let has_raster = samples.iter().any(|s| s.raster_cache > 0);
-    let has_rss = samples.iter().any(|s| s.rss > 0);
+    let has_raster = sample_data.iter().any(|s| s.raster_cache > 0);
+    let has_rss = sample_data.iter().any(|s| s.rss > 0);
 
     for (i, sample) in sample_data.iter().enumerate() {
         let dot_x = sample_to_dot_x(i);

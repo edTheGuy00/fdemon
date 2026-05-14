@@ -272,7 +272,7 @@ flutter-demon/
 │   │       │   ├── macos.rs      # macOS log stream capture
 │   │       │   └── ios.rs        # iOS simulator (xcrun simctl) + physical (idevicesyslog)
 │   │       └── vm_service/       # VM Service WebSocket client
-│   │           ├── mod.rs        # VmServiceHandle, connection management
+│   │           ├── mod.rs        # VmServiceHandle, VmRequestHandle, connection management
 │   │           ├── client.rs     # WebSocket client transport
 │   │           ├── protocol.rs   # JSON-RPC protocol types
 │   │           ├── errors.rs     # VM Service error types
@@ -889,6 +889,7 @@ DevTools state lives at two levels:
 
 - **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
 - **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
+- **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, and the `has_ever_rendered_tree` flag. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag survives `reset()` calls — it is sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches.
 
 Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 
@@ -903,6 +904,81 @@ Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 4. Results sent as `Message` variants to the Engine message channel
 5. Handler functions update per-session state
 6. TUI renders the updated state on the next frame
+
+### Inspector Widget Tree Fetch
+
+The Inspector panel fetches the widget tree through a two-phase sequence: isolate resolution followed by a readiness poll (skipped on explicit refresh).
+
+**Flutter UI isolate resolution** (`resolve_flutter_ui_isolate` on `VmRequestHandle`):
+
+The Dart VM may host multiple isolates (UI, worker, background). Targeting the wrong isolate produces empty or incorrect widget tree results. `resolve_flutter_ui_isolate` selects the correct isolate by:
+
+1. Calling `getVM` to enumerate all live isolates.
+2. Calling `getIsolate` on each non-system isolate.
+3. Selecting the first isolate whose `extensionRPCs` list contains at least one `ext.flutter.*` entry — indicating that the Flutter framework has registered its service extensions in that isolate.
+4. If no isolate has Flutter extensions yet (e.g., the app is still warming up), falls back to the first non-system isolate.
+
+The resolved isolate ID is cached on `VmRequestHandle`. The cache is invalidated on hot restart via `invalidate_isolate_cache()` (called from the daemon hot-restart event path) and on session teardown via `clear_isolate_cache()`.
+
+**Readiness poll** (`ReadinessPollConfig`):
+
+Before fetching the widget tree on first load, fdemon polls `ext.flutter.inspector.isWidgetTreeReady` to confirm the Flutter framework has completed its first frame. The poll budget defaults to 2 attempts × 250 ms interval × 1 s per-call timeout (2.5 s worst case). All three parameters are configurable via `[devtools]` keys `readiness_poll_attempts`, `readiness_poll_interval_ms`, and `readiness_poll_call_timeout_ms` in `.fdemon/config.toml`.
+
+**Fetch triggers and poll bypass** (`FetchTrigger`):
+
+Each widget-tree fetch carries a `FetchTrigger` variant — `Initial` or `Refresh` — that controls how the fetch is handled:
+
+- `Initial` — first load for the session; runs the full readiness poll.
+- `Refresh` — user-initiated `r` press after a tree has been rendered at least once; skips the readiness poll and fetches immediately, avoiding an unnecessary 2.5 s wait when the framework is already running.
+
+The sticky `has_ever_rendered_tree` flag on `InspectorState` gates whether `r` dispatches a `Refresh` or an `Initial` trigger.
+
+### Browser DevTools URL (Served Endpoint)
+
+When the `B` key is pressed from DevTools mode, fdemon opens the Flutter DevTools UI in the system browser. To produce a stable, DDS-registered URL, fdemon uses the Flutter daemon's `devtools.serve` JSON-RPC method rather than constructing a URL from raw VM Service connection details.
+
+The endpoint acquisition follows two channels:
+
+- **Primary — `app.devTools` event**: The Flutter daemon emits this event asynchronously after the DevTools server starts. `fdemon-daemon/protocol.rs` parses the event and emits a `DaemonEvent::DevToolsServed` variant; the handler in `fdemon-app/handler/daemon.rs` stores the resolved base URL on the session.
+- **Eager fallback — `devtools.serve` RPC**: When VM Service connection is established for a session, fdemon eagerly fires a `devtools.serve` JSON-RPC call via `fdemon-daemon/commands.rs`. This populates the endpoint before the user first presses `B`, avoiding a cold-start delay. Both channels write to the same `Session.devtools_endpoint` field (`{base_url: String, served_at: Instant}`), so whichever arrives first wins.
+
+If neither channel has produced an endpoint by the time `B` is pressed, fdemon falls back to the legacy VM Service WebSocket URL and shows a recovery toast informing the user of the degraded path.
+
+The `devtools.serve` method is available on Flutter SDK ≥ 1.22 (October 2020). On older SDKs the daemon returns a JSON-RPC `-32601 Method not found` error, which the daemon layer treats as a signal to suppress the eager-serve request and rely solely on the `app.devTools` event path or the legacy fallback.
+
+### Performance Panel Interactivity
+
+The Performance panel is divided into three independently-navigable sub-sections. Focus, scrolling, and selection state are tracked on `PerformanceState` (in `fdemon-app/src/session/performance.rs`).
+
+**Section focus (`PerfSection` enum):**
+
+`PerfSection` has three variants — `FrameChart`, `MemoryChart`, `MemoryList` — corresponding to the frame timing bar chart, the memory usage time-series chart, and the class allocation table respectively. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` forward and backward through this order; section-specific key and mouse events are gated on which section currently has focus.
+
+**Scroll-offset model (live-edge drift):**
+
+Both chart sections use "frames back from live edge" scroll semantics:
+
+- `frame_chart_scroll_offset` — how many bars the frame chart has been scrolled back from the newest frame. `0` means the live edge is visible (most recent frames are at the right of the chart).
+- `memory_chart_scroll_offset` — same model for the memory chart samples.
+- `alloc_table_scroll_offset` — row scroll offset for the allocation table (rows scrolled past the top).
+
+Pressing `End` (or the equivalent mouse click on the live-edge indicator) resets the relevant offset to `0`, snapping the view back to the live edge.
+
+**Render-hint `Cell<usize>` fields:**
+
+Three fields use `Cell<usize>` interior mutability to feed geometry back from the renderer to the handler without violating the TEA immutability contract on the model:
+
+| Field | Purpose |
+|---|---|
+| `frame_chart_visible_width` | Columns available in the frame chart area; used by the scroll handler to clamp scroll offset. |
+| `memory_chart_visible_width` | Columns available in the memory chart area; same purpose. |
+| `alloc_table_visible_height` | Rows visible in the allocation table; used by `PgUp`/`PgDn` to page by the correct amount. |
+
+All three default to `0` ("not yet rendered — use fallback"). This is the same approved TEA exception class as the `MouseRegions` cell and the tag-filter render-hint cell. See `docs/CODE_STANDARDS.md` Principle 3 for the canonical definition of this pattern.
+
+**Frame history capacity:**
+
+`DEFAULT_FRAME_HISTORY_SIZE` is 1800 frames (30 seconds at 60 FPS), up from the previous 300-frame default. This provides enough scroll-back history for meaningful post-hoc analysis of jank events.
 
 ---
 

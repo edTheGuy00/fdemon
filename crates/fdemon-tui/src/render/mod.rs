@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use super::{layout, widgets};
 use crate::widgets::LogViewState;
-use fdemon_app::state::{AppState, LoadingState, UiMode};
+use fdemon_app::state::{AppState, LoadingState, ToastLevel, UiMode};
 use fdemon_app::{MouseAction, MouseRect, MouseRegionsBuilder};
 use fdemon_core::LogEntry;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -404,11 +404,109 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         }
     }
 
+    // ── Toast notifications ────────────────────────────────────────────────
+    // Rendered last so they appear on top of all other UI elements.
+    // Toasts are transient one-line overlays that expire automatically.
+    if !state.toasts.is_empty() {
+        render_toasts(frame, area, &state.toasts);
+    }
+
     // ── Registry put-back handled by guard's Drop ─────────────────────────
     // The `regions` guard (MouseRegionGuard) calls `state.mouse_regions.set`
     // automatically when it drops here. No explicit set() needed.
     // `mouse_ctx`'s borrow of `*regions` ends at its last use above (NLL);
     // the guard can then drop and put the registry back.
+}
+
+/// Render transient toast notifications as one-line overlays near the bottom
+/// of the screen.
+///
+/// Toasts are drawn on top of all other UI elements. When multiple toasts are
+/// queued they stack upward (most recent at the bottom). Each row is cleared
+/// with [`Clear`] before the text is painted so underlying UI elements do not
+/// bleed through.
+///
+/// The accent colour follows [`ToastLevel`]:
+/// - [`ToastLevel::Warn`] — yellow (`STATUS_YELLOW`)
+/// - [`ToastLevel::Info`] — blue (`STATUS_BLUE`)
+fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[fdemon_app::state::Toast]) {
+    use crate::theme::palette;
+
+    /// Left/right padding inside the toast pill.
+    const HORIZONTAL_PADDING: u16 = 2;
+    /// Vertical offset from the bottom edge of `area`.
+    /// 2 rows up keeps the toast above the typical bottom metadata bar.
+    const BOTTOM_OFFSET: u16 = 2;
+    /// Display-width budget reserved for the leading icon.
+    ///
+    /// The icon string is `"⚠ "` or `"ℹ "` (2 codepoints each: glyph +
+    /// space). The warning/info glyph is a non-ASCII codepoint that some
+    /// terminals render at 2 cells (default-width / emoji presentation) and
+    /// others at 1 cell (text presentation). Plus the trailing space gives
+    /// 2–3 cells in practice. We budget 4 cells to leave a 1–2 cell safety
+    /// margin so the pill never clips the icon — the cost is at most two
+    /// blank cells on the right when text fits exactly.
+    const ICON_DISPLAY_WIDTH: u16 = 4;
+
+    // Render most recent toast at the bottom; older ones stack above it.
+    for (i, toast) in toasts.iter().rev().enumerate() {
+        let row_from_bottom = BOTTOM_OFFSET + i as u16;
+        // Stop if we would overflow the top of the area.
+        if row_from_bottom >= area.height {
+            break;
+        }
+        let y = area.y + area.height.saturating_sub(row_from_bottom + 1);
+
+        // Truncate the message to fit in the available width.
+        let max_text_chars =
+            area.width
+                .saturating_sub(HORIZONTAL_PADDING * 2 + ICON_DISPLAY_WIDTH) as usize;
+        let label = if toast.text.chars().count() > max_text_chars {
+            format!(
+                "{}…",
+                toast
+                    .text
+                    .chars()
+                    .take(max_text_chars.saturating_sub(1))
+                    .collect::<String>()
+            )
+        } else {
+            toast.text.clone()
+        };
+
+        let (accent, icon) = match toast.level {
+            ToastLevel::Warn => (palette::STATUS_YELLOW, "⚠ "),
+            ToastLevel::Info => (palette::STATUS_BLUE, "ℹ "),
+        };
+
+        // Use ICON_DISPLAY_WIDTH (not icon.chars().count()) so the toast
+        // rect matches the budget used in `max_text_chars` above. Using
+        // `chars().count() == 2` would undersize the rect on terminals
+        // that render the glyph at 2 cells, clipping the icon.
+        let text_width = (label.chars().count()
+            + ICON_DISPLAY_WIDTH as usize
+            + HORIZONTAL_PADDING as usize * 2) as u16;
+        let toast_width = text_width.min(area.width);
+        // Right-align the toast pill.
+        let x = area
+            .x
+            .saturating_add(area.width.saturating_sub(toast_width));
+
+        let toast_area = Rect::new(x, y, toast_width, 1);
+
+        // Clear the row before painting the pill.
+        frame.render_widget(Clear, toast_area);
+
+        let line = Line::from(vec![
+            Span::raw(" ".repeat(HORIZONTAL_PADDING as usize)),
+            Span::styled(icon, Style::default().fg(accent)),
+            Span::styled(label, Style::default().fg(palette::TEXT_PRIMARY)),
+            Span::raw(" ".repeat(HORIZONTAL_PADDING as usize)),
+        ]);
+
+        let paragraph = Paragraph::new(line).style(Style::default().bg(palette::POPUP_BG));
+        frame.render_widget(paragraph, toast_area);
+    }
 }
 
 /// Render loading screen during startup initialization (Task 08d)

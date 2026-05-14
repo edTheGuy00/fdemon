@@ -9,6 +9,7 @@ use crate::config::LaunchConfig;
 use crate::handler::helpers::{detect_raw_line_level, is_block_end, is_block_start};
 use crate::hyperlinks::LinkHighlightState;
 use crate::log_view_state::LogViewState;
+use fdemon_core::url::percent_encode_uri;
 use fdemon_core::{
     strip_ansi_codes, AppPhase, ExceptionBlockParser, FeedResult, FilterState, LogEntry, LogLevel,
     LogSource, SearchState,
@@ -21,6 +22,49 @@ use super::log_batcher::LogBatcher;
 use super::network::NetworkState;
 use super::next_session_id;
 use super::performance::PerformanceState;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DevTools Endpoint (browser DevTools integration)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The DevTools server endpoint associated with a Flutter session.
+///
+/// Populated from the `app.devTools` event that the Flutter daemon emits
+/// automatically during `flutter run --machine` startup (Flutter ≥ 1.22.0),
+/// or from the `devtools.serve` RPC response as a fallback.
+///
+/// The `base_url` is the raw DevTools server URL with NO query parameters.
+/// Two formats exist:
+/// - Standalone DevTools (older Flutter): `http://127.0.0.1:9100`
+/// - DDS-integrated DevTools (Flutter ≥ 3.24): `http://127.0.0.1:59123/<auth-token>/devtools`
+#[derive(Debug, Clone)]
+pub struct DevToolsEndpoint {
+    /// Base DevTools server URL without trailing `?uri=` parameter.
+    pub base_url: String,
+}
+
+impl DevToolsEndpoint {
+    /// Construct the full browser URL by appending `?uri=<encoded_ws_uri>`.
+    ///
+    /// The `ws_uri` is the VM Service WebSocket URI (e.g.
+    /// `ws://127.0.0.1:1234/abc=/ws`). It is percent-encoded and appended as
+    /// the `uri` query parameter per the Flutter DevTools convention.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use fdemon_app::session::DevToolsEndpoint;
+    /// let ep = DevToolsEndpoint {
+    ///     base_url: "http://127.0.0.1:9100".into(),
+    /// };
+    /// let url = ep.url("ws://127.0.0.1:1234/abc=/ws");
+    /// assert_eq!(url, "http://127.0.0.1:9100?uri=ws%3A%2F%2F127.0.0.1%3A1234%2Fabc%3D%2Fws");
+    /// ```
+    pub fn url(&self, ws_uri: &str) -> String {
+        let encoded = percent_encode_uri(ws_uri);
+        format!("{}?uri={}", self.base_url, encoded)
+    }
+}
 
 /// A single Flutter app session
 #[derive(Debug)]
@@ -88,6 +132,19 @@ pub struct Session {
 
     /// Whether the VM Service WebSocket is currently connected
     pub vm_connected: bool,
+
+    /// DevTools server endpoint (populated from `app.devTools` event or
+    /// `devtools.serve` RPC response). `None` until the daemon reports that
+    /// DevTools is ready.
+    ///
+    /// Use [`DevToolsEndpoint::url`] to obtain the full browser URL with the
+    /// VM Service URI query parameter appended.
+    pub devtools_endpoint: Option<DevToolsEndpoint>,
+
+    /// True between sending a `ServeDevTools` command and receiving the
+    /// corresponding response. Used to debounce duplicate serve requests when
+    /// the eager-serve path fires before the `app.devTools` event arrives.
+    pub devtools_serve_pending: bool,
 
     /// Launch configuration used
     pub launch_config: Option<LaunchConfig>,
@@ -166,6 +223,8 @@ impl Session {
             app_id: None,
             ws_uri: None,
             vm_connected: false,
+            devtools_endpoint: None,
+            devtools_serve_pending: false,
             launch_config: None,
             created_at: Local::now(),
             started_at: None,

@@ -13,6 +13,12 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::widgets::MouseCtx;
 
+/// Z-index for per-bar click regions.
+///
+/// Must be higher than the section-level focus region (z=0) registered by
+/// [`PerformancePanel`] so per-bar selection wins on overlap.
+const BAR_CLICK_Z_INDEX: u8 = 1;
+
 // ── Bar chart methods ─────────────────────────────────────────────────────────
 
 impl FrameChart<'_> {
@@ -35,15 +41,25 @@ impl FrameChart<'_> {
             return;
         }
 
+        // EXCEPTION (TEA): render-hint Cell write-back — see docs/CODE_STANDARDS.md
+        // Principle 3 and "Region Registry Pattern".
+        self.frame_chart_visible_width.set(max_visible);
+
         let total_frames = self.frame_history.len();
         if total_frames == 0 {
             return;
         }
 
         // Determine the visible window of frames.
-        // Prefer: show the most recent N frames.
-        // Exception: if a frame is selected, scroll so the selected frame is visible.
-        let (start_idx, end_idx) = self.compute_visible_range(total_frames, max_visible);
+        // scroll_offset > 0: frozen-scroll mode anchored at len - offset.
+        // scroll_offset == 0 with selection: keep selected frame visible.
+        // scroll_offset == 0 without selection: live-edge (most recent frames).
+        let (start_idx, end_idx) = compute_visible_range(
+            total_frames,
+            max_visible,
+            self.selected_frame,
+            self.scroll_offset,
+        );
 
         // Collect visible frames (oldest first so they render left-to-right)
         let visible: Vec<&FrameTiming> = self
@@ -132,6 +148,7 @@ impl FrameChart<'_> {
 
             // Register a click region covering the full slot width and chart height.
             // Clicking anywhere in the bar pair (UI + Raster + gap) selects the frame.
+            // z=BAR_CLICK_Z_INDEX (1) so these win over the section-level focus region at z=0.
             if let Some(c) = ctx.as_deref_mut() {
                 // Width: CHARS_PER_FRAME (3) per slot, but clamp to available columns
                 // at the right edge of the chart so we never exceed the area bounds.
@@ -139,40 +156,14 @@ impl FrameChart<'_> {
                 let rect_w = CHARS_PER_FRAME.min(avail);
                 if rect_w > 0 && area.height > 0 {
                     let rect = MouseRect::new(x, area.y, rect_w, area.height);
-                    c.click(
+                    c.click_at_z(
                         rect,
                         MouseAction::emit(fdemon_app::Message::SelectPerformanceFrame {
                             index: Some(global_idx),
                         }),
+                        BAR_CLICK_Z_INDEX,
                     );
                 }
-            }
-        }
-    }
-
-    /// Compute which slice of `frame_history` to display.
-    ///
-    /// Returns `(start_idx, end_idx)` — exclusive end, i.e. `frame_history[start..end]`.
-    pub(super) fn compute_visible_range(
-        &self,
-        total_frames: usize,
-        max_visible: usize,
-    ) -> (usize, usize) {
-        let visible_count = max_visible.min(total_frames);
-
-        match self.selected_frame {
-            None => {
-                // Show the most recent frames
-                let end = total_frames;
-                let start = end.saturating_sub(visible_count);
-                (start, end)
-            }
-            Some(sel) => {
-                // Keep selected frame in view — prefer showing it at the right side
-                // but scroll left if near the start.
-                let end = (sel + 1).min(total_frames);
-                let start = end.saturating_sub(visible_count);
-                (start, end)
             }
         }
     }
@@ -218,6 +209,45 @@ impl FrameChart<'_> {
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
+
+/// Compute which slice of `frame_history` to display.
+///
+/// Returns `(start_idx, end_idx)` — exclusive end, i.e. `frame_history[start..end]`.
+///
+/// Three modes (Model A — `scroll_offset` is "frames back from the live edge"):
+///
+/// 1. `scroll_offset > 0`: frozen-scroll mode. The window anchors at
+///    `frame_count - scroll_offset`. As new frames arrive the absolute window
+///    drifts forward by the same amount, preserving the "N frames back from
+///    latest" mental model.
+/// 2. `scroll_offset == 0` and `selected_frame.is_some()`: anchor at the
+///    selected frame so it stays visible at the right edge of the window.
+/// 3. `scroll_offset == 0` and `selected_frame.is_none()`: live-edge mode —
+///    always shows the most recent `visible_width` frames.
+pub fn compute_visible_range(
+    frame_count: usize,
+    visible_width: usize,
+    selected_frame: Option<usize>,
+    scroll_offset: usize,
+) -> (usize, usize) {
+    if scroll_offset > 0 {
+        // Frozen-scroll mode: anchor at len - offset
+        let end = frame_count.saturating_sub(scroll_offset);
+        let start = end.saturating_sub(visible_width);
+        (start, end)
+    } else if let Some(sel) = selected_frame {
+        // Keep selected frame in view — prefer showing it at the right side
+        // but scroll left if near the start.
+        let end = (sel + 1).min(frame_count);
+        let start = end.saturating_sub(visible_width);
+        (start, end)
+    } else {
+        // Live-edge: show the most recent frames
+        let end = frame_count;
+        let start = end.saturating_sub(visible_width);
+        (start, end)
+    }
+}
 
 /// Determine the UI and Raster bar colours for a frame.
 ///

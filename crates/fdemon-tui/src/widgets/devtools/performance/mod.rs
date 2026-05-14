@@ -25,11 +25,12 @@ mod frame_chart;
 mod memory_chart;
 pub(super) mod styles;
 
-use fdemon_app::session::PerformanceState;
+use fdemon_app::session::{PerfSection, PerformanceState};
 use fdemon_app::state::VmConnectionStatus;
+use fdemon_app::{MouseAction, MouseRect};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
@@ -50,6 +51,14 @@ const DUAL_SECTION_MIN_HEIGHT: u16 = 16;
 
 /// Below this height, show compact summary only.
 const COMPACT_THRESHOLD: u16 = 7;
+
+// ── Focus / border styling constants ─────────────────────────────────────────
+
+/// Border colour for the focused section (brighter, draws the eye).
+const COLOR_FOCUSED_BORDER: Color = Color::Cyan;
+
+/// Border colour for unfocused sections (dim, recedes).
+const COLOR_UNFOCUSED_BORDER: Color = Color::DarkGray;
 
 // ── PerformancePanel ─────────────────────────────────────────────────────────
 
@@ -111,9 +120,9 @@ impl PerformancePanel<'_> {
     ///
     /// When `ctx` is `None` the behaviour is identical to the old
     /// `Widget::render` implementation. When `ctx` is `Some`, click regions
-    /// are forwarded into the FrameChart section only (the only clickable
-    /// surface). The memory chart and compact-summary paths receive `None`.
-    fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
+    /// are forwarded into both the FrameChart and MemoryChart sections.
+    /// The compact-summary and disconnected paths receive `None`.
+    fn render_impl(self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
         // Clear background
         let bg_style = Style::default().bg(palette::DEEPEST_BG);
         for y in area.y..area.bottom() {
@@ -140,20 +149,42 @@ impl PerformancePanel<'_> {
 
         if total_h < DUAL_SECTION_MIN_HEIGHT {
             // Small terminal — frame chart only (no memory section).
+            let frame_focused = self.performance.focused_section == PerfSection::FrameChart;
+            let frame_border_color = if frame_focused {
+                COLOR_FOCUSED_BORDER
+            } else {
+                COLOR_UNFOCUSED_BORDER
+            };
             let frame_block = Block::default()
                 .title(format!(" {} Frame Timing ", self.icons.activity()))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(palette::BORDER_DIM))
+                .border_style(Style::default().fg(frame_border_color))
                 .title_style(Style::default().fg(palette::ACCENT_DIM));
             let frame_inner = frame_block.inner(area);
             frame_block.render(area, buf);
+
+            // Section-level focus region: clicking anywhere in the frame chart area
+            // focuses this section. Per-bar clicks (z=1) win over this region (z=0).
+            if let Some(c) = ctx.as_deref_mut() {
+                // EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
+                // "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
+                let section_rect = MouseRect::new(area.x, area.y, area.width, area.height);
+                c.click(
+                    section_rect,
+                    MouseAction::emit(fdemon_app::Message::PerfFocusSection(
+                        PerfSection::FrameChart,
+                    )),
+                );
+            }
 
             FrameChart::new(
                 &self.performance.frame_history,
                 self.performance.selected_frame,
                 &self.performance.stats,
                 false,
+                self.performance.frame_chart_scroll_offset,
+                &self.performance.frame_chart_visible_width,
             )
             .render_with_regions(frame_inner, buf, ctx);
             return;
@@ -176,35 +207,80 @@ impl PerformancePanel<'_> {
             .split(usable_area);
 
         // Frame timing section (with block border) — ctx forwarded here.
+        let frame_focused = self.performance.focused_section == PerfSection::FrameChart;
+        let frame_border_color = if frame_focused {
+            COLOR_FOCUSED_BORDER
+        } else {
+            COLOR_UNFOCUSED_BORDER
+        };
         let frame_block = Block::default()
             .title(format!(" {} Frame Timing ", self.icons.activity()))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .border_style(Style::default().fg(frame_border_color))
             .title_style(Style::default().fg(palette::ACCENT_DIM));
         let frame_inner = frame_block.inner(chunks[0]);
         frame_block.render(chunks[0], buf);
 
+        // Section-level focus region: clicking anywhere in the frame chart section
+        // focuses this section. Per-bar clicks (z=1) win over this region (z=0).
+        if let Some(c) = ctx.as_deref_mut() {
+            // EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
+            // "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
+            let section_rect =
+                MouseRect::new(chunks[0].x, chunks[0].y, chunks[0].width, chunks[0].height);
+            c.click(
+                section_rect,
+                MouseAction::emit(fdemon_app::Message::PerfFocusSection(
+                    PerfSection::FrameChart,
+                )),
+            );
+        }
+
+        // Use as_deref_mut() so ctx is only borrowed here — ownership is
+        // retained for the MemoryChart call below.
         FrameChart::new(
             &self.performance.frame_history,
             self.performance.selected_frame,
             &self.performance.stats,
             false,
+            self.performance.frame_chart_scroll_offset,
+            &self.performance.frame_chart_visible_width,
         )
-        .render_with_regions(frame_inner, buf, ctx);
+        .render_with_regions(frame_inner, buf, ctx.as_deref_mut());
 
-        // Memory section — no clicks in Phase 4. Use Borders::TOP only to
-        // maximise inner height. The top border carries the title; no
-        // bottom/side borders are needed because the footer hint line occupies
-        // the row below.
+        // Memory section — Use Borders::TOP only to maximise inner height.
+        // The top border carries the title; no bottom/side borders are needed
+        // because the footer hint line occupies the row below.
+        let memory_focused = self.performance.focused_section == PerfSection::MemoryChart;
+        let memory_border_color = if memory_focused {
+            COLOR_FOCUSED_BORDER
+        } else {
+            COLOR_UNFOCUSED_BORDER
+        };
         let memory_block = Block::default()
             .title(format!(" {} Memory ", self.icons.cpu()))
             .borders(Borders::TOP)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .border_style(Style::default().fg(memory_border_color))
             .title_style(Style::default().fg(palette::ACCENT_DIM));
         let memory_inner = memory_block.inner(chunks[1]);
         memory_block.render(chunks[1], buf);
+
+        // Section-level focus region for the memory chart area.
+        // Clicking anywhere in the memory section focuses it (z=0).
+        if let Some(c) = ctx.as_deref_mut() {
+            // EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
+            // "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
+            let section_rect =
+                MouseRect::new(chunks[1].x, chunks[1].y, chunks[1].width, chunks[1].height);
+            c.click(
+                section_rect,
+                MouseAction::emit(fdemon_app::Message::PerfFocusSection(
+                    PerfSection::MemoryChart,
+                )),
+            );
+        }
 
         MemoryChart::new(
             &self.performance.memory_samples,
@@ -214,7 +290,18 @@ impl PerformancePanel<'_> {
             self.performance.allocation_sort,
             false,
         )
-        .render(memory_inner, buf);
+        .with_chart_state(
+            self.performance.memory_chart_scroll_offset,
+            memory_focused,
+            &self.performance.memory_chart_visible_width,
+        )
+        .with_alloc_state(
+            self.performance.alloc_table_scroll_offset,
+            self.performance.alloc_table_selected_row,
+            self.performance.focused_section == PerfSection::MemoryList,
+            &self.performance.alloc_table_visible_height,
+        )
+        .render_with_regions(memory_inner, buf, ctx);
     }
 
     // ── Disconnected / no-data state ─────────────────────────────────────────
@@ -292,8 +379,8 @@ impl PerformancePanel<'_> {
 /// implementation shared with `Widget::render`.  Passing `None` for `ctx`
 /// produces output byte-identical to `Widget::render`.
 ///
-/// `ctx` is forwarded only into the frame-chart bar-chart section. The memory
-/// chart, compact-summary, and disconnected paths do not record click regions.
+/// `ctx` is forwarded into the frame-chart and memory-chart sections. The
+/// compact-summary and disconnected paths do not record click regions.
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,

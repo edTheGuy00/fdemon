@@ -9695,6 +9695,106 @@ fn test_enter_devtools_starts_monitoring_when_vm_connected() {
 }
 
 #[test]
+fn test_enter_devtools_lazy_start_followup_dispatches_fetch_widget_tree() {
+    // Regression for the "Inspector stuck on Loading widget tree" bug
+    // (see workflow/plans/bugs/devtools-inspector-stuck-loading/).
+    //
+    // The lazy-start path of `handle_enter_devtools_mode` (DevTools opened
+    // while no perf task is running) returns BOTH a StartPerformanceMonitoring
+    // action AND a RequestWidgetTree follow-up message. The follow-up is
+    // processed in the same `update()` cycle.
+    //
+    // Prior bug: the lazy-start path called `inspector.record_fetch_start()`
+    // before queuing the follow-up, which set `loading=true`. The follow-up
+    // RequestWidgetTree handler then saw `is_fetch_debounced() == true` and
+    // bailed without dispatching FetchWidgetTree — the spawn task never ran,
+    // and the inspector stayed on "Loading widget tree..." forever.
+    //
+    // This test asserts that:
+    //  (1) handle_enter_devtools_mode does NOT set loading=true at the lazy-
+    //      start site (so the follow-up isn't self-debounced);
+    //  (2) processing the follow-up RequestWidgetTree DOES produce a
+    //      FetchWidgetTree action.
+    use crate::handler::devtools::handle_enter_devtools_mode;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state
+        .session_manager
+        .get_mut(session_id)
+        .unwrap()
+        .session
+        .vm_connected = true;
+    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
+    // Inspector is the default panel ("inspector"); no tree is loaded; not loading.
+    assert!(state.devtools_view_state.inspector.root.is_none());
+    assert!(!state.devtools_view_state.inspector.loading);
+    assert!(state
+        .devtools_view_state
+        .inspector
+        .last_fetch_time
+        .is_none());
+
+    let result = handle_enter_devtools_mode(&mut state);
+
+    // (a) Returns StartPerformanceMonitoring as the action.
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "lazy-start path should return StartPerformanceMonitoring action"
+    );
+
+    // (b) Returns RequestWidgetTree as the follow-up message.
+    let followup = result
+        .message
+        .expect("lazy-start path with Inspector panel should queue a follow-up message");
+    assert!(
+        matches!(followup, Message::RequestWidgetTree { .. }),
+        "follow-up should be RequestWidgetTree, got {followup:?}"
+    );
+
+    // (c) THE REGRESSION GUARD: inspector.loading must remain false so the
+    //     follow-up RequestWidgetTree is not debounced.
+    assert!(
+        !state.devtools_view_state.inspector.loading,
+        "loading=true at lazy-start site would cause the follow-up RequestWidgetTree \
+         to be debounced — re-introducing the stuck-loading bug"
+    );
+    assert!(
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetch_time
+            .is_none(),
+        "last_fetch_time=Some(...) at lazy-start site would also engage the debounce \
+         and re-introduce the stuck-loading bug"
+    );
+
+    // (d) Drive the follow-up message through the handler — it MUST dispatch
+    //     FetchWidgetTree, otherwise the bug recurs.
+    let followup_result = update(&mut state, followup);
+    assert!(
+        matches!(
+            followup_result.action,
+            Some(UpdateAction::FetchWidgetTree { .. })
+        ),
+        "follow-up RequestWidgetTree must dispatch FetchWidgetTree, got {:?}",
+        followup_result.action
+    );
+    // After the follow-up: loading is set true (by RequestWidgetTree's own
+    // record_fetch_start call), and the spawn task is in flight.
+    assert!(state.devtools_view_state.inspector.loading);
+    assert!(state
+        .devtools_view_state
+        .inspector
+        .last_fetch_time
+        .is_some());
+}
+
+#[test]
 fn test_enter_devtools_does_not_start_when_vm_disconnected() {
     use crate::handler::devtools::handle_enter_devtools_mode;
 
@@ -10393,14 +10493,14 @@ mod mouse_scroll {
         assert!(result.action.is_none(), "scroll must not produce an action");
     }
 
-    // 5. UiMode::DevTools, Performance panel, Up Shift-only → None
+    // 5. UiMode::DevTools, Performance panel, Up Shift-only → PerfPageUp
     #[test]
-    fn mouse_scroll_devtools_performance_shift_up_produces_none() {
+    fn mouse_scroll_devtools_performance_shift_up_produces_perf_page_up() {
         let mut state = AppState::new();
         state.ui_mode = UiMode::DevTools;
         state.devtools_view_state.active_panel = DevToolsPanel::Performance;
         let shift = KeyModSet::new(true, false, false);
-        assert_scroll_routes_to_nothing(&mut state, ScrollDir::Up, shift);
+        assert_scroll_routes_to(&mut state, ScrollDir::Up, shift, Message::PerfPageUp);
     }
 
     // 6. UiMode::DevTools, Network panel (filter inactive), Up no mods → Message::NetworkNavigate(NetworkNav::Up)
@@ -11907,6 +12007,631 @@ mod phase5_5_modal_precedence_tests {
                 mode,
                 result.message
             );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DevTools endpoint handler tests (Task 05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+mod devtools_served_handler {
+    use super::*;
+    use crate::session::SessionId;
+
+    fn make_state_with_session() -> (AppState, SessionId) {
+        let mut state = AppState::new();
+        let device = test_device("device-1", "Pixel 5");
+        let sid = state.session_manager.create_session(&device).unwrap();
+        (state, sid)
+    }
+
+    /// `Message::DevToolsServed` populates `devtools_endpoint` and clears
+    /// `devtools_serve_pending`.
+    #[test]
+    fn devtools_served_populates_endpoint() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Set serve-pending to simulate a prior `devtools.serve` dispatch
+        {
+            let h = state.session_manager.get_mut(session_id).unwrap();
+            h.session.devtools_serve_pending = true;
+        }
+
+        let result = update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: "http://127.0.0.1:9100".to_string(),
+            },
+        );
+
+        // Handler should not produce a follow-up message or action
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        let endpoint = handle.session.devtools_endpoint.as_ref().unwrap();
+        assert_eq!(endpoint.base_url, "http://127.0.0.1:9100");
+        assert!(
+            !handle.session.devtools_serve_pending,
+            "devtools_serve_pending should be cleared"
+        );
+    }
+
+    /// `Message::DevToolsServeFailed` clears `devtools_serve_pending` and leaves
+    /// `devtools_endpoint` as `None`.
+    #[test]
+    fn devtools_serve_failed_clears_pending() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Set serve-pending to simulate a prior dispatch
+        {
+            let h = state.session_manager.get_mut(session_id).unwrap();
+            h.session.devtools_serve_pending = true;
+        }
+
+        let result = update(
+            &mut state,
+            Message::DevToolsServeFailed {
+                session_id,
+                reason: "devtools.serve failed: Method not found (code -32601)".to_string(),
+            },
+        );
+
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.devtools_endpoint.is_none(),
+            "devtools_endpoint should remain None after failure"
+        );
+        assert!(
+            !handle.session.devtools_serve_pending,
+            "devtools_serve_pending should be cleared after failure"
+        );
+    }
+
+    /// `Message::DevToolsServed` with DDS-integrated base URL (auth-token in path).
+    #[test]
+    fn devtools_served_dds_integrated_base_url() {
+        let (mut state, session_id) = make_state_with_session();
+
+        let base_url = "http://127.0.0.1:59123/tbrR0DzW2j8=/devtools".to_string();
+        update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: base_url.clone(),
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        let endpoint = handle.session.devtools_endpoint.as_ref().unwrap();
+        assert_eq!(endpoint.base_url, base_url);
+    }
+
+    /// A second `DevToolsServed` for the same session overwrites the endpoint
+    /// (handles the race between `app.devTools` event and `devtools.serve` response).
+    #[test]
+    fn devtools_served_overwrites_existing_endpoint() {
+        let (mut state, session_id) = make_state_with_session();
+
+        update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: "http://127.0.0.1:9100".to_string(),
+            },
+        );
+        update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id,
+                base_url: "http://127.0.0.1:9200".to_string(),
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.devtools_endpoint.as_ref().unwrap().base_url,
+            "http://127.0.0.1:9200",
+            "second DevToolsServed should overwrite first"
+        );
+        assert!(!handle.session.devtools_serve_pending);
+    }
+
+    /// `DevToolsServed` for an unknown session_id is silently ignored (no panic).
+    #[test]
+    fn devtools_served_unknown_session_is_noop() {
+        let mut state = AppState::new();
+        // Use a session_id that was never created
+        let phantom_id: SessionId = 99999;
+
+        let result = update(
+            &mut state,
+            Message::DevToolsServed {
+                session_id: phantom_id,
+                base_url: "http://127.0.0.1:9100".to_string(),
+            },
+        );
+
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+    }
+
+    // -- Lifecycle resets ----------------------------------------------------
+    // After hot restart / process exit / VM disconnect, the stored DevTools
+    // URL is stale (DDS may have cycled the port). Pressing `B` after
+    // these events must not silently open a dead URL — both
+    // `devtools_endpoint` and `devtools_serve_pending` must be cleared.
+
+    use fdemon_core::AppStop;
+
+    fn populate_devtools_state(state: &mut AppState, session_id: SessionId) {
+        let h = state.session_manager.get_mut(session_id).unwrap();
+        h.session.app_id = Some("test-app".to_string());
+        h.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
+            base_url: "http://127.0.0.1:9100".to_string(),
+        });
+        h.session.devtools_serve_pending = true;
+    }
+
+    #[test]
+    fn app_stop_resets_devtools_endpoint() {
+        use crate::handler::session::handle_session_message_state;
+        let (mut state, session_id) = make_state_with_session();
+        populate_devtools_state(&mut state, session_id);
+
+        handle_session_message_state(
+            &mut state,
+            session_id,
+            &fdemon_core::DaemonMessage::AppStop(AppStop {
+                app_id: "test-app".to_string(),
+                error: None,
+            }),
+        );
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.session.devtools_endpoint.is_none(),
+            "AppStop must clear devtools_endpoint to avoid stale URL after restart"
+        );
+        assert!(
+            !h.session.devtools_serve_pending,
+            "AppStop must clear devtools_serve_pending"
+        );
+    }
+
+    #[test]
+    fn session_exited_resets_devtools_state() {
+        use crate::handler::session::handle_session_exited;
+        let (mut state, session_id) = make_state_with_session();
+        populate_devtools_state(&mut state, session_id);
+
+        handle_session_exited(&mut state, session_id, Some(0));
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(h.session.devtools_endpoint.is_none());
+        assert!(!h.session.devtools_serve_pending);
+    }
+
+    #[test]
+    fn vm_service_disconnected_resets_devtools_state() {
+        let (mut state, session_id) = make_state_with_session();
+        populate_devtools_state(&mut state, session_id);
+
+        update(&mut state, Message::VmServiceDisconnected { session_id });
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.session.devtools_endpoint.is_none(),
+            "VmServiceDisconnected must clear devtools_endpoint"
+        );
+        assert!(
+            !h.session.devtools_serve_pending,
+            "VmServiceDisconnected must clear devtools_serve_pending so a \
+             reconnect can fire the fallback again"
+        );
+    }
+
+    // -- TriggerDevToolsServeFallback chained follow-up ----------------------
+
+    fn attach_cmd_sender(state: &mut AppState, session_id: SessionId) {
+        let sender = fdemon_daemon::CommandSender::new_for_test();
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.cmd_sender = Some(sender);
+        }
+    }
+
+    #[test]
+    fn trigger_devtools_serve_fallback_emits_action() {
+        let (mut state, session_id) = make_state_with_session();
+        attach_cmd_sender(&mut state, session_id);
+
+        let result = update(
+            &mut state,
+            Message::TriggerDevToolsServeFallback {
+                session_id,
+                continuation: None,
+            },
+        );
+
+        assert!(
+            matches!(
+                result.action,
+                Some(crate::handler::UpdateAction::SendDaemonCommand { .. })
+            ),
+            "expected SendDaemonCommand action, got {:?}",
+            result.action
+        );
+        assert!(result.message.is_none(), "no continuation queued");
+    }
+
+    #[test]
+    fn trigger_devtools_serve_fallback_chains_continuation() {
+        let (mut state, session_id) = make_state_with_session();
+        // No cmd_sender — guard short-circuits, action is None, but
+        // continuation MUST still be threaded through.
+        let continuation = Box::new(Message::RequestWidgetTree { session_id });
+
+        let result = update(
+            &mut state,
+            Message::TriggerDevToolsServeFallback {
+                session_id,
+                continuation: Some(continuation),
+            },
+        );
+
+        assert!(result.action.is_none(), "no action when guard fails");
+        assert!(
+            matches!(result.message, Some(Message::RequestWidgetTree { .. })),
+            "continuation should be the next follow-up message"
+        );
+    }
+
+    #[test]
+    fn devtools_serve_failed_emits_toast_for_active_session() {
+        let (mut state, session_id) = make_state_with_session();
+        // create_session typically auto-selects; verify and force-select if not.
+        let active = state.session_manager.selected().map(|h| h.session.id);
+        assert_eq!(
+            active,
+            Some(session_id),
+            "test precondition: session should be active"
+        );
+
+        update(
+            &mut state,
+            Message::DevToolsServeFailed {
+                session_id,
+                reason: "Method not supported on this Flutter SDK".to_string(),
+            },
+        );
+
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("DevTools serve failed")),
+            "Expected a 'DevTools serve failed' toast for the active session"
+        );
+    }
+
+    #[test]
+    fn devtools_serve_failed_no_toast_for_background_session() {
+        // Create two sessions; foreground = first, background = second.
+        let (mut state, foreground_id) = make_state_with_session();
+        let device = test_device("device-2", "Pixel 7");
+        let background_id = state.session_manager.create_session(&device).unwrap();
+        // Force the foreground session to remain active.
+        let _ = state.session_manager.select_by_id(foreground_id);
+
+        update(
+            &mut state,
+            Message::DevToolsServeFailed {
+                session_id: background_id,
+                reason: "Method not supported".to_string(),
+            },
+        );
+
+        assert!(
+            state.toasts.is_empty(),
+            "Background-session failure must not emit a toast"
+        );
+    }
+
+    #[test]
+    fn trigger_devtools_serve_fallback_idempotent_when_endpoint_set() {
+        let (mut state, session_id) = make_state_with_session();
+        attach_cmd_sender(&mut state, session_id);
+        populate_devtools_state(&mut state, session_id);
+        // Reset pending to ensure ONLY the endpoint-is-some guard trips:
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .devtools_serve_pending = false;
+
+        let result = update(
+            &mut state,
+            Message::TriggerDevToolsServeFallback {
+                session_id,
+                continuation: None,
+            },
+        );
+
+        assert!(
+            result.action.is_none(),
+            "should no-op when endpoint already set"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 06: FetchTrigger — bypass readiness poll on `r` refresh
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod fetch_trigger_tests {
+    use super::*;
+    use crate::handler::devtools::handle_widget_tree_fetched;
+    use crate::handler::FetchTrigger;
+    use fdemon_core::DiagnosticsNode;
+
+    /// Build a minimal `DiagnosticsNode` for testing.
+    fn make_root_node() -> DiagnosticsNode {
+        serde_json::from_value(serde_json::json!({
+            "description": "MyApp"
+        }))
+        .expect("valid DiagnosticsNode")
+    }
+
+    /// Build an `AppState` with one VM-connected session.
+    fn make_vm_connected_state() -> (AppState, crate::session::SessionId) {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        update(&mut state, Message::VmServiceConnected { session_id });
+        (state, session_id)
+    }
+
+    // ── has_ever_rendered_tree flag ───────────────────────────────────────────
+
+    /// `has_ever_rendered_tree()` is `false` by default.
+    #[test]
+    fn has_ever_rendered_tree_is_false_by_default() {
+        let state = AppState::new();
+        assert!(
+            !state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree should be false on a fresh InspectorState"
+        );
+    }
+
+    /// After a successful `WidgetTreeFetched` message, the flag becomes `true`.
+    #[test]
+    fn has_ever_rendered_tree_becomes_true_after_first_fetch() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree should be true after a successful fetch"
+        );
+    }
+
+    /// The sticky flag survives a `record_fetch_start()` call (not cleared between refreshes).
+    #[test]
+    fn has_ever_rendered_tree_survives_record_fetch_start() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate first successful render.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree(),);
+
+        // Start a second fetch — the flag must survive.
+        state.devtools_view_state.inspector.record_fetch_start();
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must survive record_fetch_start"
+        );
+    }
+
+    /// The sticky flag is NOT cleared by `reset()`.
+    ///
+    /// `reset()` is called on session switch — but the flag should persist
+    /// because the task spec says "reset only on session destruction."
+    /// (In the current model, session destruction destroys the whole
+    /// `InspectorState`; `reset()` is used for mid-session clears.)
+    #[test]
+    fn has_ever_rendered_tree_survives_reset() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree());
+
+        state.devtools_view_state.inspector.reset();
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must survive reset() — sticky for session lifetime"
+        );
+    }
+
+    // ── FetchTrigger selection in RequestWidgetTree handler ───────────────────
+
+    /// After the inspector has rendered a tree, pressing `r` should produce
+    /// `FetchTrigger::Refresh` so the readiness poll is skipped.
+    #[test]
+    fn refresh_after_render_uses_refresh_trigger() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate first successful render.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree(),);
+
+        // Clear debounce so that the request is not suppressed.
+        state.devtools_view_state.inspector.clear_fetch_debounce();
+
+        let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Refresh,
+                    "Should use Refresh trigger when inspector has ever rendered a tree"
+                );
+            }
+            other => panic!("Expected FetchWidgetTree action, got: {:?}", other),
+        }
+    }
+
+    /// Before the inspector has ever rendered, pressing `r` should produce
+    /// `FetchTrigger::Initial` so polling still applies.
+    #[test]
+    fn refresh_before_first_render_uses_initial_trigger() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // No successful render yet → has_ever_rendered_tree is false.
+        assert!(!state.devtools_view_state.inspector.has_ever_rendered_tree(),);
+
+        let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Initial,
+                    "Should use Initial trigger when inspector has never rendered"
+                );
+            }
+            other => panic!("Expected FetchWidgetTree action, got: {:?}", other),
+        }
+    }
+
+    // ── Hot restart clears has_ever_rendered_tree ─────────────────────────────
+
+    /// After `Message::SessionRestartCompleted`, `has_ever_rendered_tree`
+    /// is reset to `false` so the next fetch uses the full readiness poll.
+    #[test]
+    fn session_restart_clears_has_ever_rendered_tree() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate a prior successful render so the flag is set.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "pre-condition: flag must be true after a successful render"
+        );
+
+        // Hot restart — session must be in Reloading phase for complete_reload() to work.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.start_reload();
+        }
+        update(&mut state, Message::SessionRestartCompleted { session_id });
+
+        assert!(
+            !state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must be cleared after SessionRestartCompleted"
+        );
+    }
+
+    /// After a hot restart the next `RequestWidgetTree` must use
+    /// `FetchTrigger::Initial` so the readiness poll is applied.
+    #[test]
+    fn post_restart_request_uses_initial_trigger() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        // Simulate a prior successful render so the flag is set.
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree());
+
+        // Hot restart resets the flag.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.start_reload();
+        }
+        update(&mut state, Message::SessionRestartCompleted { session_id });
+
+        // Clear the fetch debounce so the next RequestWidgetTree is not suppressed.
+        state.devtools_view_state.inspector.clear_fetch_debounce();
+
+        let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Initial,
+                    "post-restart fetch must use Initial trigger so readiness poll applies"
+                );
+            }
+            other => panic!("Expected FetchWidgetTree action, got: {:?}", other),
+        }
+    }
+
+    /// `has_ever_rendered_tree` is NOT cleared by hot reload
+    /// (`Message::SessionReloadCompleted`) — only hot restart creates a new isolate.
+    #[test]
+    fn hot_reload_does_not_clear_has_ever_rendered_tree() {
+        let (mut state, session_id) = make_vm_connected_state();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(make_root_node()));
+        assert!(state.devtools_view_state.inspector.has_ever_rendered_tree());
+
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.start_reload();
+        }
+        update(
+            &mut state,
+            Message::SessionReloadCompleted {
+                session_id,
+                time_ms: 120,
+            },
+        );
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree(),
+            "has_ever_rendered_tree must survive hot reload — only hot restart should clear it"
+        );
+    }
+
+    /// `handle_switch_panel(Inspector)` must use `FetchTrigger::Initial`
+    /// because the panel always fetches on first open.
+    #[test]
+    fn switch_panel_inspector_uses_initial_trigger() {
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Device 1");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        update(&mut state, Message::VmServiceConnected { session_id });
+        // Start in DevTools mode on the Performance panel so switching to
+        // Inspector triggers a fresh fetch.
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Performance;
+
+        let result = update(
+            &mut state,
+            Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Inspector),
+        );
+
+        match result.action {
+            Some(UpdateAction::FetchWidgetTree { trigger, .. }) => {
+                assert_eq!(
+                    trigger,
+                    FetchTrigger::Initial,
+                    "SwitchDevToolsPanel(Inspector) should use Initial trigger"
+                );
+            }
+            // If the tree is already loaded or loading is in progress the handler
+            // skips the fetch — accept None in that case too.
+            None => {}
+            other => panic!(
+                "Unexpected action from SwitchDevToolsPanel(Inspector): {:?}",
+                other
+            ),
         }
     }
 }

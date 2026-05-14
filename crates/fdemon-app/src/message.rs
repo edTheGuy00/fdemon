@@ -4,6 +4,7 @@ use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
+use crate::session::performance::PerfSection;
 use crate::session::{NetworkDetailTab, SessionId};
 use crate::state::DevToolsPanel;
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
@@ -893,6 +894,49 @@ pub enum Message {
     /// Open Flutter DevTools in the system browser.
     OpenBrowserDevTools,
 
+    /// DevTools server is ready for the given session.
+    ///
+    /// Populated from the `app.devTools` daemon event (primary path) or from a
+    /// `devtools.serve` RPC response (fallback). The `base_url` is the raw
+    /// DevTools server URL without any `?uri=` query parameter.
+    ///
+    /// The handler stores a [`crate::session::DevToolsEndpoint`] on the session
+    /// and clears `devtools_serve_pending`.
+    DevToolsServed {
+        session_id: SessionId,
+        /// Base DevTools server URL (e.g. `http://127.0.0.1:9100` or
+        /// `http://127.0.0.1:59123/<auth-token>/devtools`).
+        base_url: String,
+    },
+
+    /// DevTools server could not be started for the given session.
+    ///
+    /// Emitted when the `devtools.serve` RPC returns an error or null host/port,
+    /// or when the daemon reports that DevTools is unavailable.
+    /// The handler clears `devtools_serve_pending` and may show a toast.
+    DevToolsServeFailed {
+        session_id: SessionId,
+        /// Human-readable reason for the failure (e.g. "Method not supported on
+        /// this Flutter SDK — update Flutter to ≥ 1.22 or run `dart devtools`
+        /// manually").
+        reason: String,
+    },
+
+    /// Internal: dispatch the `devtools.serve` fallback RPC if the session
+    /// still needs it (idempotent — no-op when an endpoint is already set or
+    /// a previous dispatch is in flight).
+    ///
+    /// Emitted as a follow-up from `VmServiceConnected` so the fallback can
+    /// fire alongside `StartPerformanceMonitoring`, which would otherwise
+    /// monopolise the single action slot when the user is already in
+    /// DevTools mode at VM-connection time. The `continuation` field chains
+    /// the original `VmServiceConnected` follow-up (widget-tree fetch,
+    /// auto-overlay) so it is not lost.
+    TriggerDevToolsServeFallback {
+        session_id: SessionId,
+        continuation: Option<Box<Message>>,
+    },
+
     /// Request a widget tree refresh from the VM Service.
     RequestWidgetTree { session_id: SessionId },
 
@@ -1047,6 +1091,24 @@ pub enum Message {
     // ── Performance Panel UI Messages ─────────────────────────────────────────
     /// Toggle the allocation table sort column (Size ↔ Instances).
     ToggleAllocationSort,
+
+    // --- Performance panel interactivity ---
+    /// Move keyboard focus to the given sub-section within the Performance panel.
+    PerfFocusSection(PerfSection),
+    /// Scroll the focused Performance panel section up by one row/bar.
+    PerfScrollUp,
+    /// Scroll the focused Performance panel section down by one row/bar.
+    PerfScrollDown,
+    /// Scroll the focused Performance panel section up by one page.
+    PerfPageUp,
+    /// Scroll the focused Performance panel section down by one page.
+    PerfPageDown,
+    /// Jump to the first item in the focused Performance panel section.
+    PerfJumpToStart,
+    /// Jump to the last item in the focused Performance panel section.
+    PerfJumpToEnd,
+    /// Select a row in the allocation table, or clear selection when `index` is `None`.
+    PerfSelectAllocRow { index: Option<usize> },
 
     // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)

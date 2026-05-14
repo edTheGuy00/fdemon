@@ -46,6 +46,9 @@ pub fn handle_widget_tree_fetched(
         state.devtools_view_state.inspector.loading = false;
         state.devtools_view_state.inspector.error = None;
         state.devtools_view_state.inspector.has_object_group = true;
+        // Sticky: once the tree has been rendered at least once, remember it
+        // so that subsequent `r` presses can skip the readiness poll.
+        state.devtools_view_state.inspector.has_ever_rendered_tree = true;
 
         // Clear stale layout data — value_ids from the previous tree are
         // meaningless after a refresh.
@@ -77,6 +80,9 @@ pub fn handle_widget_tree_fetched(
 ///
 /// Maps the raw RPC error string to a user-friendly [`DevToolsError`] using
 /// [`map_rpc_error`] so the TUI never displays a raw technical error.
+///
+/// Clears the fetch debounce timer so the user can press `r` again
+/// immediately without waiting for the 2-second cooldown to expire.
 pub fn handle_widget_tree_fetch_failed(
     state: &mut AppState,
     session_id: SessionId,
@@ -87,6 +93,7 @@ pub fn handle_widget_tree_fetch_failed(
     if active_id == Some(session_id) {
         state.devtools_view_state.inspector.loading = false;
         state.devtools_view_state.inspector.error = Some(map_rpc_error(&error));
+        state.devtools_view_state.inspector.clear_fetch_debounce();
     }
 
     UpdateResult::none()
@@ -216,11 +223,14 @@ fn maybe_fetch_layout(inspector: &mut InspectorState) -> Option<String> {
     Some(node_id)
 }
 
-/// Handle widget tree fetch timeout (Phase 5, Task 02).
+/// Handle widget tree fetch timeout.
 ///
 /// Sets `inspector.loading = false` and stores an error message with a retry
 /// hint, then marks `connection_status` as `TimedOut` so the tab bar can
 /// indicate the degraded state.
+///
+/// Clears the fetch debounce timer so the user can press `r` again
+/// immediately without waiting for the 2-second cooldown to expire.
 pub fn handle_widget_tree_fetch_timeout(
     state: &mut AppState,
     session_id: SessionId,
@@ -235,6 +245,7 @@ pub fn handle_widget_tree_fetch_timeout(
             "Request timed out",
             "Press [r] to retry",
         ));
+        state.devtools_view_state.inspector.clear_fetch_debounce();
         state.devtools_view_state.connection_status = VmConnectionStatus::TimedOut;
     }
 
@@ -1519,6 +1530,217 @@ mod tests {
         assert_eq!(
             state.devtools_view_state.inspector.selected_index, 1,
             "Toggling a leaf should still select that row"
+        );
+    }
+
+    // ── Bug fix: fetch failed / timeout clears debounce (Task 02) ────────────
+
+    #[test]
+    fn fetch_failed_clears_debounce() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Simulate a fetch start — this stamps last_fetch_time and sets loading.
+        state.devtools_view_state.inspector.record_fetch_start();
+        assert!(
+            state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should be active while loading"
+        );
+
+        handle_widget_tree_fetch_failed(&mut state, session_id, "some rpc error".to_string());
+
+        assert!(
+            !state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should be cleared immediately after fetch failure"
+        );
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading should be false after failure"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_none(),
+            "last_fetch_time should be None after clear_fetch_debounce"
+        );
+    }
+
+    #[test]
+    fn fetch_timeout_clears_debounce() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Simulate a fetch start — this stamps last_fetch_time and sets loading.
+        state.devtools_view_state.inspector.record_fetch_start();
+        assert!(
+            state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should be active while loading"
+        );
+
+        handle_widget_tree_fetch_timeout(&mut state, session_id);
+
+        assert!(
+            !state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should be cleared immediately after fetch timeout"
+        );
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading should be false after timeout"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_none(),
+            "last_fetch_time should be None after clear_fetch_debounce"
+        );
+    }
+
+    #[test]
+    fn fetch_failed_no_session_does_not_clear_debounce() {
+        let mut state = make_state_with_session();
+
+        // Simulate a fetch start.
+        state.devtools_view_state.inspector.record_fetch_start();
+
+        // Use a session_id that does not match the active session.
+        handle_widget_tree_fetch_failed(&mut state, 9999, "some rpc error".to_string());
+
+        // State should be unchanged — debounce still active because loading == true.
+        assert!(
+            state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should remain active when session_id does not match"
+        );
+        assert!(
+            state.devtools_view_state.inspector.loading,
+            "loading should remain true when session_id does not match"
+        );
+    }
+
+    #[test]
+    fn fetch_success_leaves_debounce_intact() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Simulate a fetch start.
+        state.devtools_view_state.inspector.record_fetch_start();
+
+        // Successful fetch — root has no value_id so no layout fetch is dispatched.
+        let node: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root"
+        }))
+        .unwrap();
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(node));
+
+        // loading is now false but last_fetch_time was set by record_fetch_start,
+        // so is_fetch_debounced() returns true (cooldown still active).
+        assert!(
+            state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Success path should leave debounce active (last_fetch_time not cleared)"
+        );
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading should be false after successful fetch"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_some(),
+            "last_fetch_time should remain Some after successful fetch"
+        );
+    }
+
+    // ── Task 07: integration-style lifecycle tests ────────────────────────────
+
+    /// Scenario 1: initial inspector open → success.
+    ///
+    /// After `WidgetTreeFetched` the full state contract holds:
+    /// `loading == false`, `root == Some(_)`, `error == None`.
+    #[test]
+    fn test_inspector_open_success_loading_false_root_some_error_none() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Prime error / loading state that a real fetch start would set.
+        state.devtools_view_state.inspector.loading = true;
+        state.devtools_view_state.inspector.error =
+            Some(DevToolsError::new("stale error", "retry"));
+
+        let node: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "MaterialApp",
+            "valueId": "root-value-id"
+        }))
+        .unwrap();
+
+        handle_widget_tree_fetched(&mut state, session_id, Box::new(node));
+
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading must be false after successful fetch (scenario 1)"
+        );
+        assert!(
+            state.devtools_view_state.inspector.root.is_some(),
+            "root must be Some(_) after successful fetch (scenario 1)"
+        );
+        assert!(
+            state.devtools_view_state.inspector.error.is_none(),
+            "error must be None after successful fetch (scenario 1)"
+        );
+    }
+
+    /// Scenario 4: after failure → `r` press → new RPC fires immediately (not debounced).
+    ///
+    /// Verifies the integration between `handle_widget_tree_fetch_failed`
+    /// clearing the debounce and a subsequent `RequestWidgetTree` message being
+    /// processed without suppression.  The key assertion is that
+    /// `is_fetch_debounced()` is `false` immediately after the failure handler
+    /// returns, so the caller of the message loop can immediately re-issue the
+    /// fetch.
+    #[test]
+    fn test_inspector_open_then_fail_clears_debounce() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+
+        // Simulate a fetch in progress.
+        state.devtools_view_state.inspector.record_fetch_start();
+        assert!(
+            state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce should be active while fetch is in flight"
+        );
+
+        // Fetch fails.
+        handle_widget_tree_fetch_failed(
+            &mut state,
+            session_id,
+            "ext.flutter.inspector.getRootWidgetTree: null check failure".to_string(),
+        );
+
+        // The debounce must be cleared so that a subsequent `r` press is NOT
+        // suppressed and a new RPC fires immediately.
+        assert!(
+            !state.devtools_view_state.inspector.is_fetch_debounced(),
+            "Debounce must be cleared after fetch failure so `r` fires immediately (scenario 4)"
+        );
+        assert!(
+            !state.devtools_view_state.inspector.loading,
+            "loading must be false after fetch failure (scenario 4)"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .last_fetch_time
+                .is_none(),
+            "last_fetch_time must be None after debounce clear (scenario 4)"
+        );
+        assert!(
+            state.devtools_view_state.inspector.error.is_some(),
+            "error must be set after fetch failure (scenario 4)"
         );
     }
 }

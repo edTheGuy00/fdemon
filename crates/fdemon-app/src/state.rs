@@ -246,6 +246,24 @@ pub struct InspectorState {
     ///
     /// This prevents RPC spam during rapid scrolling through the widget tree.
     pub layout_last_fetch_time: Option<Instant>,
+
+    /// Sticky flag that becomes `true` after the first successful widget tree
+    /// render in the current Flutter isolate.
+    ///
+    /// **Does not reset on [`Self::reset`], fetch debounce clears, or
+    /// individual fetch failures.** Cleared on:
+    /// - session destruction (drop)
+    /// - hot restart (`Message::SessionRestartCompleted`)
+    ///
+    /// Hot restart creates a new isolate and re-initializes the framework, so
+    /// the "framework is warm" invariant the flag encodes is temporarily invalid;
+    /// the next fetch should use the full readiness poll budget.
+    ///
+    /// Used to choose between `FetchTrigger::Initial` (poll applies) and
+    /// `FetchTrigger::Refresh` (poll skipped) when the user presses `r`.
+    /// If the user refreshes before the inspector has ever loaded a tree the
+    /// flag will be `false` and `Initial` is used so polling still applies.
+    pub has_ever_rendered_tree: bool,
 }
 
 impl InspectorState {
@@ -272,6 +290,9 @@ impl InspectorState {
         self.selected_index = 0;
         self.loading = false;
         self.error = None;
+        // has_ever_rendered_tree intentionally NOT reset — sticky for session lifetime.
+        // Cleared on hot restart (handler/update.rs::SessionRestartCompleted) and
+        // session drop.
         self.has_object_group = false;
         self.last_fetch_time = None;
         // Layout fields
@@ -282,6 +303,21 @@ impl InspectorState {
         self.last_fetched_node_id = None;
         self.pending_node_id = None;
         self.layout_last_fetch_time = None;
+    }
+
+    /// Returns `true` after the first successful widget tree render.
+    ///
+    /// This flag is sticky: it is set to `true` by
+    /// [`crate::handler::devtools::handle_widget_tree_fetched`] and never
+    /// cleared by [`Self::reset`], debounce clears, or fetch failures.
+    /// It is explicitly cleared on hot restart (`Message::SessionRestartCompleted`)
+    /// because hot restart creates a new isolate and re-initializes the framework.
+    ///
+    /// Used by `Message::RequestWidgetTree` handler to pick
+    /// `FetchTrigger::Refresh` (skip readiness poll) when the Flutter
+    /// framework is already known to be running.
+    pub fn has_ever_rendered_tree(&self) -> bool {
+        self.has_ever_rendered_tree
     }
 
     /// Returns `true` if a tree refresh request should be suppressed.
@@ -325,6 +361,18 @@ impl InspectorState {
     pub fn record_fetch_start(&mut self) {
         self.loading = true;
         self.last_fetch_time = Some(Instant::now());
+    }
+
+    /// Clear the fetch debounce timer so that the next refresh request is
+    /// dispatched immediately.
+    ///
+    /// Called after a failed or timed-out widget tree fetch so the user can
+    /// press `r` again without waiting for the 2-second cooldown to expire.
+    /// The success path intentionally does **not** clear this — it is fine
+    /// for rapid `r` presses after a successful fetch to be gated by the
+    /// cooldown.
+    pub fn clear_fetch_debounce(&mut self) {
+        self.last_fetch_time = None;
     }
 
     /// Build a flat list of visible nodes based on expand/collapse state.
@@ -911,6 +959,60 @@ pub struct SettingsClickStamp {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Toast / Notification system
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Severity level of a transient toast notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    /// Informational notice (blue).
+    Info,
+    /// Warning that requires user attention (yellow).
+    Warn,
+}
+
+/// How long a toast stays visible before it is automatically dismissed.
+///
+/// Derived from a comfortable reading speed for the longest expected message:
+/// ~80 characters at 250 wpm reads in ~4 seconds, plus a 1-second buffer so a
+/// user who glances at the terminal late in the cycle still has time to
+/// finish the sentence.
+pub const TOAST_TTL_SECS: u64 = 5;
+
+/// A transient user-facing notification displayed as a one-line overlay.
+///
+/// Toasts are pushed by handler code (e.g., [`crate::handler::devtools`]) into
+/// [`AppState::toasts`] and rendered by the TUI as a bottom-of-screen overlay.
+/// They expire automatically after [`TOAST_TTL_SECS`] seconds; the
+/// [`crate::handler::update`] `Tick` arm calls
+/// [`AppState::expire_toasts`] to remove stale entries.
+#[derive(Debug, Clone)]
+pub struct Toast {
+    /// Short human-readable message to display.
+    pub text: String,
+    /// Visual severity level (controls accent colour).
+    pub level: ToastLevel,
+    /// Wall-clock time at which this toast was created.
+    pub created_at: std::time::Instant,
+}
+
+impl Toast {
+    /// Construct a new toast with the current timestamp.
+    pub fn new(level: ToastLevel, text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            level,
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    /// Return `true` if this toast has outlived [`TOAST_TTL_SECS`].
+    pub fn is_expired(&self) -> bool {
+        self.created_at.elapsed().as_secs() >= TOAST_TTL_SECS
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -1046,6 +1148,13 @@ pub struct AppState {
     /// Cleared when the New Session dialog is dismissed.
     pub show_migration_banner: bool,
 
+    /// Transient toast notifications shown as a one-line overlay in the TUI.
+    ///
+    /// Pushed by handler code (e.g., DevTools fallback in
+    /// `handler/devtools/mod.rs`) via [`AppState::push_toast`].
+    /// Expired automatically on each `Tick` via [`AppState::expire_toasts`].
+    pub toasts: Vec<Toast>,
+
     /// Per-frame mouse click-region registry.
     ///
     /// Populated by widgets during render via [`crate::mouse_regions::MouseRegionsBuilder`]
@@ -1140,10 +1249,39 @@ impl AppState {
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
             show_migration_banner: false,
+            toasts: Vec::new(),
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
             last_settings_click: None,
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Toast Helpers
+    // ─────────────────────────────────────────────────────────
+
+    /// Push a transient toast notification to the display queue.
+    ///
+    /// The toast is visible until [`expire_toasts`][Self::expire_toasts] removes
+    /// it after [`TOAST_TTL_SECS`] seconds (driven by the `Tick` handler).
+    ///
+    /// Capped at 5 concurrent toasts to prevent unbounded growth when events
+    /// fire in rapid succession. If the queue is already full the oldest toast
+    /// is evicted before the new one is added.
+    pub fn push_toast(&mut self, level: ToastLevel, text: impl Into<String>) {
+        /// Maximum number of concurrent toasts.
+        const MAX_TOASTS: usize = 5;
+        if self.toasts.len() >= MAX_TOASTS {
+            self.toasts.remove(0);
+        }
+        self.toasts.push(Toast::new(level, text));
+    }
+
+    /// Remove all toasts that have exceeded [`TOAST_TTL_SECS`].
+    ///
+    /// Called on each `Tick` by the update handler.
+    pub fn expire_toasts(&mut self) {
+        self.toasts.retain(|t| !t.is_expired());
     }
 
     // ─────────────────────────────────────────────────────────

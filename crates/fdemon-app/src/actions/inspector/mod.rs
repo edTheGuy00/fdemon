@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::handler::FetchTrigger;
 use crate::message::{DebugOverlayKind, Message};
 use crate::session::SessionId;
 use fdemon_daemon::vm_service::{
@@ -23,6 +24,14 @@ use fdemon_daemon::vm_service::{
 
 /// Timeout for a single `getLayoutExplorerNode` RPC call.
 const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// VM object group for the widget inspector. Scopes `valueId` references
+/// returned by `getRootWidgetTree`.
+const INSPECTOR_OBJECT_GROUP: &str = "fdemon-inspector-1";
+
+/// VM object group for the layout explorer. Scopes `valueId` references
+/// returned by `getLayoutExplorerNode`.
+const LAYOUT_OBJECT_GROUP: &str = "devtools-layout";
 
 /// Spawn a background task that fetches the root widget tree via VM Service.
 ///
@@ -37,8 +46,9 @@ const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// The fetch operation includes:
 /// 1. **Readiness polling** — calls `ext.flutter.inspector.isWidgetTreeReady`
-///    up to 8 times (500ms apart, 2s per-call timeout) before attempting the
-///    tree fetch. A timed-out poll is treated as "not ready".
+///    up to `inspector_readiness_poll_attempts` times (configurable, default 2) before
+///    attempting the tree fetch. A timed-out poll is treated as "not ready".
+///    Exhausting the poll budget is **not** an error — the fetch proceeds anyway.
 /// 2. **API fallback** — tries `getRootWidgetTree` first, falls back to
 ///    `getRootWidgetSummaryTree` on "method not found".
 /// 3. **Configurable outer timeout** — `fetch_timeout_secs` (min 5s) wraps the
@@ -47,28 +57,73 @@ const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Sends `Message::WidgetTreeFetched` on success,
 /// `Message::WidgetTreeFetchFailed` on error, or
 /// `Message::WidgetTreeFetchTimeout` on timeout.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_fetch_widget_tree(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     tree_max_depth: u32,
     fetch_timeout_secs: u64,
+    inspector_readiness_poll_attempts: u32,
+    inspector_readiness_poll_interval_ms: u64,
+    inspector_readiness_poll_call_timeout_ms: u64,
+    trigger: FetchTrigger,
 ) {
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(fetch_timeout_secs.max(5));
 
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+        tracing::info!(
+            session_id = %session_id,
+            tree_max_depth = tree_max_depth,
+            fetch_timeout_secs = fetch_timeout_secs,
+            trigger = ?trigger,
+            "Inspector: fetch_widget_tree task started"
+        );
+
         let fetch_result = tokio::time::timeout(timeout_dur, async {
-            // Step 1: Get isolate ID.
+            // Step 1: Get isolate ID (prefers the Flutter UI isolate with ext.flutter.* RPCs).
             let isolate_id = handle
-                .main_isolate_id()
+                .resolve_flutter_ui_isolate()
                 .await
                 .map_err(|e| format!("Could not get isolate ID: {e}"))?;
 
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+            tracing::info!(
+                session_id = %session_id,
+                isolate_id = %isolate_id,
+                "Inspector: resolved isolate"
+            );
+
             // Step 2: Poll widget tree readiness.
-            widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id).await;
+            // Skip polling when the user explicitly refreshed (`r`) and the
+            // inspector has already rendered a tree.  The Flutter framework is
+            // already running in that case, so the readiness poll is wasted
+            // budget that only adds latency.
+            if trigger != FetchTrigger::Refresh {
+                let poll_cfg = widget_tree::ReadinessPollConfig {
+                    attempts: inspector_readiness_poll_attempts,
+                    interval_ms: inspector_readiness_poll_interval_ms,
+                    call_timeout_ms: inspector_readiness_poll_call_timeout_ms,
+                };
+                widget_tree::poll_widget_tree_ready(&handle, &isolate_id, session_id, &poll_cfg)
+                    .await;
+
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+                tracing::info!(
+                    session_id = %session_id,
+                    "Inspector: readiness poll completed"
+                );
+            } else {
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+                tracing::info!(
+                    session_id = %session_id,
+                    "Inspector: readiness poll skipped (Refresh trigger)"
+                );
+            }
 
             // Step 3: Dispose previous object group.
-            let object_group = "fdemon-inspector-1";
+            let object_group = INSPECTOR_OBJECT_GROUP;
             {
                 let mut dispose_args = HashMap::new();
                 dispose_args.insert("objectGroup".to_string(), object_group.to_string());
@@ -86,7 +141,12 @@ pub(super) fn spawn_fetch_widget_tree(
             }
 
             // Step 4: Retry loop — fetch the widget tree.
-            widget_tree::try_fetch_widget_tree(
+            // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+            tracing::info!(
+                session_id = %session_id,
+                "Inspector: RPC call getRootWidgetTree starting"
+            );
+            let result = widget_tree::try_fetch_widget_tree(
                 &handle,
                 &isolate_id,
                 object_group,
@@ -94,16 +154,28 @@ pub(super) fn spawn_fetch_widget_tree(
                 session_id,
             )
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+
+            if let Ok(ref root) = result {
+                // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+                tracing::info!(
+                    session_id = %session_id,
+                    root_description = %root.description,
+                    child_count = root.children.len(),
+                    "Inspector: RPC call getRootWidgetTree completed"
+                );
+            }
+
+            result
         })
         .await;
 
         let msg = match fetch_result {
             Err(_timeout) => {
                 tracing::warn!(
-                    "FetchWidgetTree timed out after {}s for session {}",
-                    fetch_timeout_secs.max(5),
-                    session_id
+                    session_id = %session_id,
+                    timeout_secs = fetch_timeout_secs.max(5),
+                    "Inspector: fetch_widget_tree timed out"
                 );
                 Message::WidgetTreeFetchTimeout { session_id }
             }
@@ -113,14 +185,33 @@ pub(super) fn spawn_fetch_widget_tree(
             },
             Ok(Err(error)) => {
                 tracing::warn!(
-                    "FetchWidgetTree failed for session {}: {}",
-                    session_id,
-                    error
+                    session_id = %session_id,
+                    error = %error,
+                    "Inspector: fetch_widget_tree failed"
                 );
                 Message::WidgetTreeFetchFailed { session_id, error }
             }
         };
-        let _ = msg_tx.send(msg).await;
+
+        // TODO(stabilization): downgrade to debug! once Inspector stability is verified in production.
+        tracing::info!(
+            session_id = %session_id,
+            msg_kind = match &msg {
+                Message::WidgetTreeFetched { .. } => "WidgetTreeFetched",
+                Message::WidgetTreeFetchFailed { .. } => "WidgetTreeFetchFailed",
+                Message::WidgetTreeFetchTimeout { .. } => "WidgetTreeFetchTimeout",
+                _ => "Other",
+            },
+            "Inspector: dispatching result message"
+        );
+
+        if let Err(e) = msg_tx.send(msg).await {
+            tracing::error!(
+                session_id = %session_id,
+                error = ?e,
+                "Inspector: failed to send terminal message — receiver dropped"
+            );
+        }
     });
 }
 
@@ -139,7 +230,7 @@ pub(super) fn spawn_toggle_overlay(
     msg_tx: mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
+        let isolate_id = match handle.resolve_flutter_ui_isolate().await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -213,12 +304,19 @@ pub(super) fn spawn_toggle_overlay(
             }
         };
 
-        let _ = msg_tx
+        if let Err(e) = msg_tx
             .send(Message::DebugOverlayToggled {
                 extension,
                 enabled: new_state,
             })
-            .await;
+            .await
+        {
+            tracing::error!(
+                session_id = %session_id,
+                error = ?e,
+                "Inspector: failed to send terminal message — receiver dropped"
+            );
+        }
     });
 }
 
@@ -238,7 +336,7 @@ pub(super) fn spawn_fetch_layout_data(
     msg_tx: mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
+        let isolate_id = match handle.resolve_flutter_ui_isolate().await {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -246,18 +344,25 @@ pub(super) fn spawn_fetch_layout_data(
                     session_id,
                     e
                 );
-                let _ = msg_tx
+                if let Err(send_err) = msg_tx
                     .send(Message::LayoutDataFetchFailed {
                         session_id,
                         error: format!("Could not get isolate ID: {e}"),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = ?send_err,
+                        "Inspector: failed to send terminal message — receiver dropped"
+                    );
+                }
                 return;
             }
         };
 
         // Use a dedicated object group for the layout explorer.
-        let layout_group = "devtools-layout";
+        let layout_group = LAYOUT_OBJECT_GROUP;
 
         // Dispose the previous layout object group before creating a new one.
         // This releases VM references from any prior layout fetch and prevents
@@ -301,9 +406,16 @@ pub(super) fn spawn_fetch_layout_data(
                     "FetchLayoutData timed out after 10s for session {}",
                     session_id
                 );
-                let _ = msg_tx
+                if let Err(e) = msg_tx
                     .send(Message::LayoutDataFetchTimeout { session_id })
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = ?e,
+                        "Inspector: failed to send terminal message — receiver dropped"
+                    );
+                }
                 return;
             }
             Ok(Ok(v)) => v,
@@ -313,12 +425,19 @@ pub(super) fn spawn_fetch_layout_data(
                     session_id,
                     e
                 );
-                let _ = msg_tx
+                if let Err(send_err) = msg_tx
                     .send(Message::LayoutDataFetchFailed {
                         session_id,
                         error: e.to_string(),
                     })
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = ?send_err,
+                        "Inspector: failed to send terminal message — receiver dropped"
+                    );
+                }
                 return;
             }
         };
@@ -334,22 +453,36 @@ pub(super) fn spawn_fetch_layout_data(
                         session_id,
                         e
                     );
-                    let _ = msg_tx
+                    if let Err(send_err) = msg_tx
                         .send(Message::LayoutDataFetchFailed {
                             session_id,
                             error: format!("Failed to parse layout data: {e}"),
                         })
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            session_id = %session_id,
+                            error = ?send_err,
+                            "Inspector: failed to send terminal message — receiver dropped"
+                        );
+                    }
                     return;
                 }
             };
 
-        let _ = msg_tx
+        if let Err(e) = msg_tx
             .send(Message::LayoutDataFetched {
                 session_id,
                 layout: Box::new(layout),
             })
-            .await;
+            .await
+        {
+            tracing::error!(
+                session_id = %session_id,
+                error = ?e,
+                "Inspector: failed to send terminal message — receiver dropped"
+            );
+        }
     });
 }
 
@@ -365,7 +498,7 @@ pub(super) fn spawn_fetch_layout_data(
 /// when a group does not exist is also safe.
 pub(super) fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmRequestHandle) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
+        let isolate_id = match handle.resolve_flutter_ui_isolate().await {
             Ok(id) => id,
             Err(e) => {
                 tracing::debug!(
@@ -378,7 +511,7 @@ pub(super) fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmReq
             }
         };
 
-        for group in &["fdemon-inspector-1", "devtools-layout"] {
+        for group in &[INSPECTOR_OBJECT_GROUP, LAYOUT_OBJECT_GROUP] {
             let mut args = HashMap::new();
             args.insert("objectGroup".to_string(), (*group).to_string());
             if let Err(e) = handle

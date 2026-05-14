@@ -162,6 +162,13 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
         // persist across a session stop/restart.
         handle.native_tag_state = crate::session::NativeTagState::default();
 
+        // Clear DevTools endpoint — on next run the Flutter daemon may serve
+        // DevTools on a different port (or not at all), so the stored URL
+        // would point at a stale or non-listening server. Pressing `B` after
+        // exit must NOT silently open a dead URL.
+        handle.session.devtools_endpoint = None;
+        handle.session.devtools_serve_pending = false;
+
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
     }
@@ -229,6 +236,14 @@ pub fn handle_session_message_state(
                 // Reset native tag state — tags from the previous run should
                 // not persist when the app is restarted within the same session.
                 handle.native_tag_state = crate::session::NativeTagState::default();
+
+                // Clear DevTools endpoint — hot restart cycles the Flutter
+                // app and likely cycles its DevTools server. The stored URL
+                // may now point at a dead port; the next `app.devTools`
+                // event will repopulate it (or the eager fallback fires on
+                // the next VmServiceConnected).
+                handle.session.devtools_endpoint = None;
+                handle.session.devtools_serve_pending = false;
             }
         }
     }
@@ -246,6 +261,59 @@ pub fn handle_session_message_state(
             }
         }
     }
+}
+
+/// Check if a session should fire the `devtools.serve` fallback RPC now that
+/// the VM Service WebSocket is connected.
+///
+/// The primary DevTools URL path is the `app.devTools` daemon event (parsed
+/// into `DaemonMessage::DevToolsServed` and lifted to `Message::DevToolsServed`
+/// by the daemon bridge). This helper provides a belt-and-suspenders fallback:
+/// when the VM Service becomes connected and DevTools has not yet been served
+/// via the primary path, fire a `devtools.serve` RPC.
+///
+/// Guards:
+/// - Only fires when `devtools_endpoint.is_none()` (not already served by the
+///   primary `app.devTools` event path that fires automatically on modern Flutter).
+/// - Only fires when `!devtools_serve_pending` (idempotent — prevents double
+///   dispatch when `VmServiceConnected` and `app.devTools` race).
+///
+/// The returned action carries `cmd_sender: None`; `process.rs` hydrates it
+/// with the actual `CommandSender` before dispatching to `handle_action`.
+///
+/// Returns `Some(SendDaemonCommand)` when the command should be sent, else `None`.
+pub fn maybe_serve_devtools(state: &mut AppState, session_id: SessionId) -> Option<UpdateAction> {
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        // Guard: the session must have a command sender (process attached).
+        // If not, we can't send the devtools.serve command yet; process.rs would
+        // discard it anyway, but bailing early avoids setting devtools_serve_pending
+        // prematurely (which would prevent a future attempt when the sender arrives).
+        handle.cmd_sender.as_ref()?;
+        // Idempotence guards
+        if handle.session.devtools_endpoint.is_some() {
+            return None; // already served via app.devTools primary path
+        }
+        if handle.session.devtools_serve_pending {
+            return None; // already dispatched once; waiting for response
+        }
+        handle.session.devtools_serve_pending = true;
+        tracing::info!(
+            "Session {} VM Service connected; firing devtools.serve fallback",
+            session_id
+        );
+        return Some(UpdateAction::SendDaemonCommand {
+            session_id,
+            command: fdemon_daemon::DaemonCommand::ServeDevTools {
+                request_id: Some(format!(
+                    "{}{}",
+                    crate::process::DEVTOOLS_SERVE_REQUEST_PREFIX,
+                    session_id
+                )),
+            },
+            cmd_sender: None,
+        });
+    }
+    None
 }
 
 /// Check if an AppDebugPort message should trigger a VM Service connection.
@@ -540,5 +608,156 @@ mod tests {
     #[test]
     fn test_log_source_vm_service_prefix() {
         assert_eq!(LogSource::VmService.prefix(), "vm");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // maybe_serve_devtools tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Attach a test `CommandSender` to a session so `maybe_serve_devtools` will
+    /// pass its `cmd_sender.is_some()` guard.
+    fn attach_cmd_sender(state: &mut AppState, session_id: SessionId) {
+        let sender = fdemon_daemon::CommandSender::new_for_test();
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.cmd_sender = Some(sender);
+        }
+    }
+
+    /// `maybe_serve_devtools` returns `Some(SendDaemonCommand)` when neither the
+    /// endpoint nor a pending request is present, and the session has a cmd_sender.
+    #[test]
+    fn vm_service_ready_triggers_serve_devtools() {
+        let (mut state, session_id) = state_with_session("test-app");
+        attach_cmd_sender(&mut state, session_id);
+
+        let action = maybe_serve_devtools(&mut state, session_id);
+
+        match action {
+            Some(UpdateAction::SendDaemonCommand {
+                session_id: sid,
+                command: fdemon_daemon::DaemonCommand::ServeDevTools { request_id },
+                cmd_sender: _,
+            }) => {
+                assert_eq!(sid, session_id);
+                let rid = request_id.expect("request_id should be Some");
+                assert!(
+                    rid.starts_with("devtools-serve-"),
+                    "request_id should start with devtools-serve-"
+                );
+            }
+            other => panic!("expected SendDaemonCommand(ServeDevTools), got {:?}", other),
+        }
+
+        // devtools_serve_pending should now be true
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.devtools_serve_pending,
+            "devtools_serve_pending should be true after dispatch"
+        );
+        assert!(
+            handle.session.devtools_endpoint.is_none(),
+            "devtools_endpoint should still be None"
+        );
+    }
+
+    /// Without a `cmd_sender`, `maybe_serve_devtools` returns `None` and does
+    /// NOT set `devtools_serve_pending` (guard prevents premature pending state).
+    #[test]
+    fn no_action_without_cmd_sender() {
+        let (mut state, session_id) = state_with_session("test-app");
+        // No cmd_sender attached
+
+        let action = maybe_serve_devtools(&mut state, session_id);
+        assert!(
+            action.is_none(),
+            "should return None when no cmd_sender attached"
+        );
+        // pending should NOT be set
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            !handle.session.devtools_serve_pending,
+            "devtools_serve_pending must not be set when cmd_sender is absent"
+        );
+    }
+
+    /// When `devtools_serve_pending` is already true, `maybe_serve_devtools`
+    /// returns `None` (idempotent — no duplicate dispatch).
+    #[test]
+    fn idempotent_dispatch_when_serve_pending() {
+        let (mut state, session_id) = state_with_session("test-app");
+        attach_cmd_sender(&mut state, session_id);
+
+        // First call sets pending flag
+        let first = maybe_serve_devtools(&mut state, session_id);
+        assert!(first.is_some(), "first call should return Some");
+
+        // Second call should be a no-op
+        let second = maybe_serve_devtools(&mut state, session_id);
+        assert!(
+            second.is_none(),
+            "second call should return None (idempotent)"
+        );
+    }
+
+    /// When `devtools_endpoint` is already populated (primary `app.devTools` path),
+    /// `maybe_serve_devtools` returns `None` — no redundant RPC needed.
+    #[test]
+    fn idempotent_dispatch_when_endpoint_already_set() {
+        let (mut state, session_id) = state_with_session("test-app");
+        attach_cmd_sender(&mut state, session_id);
+
+        // Simulate the primary app.devTools path having already populated the endpoint
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
+                base_url: "http://127.0.0.1:9100".to_string(),
+            });
+        }
+
+        let action = maybe_serve_devtools(&mut state, session_id);
+        assert!(
+            action.is_none(),
+            "should return None when endpoint already set"
+        );
+    }
+
+    /// Multiple sessions get distinct request IDs in their `ServeDevTools` commands.
+    #[test]
+    fn multiple_sessions_get_distinct_request_ids() {
+        let mut state = AppState::new();
+        let device1 = test_device("device-1");
+        let device2 = test_device("device-2");
+        let sid1 = state.session_manager.create_session(&device1).unwrap();
+        let sid2 = state.session_manager.create_session(&device2).unwrap();
+
+        // Attach cmd_senders so the guard passes
+        attach_cmd_sender(&mut state, sid1);
+        attach_cmd_sender(&mut state, sid2);
+
+        let action1 = maybe_serve_devtools(&mut state, sid1);
+        let action2 = maybe_serve_devtools(&mut state, sid2);
+
+        let rid1 = match action1 {
+            Some(UpdateAction::SendDaemonCommand {
+                command: fdemon_daemon::DaemonCommand::ServeDevTools { request_id },
+                ..
+            }) => request_id.unwrap(),
+            other => panic!("expected SendDaemonCommand for sid1, got {:?}", other),
+        };
+
+        let rid2 = match action2 {
+            Some(UpdateAction::SendDaemonCommand {
+                command: fdemon_daemon::DaemonCommand::ServeDevTools { request_id },
+                ..
+            }) => request_id.unwrap(),
+            other => panic!("expected SendDaemonCommand for sid2, got {:?}", other),
+        };
+
+        assert_ne!(
+            rid1, rid2,
+            "distinct sessions should produce distinct request IDs"
+        );
+        assert!(rid1.contains(&sid1.to_string()), "rid1 should embed sid1");
+        assert!(rid2.contains(&sid2.to_string()), "rid2 should embed sid2");
     }
 }
