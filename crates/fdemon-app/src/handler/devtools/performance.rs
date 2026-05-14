@@ -56,6 +56,13 @@ pub(crate) fn handle_select_performance_frame(
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         handle.session.performance.selected_frame = index;
+        // When a concrete frame is selected, reset the scroll offset so the
+        // newly-selected frame is visible at the live edge. Deselect (None)
+        // leaves the offset unchanged — the user may have scrolled back
+        // deliberately and pressed Esc only to drop the selection highlight.
+        if index.is_some() {
+            handle.session.performance.frame_chart_scroll_offset = 0;
+        }
     }
     UpdateResult::none()
 }
@@ -1766,17 +1773,8 @@ mod tests {
     }
 
     /// Pressing Left arrow when `scroll_offset = 50` and `selected_frame = None`
-    /// selects the live-edge-relative frame.
-    ///
-    /// NOTE: The current Phase 2 implementation does NOT clear `frame_chart_scroll_offset`
-    /// when a frame is selected via the Left arrow key. `compute_visible_range` from
-    /// Phase 3 gives `scroll_offset` priority over selection, so the window does not
-    /// visually jump to the selected frame when an offset is active. This is a known
-    /// Model A / B ambiguity surfaced by this test — tracked as a follow-up.
-    ///
-    /// What the test *does* assert: the selection is made, the offset is unchanged
-    /// (since Left does not call `handle_perf_jump_to_end` first), and the handler
-    /// does not panic.
+    /// selects the live-edge-relative frame and resets `frame_chart_scroll_offset` to 0
+    /// so the newly-selected frame is visible at the live edge.
     #[test]
     fn left_right_arrow_clears_scroll_offset() {
         let (mut state, _) = make_state_in_performance_panel();
@@ -1802,16 +1800,12 @@ mod tests {
             "Left from None selects len-1 = 199 (most recent frame)"
         );
 
-        // NOTE: scroll_offset is intentionally NOT cleared by the current Phase 2
-        // implementation. This surfaces the Model A/B conflict as a follow-up item:
-        // to make the selected frame visible the caller must also emit PerfJumpToEnd.
-        // The assertion below documents the *current* behaviour, not the desired one.
+        // Selecting a concrete frame must reset the scroll offset to 0 so the
+        // selected frame is visible at the live edge.
         let offset = perf_frame_scroll(&state);
         assert_eq!(
-            offset, 50,
-            "KNOWN DEFECT (follow-up): Left arrow does not clear frame_chart_scroll_offset; \
-             offset stays at 50. A follow-up task should emit PerfJumpToEnd alongside \
-             SelectPerformanceFrame when transitioning from None to a concrete index."
+            offset, 0,
+            "Left arrow selecting a frame must clear frame_chart_scroll_offset to 0"
         );
     }
 
