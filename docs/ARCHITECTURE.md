@@ -946,6 +946,40 @@ If neither channel has produced an endpoint by the time `B` is pressed, fdemon f
 
 The `devtools.serve` method is available on Flutter SDK ≥ 1.22 (October 2020). On older SDKs the daemon returns a JSON-RPC `-32601 Method not found` error, which the daemon layer treats as a signal to suppress the eager-serve request and rely solely on the `app.devTools` event path or the legacy fallback.
 
+### Performance Panel Interactivity
+
+The Performance panel is divided into three independently-navigable sub-sections. Focus, scrolling, and selection state are tracked on `PerformanceState` (in `fdemon-app/src/session/performance.rs`).
+
+**Section focus (`PerfSection` enum):**
+
+`PerfSection` has three variants — `FrameChart`, `MemoryChart`, `MemoryList` — corresponding to the frame timing bar chart, the memory usage time-series chart, and the class allocation table respectively. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` forward and backward through this order; section-specific key and mouse events are gated on which section currently has focus.
+
+**Scroll-offset model (live-edge drift):**
+
+Both chart sections use "frames back from live edge" scroll semantics:
+
+- `frame_chart_scroll_offset` — how many bars the frame chart has been scrolled back from the newest frame. `0` means the live edge is visible (most recent frames are at the right of the chart).
+- `memory_chart_scroll_offset` — same model for the memory chart samples.
+- `alloc_table_scroll_offset` — row scroll offset for the allocation table (rows scrolled past the top).
+
+Pressing `End` (or the equivalent mouse click on the live-edge indicator) resets the relevant offset to `0`, snapping the view back to the live edge.
+
+**Render-hint `Cell<usize>` fields:**
+
+Three fields use `Cell<usize>` interior mutability to feed geometry back from the renderer to the handler without violating the TEA immutability contract on the model:
+
+| Field | Purpose |
+|---|---|
+| `frame_chart_visible_width` | Columns available in the frame chart area; used by the scroll handler to clamp scroll offset. |
+| `memory_chart_visible_width` | Columns available in the memory chart area; same purpose. |
+| `alloc_table_visible_height` | Rows visible in the allocation table; used by `PgUp`/`PgDn` to page by the correct amount. |
+
+All three default to `0` ("not yet rendered — use fallback"). This is the same approved TEA exception class as the `MouseRegions` cell and the tag-filter render-hint cell. See `docs/CODE_STANDARDS.md` Principle 3 for the canonical definition of this pattern.
+
+**Frame history capacity:**
+
+`DEFAULT_FRAME_HISTORY_SIZE` is 1800 frames (30 seconds at 60 FPS), up from the previous 300-frame default. This provides enough scroll-back history for meaningful post-hoc analysis of jank events.
+
 ---
 
 ## DAP Server Subsystem
