@@ -29,3 +29,31 @@
 - Match the existing pattern in `handle_perf_jump_to_end`, which also resets `frame_chart_scroll_offset` to 0.
 - Consider whether mouse-bar click (`SelectPerformanceFrame` from a click region) should also clear the offset. It should — same handler, same fix. Add a small test for the mouse-bar path if not already covered.
 - Leave the deselect path (`index: None`, e.g. `Esc`) alone: the user may have scrolled back deliberately and pressed Esc only to drop the selection highlight.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | `handle_select_performance_frame`: added `frame_chart_scroll_offset = 0` reset when `index.is_some()`. Updated `left_right_arrow_clears_scroll_offset` test to assert `offset == 0` (inverting the KNOWN DEFECT). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reset only on `Some(_)`**: The deselect path (`None`) intentionally leaves the offset unchanged per task spec and design intent — the user may have scrolled back and pressed Esc to just drop the selection highlight, not to jump to the live edge.
+2. **Pattern match on `is_some()`**: Used `if index.is_some()` inside the existing `if let Some(handle)` block, matching the simple, inline style of the surrounding handlers rather than restructuring the match.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app left_right_arrow_clears_scroll_offset` - Passed (1 test)
+- `cargo test --workspace` - Passed (all test results ok, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no output, no warnings)
+
+### Risks/Limitations
+
+1. **Mouse-bar click coverage**: The task notes mention adding a small test for the mouse-bar path (also goes through `SelectPerformanceFrame`). The fix already covers that path through the same handler — the existing test suite's bar-click tests will exercise the same code. No separate test was added as the fix is in the single shared handler.

@@ -18,8 +18,8 @@ Two small independent follow-ups surfaced during phase-4 smoke verification.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-clear-scroll-offset-on-frame-select](tasks/01-clear-scroll-offset-on-frame-select.md) | Not Started | — | 0.25-0.5h | `handler/devtools/performance.rs` |
-| 2 | [02-mouse-wheel-scroll-in-perf-panel](tasks/02-mouse-wheel-scroll-in-perf-panel.md) | Not Started | — | 0.5-0.75h | `handler/mouse/devtools.rs` |
+| 1 | [01-clear-scroll-offset-on-frame-select](tasks/01-clear-scroll-offset-on-frame-select.md) | Done | — | 0.25-0.5h | `handler/devtools/performance.rs` |
+| 2 | [02-mouse-wheel-scroll-in-perf-panel](tasks/02-mouse-wheel-scroll-in-perf-panel.md) | Done | — | 0.5-0.75h | `handler/mouse/devtools.rs` |
 
 ## File Overlap Analysis
 

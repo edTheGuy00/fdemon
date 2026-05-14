@@ -40,3 +40,38 @@
 - The wheel landing position (x, y) is intentionally ignored. The keyboard-scroll dispatch already routes by `focused_section`; matching that behaviour avoids the "wheel-over-unfocused-section silently does nothing" UX trap and keeps the handler trivially testable.
 - A future enhancement could focus-then-scroll on wheel — i.e., set `focused_section` to the section under the cursor before dispatching the scroll. Out of scope here; can be a separate task once we have user feedback on whether unfocused-section wheel is confusing.
 - The handler-level `PerfScrollUp`/`Down` already clamp the offset bounds; no additional clamping needed at the mouse layer.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/devtools-improvements
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | Updated module header doc comment; replaced `DevToolsPanel::Performance => None` with `handle_performance_scroll(dir, mods)`; added `handle_performance_scroll` function; replaced `performance_wheel_is_always_none` test with 7 new targeted tests |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated `mouse_scroll_devtools_performance_shift_up_produces_none` test (renamed to `_produces_perf_page_up`) to reflect the new behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing test update**: `tests.rs` contained an integration-level test (`mouse_scroll_devtools_performance_shift_up_produces_none`) that asserted Shift+wheel on Performance returns `None`. That expectation was correct before this task — now Shift+wheel returns `PerfPageUp`. Updated the test name and assertion to reflect the new behavior rather than deleting it, so the integration-level smoke remains.
+
+2. **Shift-only detection**: Used `mods.is_shift_only()` (mirrors `handle_network_scroll`) so that Shift+Ctrl and Shift+Alt correctly fall through to the `mods.ctrl || mods.alt` rejection branch rather than triggering page step.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2257 unit tests, 80 integration tests passing)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Smoke Test (Manual — documented per acceptance criteria)
+
+Manual verification requires a running Flutter session with DevTools connected. The implementation is structurally identical to `handle_network_scroll` (which has been verified in production): plain wheel up/down dispatches `PerfScrollUp`/`PerfScrollDown`, Shift+wheel dispatches `PerfPageUp`/`PerfPageDown`, and the existing keyboard handler routes each message by `focused_section`. Since no `focused_section` logic was changed, the wheel path is identical to the keyboard path and inherits its correctness.
+
+### Risks/Limitations
+
+1. **No manual smoke confirmation**: Cannot run a live Flutter session in the CI/worktree environment; smoke is deferred to the reviewer on a real device.
