@@ -1,10 +1,49 @@
 # Mouse Interaction Reference
 
 Flutter Demon supports mouse interaction in the terminal when `[ui] enable_mouse = true`
-(the default). This document describes how the wheel scrolls each UI mode, the modifier
-keys that change scroll behavior, and the platform caveats.
+(the default). This document describes how to select and copy log text, how the wheel
+scrolls each UI mode, the modifier keys that change scroll behavior, the runtime toggle,
+and the platform caveats.
 
 For the on/off setting, see `[ui] enable_mouse` in [CONFIGURATION.md](CONFIGURATION.md).
+
+---
+
+## Selecting and Copying Log Text
+
+Three affordances are available for getting log text onto your clipboard:
+
+### Shift+drag — arbitrary substring selection
+
+Hold `Shift` and drag the mouse to select any run of characters in the log view. The
+terminal's native selection engine handles the highlight and the copy; `Cmd+C` /
+`Ctrl+Shift+C` (or your terminal's copy shortcut) copies the selection.
+
+This works because fdemon no longer requests the `?1003` (any-motion) mouse-tracking
+mode. With only `?1000`/`?1002` enabled, modern terminals pass `Shift+drag` through to
+their native selection handler. See [Platform Caveats](#platform-caveats) if Shift+drag
+still misbehaves in your terminal.
+
+### Right-click — full-line copy with toast confirmation
+
+Right-click on any log row to copy that entry's complete text to the system clipboard.
+A one-second status-bar toast confirms the copy: `Copied: <60-char preview…>`.
+
+Right-clicking outside a log row (e.g., on the header or a DevTools panel) shows a brief
+informational toast and takes no action.
+
+### `Alt+m` runtime toggle — fully suspend mouse capture
+
+If Shift+drag still does not select text in your terminal, press `Alt+m` to suspend
+mouse capture entirely. While capture is off:
+
+- All mouse events go directly to the terminal — native text selection and scrollback
+  work as if fdemon were a non-mouse-aware program.
+- The status bar shows `[mouse-off]` (in warning color) so you know capture is paused.
+
+Press `Alt+m` again to restore fdemon's mouse features (scroll wheel, clickable header,
+session tabs, DevTools panels, etc.). The toggle is in-process only; on restart, capture
+returns to the state set by `[ui] enable_mouse` in your config file.
 
 ---
 
@@ -152,19 +191,34 @@ than 70 columns to restore mouse coverage.
 
 ---
 
+## Runtime Toggle
+
+Press `Alt+m` in any mode to toggle mouse capture on or off without restarting fdemon.
+The `[mouse]` / `[mouse-off]` badge in the status bar reflects the current state.
+
+- **`[mouse]`** — capture is active; wheel scroll, clicks, and right-click-copy all work.
+- **`[mouse-off]`** — capture is suspended; native terminal selection and scrollback work
+  unimpeded.
+
+The toggle is in-process only. It does not write to `config.toml`; restart returns to the
+value of `[ui] enable_mouse`. Use the toggle for ad-hoc suspends; use the config setting
+for a permanent opt-out.
+
+---
+
 ## Disabling Mouse Capture
 
-If you prefer wheel events to drive your terminal's native scrollback, or if you are on
-legacy Windows conhost, disable mouse capture:
+For a permanent opt-out — legacy Windows conhost, terminals without Shift+drag support,
+or a preference for native wheel scrollback — disable mouse capture in your config:
 
 ```toml
 [ui]
 enable_mouse = false
 ```
 
-Restart fdemon after changing this setting. See `[ui] enable_mouse` in
-[CONFIGURATION.md](CONFIGURATION.md) for the full setting reference including the "When
-to disable mouse capture" callout.
+Restart fdemon after changing this setting. While disabled, `Alt+m` has no effect
+(capture is already off). See `[ui] enable_mouse` in [CONFIGURATION.md](CONFIGURATION.md)
+for the full setting reference including the "When to disable mouse capture" callout.
 
 ---
 
@@ -323,10 +377,10 @@ the gap.
 
 ## Future Work
 
-- Drag-to-select for log lines.
 - Drag-to-resize panel splits.
 - Hover tooltips.
 - Project-selector mouse support.
-- Right-click context menus.
+- Right-click context menus (right-click currently has a fixed action on log rows — full
+  line copy; a multi-item context menu is deferred until a concrete use case arrives).
 - Horizontal-scroll consumers (log timeline panning, DevTools secondary-axis navigation).
 

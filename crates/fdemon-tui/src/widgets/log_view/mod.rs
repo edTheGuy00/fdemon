@@ -969,8 +969,7 @@ impl<'a> LogView<'a> {
             let right_width_no_badge: usize =
                 right_spans.iter().map(|s| s.content.chars().count()).sum();
             // Badge fits when there is enough room: left + padding(1) + right + 2 + badge <= area.width
-            let fits = (area.width as usize)
-                >= left_width + 1 + right_width_no_badge + badge_len;
+            let fits = (area.width as usize) >= left_width + 1 + right_width_no_badge + badge_len;
 
             if fits {
                 right_spans.push(Span::raw("  "));

@@ -59,6 +59,7 @@ Normal mode is the default mode when viewing logs and managing your Flutter app 
 | `Esc` | Quit | Same as `q` |
 | `Ctrl+C` | Force Quit | Emergency exit, bypasses confirmation dialog |
 | `c` | Clear Logs | Clear all logs in the current session |
+| `Alt+m` | Toggle mouse capture | Suspend or resume mouse capture (runtime, in-process — see [MOUSE.md](MOUSE.md)). Status bar shows `[mouse]` / `[mouse-off]`. |
 
 ### Startup State
 
