@@ -168,3 +168,35 @@ Run `cargo test -p fdemon-app handler::tests::test_alt_m`. All existing + new te
 - This task touches `handler/tests.rs`. **Task 04 also touches `handler/tests.rs`.** The orchestrator will run these two sequentially on the current branch, not in parallel worktrees. Run task 04 first (it adds tests in distinct slots near the copy-message tests); then task 05 adds tests near the existing Alt+m tests.
 - If `DialogPane` or `NewSessionDialogState` field accessors differ from the names above, adapt to actual API. The `codebase_researcher` confirmed the enum variants are `TargetSelector` and `LaunchContext` and live at `crates/fdemon-app/src/new_session_dialog/types.rs:7`.
 - Do NOT change `event.rs` — the canonicalisation there already handles both `'m'` and `'M'` correctly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Widened Alt+m match to `CharAlt('m' | 'M')`; replaced flat `Startup | NewSessionDialog => true` with pane-aware logic using `focused_pane` and sub-modal checks |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 new tests: `test_shift_alt_m_in_normal_mode_emits_toggle`, `test_alt_m_in_settings_editing_mode_does_not_toggle`, `test_alt_m_in_new_session_dialog_target_selector_emits_toggle`, `test_alt_m_in_new_session_dialog_launch_context_does_not_toggle` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field name adaptation**: Task docs used `active_pane` and `state.new_session_dialog` but actual API is `focused_pane` and `state.new_session_dialog_state`. Adapted accordingly.
+2. **`start_editing` signature**: Task docs showed `start_editing()` with no args; actual API is `start_editing(&str)`. Called with `""` as initial value in the test.
+3. **Test placement**: New tests inserted immediately before the existing `// ── Handler arm tests (Task 06)` section comment, cleanly adjacent to the existing Alt+m test block.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app "test_alt_m"` — 7 tests passed (5 existing + 2 new)
+- `cargo test -p fdemon-app "test_shift_alt_m"` — 1 test passed
+- `cargo test --workspace` — All 2286+ tests passed, 0 failed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed
+
+### Risks/Limitations
+
+1. **Sub-modal suppression**: The task specified suppressing when `dart_defines_modal` or `fuzzy_modal` is open in the dialog. This is correctly implemented by checking `dlg.dart_defines_modal.is_some() || dlg.fuzzy_modal.is_some()` — no test was added for this branch since it's guarded by the existing modal state logic and covered implicitly.

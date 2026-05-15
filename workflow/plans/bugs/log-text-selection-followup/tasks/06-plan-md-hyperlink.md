@@ -44,3 +44,30 @@ Open the file in a markdown renderer and click the link to verify navigation wor
 ### Notes
 
 - This file is NOT under the doc_maintainer's allow-list (it's a workflow plan doc, not a core docs/* file). Implementor handles it directly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/mouse-support/PLAN.md` | Line 536: converted backtick prose path to clickable markdown hyperlink `[BUG.md](../../bugs/log-text-selection-broken/BUG.md)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Relative path verification**: Confirmed the relative path `../../bugs/log-text-selection-broken/BUG.md` is correct — from `workflow/plans/features/mouse-support/` going up two levels reaches `workflow/plans/`, then descending into `bugs/log-text-selection-broken/BUG.md`. The target file was verified to exist.
+
+### Testing Performed
+
+- Verified relative path resolves correctly by directory structure inspection — Passed
+- Verified target file `workflow/plans/bugs/log-text-selection-broken/BUG.md` exists — Passed
+- No Rust code changed, so cargo checks are not applicable to this task
+
+### Risks/Limitations
+
+1. **None**: This is a trivial documentation-only change with no code impact.

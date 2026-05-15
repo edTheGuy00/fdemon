@@ -45,3 +45,25 @@ The second sentence is optional but clarifies the architectural role (which IS i
 - Follow content boundaries strictly per `~/.claude/skills/doc-standards/schemas.md`.
 - The `WriteClipboard { text }` description on the next line (1667) is fine as-is — leave it alone.
 - This is a single-token deletion plus optional clarifying sentence. No refactor.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Removed `(?1003` DECSET)` parenthetical from `SetMouseCapture(bool)` description; added "outside the TEA pipeline" clarifying phrase |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES (terminal-protocol detail `?1003 DECSET` removed from ARCHITECTURE.md)
+
+### Notable Decisions/Tradeoffs
+
+1. **Clarifying phrase retained**: Added "outside the TEA pipeline" to preserve architectural meaning (the runner acts synchronously, bypassing TEA) while keeping the terminal-protocol detail out of scope.

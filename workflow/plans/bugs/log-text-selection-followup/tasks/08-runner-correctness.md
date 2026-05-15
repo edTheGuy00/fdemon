@@ -192,3 +192,31 @@ If filling the channel to capacity is impractical in a test, consider a differen
 - The `try_send` fallback's direct state mutation is a deliberate TEA exception. Document the rationale clearly in the inline comment so future readers don't think it's a bug to "clean up".
 - Do NOT switch to `blocking_send().await` — the codebase universally uses `try_send` for runner-side sends, and `run_loop` is synchronous (not an async fn).
 - Do NOT modify `services/clipboard.rs` (Task 01's territory) or `handler/update.rs` (the handler-side "Copied: …" optimistic toast is left as-is per BUG.md "Further Considerations").
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/runner.rs` | try_send fallback with direct state mutation; startup toast in `run_with_project` and `run_with_project_and_dap`; exhaustive match replacing `_` catch-all; two new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Channel-fill strategy in test**: The `test_mouse_capture_changed_channel_full_applies_state_directly` test fills the 256-slot channel with `Message::Tick` entries (a benign no-payload variant) rather than using a mock sender. This avoids introducing test infrastructure while reliably saturating the channel. The direct-mutation path is verified by checking `mouse_capture_active` and the Warn toast level after `handle_runner_actions`.
+
+2. **`run()` demo entry point**: The task says "Apply the same change at all THREE fallback sites". The `run()` function uses `NullClipboard` unconditionally (no `SystemClipboard::new()` attempt), so there is no fallback site to change — no startup toast is added there, matching the task's intent (demo/test mode, not a user-facing entry point).
+
+3. **Exhaustive match listing**: All 44 non-runner `UpdateAction` variants are explicitly enumerated in the match arm. This satisfies the compiler-enforced-awareness goal: adding a new variant will cause a compile error until the developer consciously decides which arm it belongs to.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui runner` — 5/5 passed (3 existing + 2 new)
+- `cargo test --workspace` — all suites passed (0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+- `cargo fmt --all -- --check` — clean

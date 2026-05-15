@@ -6,17 +6,25 @@ This follow-up addresses the 4 blocking + 8 should-fix + 6 of 10 debt items from
 
 ## Tasks
 
-| # | Title | Wave | Depends on | Agent | File |
-|---|-------|------|------------|-------|------|
-| 01 | `NullClipboard` service + cfg-gate `MemoryClipboard` | 1 | — | implementor | [tasks/01-null-clipboard-service.md](./tasks/01-null-clipboard-service.md) |
-| 02 | `terminal.rs` doc-comment correction | 1 | — | implementor | [tasks/02-terminal-doc-correction.md](./tasks/02-terminal-doc-correction.md) |
-| 03 | `docs/ARCHITECTURE.md` `?1003` deletion | 1 | — | **doc_maintainer** | [tasks/03-architecture-doc-fix.md](./tasks/03-architecture-doc-fix.md) |
-| 04 | Test + quality polish (vacuous assertion, EXCEPTION annotation, magic number, `resolve_entry_text` test, Unicode contract) | 1 | — | implementor | [tasks/04-test-and-quality-polish.md](./tasks/04-test-and-quality-polish.md) |
-| 05 | Keys + suppression (Shift+Alt+m, NewSessionDialog field-focus, missing tests) | 1 | — | implementor | [tasks/05-keys-and-suppression.md](./tasks/05-keys-and-suppression.md) |
-| 06 | `PLAN.md` markdown hyperlink fix | 1 | — | implementor | [tasks/06-plan-md-hyperlink.md](./tasks/06-plan-md-hyperlink.md) |
-| 07 | `AppState::pending_runner_actions` visibility hygiene | 1 | — | implementor | [tasks/07-state-visibility.md](./tasks/07-state-visibility.md) |
-| 08 | Runner correctness (`try_send` fallback, `NullClipboard` adoption, exhaustive match) | 2 | 01 | implementor | [tasks/08-runner-correctness.md](./tasks/08-runner-correctness.md) |
-| 09 | Manual-test matrix execution + parent BUG.md success-criteria check-off | 3 | 01–08 | implementor | [tasks/09-manual-test-matrix.md](./tasks/09-manual-test-matrix.md) |
+| # | Status | Title | Wave | Depends on | Agent | File |
+|---|--------|-------|------|------------|-------|------|
+| 01 | [x] Done | `NullClipboard` service + cfg-gate `MemoryClipboard` | 1 | — | implementor | [tasks/01-null-clipboard-service.md](./tasks/01-null-clipboard-service.md) |
+| 02 | [x] Done | `terminal.rs` doc-comment correction | 1 | — | implementor | [tasks/02-terminal-doc-correction.md](./tasks/02-terminal-doc-correction.md) |
+| 03 | [x] Done | `docs/ARCHITECTURE.md` `?1003` deletion | 1 | — | **doc_maintainer** | [tasks/03-architecture-doc-fix.md](./tasks/03-architecture-doc-fix.md) |
+| 04 | [x] Done (CONCERN) | Test + quality polish (vacuous assertion, EXCEPTION annotation, magic number, `resolve_entry_text` test, Unicode contract) | 1 | — | implementor | [tasks/04-test-and-quality-polish.md](./tasks/04-test-and-quality-polish.md) |
+| 05 | [x] Done (CONCERN) | Keys + suppression (Shift+Alt+m, NewSessionDialog field-focus, missing tests) | 1 | — | implementor | [tasks/05-keys-and-suppression.md](./tasks/05-keys-and-suppression.md) |
+| 06 | [x] Done | `PLAN.md` markdown hyperlink fix | 1 | — | implementor | [tasks/06-plan-md-hyperlink.md](./tasks/06-plan-md-hyperlink.md) |
+| 07 | [x] Done | `AppState::pending_runner_actions` visibility hygiene | 1 | — | implementor | [tasks/07-state-visibility.md](./tasks/07-state-visibility.md) |
+| 08 | [x] Done | Runner correctness (`try_send` fallback, `NullClipboard` adoption, exhaustive match) | 2 | 01 | implementor | [tasks/08-runner-correctness.md](./tasks/08-runner-correctness.md) |
+| 09 | [x] Done (partial — human-only checks remain) | Manual-test matrix execution + parent BUG.md success-criteria check-off | 3 | 01–08 | implementor | [tasks/09-manual-test-matrix.md](./tasks/09-manual-test-matrix.md) |
+
+### Orchestration Notes
+
+- **Task 01** had a justified scope expansion: gating `MemoryClipboard` to `#[cfg(test)]` broke compilation in the three production fallback sites of `runner.rs`, so the implementor substituted `NullClipboard` there (work originally allocated to Task 08). Validator's FAIL verdict was a false positive caused by symmetric-diff confusion (the worktree branched before Tasks 04/05 committed on base, so Task 04/05 changes showed as "reverted" in the worktree). Real scope was clean apart from two leaked dev-time artifacts.
+- **Task 04 / Task 01** both leaked auto-generated dev artifacts (`crates/fdemon-tui/.fdemon/config.toml` and `crates/fdemon-tui/.gitignore`) into their commits while testing. Task 09 cleaned these up and added root `.gitignore` rules under `**/.fdemon/*.toml` to prevent recurrence. Task 04 also bundled an unrelated `example/app2/pubspec.lock` drift.
+- **Task 05** CONCERN: stale block comment in `crates/fdemon-app/src/handler/keys.rs:19` still reads "NewSessionDialog / Startup: dialog contains text fields at all times" — inaccurate after the pane-aware refinement. Inline comments inside the match arm are correct. Documentation drift only; behavior is correct.
+- **Task 07** chose Option B (preserve `pub` visibility, update doc-comment) instead of Option A (tighten to `pub(crate)`). Rationale: `crates/fdemon-tui/src/runner.rs` tests directly push to `engine.state.pending_runner_actions`, and the task scope restricted writes to `state.rs` only. Refactoring the cross-crate test access is logged as future work.
+- **Task 09** is partially complete: all programmatically verifiable success criteria are checked off in BUG.md; six human-only interactive checks (Shift+drag selection, right-click paste on a real OS clipboard, Alt+m physical toggle on stand-alone macOS + Linux terminals, IDE-terminal sanity confirmation) are listed under "Human-Verification Remaining" in BUG.md and require a human follow-up.
 
 Waves 1 → 3 must complete in order. Within a wave, all tasks may dispatch in parallel — see overlap matrix below.
 

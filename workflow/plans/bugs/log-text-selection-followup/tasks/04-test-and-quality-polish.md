@@ -167,3 +167,38 @@ Run `cargo test --workspace`. The new `test_resolve_entry_text_*` tests should a
 - This task touches `handler/tests.rs`. **Task 05 also touches `handler/tests.rs`.** The orchestrator will run these two tasks sequentially on the current branch, not in parallel worktrees.
 - The vacuous-assertion fix may require checking what `term.buffer_contains` actually does. If it's an exact-substring search, `[mouse]` (with closing bracket) will not match `[mouse-off]` (with `-`), so the rewritten assertion is correct. Verify by reading the `TestTerminal` implementation before submitting.
 - Do NOT change `truncate_with_ellipsis`'s implementation — only its doc-comment.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Rewrote vacuous second assertion in `test_status_info_renders_mouse_off_badge` to check absence of `[mouse]` (7-char on-state badge) directly |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Updated EXCEPTION annotation to required `(TEA)` style with dual cross-references to CODE_STANDARDS.md and REVIEW_FOCUS.md |
+| `crates/fdemon-app/src/handler/update.rs` | Added `COPY_TOAST_PREVIEW_CHARS: usize = 60` constant (pub(crate)); replaced magic `60` at call site; added Unicode-scalar-vs-grapheme contract doc-comment on `truncate_with_ellipsis`; made `resolve_entry_text` pub(crate) |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `#[cfg(test)]` re-export of `resolve_entry_text` and `COPY_TOAST_PREVIEW_CHARS` so `tests.rs` can access them via `use super::*;` |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated `test_copy_message_truncates_preview_to_60_chars` bound to `COPY_TOAST_PREVIEW_CHARS + 1`; added three new `test_resolve_entry_text_*` tests inside `fetch_trigger_tests` module |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[cfg(test)]` re-export**: `resolve_entry_text` and `COPY_TOAST_PREVIEW_CHARS` are only needed in tests, so used a `#[cfg(test)]` conditional re-export in `handler/mod.rs` to avoid unused-import compiler warnings in non-test builds.
+2. **`buffer_dump()` absence**: `TestTerminal` has `content()` but not `buffer_dump()`. The rewritten assertion uses a plain failure message rather than a buffer dump, which is sufficient for non-vacuous signal.
+3. **Tests in `fetch_trigger_tests` module**: The three `test_resolve_entry_text_*` tests were added inside the existing `fetch_trigger_tests` module in `tests.rs`, alongside the other copy-message tests that also use `make_state_with_log_entry`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed (no warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-app test_resolve_entry_text` - Passed (3/3 new tests)
+- `cargo test --workspace` - Passed (all test suites, 0 failures)
+
+### Risks/Limitations
+
+1. **None identified**: All changes are isolated to test code and doc-comments/constants, with no logic changes.

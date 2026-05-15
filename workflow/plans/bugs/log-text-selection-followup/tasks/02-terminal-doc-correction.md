@@ -60,3 +60,30 @@ No new tests. The change is doc-only. Run `cargo check --workspace` to confirm n
 
 - Task 08 will rely on this doc-comment being accurate when implementing the runner-side `try_send` fallback. If a future cleanup wants to make `disable_mouse_capture()` return `Result<()>`, that's a separate refactor (out of scope for this follow-up).
 - Do NOT modify the `set_mouse_capture` function body or `disable_mouse_capture`'s signature.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/terminal.rs` | Replaced the 3-line incorrect doc-comment fragment on `set_mouse_capture` (lines 199-202) with a 7-line accurate description that removes the false claim about surfacing disable-path errors, explains the asymmetry, and tells callers not to rely on `Err` for disable detection. No code changes. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Scope limited to doc-comment only**: The task explicitly required no code changes. The inline implementation comments inside the function body (lines 224-235) were left untouched even though they are slightly redundant with the new doc-comment, since the task scope was restricted to the outer `///` doc-comment.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo doc -p fdemon-tui --no-deps` - Passed (8 pre-existing warnings unrelated to this change, no new warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **Pre-existing doc warnings**: The `cargo doc` run shows 8 pre-existing warnings in other files (private intra-doc links, unresolved links). These are not introduced by this change and were present before.

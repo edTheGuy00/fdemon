@@ -72,3 +72,31 @@ Try Option A first. If it works (most likely), use it. If it doesn't, document w
 
 - The architecture reviewer's main concern was that `pub` on `AppState` allows a future contributor (or the headless runner) to drain or push directly, bypassing the `process.rs` routing gate. Tightening to `pub(crate)` or fixing the doc-comment both address the concern; tightening is preferred.
 - Do NOT change the field name or type. Only visibility + comment.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a697f6e19dd336aef
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Updated doc-comment on `pending_runner_actions` field to accurately describe access contract (Option B) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option B chosen over Option A**: The task specifies Option A (tightening to `pub(crate)`) as preferred but explicitly states Option B (fixing the comment) is the fallback if tests reach in directly. Investigation confirmed that tests in `fdemon-tui/src/runner.rs` (lines 413, 452, 480) directly push to `engine.state.pending_runner_actions` from a different crate, which would break with `pub(crate)`. The task's scope explicitly limits writes to `state.rs` only, making runner.rs test refactoring out of scope. Option B was therefore the correct choice.
+
+2. **Comment rewrite**: The old comment falsely stated "The field is `pub` so the runner can drain it directly without a dedicated accessor". This is wrong — the production drain path is always `Engine::drain_runner_actions()`. The new comment accurately explains: (a) the legitimate access path is `Engine::drain_runner_actions()`, (b) direct access from outside the crate should be avoided, (c) `pub` is retained specifically because `fdemon-tui` tests push directly for test setup purposes, and (d) narrowing to `pub(crate)` is a future cleanup item once those tests are refactored.
+
+### Testing Performed
+
+- `cargo build --workspace` - Passed
+- `cargo test --workspace` - Passed (5,564 tests passed across all crates, 0 failed)
+
+### Risks/Limitations
+
+1. **Architectural debt preserved**: The field remains `pub`, which means a future contributor could still bypass the access contract. The doc-comment now documents the intent clearly, which is the best we can do without refactoring the runner.rs tests to use messages instead of direct field access. That refactoring is noted as a future cleanup item in the comment itself.

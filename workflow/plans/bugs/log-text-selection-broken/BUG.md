@@ -195,10 +195,48 @@ A drag-to-select implementation (custom highlight + clipboard write on release) 
 
 - [ ] On macOS Terminal.app, iTerm2, Alacritty, Ghostty, kitty: Shift+drag selects log text natively while fdemon is running with `enable_mouse = true`.
 - [ ] Right-click on any log row copies the row's full text to the system clipboard; status-bar toast confirms.
-- [ ] `Ctrl+M` (or chosen chord) toggles mouse capture without restarting fdemon; status indicator reflects the current state; toggle is logged for debugging.
+- [x] `Alt+m` (chosen chord — Ctrl+M was ruled out due to `\r` collision) toggles mouse capture without restarting fdemon; status indicator reflects the current state; toggle is logged for debugging.
 - [ ] All existing mouse features (scroll wheel, click `[r]`, click tabs, double-click stack-trace) still work after the fix.
-- [ ] `cargo test --workspace` passes; new tests cover: (a) capture sequence excludes `?1003`, (b) right-click → clipboard write via mock, (c) toggle updates state, (d) status indicator renders both states.
-- [ ] `docs/MOUSE.md` rewritten to match the new reality; PLAN.md cross-references this BUG.md.
+- [x] `cargo test --workspace` passes; new tests cover: (a) capture sequence excludes `?1003` (`test_enable_decset_omits_1003`), (b) right-click → clipboard write via mock (`test_right_click_on_log_row_emits_copy_message`, `test_right_click_off_log_row_pushes_toast`), (c) toggle updates state (`test_toggle_emits_set_mouse_capture_with_inverted_target`, `test_mouse_capture_changed_updates_state_and_toasts`), (d) status indicator renders both states (`test_status_info_renders_mouse_off_badge`).
+- [x] `docs/MOUSE.md` rewritten to match the new reality; PLAN.md cross-references this BUG.md.
+
+### Programmatically Verified (2026-05-16)
+
+The following sub-criteria have been confirmed without manual terminal access:
+
+| Check | Method | Result |
+|-------|--------|--------|
+| `ENABLE_MOUSE_DECSET` omits `?1003` | `test_enable_decset_omits_1003` in `crates/fdemon-tui/src/terminal.rs` | PASS |
+| `NullClipboard` exists and returns `Err` on every write | `test_null_clipboard_returns_err` in `crates/fdemon-app/src/services/clipboard.rs` | PASS |
+| `MemoryClipboard` is `#[cfg(test)]`-only | `crates/fdemon-app/src/services/mod.rs` re-export gated by `#[cfg(test)]` | CONFIRMED |
+| `grep '1003' docs/ARCHITECTURE.md` returns no matches | grep run against checked-in file | CONFIRMED |
+| Right-click on log row emits `CopyLogEntryToClipboard` message | `test_right_click_on_log_row_emits_copy_message` | PASS |
+| Right-click off log row pushes toast | `test_right_click_off_log_row_pushes_toast` | PASS |
+| `Alt+m` key binding emits `ToggleMouseCapture` | `crates/fdemon-app/src/handler/keys.rs:42` verified by code inspection | CONFIRMED |
+| Toggle handler emits `SetMouseCapture` with inverted state | `test_toggle_emits_set_mouse_capture_with_inverted_target` | PASS |
+| `MouseCaptureChanged` updates `mouse_capture_active` field | `test_mouse_capture_changed_updates_state_and_toasts` | PASS |
+| `[mouse-off]` badge renders in status bar | `test_status_info_renders_mouse_off_badge` | PASS |
+| `cargo test --workspace` clean | All 3,209+ unit tests across 4 crates | PASS |
+| `docs/MOUSE.md` has IDE-terminal matrix | File contains "IDE built-in terminals" section with per-IDE table | CONFIRMED |
+
+### Human-Verification Remaining
+
+The following checks require an interactive terminal session and CANNOT be performed by an AI agent:
+
+- [ ] **Shift+drag on macOS Terminal.app (or iTerm2, Alacritty, Ghostty, kitty):** Confirm text selection works with `enable_mouse = true` while fdemon is running. Expected: Shift+drag highlights log text; Cmd+C copies it.
+- [ ] **Shift+drag on Linux (Alacritty, Ghostty, kitty, GNOME Terminal, or Wezterm):** Same check on at least one stand-alone Linux terminal.
+- [ ] **Right-click physically copies to clipboard:** Paste into a text editor to verify the clipboard content matches the log row text.
+- [ ] **`Alt+m` physically toggles in a real terminal:** Press Alt+m; confirm `[mouse-off]` badge appears in status bar; confirm native selection/scrollback works; press again to restore.
+- [ ] **Existing features still work after fix:** Scroll wheel, `[r]` click, session-tab clicks, double-click stack-trace expansion all operate normally.
+- [ ] **IDE sanity (Zed):** Confirm right-click is swallowed, `Alt+m` is intercepted, and Shift+drag drifts — matching the `docs/MOUSE.md` "IDE built-in terminals → Zed" entry.
+
+### Verification Log
+
+**Date:** 2026-05-16 (automated portion only)
+**Terminals tested:**
+- macOS: PENDING — requires human tester with stand-alone macOS terminal
+- Linux: PENDING — requires human tester with stand-alone Linux terminal
+**Automated result:** All programmatically checkable criteria confirmed (see table above). Manual terminal checks remain outstanding — see "Human-Verification Remaining" above.
 
 ---
 
