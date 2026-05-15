@@ -31,9 +31,12 @@
 //! - [`LogService`]: Log buffer access and filtering
 //! - [`StateService`]: App state and device queries
 
+pub mod clipboard;
 mod flutter_controller;
 mod log_service;
 mod state_service;
+
+pub use clipboard::{Clipboard, MemoryClipboard, SystemClipboard};
 
 pub use flutter_controller::{
     CommandSenderController, DaemonFlutterController, FlutterCommand, FlutterController,
