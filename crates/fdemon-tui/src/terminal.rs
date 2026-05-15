@@ -205,9 +205,10 @@ pub fn disable_mouse_capture() {
 /// the user toggles `enable_mouse` in settings at runtime). The startup call in
 /// `runner.rs` keeps using [`enable_mouse_capture`] directly.
 ///
-/// Note: called by the runner in Task 07 (runner-side-effect). The `dead_code`
-/// lint is suppressed here because Task 07 has not been merged yet.
-#[allow(dead_code)]
+/// Note: called by the runner to handle `UpdateAction::SetMouseCapture` from the
+/// TEA pipeline. The runner drains `engine.drain_runner_actions()` after each
+/// message-processing cycle and calls this function for each `SetMouseCapture`
+/// action.
 pub fn set_mouse_capture(enabled: bool) -> Result<()> {
     if enabled {
         // Idempotency: if already on, enable_mouse_capture will still emit

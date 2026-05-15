@@ -376,6 +376,22 @@ impl Engine {
         count
     }
 
+    /// Drain runner-side-effect actions queued since the last call.
+    ///
+    /// Returns all `UpdateAction::SetMouseCapture` and
+    /// `UpdateAction::WriteClipboard` entries that were intercepted by
+    /// `process.rs` during the preceding `process_message()` / `drain_pending_messages()`
+    /// calls. The internal queue is cleared on return.
+    ///
+    /// **Caller contract:** the TUI runner MUST call this after each call to
+    /// `process_message()` or `drain_pending_messages()`, then handle every
+    /// returned action synchronously before the next render cycle. Leaving
+    /// actions unconsumed is a bug — `SetMouseCapture` will be silently
+    /// dropped and `WriteClipboard` text will be lost.
+    pub fn drain_runner_actions(&mut self) -> Vec<crate::handler::UpdateAction> {
+        std::mem::take(&mut self.state.pending_runner_actions)
+    }
+
     /// Flush pending batched logs across all sessions.
     ///
     /// Call after processing messages and before rendering/emitting events.

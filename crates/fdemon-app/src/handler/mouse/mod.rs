@@ -107,8 +107,7 @@ fn handle_press(
 /// Kept as a named constant so the toast-push site and the dedup check
 /// reference the same string literal, and so tests can import it without
 /// embedding a magic string.
-pub(crate) const RIGHT_CLICK_HINT: &str =
-    "Right-click copies log lines; nothing to copy here.";
+pub(crate) const RIGHT_CLICK_HINT: &str = "Right-click copies log lines; nothing to copy here.";
 
 /// Handle a right-click uniformly across all UI modes.
 ///

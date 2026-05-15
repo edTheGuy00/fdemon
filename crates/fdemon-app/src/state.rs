@@ -1198,6 +1198,24 @@ pub struct AppState {
     /// performed the corresponding `terminal::set_mouse_capture` call. The
     /// indicator in the bottom metadata bar (Task 08) reads this field.
     pub mouse_capture_active: bool,
+
+    /// Terminal/clipboard actions queued for the runner to execute.
+    ///
+    /// `SetMouseCapture` and `WriteClipboard` require synchronous side effects
+    /// (terminal writes, OS clipboard I/O) that must be performed by the TUI
+    /// runner, not by `actions::handle_action` (which runs on the Tokio thread
+    /// pool and has no access to the terminal handle or the runner-owned
+    /// clipboard). `process.rs` intercepts these two variants and pushes them
+    /// here instead of forwarding them to `handle_action`. The runner drains
+    /// this queue after each `process_message()` call.
+    ///
+    /// The field is `pub` so the runner (in `fdemon-tui`) can drain it directly
+    /// without a dedicated accessor, following the same pattern as `toasts`.
+    ///
+    /// Only `UpdateAction::SetMouseCapture` and `UpdateAction::WriteClipboard`
+    /// are ever pushed here; all other action variants flow through the normal
+    /// `handle_action` path.
+    pub pending_runner_actions: Vec<crate::handler::UpdateAction>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1264,6 +1282,7 @@ impl AppState {
             last_log_click: None,
             last_settings_click: None,
             mouse_capture_active,
+            pending_runner_actions: Vec::new(),
         }
     }
 
