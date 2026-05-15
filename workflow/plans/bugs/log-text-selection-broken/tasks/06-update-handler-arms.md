@@ -86,3 +86,39 @@ Message::MouseCaptureChanged { active } => {
 
 - The decision to keep `Clipboard` out of `update` (Option B above) was a deliberate trade-off: the handler stays pure, and the runner is the single place that owns side effects. The cost is a slight delay between the success toast and the actual write (microseconds in practice). Worth the simplification.
 - A follow-up improvement (not in scope here) could add a `ClipboardWriteFailed { preview }` message to revoke the optimistic toast cleanly — left in BUG.md's "Future Enhancements" implicit scope.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aef3e2180b6b00b35
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::WriteClipboard { text: String }` variant |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `WriteClipboard` arm to `handle_action` (warn stub — handled by TUI runner) |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced three stubs with real handler arms; added `resolve_entry_text` and `truncate_with_ellipsis` private helpers |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 6 unit tests for Task 06 handler arms |
+| `crates/fdemon-tui/src/terminal.rs` | Added `#[allow(dead_code)]` to `set_mouse_capture` (pre-existing dead-code lint from Task 01; wired by Task 07) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`WriteClipboard` variant added in this task (not Task 03)**: Task 03 was a pure-declaration task for `CopyLogEntryToClipboard`, `ToggleMouseCapture`, and `MouseCaptureChanged` messages. `WriteClipboard` is the action that the handler emits, so it belongs here where the consumer is wired.
+2. **`resolve_entry_text` scoped to `update.rs`**: The helper looks up a log entry from the currently selected session's `VecDeque<LogEntry>` by id. Returns empty string on miss (no session or entry not found), which gates the action emission and substitutes an alternate toast.
+3. **`truncate_with_ellipsis` uses `char_indices().nth(max_chars)`**: This finds the correct byte boundary after `max_chars` scalar values, making it safe for multibyte (emoji, CJK) input. Appends Unicode ellipsis `…` on truncation.
+4. **Pre-existing `dead_code` lint in `fdemon-tui`**: The `set_mouse_capture` function added by Task 01 triggers a dead-code lint because Task 07 (runner wiring) hasn't been merged yet. Fixed with `#[allow(dead_code)]` and a doc comment explaining the reason.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2270 fdemon-app tests, all 6 Task 06 tests passing)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Optimistic toast**: The success toast is pushed immediately when the handler runs; the actual clipboard write happens later in the runner. If the runner's clipboard write fails, a warning toast is shown on top of the success toast. This is an acceptable UX trade-off (documented in task).
+2. **`resolve_entry_text` only searches the selected session**: If the user right-clicks a log row and then switches sessions before the message is processed, the entry won't be found and the alternate toast fires. This is rare in practice and the fallback is graceful.

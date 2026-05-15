@@ -51,3 +51,38 @@ Bring user-facing documentation in line with the bug fix. Specifically:
 
 - The implementor should regenerate any markdown TOC sections in the affected files if the project convention auto-generates them; otherwise manually update inline anchors.
 - Keep the prose terse. Existing `MOUSE.md` lines tend to be ≤ 90 chars; match the local convention.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a22ac13e48c5ed7b9
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/MOUSE.md` | Added "Selecting and Copying Log Text" section (Shift+drag, right-click-copy, Alt+m); added "Runtime Toggle" section explaining `[mouse]`/`[mouse-off]` badge; updated "Disabling Mouse Capture" to point at runtime toggle for ad-hoc use; updated Future Work (dropped "Drag-to-select for log lines", noted right-click is a fixed action not a full context menu) |
+| `docs/KEYBINDINGS.md` | Added `Alt+m` row in the Normal Mode General Controls table with cross-link to MOUSE.md |
+| `docs/CONFIGURATION.md` | Clarified `enable_mouse` table entry as initial-state-only with runtime toggle note; updated "When to disable mouse capture" callout to mention `Alt+m` for ad-hoc suspends |
+| `workflow/plans/features/mouse-support/PLAN.md` | Appended "Bugfix Follow-up" paragraph with relative link to BUG.md explaining the `?1003` assumption failure |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Whitespace-only formatting change from `cargo fmt --all` |
+
+### Notable Decisions/Tradeoffs
+
+1. **"Selecting and Copying Log Text" placement**: Added as a new top-level section before the scroll table. Users searching for "how do I copy log text" land there first rather than having to hunt through the platform caveats.
+2. **Kept "Runtime Toggle" as its own section**: The BUG.md calls this out as a first-class feature; giving it a dedicated anchor makes it linkable from KEYBINDINGS.md and CONFIGURATION.md without cluttering the intro.
+3. **Alt+m placed in General Controls (not a separate section)**: It is a global always-on binding, consistent with how other global keys (`c`, `Ctrl+C`) are filed. Adding a separate "Mouse" section was unnecessary for a single row.
+4. **PLAN.md bugfix note appended after References**: Keeps the original plan intact and makes the historical correction easy to find at the end of the file.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (whitespace-only change in log_view/mod.rs)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo test --workspace` - Passed (5,564 tests across all result lines, 0 failed)
+
+### Risks/Limitations
+
+1. **No TOC update in MOUSE.md**: The file does not have an inline TOC, so no regeneration was needed. The new sections have anchors consistent with the existing heading convention.
+2. **Alt+m description notes terminals that send Esc+m**: MOUSE.md defers the nuance to the Resolved Decisions in BUG.md rather than repeating it in user docs (keeps the prose terse per the reviewer note).

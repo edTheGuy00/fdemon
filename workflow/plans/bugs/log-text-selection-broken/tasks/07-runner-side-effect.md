@@ -90,3 +90,40 @@ Minimum bar:
 
 - The runner is the only place in the codebase that owns both the terminal handle and the clipboard handle, which is why both side-effect arms live here.
 - If the user (or a reviewer) prefers a hard-error toast for clipboard unavailable rather than silent `MemoryClipboard`, switch the fallback in step 1 of Implementation. Recommend leaving it as-written; the warn log gives operators a breadcrumb.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `pending_runner_actions: Vec<UpdateAction>` field to `AppState`; initialized in `with_settings` |
+| `crates/fdemon-app/src/process.rs` | Intercept `SetMouseCapture` and `WriteClipboard` actions before `handle_action`; push to `state.pending_runner_actions` instead |
+| `crates/fdemon-app/src/engine.rs` | Added `drain_runner_actions()` method that returns and clears the pending runner actions queue |
+| `crates/fdemon-app/src/lib.rs` | Exported `ToastLevel` from the public API |
+| `crates/fdemon-tui/src/terminal.rs` | Removed `#[allow(dead_code)]` from `set_mouse_capture` (now has a caller) |
+| `crates/fdemon-tui/src/runner.rs` | Added clipboard instantiation (SystemClipboard with MemoryClipboard fallback) in all 3 entry points; updated `run_loop` signature to accept `&mut dyn Clipboard`; added `handle_runner_actions` side-effect dispatcher; added 3 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pending queue on AppState**: Rather than a new channel or Engine-level field (which would require passing more through `process.rs`), `pending_runner_actions` lives on `AppState`. `process.rs` has `&mut AppState` and can push to it; the runner drains via `engine.drain_runner_actions()`. This is consistent with the existing `pending_watcher_errors` pattern.
+
+2. **`handle_runner_actions` called twice per loop iteration**: Once after `drain_pending_messages()` (processes engine-channel messages that may produce runner actions) and once after `event::poll()` (processes the user-input message). This ensures no runner actions are left pending before render.
+
+3. **`set_mouse_capture(false)` idempotency used for testing**: In non-TTY test environments, calling `set_mouse_capture(false)` when `MOUSE_CAPTURE_ON = false` returns `Ok(())` via the idempotency guard — no stdout write occurs. This lets the test confirm the success path (Info toast, not Warn toast) without requiring a real terminal.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all 3 new tests + full workspace suite)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **`SetMouseCapture(true)` in tests**: The enable path (`set_mouse_capture(true)`) writes to stdout and fails in non-TTY CI environments, so the test covers the disable direction only. The failure-toast path for enable would require mocking `MOUSE_CAPTURE_ON` (private static), which was avoided to keep tests simple. Both directions share the same `match` arm in `handle_runner_actions`, so the logic is covered.

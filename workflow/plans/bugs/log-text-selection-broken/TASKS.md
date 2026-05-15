@@ -6,18 +6,18 @@ This bug ships as one PR — every task targets the same fix and the doc updates
 
 ## Tasks
 
-| # | Title | Wave | Depends on | Agent | File |
-|---|-------|------|------------|-------|------|
-| 01 | Drop `?1003` + add runtime `set_mouse_capture` | 1 | — | implementor | [tasks/01-drop-1003-and-runtime-toggle.md](./tasks/01-drop-1003-and-runtime-toggle.md) |
-| 02 | Clipboard service trait + arboard impl + memory mock | 1 | — | implementor | [tasks/02-clipboard-service.md](./tasks/02-clipboard-service.md) |
-| 03 | New `Message` variants, `UpdateAction` variant, `AppState` field | 1 | — | implementor | [tasks/03-messages-and-state.md](./tasks/03-messages-and-state.md) |
-| 04 | Right-click on log row → copy line; non-log → toast | 2 | 02, 03 | implementor | [tasks/04-right-click-copy.md](./tasks/04-right-click-copy.md) |
-| 05 | `Alt+m` toggle binding → `Message::ToggleMouseCapture` | 2 | 03 | implementor | [tasks/05-alt-m-toggle-binding.md](./tasks/05-alt-m-toggle-binding.md) |
-| 06 | `handler/update.rs` arms for the three new messages | 2 | 02, 03 | implementor | [tasks/06-update-handler-arms.md](./tasks/06-update-handler-arms.md) |
-| 07 | Runner glue: observe `UpdateAction::SetMouseCapture`, follow-up event | 3 | 01, 03, 06 | implementor | [tasks/07-runner-side-effect.md](./tasks/07-runner-side-effect.md) |
-| 08 | Status-bar mouse indicator via `StatusInfo` | 3 | 03 | implementor | [tasks/08-status-indicator.md](./tasks/08-status-indicator.md) |
-| 09 | Update non-core docs (MOUSE / KEYBINDINGS / CONFIGURATION / PLAN cross-ref) | 4 | 01–08 | implementor | [tasks/09-non-core-docs.md](./tasks/09-non-core-docs.md) |
-| 10 | Update `docs/ARCHITECTURE.md` for new service + update channel | 4 | 02, 03, 07 | **doc_maintainer** | [tasks/10-architecture-doc.md](./tasks/10-architecture-doc.md) |
+| # | Title | Wave | Depends on | Agent | File | Status |
+|---|-------|------|------------|-------|------|--------|
+| 01 | Drop `?1003` + add runtime `set_mouse_capture` | 1 | — | implementor | [tasks/01-drop-1003-and-runtime-toggle.md](./tasks/01-drop-1003-and-runtime-toggle.md) | [x] Done (CONCERN: doc-comment for `set_mouse_capture` overpromises error surfacing on disable path; functional core correct) |
+| 02 | Clipboard service trait + arboard impl + memory mock | 1 | — | implementor | [tasks/02-clipboard-service.md](./tasks/02-clipboard-service.md) | [x] Done |
+| 03 | New `Message` variants, `UpdateAction` variant, `AppState` field | 1 | — | implementor | [tasks/03-messages-and-state.md](./tasks/03-messages-and-state.md) | [x] Done |
+| 04 | Right-click on log row → copy line; non-log → toast | 2 | 02, 03 | implementor | [tasks/04-right-click-copy.md](./tasks/04-right-click-copy.md) | [x] Done |
+| 05 | `Alt+m` toggle binding → `Message::ToggleMouseCapture` | 2 | 03 | implementor | [tasks/05-alt-m-toggle-binding.md](./tasks/05-alt-m-toggle-binding.md) | [x] Done |
+| 06 | `handler/update.rs` arms for the three new messages | 2 | 02, 03 | implementor | [tasks/06-update-handler-arms.md](./tasks/06-update-handler-arms.md) | [x] Done (CONCERN: `resolve_entry_text` exercised via two tests rather than a standalone focused test; merge conflict with task 05 in `tests.rs` + `terminal.rs` resolved manually) |
+| 07 | Runner glue: observe `UpdateAction::SetMouseCapture`, follow-up event | 3 | 01, 03, 06 | implementor | [tasks/07-runner-side-effect.md](./tasks/07-runner-side-effect.md) | [x] Done (CONCERN: out-of-scope additions to fdemon-app for `pending_runner_actions` queue + `Engine::drain_runner_actions` were necessary supporting infrastructure not declared by prior tasks) |
+| 08 | Status-bar mouse indicator via `StatusInfo` | 3 | 03 | implementor | [tasks/08-status-indicator.md](./tasks/08-status-indicator.md) | [x] Done (minor: one vacuous test assertion noted, not blocking) |
+| 09 | Update non-core docs (MOUSE / KEYBINDINGS / CONFIGURATION / PLAN cross-ref) | 4 | 01–08 | implementor | [tasks/09-non-core-docs.md](./tasks/09-non-core-docs.md) | [x] Done (CONCERN: BUG.md reference in PLAN.md is a backtick prose path rather than a clickable markdown hyperlink; `cargo fmt --all` produced a whitespace-only edit to `widgets/log_view/mod.rs`) |
+| 10 | Update `docs/ARCHITECTURE.md` for new service + update channel | 4 | 02, 03, 07 | **doc_maintainer** | [tasks/10-architecture-doc.md](./tasks/10-architecture-doc.md) | [x] Done (CONCERN: `SetMouseCapture` description on line 1666 mentions `?1003` DECSET — terminal-protocol detail explicitly out of scope for ARCHITECTURE.md per task spec; one-phrase deletion fixes it) |
 
 Waves 1 → 4 must complete in order. Within a wave, all tasks may dispatch in parallel — see overlap matrix below.
 

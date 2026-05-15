@@ -155,6 +155,105 @@ behavior anyway when capture does not work).
 Set `enable_mouse = false` in `.fdemon/config.toml` to opt out cleanly and avoid any
 side effects from sending capture sequences to a terminal that ignores them.
 
+### IDE built-in terminals
+
+IDE-embedded terminals (Zed, VS Code, JetBrains, Cursor, Windsurf, Fleet, Neovim
+`:terminal`) wrap the terminal grid in their own event-handling layer that
+intercepts a subset of keys and mouse buttons before the TTY ever sees them. The
+fix philosophy in this app — drop `?1003`, copy via right-click, fall back via
+`Alt+m`, anchor selection in the scrollback buffer — assumes a stand-alone
+terminal that simply forwards the events. IDE terminals violate that assumption
+in three recurring ways:
+
+- **Right-click is swallowed.** The IDE keeps the right mouse button for its own
+  context menu (or drops it entirely). Right-click-to-copy never fires because
+  the event never reaches fdemon.
+- **`Alt+<char>` chords are eaten.** The IDE binds Alt-modified keys to its own
+  commands, menu mnemonics, or pane navigation, so `Alt+m` does not toggle
+  capture.
+- **Selection is anchored to viewport coordinates, not buffer rows.** Standalone
+  terminals (Alacritty, iTerm2, kitty, macOS Terminal, Ghostty, Wezterm, Windows
+  Terminal, GNOME Terminal) anchor a Shift+drag selection to the scrollback
+  buffer, so the selection tracks the content as new lines arrive. Several IDE
+  terminals anchor to viewport coordinates instead — when new logs scroll the
+  buffer up, the highlight stays at the same screen rows but now covers
+  *different* log content. Releasing the mouse copies the wrong text.
+
+#### Per-IDE summary
+
+| IDE | Right-click → fdemon | `Alt+<char>` → fdemon | Selection tracks scrollback |
+|-----|----------------------|------------------------|------------------------------|
+| Zed | No | No (intercepted by Zed) | No (viewport-anchored) |
+| VS Code | No (always intercepted) | Partial (workarounds; some combos broken) | Mostly yes for static scroll; rough during live scroll |
+| Cursor | No (inherits VS Code) | Partial (inherits VS Code) | Same as VS Code |
+| Windsurf | No (inherits VS Code) | Partial (inherits VS Code) | Same as VS Code |
+| JetBrains (IntelliJ / RustRover / CLion / PyCharm) | Configurable, but conflicts with mouse reporting | Partial (Classic engine OK; reworked 2025 engine regressed on macOS) | Not specifically documented |
+| Fleet | Likely no | No (open feature request for "Option as Meta") | Unknown |
+| Neovim `:terminal` | Inconsistent (left-click better) | Yes by default in terminal-mode | Buffer-anchored, but you must leave terminal-mode to select |
+| Helix | N/A — no embedded terminal | N/A | N/A |
+
+#### Per-IDE detail and workarounds
+
+**Zed.** All three behaviors are confirmed: right-click is dropped, `Alt+m`
+never reaches fdemon, and Shift+drag selections drift visually as new log lines
+arrive. There is no user-configurable workaround today. Tracking issues:
+[zed-industries/zed#10647](https://github.com/zed-industries/zed/issues/10647)
+(user-configurable mouse bindings),
+[#21387](https://github.com/zed-industries/zed/issues/21387) (Alt forwarding),
+[#14543](https://github.com/zed-industries/zed/issues/14543) (Alt/Ctrl shell
+combos on Linux). For full mouse support, run fdemon in a stand-alone terminal.
+
+**VS Code.** Right-click cannot be cleanly forwarded to the terminal app; the
+closest mitigation is `"terminal.integrated.rightClickBehavior": "paste"` to
+suppress the IDE context menu (the right-button-down event is still consumed).
+For Alt forwarding, set
+`"terminal.integrated.sendKeybindingsToShell": true` and remove conflicting
+chords via `"terminal.integrated.commandsToSkipShell"`. Selection is mostly
+buffer-anchored but has known rough edges during streaming output
+([xtermjs/xterm.js#5198](https://github.com/xtermjs/xterm.js/issues/5198),
+[microsoft/vscode#142927](https://github.com/microsoft/vscode/issues/142927)).
+
+**Cursor / Windsurf.** Both are VS Code forks and ship the same xterm.js-based
+terminal layer with no terminal-specific changes. Apply the VS Code workarounds
+above.
+
+**JetBrains IDEs.** Enable **Settings → Tools → Terminal → Mouse Reporting** so
+mouse events are forwarded to fdemon. On macOS, also enable **"Use Option as
+Meta key"** so `Alt+m` reaches fdemon — this option is reliable on the Classic
+terminal engine but regressed in the Reworked 2025 engine
+([IDEA-165184](https://youtrack.jetbrains.com/issue/IDEA-165184/Add-Use-Option-as-Meta-key-support-to-terminal),
+[IJPL-181613](https://youtrack.jetbrains.com/issue/IJPL-181613/New-Terminal-Option-as-Meta-key-does-not-work-on-macOS)).
+If you are on macOS and need `Alt+m`, stay on the Classic engine until JetBrains
+ships the fix. The "Override IDE shortcuts" toggle helps reduce other Alt
+collisions but has its own bugs
+([IJPL-107345](https://youtrack.jetbrains.com/issue/IJPL-107345/Terminal-override-IDE-shortcuts-option-doesnt-work-as-expected)).
+Right-click and selection-during-scroll behavior with mouse reporting active is
+not cleanly documented; treat them as unreliable
+([IDEA-383430](https://youtrack.jetbrains.com/issue/IDEA-383430/Mouse-markings-interfere-with-mouse-reporting)).
+
+**Fleet.** Even less mature than IntelliJ's terminal — no "Option as Meta" yet
+([FL-24138](https://youtrack.jetbrains.com/issue/FL-24138/Terminal-on-Mac-Option-to-Use-Option-Key-as-Meta-Key)).
+Use a stand-alone terminal.
+
+**Neovim `:terminal`.** Mouse passthrough requires `set mouse=a`. Right-click is
+inconsistently forwarded because Neovim binds it to its own popup
+(`mousemodel=popup`); see
+[neovim/neovim#3669](https://github.com/neovim/neovim/issues/3669) and
+[#23875](https://github.com/neovim/neovim/issues/23875). `Alt+<char>` chords
+generally pass through in terminal-mode unless you have rebound them. Selection
+is buffer-anchored, but you must leave terminal-mode (press `Esc`) to enter
+visual selection — which breaks the live "select while logs stream" workflow.
+
+**Helix.** No built-in terminal; pair Helix with `tmux` or `zellij` and run
+fdemon in a stand-alone terminal pane.
+
+#### Recommendation
+
+If your IDE's terminal eats any of right-click, `Alt+m`, or buffer-anchored
+selection, the simplest path is to run fdemon in a stand-alone terminal
+emulator. Pause log streaming (`Space`) before Shift+drag if you must select
+inside an IDE terminal — frozen content can't drift under your selection.
+
 ### Pointer shape (OSC 22)
 
 While the TUI is active, fdemon requests the `default` (arrow) OS-level pointer shape

@@ -62,3 +62,36 @@ The status bar at the bottom of the log view is built in `render/mod.rs:201` as 
 - We deliberately do *not* add a separate "status_bar.rs" widget. The existing `StatusInfo` strip already plays that role.
 - `[mouse-off]` uses warning color (yellow/orange) to signal "you're in a non-default state" — discoverable cue that points the user toward `Alt+m`.
 - The badge is rendered even in demo mode (where `mouse_capture_active = false` per `AppState`'s init logic); the warning color in demo is a benign cosmetic.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `mouse_capture_active: bool` field to `StatusInfo`; added badge rendering in `render_bottom_metadata` (right-side section, drops gracefully in compact mode) |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `mouse_capture_active: state.mouse_capture_active` to `StatusInfo` construction site |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `mouse_capture_active: true` to all 8 existing `StatusInfo` construction sites; added 3 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Badge placement in right-side cluster**: The badge is placed after the error count in the right-side `right_spans` section. The width-pressure fallback checks whether the badge fits before appending — when the terminal is in compact mode (width < `MIN_FULL_STATUS_WIDTH` = 60 cols), the entire right-side section is suppressed, automatically dropping the badge.
+2. **Colors**: Used `palette::TEXT_MUTED` for `[mouse]` (dim, active = default state, no action needed) and `palette::STATUS_YELLOW` for `[mouse-off]` (warning color — discoverable cue for `Alt+m`). No new theme constants added.
+3. **Width-pressure check**: The badge additionally checks if it fits even in full-width mode before appending, so it can be dropped gracefully even at > 60 col terminals that are still too narrow to show it alongside existing content.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui "test_status_info_renders_mouse"` - Passed (2 tests)
+- `cargo test -p fdemon-tui "test_status_info_drops_badge_when_width_too_narrow"` - Passed (1 test)
+- `cargo test -p fdemon-tui` - Passed (1044 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy -p fdemon-tui` - No errors or warnings
+
+### Risks/Limitations
+
+1. **Width-pressure at 60–80 cols**: In full mode (>= 60 cols), a very long left-side section (mode + flavor + VM + DAP badges) could leave insufficient room for the mouse badge. The `fits` check drops the badge gracefully in that case without truncating existing content.

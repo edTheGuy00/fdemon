@@ -106,3 +106,44 @@ Locate the existing `AppState::new(...)` constructor (or `Default` impl — veri
 - Variants are deliberately tiny — putting them all in one task avoids `message.rs` write-overlap across wave-1 tasks.
 - `MouseCaptureChanged` exists as a separate message (rather than the runner mutating state directly) because side effects must round-trip through the TEA bus to preserve testability — same pattern as existing daemon-event messages.
 - The handler-arm wiring in Task 06 is intentionally a separate task so reviewers can verify message *declarations* and *consumers* independently.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added 3 new variants: `CopyLogEntryToClipboard { entry_id: u64 }`, `ToggleMouseCapture`, `MouseCaptureChanged { active: bool }` |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `SetMouseCapture(bool)` variant to `UpdateAction` enum |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `SetMouseCapture` arm to exhaustive match in `handle_action` (logs a warning — runner handles this action directly) |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub arms for the 3 new message variants so enum match compiles (Task 06 will wire the real logic) |
+| `crates/fdemon-app/src/state.rs` | Added `mouse_capture_active: bool` field to `AppState`; initialized from `settings.ui.enable_mouse` in `with_settings()`; added 2 unit tests |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 unit tests for message/action variant round-trips |
+
+### Notable Decisions/Tradeoffs
+
+1. **`entry_id: u64` instead of `LogEntryId` type**: The codebase uses `u64` directly for `LogEntry::id` — there is no `LogEntryId` type alias. Used `u64` consistent with existing `ClickLogRow` and `ToggleStackTraceForEntry` variants.
+
+2. **Stub handler arms in `update.rs`**: The task says "no handler logic touched" but the Rust compiler requires exhaustive match coverage. Added minimal stubs with doc comments referencing Task 06 where real logic will be wired. `MouseCaptureChanged` does update state (a single field write) — this is the minimal viable stub that compiles and is not misleading.
+
+3. **`SetMouseCapture` in `actions/mod.rs`**: The variant is intended for runner-side dispatch (like `SpawnDapServer`/`StopDapServer`). Added a `tracing::warn!` arm so the exhaustive match compiles without panicking if the variant unexpectedly reaches `handle_action`.
+
+4. **`mouse_capture_active` initialization path**: Only `with_settings()` is the real constructor. `new()` delegates to `with_settings(PathBuf::new(), Settings::default())` where `enable_mouse` defaults to `true`, so demo mode tests see `true`. The task note about demo mode being `false` refers to the runner not calling `enable_mouse_capture()` at the terminal level — not to the state field.
+
+### Testing Performed
+
+- `cargo build -p fdemon-app` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (2262 tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Handler stubs**: The `ToggleMouseCapture` and `CopyLogEntryToClipboard` stubs currently return `UpdateResult::none()` without side effects. Tasks 04–06 must wire the actual behavior. There is no compile-time enforcement that these are completed.
+2. **`MouseCaptureChanged` partial implementation**: The stub in `update.rs` does update `state.mouse_capture_active = active` — this is the full handler for this message since it is just a state write-back. Task 06 review should confirm this is sufficient or extend as needed.

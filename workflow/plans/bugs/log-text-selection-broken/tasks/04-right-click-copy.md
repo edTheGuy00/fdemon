@@ -55,3 +55,39 @@ Option A is cleaner but requires touching `mouse_regions.rs` and every widget th
 
 - The clipboard write itself happens in Task 06's update-handler arm — this task only emits the message. That preserves "handler returns message" purity (Task 04 has no `Clipboard` dependency at all).
 - If the click coordinates land on a *non-log* clickable region (e.g., a header bracket), the current behavior is "ignore Right button on that region." Right-click on header brackets still emits the toast (the hit-test does not match `ClickLogRow`, so it falls through). Confirmed acceptable per the Q2 resolution.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad7c8921e9d04205d
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `handle_right_click` function and `RIGHT_CLICK_HINT` constant; wired right-click arm in `handle_press` above tag-filter and mode dispatch; added 4 new unit tests; imported `ToastLevel` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option B chosen as specified**: Rather than extending `MouseRegionEntry` with `on_right`, the hit-test queries the registry with `MouseButton::Left` and rewrites `ClickLogRow` messages to `CopyLogEntryToClipboard`. Zero changes to `mouse_regions.rs` or any widget registration site.
+
+2. **Placement before tag-filter check**: The right-click arm is inserted before both the `tag_filter_visible` check and the mode dispatch, so all UI modes (including tag-filter visible) produce the same right-click behaviour without per-mode changes.
+
+3. **`RIGHT_CLICK_HINT` named constant**: The hint text is extracted to a `pub(crate)` constant so the dedup check and the test assertions reference the same literal without string duplication.
+
+4. **Registry borrow safety**: `take_guard()` (RAII) is used so the registry is returned to the cell before any mutable `push_toast` call on state, preserving the TEA render-hint write-back exception pattern.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Pass (no errors or warnings)
+- `cargo clippy -p fdemon-app` — Pass (no warnings)
+- `cargo test -p fdemon-app --lib -- handler::mouse` — Pass (103 tests, 4 new right-click tests included)
+- `cargo test --workspace --lib` — Pass (1041 tests)
+
+### Risks/Limitations
+
+1. **Right-click on tag-filter overlay**: Right-click while `tag_filter_visible = true` produces the fallback toast rather than routing to the tag-filter handler. This is consistent with the task spec ("right-click in modes that don't show logs gets the same fallback toast") since the tag filter overlay doesn't show log rows.
+
+2. **Existing per-mode Right guard**: Sub-module handlers (`normal.rs`, `settings.rs`, `devtools.rs`, etc.) each have their own `if button == Right { return None; }` guards. These are now dead code for the public `handle_mouse` path (right-click never reaches them), but remain useful for the direct-call unit tests in each submodule. No changes required.

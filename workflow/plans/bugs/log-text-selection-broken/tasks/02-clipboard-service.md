@@ -81,3 +81,38 @@ This service is consumed by the right-click-copy handler in Task 04 and the upda
 - `arboard` brings in a transitive X11/Wayland dep chain on Linux. Keep `default-features = false` and pick the minimum features required for `write_text`.
 - Errors are mapped to `fdemon_core::Error::terminal(...)`. The `terminal` variant fits because clipboard failures originate from the OS-level terminal context the user is running in.
 - `Send` bound on the trait is required because the runner may construct it on one thread and use it on the TEA dispatch thread.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/log-text-selection-fix
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/Cargo.toml` | Added `arboard = { version = "3", default-features = false }` |
+| `crates/fdemon-app/src/services/clipboard.rs` | New file: `Clipboard` trait, `SystemClipboard` (arboard-backed), `MemoryClipboard` (in-memory), 2 unit tests, 1 doc test |
+| `crates/fdemon-app/src/services/mod.rs` | Added `pub mod clipboard;` and re-exported `Clipboard`, `SystemClipboard`, `MemoryClipboard` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`arboard` not added to workspace deps**: The dependency is only needed in `fdemon-app` and adding it to `[workspace.dependencies]` is not required when only one crate uses it. Kept it local to the crate's `Cargo.toml` for clarity.
+2. **Doc test in `MemoryClipboard`**: Added a working doc example that doubles as a third test, costing nothing in CI runtime.
+3. **`pub mod clipboard` (not `mod`)**: The module is made public so `fdemon_app::services::clipboard::MemoryClipboard` is reachable directly in addition to the re-exported paths. This mirrors no existing precedent but is the safer choice for downstream test authors.
+
+### Testing Performed
+
+- `cargo build -p fdemon-app` - Passed (arboard 3.6.1 resolved and compiled)
+- `cargo test -p fdemon-app test_memory_clipboard` - Passed (2 tests)
+- `cargo test -p fdemon-app --doc` - Passed (doc test for `MemoryClipboard` also runs)
+- `cargo test --workspace` - Passed (all 3,335+ tests across workspace)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Linux CI**: `arboard` with `default-features = false` still pulls in X11/Wayland transitive deps on Linux but does not require a running display at compile time. `SystemClipboard::new()` will fail at runtime on headless Linux, which is why the `MemoryClipboard` mock exists for tests.
+2. **No `AppState` changes**: As required by the task. Task 03 owns state additions, Task 06 owns handler wiring.
