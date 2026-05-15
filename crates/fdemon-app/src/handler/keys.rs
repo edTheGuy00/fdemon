@@ -20,11 +20,22 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
     //
     // The toggle is NOT gated on `is_busy` — it is a UI affordance, not an app
     // action, and must be reachable even during a hot-reload.
-    if matches!(key, InputKey::CharAlt('m')) {
+    if matches!(key, InputKey::CharAlt('m' | 'M')) {
         let in_text_input = match state.ui_mode {
             UiMode::SearchInput => true,
             UiMode::Settings => state.settings_view_state.editing,
-            UiMode::Startup | UiMode::NewSessionDialog => true,
+            UiMode::Startup | UiMode::NewSessionDialog => {
+                use crate::new_session_dialog::DialogPane;
+                let dlg = &state.new_session_dialog_state;
+                // Sub-modals (dart defines, fuzzy search) always contain text inputs.
+                if dlg.dart_defines_modal.is_some() || dlg.fuzzy_modal.is_some() {
+                    true
+                } else {
+                    // Main dialog: only LaunchContext pane has text fields.
+                    // TargetSelector is a device-picker list — no text input.
+                    matches!(dlg.focused_pane, DialogPane::LaunchContext)
+                }
+            }
             _ => false,
         };
         if !in_text_input {

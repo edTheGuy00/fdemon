@@ -12773,6 +12773,69 @@ mod fetch_trigger_tests {
         );
     }
 
+    #[test]
+    fn test_shift_alt_m_in_normal_mode_emits_toggle() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        let result = handle_key(&state, InputKey::CharAlt('M'));
+
+        assert!(
+            matches!(result, Some(Message::ToggleMouseCapture)),
+            "Shift+Alt+m (CharAlt('M')) must emit ToggleMouseCapture; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_alt_m_in_settings_editing_mode_does_not_toggle() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.start_editing("value");
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            result.is_none(),
+            "Alt+m must be suppressed while editing a Settings field; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_alt_m_in_new_session_dialog_target_selector_emits_toggle() {
+        // Device picker pane has no text input; Alt+m should fire.
+        use crate::new_session_dialog::DialogPane;
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.new_session_dialog_state.focused_pane = DialogPane::TargetSelector;
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            matches!(result, Some(Message::ToggleMouseCapture)),
+            "Alt+m must fire when device picker pane is focused; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_alt_m_in_new_session_dialog_launch_context_does_not_toggle() {
+        // Launch-context pane has text fields; suppress.
+        use crate::new_session_dialog::DialogPane;
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.new_session_dialog_state.focused_pane = DialogPane::LaunchContext;
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            result.is_none(),
+            "Alt+m must be suppressed when LaunchContext pane is focused; got {:?}",
+            result
+        );
+    }
+
     // ── Handler arm tests (Task 06: log-text-selection-broken) ───────────────
 
     /// Helper: create a state with one active session containing a single log entry.
