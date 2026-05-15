@@ -196,9 +196,12 @@ pub fn disable_mouse_capture() {
 ///
 /// - `enabled = true` → calls [`enable_mouse_capture`]. Returns `Ok(())` without
 ///   re-emitting DECSET sequences if capture is already on (idempotent).
-/// - `enabled = false` → calls [`disable_mouse_capture`] and surfaces any write
-///   error as a `Result`, unlike the bare `disable_mouse_capture()` which swallows
-///   errors. Returns `Ok(())` without re-emitting DECRST sequences if capture is
+/// - `enabled = false` → calls [`disable_mouse_capture`] and **always returns
+///   `Ok(())`**. Write errors on the disable path are logged at `warn` level by
+///   [`disable_mouse_capture`] but cannot be propagated through this wrapper —
+///   the underlying function returns `()`, not `Result`. Callers must not rely on
+///   `Err` to detect disable failures; only the enable path surfaces write errors
+///   as `Err`. Returns `Ok(())` without re-emitting DECRST sequences if capture is
 ///   already off (idempotent via the `MOUSE_CAPTURE_ON` flag).
 ///
 /// The runner uses this as the single entry point for runtime toggling (e.g. when
