@@ -48,6 +48,9 @@ pub struct StatusInfo<'a> {
     /// IDE name for which DAP config was generated (e.g. "VS Code").
     /// When present alongside `dap_port`, badge becomes `[DAP :PORT · IDE]`.
     pub dap_config_ide: Option<String>,
+    /// Whether terminal mouse capture is currently active.
+    /// Renders `[mouse]` (dim) when active, `[mouse-off]` (warning) when inactive.
+    pub mouse_capture_active: bool,
 }
 
 /// Log view widget with rich formatting
@@ -916,7 +919,7 @@ impl<'a> LogView<'a> {
             }
         }
 
-        // Right-aligned section: uptime + errors (only in full mode)
+        // Right-aligned section: uptime + errors + mouse badge (only in full mode)
         if !compact {
             let mut right_spans = Vec::new();
 
@@ -944,8 +947,37 @@ impl<'a> LogView<'a> {
                 ));
             }
 
-            // Calculate padding between left and right sections
+            // Mouse capture badge — always shown when there is space.
+            // [mouse] in dim color when active (default state, no user action needed).
+            // [mouse-off] in warning color when inactive (discoverable cue for Alt+m).
+            let mouse_badge_text = if status.mouse_capture_active {
+                "[mouse]"
+            } else {
+                "[mouse-off]"
+            };
+            let mouse_badge_style = if status.mouse_capture_active {
+                Style::default().fg(palette::TEXT_MUTED)
+            } else {
+                Style::default().fg(palette::STATUS_YELLOW)
+            };
+
+            // Calculate how much width the badge needs (plus 2 spaces separator)
+            let badge_len = mouse_badge_text.chars().count() + 2; // "  " prefix
+
+            // Calculate current widths to decide if badge fits
             let left_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            let right_width_no_badge: usize =
+                right_spans.iter().map(|s| s.content.chars().count()).sum();
+            // Badge fits when there is enough room: left + padding(1) + right + 2 + badge <= area.width
+            let fits = (area.width as usize)
+                >= left_width + 1 + right_width_no_badge + badge_len;
+
+            if fits {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(mouse_badge_text, mouse_badge_style));
+            }
+
+            // Calculate padding between left and right sections
             let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
             let padding = (area.width as usize).saturating_sub(left_width + right_width + 1);
 
