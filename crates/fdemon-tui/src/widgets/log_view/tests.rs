@@ -2520,9 +2520,13 @@ fn test_status_info_renders_mouse_off_badge() {
         term.buffer_contains("[mouse-off]"),
         "Status bar should show '[mouse-off]' badge when mouse_capture_active is false"
     );
+    // `[mouse-off]` contains the substring `[mouse`, so a naive substring search
+    // for `[mouse` is always true when `[mouse-off]` is present. However, the
+    // 7-char sequence `[mouse]` (closing bracket, no `-off`) is only present in
+    // the on-state badge and will NOT match `[mouse-off]`. Assert its absence.
     assert!(
-        !term.buffer_contains("[mouse]") || term.buffer_contains("[mouse-off]"),
-        "Status bar must not show plain '[mouse]' without '-off' when inactive"
+        !term.buffer_contains("[mouse]"),
+        "Status bar must not show plain '[mouse]' (the on-state badge) when capture is off"
     );
 }
 

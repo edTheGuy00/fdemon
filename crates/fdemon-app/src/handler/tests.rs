@@ -12839,7 +12839,7 @@ mod fetch_trigger_tests {
                 // (plus the "…" ellipsis appended by truncate_with_ellipsis).
                 let char_count = preview_part.chars().count();
                 assert!(
-                    char_count <= 61, // 60 chars + 1 for "…"
+                    char_count <= COPY_TOAST_PREVIEW_CHARS + 1, // max_chars + 1 for "…"
                     "Toast preview too long ({char_count} chars): {preview_part}"
                 );
                 // The full entry text (200 A's) must have been truncated — i.e.
@@ -12885,6 +12885,40 @@ mod fetch_trigger_tests {
                 .any(|t| t.text.contains("no longer available")),
             "Toast should mention the entry is unavailable; got: {:?}",
             state.toasts
+        );
+    }
+
+    // ── resolve_entry_text focused unit tests ─────────────────────────────────
+
+    #[test]
+    fn test_resolve_entry_text_no_active_session() {
+        let state = AppState::new();
+        // No session created — selected() returns None.
+        let result = resolve_entry_text(&state, 42);
+        assert!(
+            result.is_empty(),
+            "Expected empty string for no active session, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_entry_text_missing_entry_id() {
+        let (state, _session_id, _entry_id) = make_state_with_log_entry("real entry");
+        let missing_id: u64 = 999_999;
+        let result = resolve_entry_text(&state, missing_id);
+        assert!(
+            result.is_empty(),
+            "Expected empty string for missing entry, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_entry_text_matching_entry() {
+        let (state, _session_id, entry_id) = make_state_with_log_entry("Hello from Flutter");
+        let result = resolve_entry_text(&state, entry_id);
+        assert!(
+            result.contains("Hello from Flutter"),
+            "Expected resolved text to contain log message, got: {result:?}"
         );
     }
 

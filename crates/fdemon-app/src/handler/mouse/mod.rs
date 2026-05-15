@@ -127,7 +127,8 @@ pub(crate) const RIGHT_CLICK_HINT: &str = "Right-click copies log lines; nothing
 /// not pushed again — rapid right-clicks on empty space do not stack the
 /// same message.
 fn handle_right_click(state: &mut AppState, x: u16, y: u16) -> Option<Message> {
-    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    // EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
+    // "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
     let regions = state.mouse_regions.take_guard();
     let left_msg = regions
         .hit_test(x, y, MouseButton::Left)

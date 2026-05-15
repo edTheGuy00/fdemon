@@ -47,6 +47,8 @@ use fdemon_daemon::{Device, FlutterExecutable};
 
 // Re-export main entry point
 pub use update::update;
+#[cfg(test)]
+pub(crate) use update::{resolve_entry_text, COPY_TOAST_PREVIEW_CHARS};
 
 /// Maximum elapsed time between two clicks on the same target for them to
 /// count as a double-click (inclusive boundary).

@@ -2884,7 +2884,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 state.push_toast(crate::state::ToastLevel::Warn, "Entry no longer available");
                 return UpdateResult::none();
             }
-            let preview = truncate_with_ellipsis(&entry_text, 60);
+            let preview = truncate_with_ellipsis(&entry_text, COPY_TOAST_PREVIEW_CHARS);
             state.push_toast(crate::state::ToastLevel::Info, format!("Copied: {preview}"));
             UpdateResult::action(UpdateAction::WriteClipboard { text: entry_text })
         }
@@ -2907,6 +2907,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
     }
 }
 
+/// Maximum Unicode scalar values shown in the "Copied: …" toast preview.
+/// Documented user-facing in docs/MOUSE.md; keep in sync if changed.
+pub(crate) const COPY_TOAST_PREVIEW_CHARS: usize = 60;
+
 /// Resolve a log entry's rendered text from the active session by entry id.
 ///
 /// Searches the currently selected session's log buffer for an entry whose
@@ -2916,7 +2920,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 /// Returns an empty string when:
 /// - No session is selected.
 /// - No entry with the given id is found (e.g., session switched or logs cleared).
-fn resolve_entry_text(state: &AppState, entry_id: u64) -> String {
+pub(crate) fn resolve_entry_text(state: &AppState, entry_id: u64) -> String {
     let Some(handle) = state.session_manager.selected() else {
         return String::new();
     };
@@ -2929,8 +2933,12 @@ fn resolve_entry_text(state: &AppState, entry_id: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Truncate a string to at most `max_chars` Unicode scalar values, appending
-/// `…` when truncated.
+/// Truncate `s` to at most `max_chars` Unicode scalar values, appending `…` if
+/// truncated. Operates on scalar values, NOT grapheme clusters — a flag emoji
+/// or family-zwj sequence at exactly the boundary may be split mid-cluster.
+/// Acceptable here because the function is used only for status-toast previews
+/// where occasional mid-cluster truncation is cosmetic. If used in user-visible
+/// output where grapheme integrity matters, swap to `unicode-segmentation`.
 ///
 /// Uses [`char_indices`] to find the correct byte boundary so the function
 /// never panics on multibyte (e.g. emoji, CJK) input.
