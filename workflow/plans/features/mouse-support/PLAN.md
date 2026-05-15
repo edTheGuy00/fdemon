@@ -533,7 +533,7 @@ The v1 "Out of scope" assumption that "Shift+drag passthrough suffices" (see §O
 scope above) turned out to be incorrect under the `?1003` (any-motion) mode that
 crossterm's `EnableMouseCapture` enables by default. With `?1003` active, virtually all
 modern terminals suppress native Shift+drag selection, making log text uncopyable. The
-bugfix (`workflow/plans/bugs/log-text-selection-broken/BUG.md`) dropped `?1003` from the
+bugfix ([BUG.md](../../bugs/log-text-selection-broken/BUG.md)) dropped `?1003` from the
 capture set (restoring Shift+drag), added an `Alt+m` runtime toggle so users can fully
 suspend capture when needed, and bound right-click on log rows to a full-line clipboard
 copy action.
