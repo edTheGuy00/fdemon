@@ -640,6 +640,17 @@ pub enum UpdateAction {
     /// `terminal::set_mouse_capture(active)` and follows up with
     /// `Message::MouseCaptureChanged { active }` on success.
     SetMouseCapture(bool),
+
+    /// Write text to the system clipboard.
+    ///
+    /// Deferred to the runner so that `update()` stays pure (no I/O).  The
+    /// runner calls the injected `Clipboard` service and, if the write fails,
+    /// emits a warning toast via the event loop.
+    ///
+    /// Emitted by the `CopyLogEntryToClipboard` handler.  The handler also
+    /// pushes an optimistic success toast; on write failure the runner pushes
+    /// a warning toast on top of it.
+    WriteClipboard { text: String },
 }
 
 /// Background tasks to spawn

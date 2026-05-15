@@ -204,8 +204,9 @@ pub fn disable_mouse_capture() {
 /// The runner uses this as the single entry point for runtime toggling (e.g. when
 /// the user toggles `enable_mouse` in settings at runtime). The startup call in
 /// `runner.rs` keeps using [`enable_mouse_capture`] directly.
-// Called by the runner side-effect handler for UpdateAction::SetMouseCapture (Task 07).
-// Suppressed here because the caller is added in a later task in the same plan.
+///
+/// Note: called by the runner in Task 07 (runner-side-effect). The `dead_code`
+/// lint is suppressed here because Task 07 has not been merged yet.
 #[allow(dead_code)]
 pub fn set_mouse_capture(enabled: bool) -> Result<()> {
     if enabled {

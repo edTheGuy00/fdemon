@@ -12772,4 +12772,191 @@ mod fetch_trigger_tests {
             result
         );
     }
+
+    // ── Handler arm tests (Task 06: log-text-selection-broken) ───────────────
+
+    /// Helper: create a state with one active session containing a single log entry.
+    /// Returns (state, session_id, entry_id).
+    fn make_state_with_log_entry(message: &str) -> (AppState, crate::session::SessionId, u64) {
+        let mut state = AppState::new();
+        let device = test_device("d1", "Device");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(session_id);
+        let entry = fdemon_core::LogEntry::info(fdemon_core::LogSource::App, message);
+        let entry_id = entry.id;
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.add_log(entry);
+        }
+        (state, session_id, entry_id)
+    }
+
+    #[test]
+    fn test_copy_message_pushes_toast_and_emits_action() {
+        let (mut state, _session_id, entry_id) = make_state_with_log_entry("Hello from Flutter");
+
+        let result = update(&mut state, Message::CopyLogEntryToClipboard { entry_id });
+
+        // A WriteClipboard action must be emitted.
+        assert!(
+            matches!(result.action, Some(UpdateAction::WriteClipboard { .. })),
+            "CopyLogEntryToClipboard should emit WriteClipboard action"
+        );
+        // The action payload must contain the rendered entry text.
+        if let Some(UpdateAction::WriteClipboard { text }) = result.action {
+            assert!(
+                text.contains("Hello from Flutter"),
+                "WriteClipboard text should contain the log message, got: {text}"
+            );
+        }
+        // An info toast must have been pushed.
+        assert!(
+            !state.toasts.is_empty(),
+            "CopyLogEntryToClipboard should push a toast"
+        );
+        assert!(
+            state.toasts.iter().any(|t| t.text.contains("Copied:")),
+            "Toast should contain 'Copied:', got: {:?}",
+            state.toasts
+        );
+    }
+
+    #[test]
+    fn test_copy_message_truncates_preview_to_60_chars() {
+        // Create a message that is significantly longer than 60 chars.
+        let long_message: String = "A".repeat(200);
+        let (mut state, _session_id, entry_id) = make_state_with_log_entry(&long_message);
+
+        update(&mut state, Message::CopyLogEntryToClipboard { entry_id });
+
+        // The toast preview must be short (≤ 60 visible chars + possible "…").
+        // The full display_line includes a timestamp prefix, so we check the
+        // toast text is within a reasonable bound (timestamp + 60 chars + "…"
+        // is well under 120 chars).
+        for toast in &state.toasts {
+            if toast.text.starts_with("Copied:") {
+                let preview_part = toast.text.trim_start_matches("Copied: ");
+                // The preview itself must not exceed 60 Unicode scalar values
+                // (plus the "…" ellipsis appended by truncate_with_ellipsis).
+                let char_count = preview_part.chars().count();
+                assert!(
+                    char_count <= 61, // 60 chars + 1 for "…"
+                    "Toast preview too long ({char_count} chars): {preview_part}"
+                );
+                // The full entry text (200 A's) must have been truncated — i.e.
+                // the toast preview must NOT contain all 200 A's.
+                assert!(
+                    !preview_part.contains(&"A".repeat(200)),
+                    "Preview should be truncated, not the full 200-char message"
+                );
+                return;
+            }
+        }
+        panic!("No 'Copied:' toast found; toasts: {:?}", state.toasts);
+    }
+
+    #[test]
+    fn test_copy_message_with_missing_entry_skips_action() {
+        // Use an entry_id that does not exist in the session log.
+        let (mut state, _session_id, _real_id) = make_state_with_log_entry("real entry");
+        let missing_id: u64 = 999_999;
+
+        let result = update(
+            &mut state,
+            Message::CopyLogEntryToClipboard {
+                entry_id: missing_id,
+            },
+        );
+
+        // No WriteClipboard action should be emitted.
+        assert!(
+            result.action.is_none(),
+            "Missing entry_id should not emit WriteClipboard; got: {:?}",
+            result.action
+        );
+        // An alternate toast (warn) should be pushed instead.
+        assert!(
+            !state.toasts.is_empty(),
+            "Missing entry_id should push an error/warn toast"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("no longer available")),
+            "Toast should mention the entry is unavailable; got: {:?}",
+            state.toasts
+        );
+    }
+
+    #[test]
+    fn test_toggle_emits_set_mouse_capture_with_inverted_target() {
+        let mut state = AppState::new();
+
+        // When mouse capture is currently active, toggle should request false.
+        state.mouse_capture_active = true;
+        let result = update(&mut state, Message::ToggleMouseCapture);
+        assert!(
+            matches!(result.action, Some(UpdateAction::SetMouseCapture(false))),
+            "ToggleMouseCapture (active=true) should emit SetMouseCapture(false)"
+        );
+
+        // When mouse capture is currently inactive, toggle should request true.
+        state.mouse_capture_active = false;
+        let result = update(&mut state, Message::ToggleMouseCapture);
+        assert!(
+            matches!(result.action, Some(UpdateAction::SetMouseCapture(true))),
+            "ToggleMouseCapture (active=false) should emit SetMouseCapture(true)"
+        );
+    }
+
+    #[test]
+    fn test_toggle_does_not_mutate_state_directly() {
+        let mut state = AppState::new();
+        state.mouse_capture_active = true;
+
+        // ToggleMouseCapture should NOT flip the field — only MouseCaptureChanged does.
+        update(&mut state, Message::ToggleMouseCapture);
+
+        assert!(
+            state.mouse_capture_active,
+            "ToggleMouseCapture must not mutate mouse_capture_active; \
+             only MouseCaptureChanged should do that"
+        );
+    }
+
+    #[test]
+    fn test_mouse_capture_changed_updates_state_and_toasts() {
+        let mut state = AppState::new();
+
+        // Activate — field becomes true, info toast pushed.
+        update(&mut state, Message::MouseCaptureChanged { active: true });
+        assert!(
+            state.mouse_capture_active,
+            "MouseCaptureChanged(true) should set mouse_capture_active = true"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("Mouse capture on")),
+            "MouseCaptureChanged(true) should push 'Mouse capture on' toast; got: {:?}",
+            state.toasts
+        );
+
+        // Deactivate — field becomes false, info toast pushed.
+        state.toasts.clear();
+        update(&mut state, Message::MouseCaptureChanged { active: false });
+        assert!(
+            !state.mouse_capture_active,
+            "MouseCaptureChanged(false) should set mouse_capture_active = false"
+        );
+        assert!(
+            state
+                .toasts
+                .iter()
+                .any(|t| t.text.contains("Mouse capture off")),
+            "MouseCaptureChanged(false) should push 'Mouse capture off' toast; got: {:?}",
+            state.toasts
+        );
+    }
 }

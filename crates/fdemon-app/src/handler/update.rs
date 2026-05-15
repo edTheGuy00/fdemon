@@ -2878,23 +2878,76 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────
-        // Handler logic implemented in Task 06. These arms are stubs so the enum
-        // match compiles while wave-1 tasks are developed in parallel.
-        Message::CopyLogEntryToClipboard { entry_id: _ } => {
-            // Resolved by right-click handler (Task 04) + clipboard service (Task 02).
-            UpdateResult::none()
+        Message::CopyLogEntryToClipboard { entry_id } => {
+            let entry_text = resolve_entry_text(state, entry_id);
+            if entry_text.is_empty() {
+                state.push_toast(crate::state::ToastLevel::Warn, "Entry no longer available");
+                return UpdateResult::none();
+            }
+            let preview = truncate_with_ellipsis(&entry_text, 60);
+            state.push_toast(crate::state::ToastLevel::Info, format!("Copied: {preview}"));
+            UpdateResult::action(UpdateAction::WriteClipboard { text: entry_text })
         }
 
         Message::ToggleMouseCapture => {
-            // Returns SetMouseCapture action — wired in Task 06.
-            UpdateResult::none()
+            let target = !state.mouse_capture_active;
+            UpdateResult::action(UpdateAction::SetMouseCapture(target))
         }
 
         Message::MouseCaptureChanged { active } => {
-            // Updates AppState::mouse_capture_active — wired in Task 06.
             state.mouse_capture_active = active;
+            let label = if active {
+                "Mouse capture on"
+            } else {
+                "Mouse capture off — native selection ready"
+            };
+            state.push_toast(crate::state::ToastLevel::Info, label);
             UpdateResult::none()
         }
+    }
+}
+
+/// Resolve a log entry's rendered text from the active session by entry id.
+///
+/// Searches the currently selected session's log buffer for an entry whose
+/// [`fdemon_core::LogEntry::id`] matches `entry_id` and returns its
+/// [`fdemon_core::LogEntry::display_line`] text.
+///
+/// Returns an empty string when:
+/// - No session is selected.
+/// - No entry with the given id is found (e.g., session switched or logs cleared).
+fn resolve_entry_text(state: &AppState, entry_id: u64) -> String {
+    let Some(handle) = state.session_manager.selected() else {
+        return String::new();
+    };
+    handle
+        .session
+        .logs
+        .iter()
+        .find(|e| e.id == entry_id)
+        .map(|e| e.display_line())
+        .unwrap_or_default()
+}
+
+/// Truncate a string to at most `max_chars` Unicode scalar values, appending
+/// `…` when truncated.
+///
+/// Uses [`char_indices`] to find the correct byte boundary so the function
+/// never panics on multibyte (e.g. emoji, CJK) input.
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let mut indices = s.char_indices();
+    // Advance past `max_chars` chars, collecting the byte offset at which the
+    // (max_chars+1)-th char starts.
+    let split_byte = indices.nth(max_chars).map(|(i, _)| i);
+    match split_byte {
+        // String has more than `max_chars` chars — truncate and append ellipsis.
+        Some(byte_idx) => {
+            let mut result = s[..byte_idx].to_string();
+            result.push('…');
+            result
+        }
+        // String fits within `max_chars` — return as-is.
+        None => s.to_string(),
     }
 }
 
