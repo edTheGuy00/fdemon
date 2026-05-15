@@ -204,6 +204,9 @@ pub fn disable_mouse_capture() {
 /// The runner uses this as the single entry point for runtime toggling (e.g. when
 /// the user toggles `enable_mouse` in settings at runtime). The startup call in
 /// `runner.rs` keeps using [`enable_mouse_capture`] directly.
+// Called by the runner side-effect handler for UpdateAction::SetMouseCapture (Task 07).
+// Suppressed here because the caller is added in a later task in the same plan.
+#[allow(dead_code)]
 pub fn set_mouse_capture(enabled: bool) -> Result<()> {
     if enabled {
         // Idempotency: if already on, enable_mouse_capture will still emit
@@ -430,7 +433,10 @@ mod tests {
         // Calling set_mouse_capture(true) when already on must be a no-op:
         // returns Ok(()) without panicking. The flag stays true.
         let result = set_mouse_capture(true);
-        assert!(result.is_ok(), "set_mouse_capture(true) must return Ok when already enabled");
+        assert!(
+            result.is_ok(),
+            "set_mouse_capture(true) must return Ok when already enabled"
+        );
         assert!(
             MOUSE_CAPTURE_ON.load(Ordering::Acquire),
             "flag must remain true after idempotent set_mouse_capture(true)"

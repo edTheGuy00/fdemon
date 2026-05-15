@@ -12680,4 +12680,96 @@ mod fetch_trigger_tests {
             _ => panic!("unexpected variant"),
         }
     }
+
+    // ── Alt+m keybinding tests (Task 05) ─────────────────────────────────────
+
+    #[test]
+    fn test_alt_m_in_normal_mode_emits_toggle() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            matches!(result, Some(Message::ToggleMouseCapture)),
+            "Alt+m in Normal mode must emit ToggleMouseCapture; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_alt_m_in_devtools_emits_toggle() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            matches!(result, Some(Message::ToggleMouseCapture)),
+            "Alt+m in DevTools mode must emit ToggleMouseCapture; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_alt_m_in_search_input_does_not_toggle() {
+        // When search input is active (UiMode::SearchInput), Alt+m must fall
+        // through — the global dispatcher suppresses the toggle and the
+        // search-input handler has no arm for CharAlt, so the result is None.
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::SearchInput;
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            result.is_none(),
+            "Alt+m in SearchInput mode must not produce ToggleMouseCapture; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_plain_m_in_normal_does_not_toggle() {
+        // Plain 'm' (no Alt modifier) must NOT trigger ToggleMouseCapture.
+        // In Normal mode, 'm' has no binding and returns None.
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        let result = handle_key(&state, InputKey::Char('m'));
+
+        assert!(
+            !matches!(result, Some(Message::ToggleMouseCapture)),
+            "plain 'm' in Normal mode must NOT emit ToggleMouseCapture; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_alt_m_during_busy_session_still_toggles() {
+        // The toggle must NOT be gated on `is_busy` — it is a UI affordance
+        // that must remain reachable even while a hot-reload is in progress.
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Add a session and mark it as busy (reloading).
+        let device = test_device("busy-device", "Busy Device");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .phase = fdemon_core::AppPhase::Reloading;
+
+        // Sanity check: the session is indeed busy.
+        assert!(state.session_manager.any_session_busy());
+
+        let result = handle_key(&state, InputKey::CharAlt('m'));
+
+        assert!(
+            matches!(result, Some(Message::ToggleMouseCapture)),
+            "Alt+m must emit ToggleMouseCapture even when a session is busy; got {:?}",
+            result
+        );
+    }
 }

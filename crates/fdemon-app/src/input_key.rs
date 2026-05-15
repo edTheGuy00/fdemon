@@ -15,6 +15,12 @@ pub enum InputKey {
     Char(char),
     /// Character with Ctrl modifier (Ctrl+a, Ctrl+c, etc.)
     CharCtrl(char),
+    /// Character with Alt modifier (Alt+a, Alt+m, etc.)
+    ///
+    /// In some terminals, Alt is delivered as `Esc` followed by the key
+    /// (the "meta-prefix" encoding). The TUI boundary canonicalises both
+    /// delivery forms to `CharAlt` so handlers only need to check this variant.
+    CharAlt(char),
 
     // Navigation
     /// Up arrow key
