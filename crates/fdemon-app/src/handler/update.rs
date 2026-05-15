@@ -2876,6 +2876,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::FlutterVersionProbeCompleted { result } => {
             flutter_version::handle_version_probe_completed(state, result)
         }
+
+        // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────
+        // Handler logic implemented in Task 06. These arms are stubs so the enum
+        // match compiles while wave-1 tasks are developed in parallel.
+        Message::CopyLogEntryToClipboard { entry_id: _ } => {
+            // Resolved by right-click handler (Task 04) + clipboard service (Task 02).
+            UpdateResult::none()
+        }
+
+        Message::ToggleMouseCapture => {
+            // Returns SetMouseCapture action — wired in Task 06.
+            UpdateResult::none()
+        }
+
+        Message::MouseCaptureChanged { active } => {
+            // Updates AppState::mouse_capture_active — wired in Task 06.
+            state.mouse_capture_active = active;
+            UpdateResult::none()
+        }
     }
 }
 

@@ -1595,6 +1595,34 @@ pub enum Message {
     /// for leaf nodes.
     DevToolsInspectorToggleNode { index: usize },
 
+    // ── Mouse Capture (log-text-selection-broken fix) ─────────────────────────
+    /// Copy a specific log entry's rendered text to the system clipboard.
+    ///
+    /// Emitted by the right-click handler in `handler/mouse.rs` when the user
+    /// right-clicks on a log row. The handler resolves `entry_id` to the entry's
+    /// rendered text and writes it via the `Clipboard` service; a confirmation
+    /// toast is pushed onto `AppState::toasts`.
+    ///
+    /// Fix for log-text-selection bug — see
+    /// `workflow/plans/bugs/log-text-selection-broken/BUG.md`.
+    CopyLogEntryToClipboard { entry_id: u64 },
+
+    /// Request a runtime toggle of terminal mouse capture.
+    ///
+    /// Emitted by the `Alt+m` keybinding. The update handler returns
+    /// `UpdateAction::SetMouseCapture(!state.mouse_capture_active)`; the runner
+    /// performs the side effect and follows up with `MouseCaptureChanged` once
+    /// the terminal mode has changed.
+    ToggleMouseCapture,
+
+    /// Reflect a successful runtime change to terminal mouse capture.
+    ///
+    /// Sent by the runner after `terminal::set_mouse_capture(...)` returns
+    /// `Ok(())`. Updates `AppState::mouse_capture_active` so the status-bar
+    /// indicator (Task 08) and the click hit-test gates render the correct
+    /// state.
+    MouseCaptureChanged { active: bool },
+
     /// Internal trigger: start the version probe.
     ///
     /// Sent as a follow-up message from `handle_show` so that both

@@ -12634,4 +12634,50 @@ mod fetch_trigger_tests {
             ),
         }
     }
+
+    // ── Message/UpdateAction shape tests (Task 03: log-text-selection-broken) ──
+
+    #[test]
+    fn test_copy_log_entry_message_round_trips() {
+        let entry_id: u64 = 42;
+        let msg = Message::CopyLogEntryToClipboard { entry_id };
+        match msg {
+            Message::CopyLogEntryToClipboard { entry_id: id } => {
+                assert_eq!(
+                    id, 42,
+                    "entry_id should survive construction and pattern-match"
+                );
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn test_toggle_mouse_capture_message_is_unit_variant() {
+        // Verify the variant can be constructed and matched without fields.
+        let msg = Message::ToggleMouseCapture;
+        assert!(
+            matches!(msg, Message::ToggleMouseCapture),
+            "ToggleMouseCapture should be a unit variant"
+        );
+    }
+
+    #[test]
+    fn test_set_mouse_capture_action_variant_round_trips() {
+        let action_true = UpdateAction::SetMouseCapture(true);
+        match action_true {
+            UpdateAction::SetMouseCapture(v) => {
+                assert!(v, "SetMouseCapture(true) should carry true")
+            }
+            _ => panic!("unexpected variant"),
+        }
+
+        let action_false = UpdateAction::SetMouseCapture(false);
+        match action_false {
+            UpdateAction::SetMouseCapture(v) => {
+                assert!(!v, "SetMouseCapture(false) should carry false")
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
 }

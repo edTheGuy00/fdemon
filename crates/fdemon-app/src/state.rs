@@ -1190,6 +1190,14 @@ pub struct AppState {
     /// Cleared whenever a double-click is consumed or the active tab
     /// changes.
     pub last_settings_click: Option<SettingsClickStamp>,
+
+    /// Whether terminal mouse capture is currently active.
+    ///
+    /// Initialized from `settings.ui.enable_mouse` at construction. Mutated only
+    /// by the `MouseCaptureChanged` handler arm (Task 06) after the runner has
+    /// performed the corresponding `terminal::set_mouse_capture` call. The
+    /// indicator in the bottom metadata bar (Task 08) reads this field.
+    pub mouse_capture_active: bool,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1218,6 +1226,8 @@ impl AppState {
     pub fn with_settings(project_path: PathBuf, settings: Settings) -> Self {
         // Parse project name from pubspec.yaml
         let project_name = fdemon_core::get_project_name(&project_path);
+
+        let mouse_capture_active = settings.ui.enable_mouse;
 
         Self {
             ui_mode: UiMode::Normal,
@@ -1253,6 +1263,7 @@ impl AppState {
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
             last_settings_click: None,
+            mouse_capture_active,
         }
     }
 
@@ -2458,5 +2469,29 @@ mod tests {
         // immediately realloc.
         assert!(regions.iter().count() == 0);
         state.mouse_regions.set(regions);
+    }
+
+    // ── mouse_capture_active initialization tests (Task 03) ──────────────────
+
+    #[test]
+    fn test_appstate_initializes_mouse_capture_active_from_settings_true() {
+        let mut settings = crate::config::Settings::default();
+        settings.ui.enable_mouse = true;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            state.mouse_capture_active,
+            "mouse_capture_active should be true when settings.ui.enable_mouse is true"
+        );
+    }
+
+    #[test]
+    fn test_appstate_initializes_mouse_capture_active_from_settings_false() {
+        let mut settings = crate::config::Settings::default();
+        settings.ui.enable_mouse = false;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            !state.mouse_capture_active,
+            "mouse_capture_active should be false when settings.ui.enable_mouse is false"
+        );
     }
 }

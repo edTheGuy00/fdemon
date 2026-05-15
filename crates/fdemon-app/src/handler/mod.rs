@@ -635,6 +635,11 @@ pub enum UpdateAction {
         /// `None` until hydrated by `process.rs`.
         cmd_sender: Option<fdemon_daemon::CommandSender>,
     },
+
+    /// Toggle terminal mouse capture at runtime. The runner calls
+    /// `terminal::set_mouse_capture(active)` and follows up with
+    /// `Message::MouseCaptureChanged { active }` on success.
+    SetMouseCapture(bool),
 }
 
 /// Background tasks to spawn
