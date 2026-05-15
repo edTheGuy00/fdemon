@@ -1209,8 +1209,13 @@ pub struct AppState {
     /// here instead of forwarding them to `handle_action`. The runner drains
     /// this queue after each `process_message()` call.
     ///
-    /// The field is `pub` so the runner (in `fdemon-tui`) can drain it directly
-    /// without a dedicated accessor, following the same pattern as `toasts`.
+    /// **Access contract:** the legitimate production drain path is
+    /// `Engine::drain_runner_actions()` — do NOT drain or iterate this `Vec`
+    /// directly from outside the crate. The `pub` visibility is retained (rather
+    /// than `pub(crate)`) because integration tests in `fdemon-tui` push
+    /// synthetic actions directly to exercise `handle_runner_actions` without
+    /// going through a full message round-trip. Narrowing to `pub(crate)` is a
+    /// future cleanup item once those tests are refactored.
     ///
     /// Only `UpdateAction::SetMouseCapture` and `UpdateAction::WriteClipboard`
     /// are ever pushed here; all other action variants flow through the normal
