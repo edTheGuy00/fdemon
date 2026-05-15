@@ -560,13 +560,14 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 
 **Services (`services/`):**
 
-The services layer provides trait-based abstractions for Flutter control operations, managed by the Engine.
+The services layer provides trait-based abstractions for Flutter control operations, managed by the Engine. `FlutterController`, `LogService`, and `StateService` carry data and are held on `AppState` or in `SharedState`. `Clipboard` is the first service in the family that is side-effect-only — it is owned by the TUI runner (not held on `AppState`) and is invoked via `AppState::pending_runner_actions`, preserving TEA purity.
 
 | File | Purpose |
 |------|---------|
 | `flutter_controller.rs` | `FlutterController` trait — `reload()`, `restart()`, `stop()`, `is_running()` |
 | `log_service.rs` | `LogService` trait — log buffer access and filtering |
 | `state_service.rs` | `SharedState` — thread-safe state with `Arc<RwLock<>>` |
+| `clipboard.rs` | `Clipboard` trait — cross-platform clipboard writer; `SystemClipboard` (arboard-backed, used at runtime), `MemoryClipboard` (in-memory, used in tests). Owned by the TUI runner, not held on `AppState`, preserving TEA purity for this side-effect-only service. |
 
 **UI State:**
 
@@ -1635,6 +1636,8 @@ The complete application state, owned by the Engine. Contains:
 - **Configuration** — Settings, project path, project name
 - **Active session state** — Phase, logs, log view state, app ID, device info, reload count
 - **Mouse region registry** (`mouse_regions: MouseRegionsCell`) — Per-frame click-region table; a TEA-approved render-hint exception (see "Mouse Region Registry" in Key Patterns above). Access via `take_guard()` → `MouseRegionGuard<'a>` (RAII, panic-safe); `take()`/`set()` are low-level primitives for tests only.
+- **Mouse capture flag** (`mouse_capture_active: bool`) — Reflects whether terminal mouse capture is currently active. Mutated only by `Message::MouseCaptureChanged` after the TUI runner has performed the actual terminal write.
+- **Runner action queue** (`pending_runner_actions: Vec<UpdateAction>`) — Holds `SetMouseCapture` and `WriteClipboard` actions that require synchronous terminal or clipboard I/O. `process.rs` intercepts these two variants and pushes them here instead of forwarding to `handle_action`. The TUI runner drains this queue after each `process_message()` call.
 
 ### Message (Events)
 
@@ -1645,6 +1648,7 @@ All possible events that can affect application state:
 - **Reload lifecycle**: `ReloadStarted`, `ReloadCompleted { time_ms }`, `ReloadFailed { reason }`
 - **File watcher**: `FilesChanged { count }`, `AutoReloadTriggered`
 - **Session management**: `ShowDeviceSelector`, `DeviceSelected { device }`, `NextSession`, `CloseCurrentSession`
+- **Mouse/clipboard**: `MouseCaptureChanged { active }` — sent by the TUI runner after completing a `SetMouseCapture` action; updates `AppState::mouse_capture_active`
 - **Lifecycle**: `Quit`
 
 ### UpdateResult (Update Output)
@@ -1659,6 +1663,8 @@ The return type from `handler::update()`:
 - `DiscoverEmulators` — Trigger emulator discovery
 - `LaunchEmulator { emulator_id }` — Launch a specific emulator
 - `SpawnSession { device, config }` — Create a new Flutter session
+- `SetMouseCapture(bool)` — Instruct the TUI runner to enable or disable terminal mouse capture (`?1003` DECSET). The runner performs the synchronous terminal write and then sends `Message::MouseCaptureChanged { active }` as a follow-up so the TEA model (`AppState::mouse_capture_active`) reflects the new state. Intercepted by `process.rs` and queued in `AppState::pending_runner_actions` rather than routed through `handle_action`.
+- `WriteClipboard { text }` — Instruct the TUI runner to write `text` to the OS clipboard via the runner-owned `Clipboard` implementation. Fire-and-forget from the TEA perspective; a warning toast is shown on failure. Intercepted by `process.rs` and queued in `AppState::pending_runner_actions` rather than routed through `handle_action`.
 
 ---
 
@@ -1709,6 +1715,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `services::FlutterController` — Reload/restart operations
 - `services::LogService` — Log buffer access
 - `services::StateService` — App state queries
+- `services::Clipboard`, `services::SystemClipboard`, `services::MemoryClipboard` — Clipboard write trait and implementations
 - `config::Settings`, `config::LaunchConfig` — Configuration types
 
 **Internal** (`pub(crate)`):
