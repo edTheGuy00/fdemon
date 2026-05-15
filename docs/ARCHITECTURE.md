@@ -1663,7 +1663,7 @@ The return type from `handler::update()`:
 - `DiscoverEmulators` — Trigger emulator discovery
 - `LaunchEmulator { emulator_id }` — Launch a specific emulator
 - `SpawnSession { device, config }` — Create a new Flutter session
-- `SetMouseCapture(bool)` — Instruct the TUI runner to enable or disable terminal mouse capture (`?1003` DECSET). The runner performs the synchronous terminal write and then sends `Message::MouseCaptureChanged { active }` as a follow-up so the TEA model (`AppState::mouse_capture_active`) reflects the new state. Intercepted by `process.rs` and queued in `AppState::pending_runner_actions` rather than routed through `handle_action`.
+- `SetMouseCapture(bool)` — Instruct the TUI runner to enable or disable terminal mouse capture. The runner performs the synchronous terminal write outside the TEA pipeline and then sends `Message::MouseCaptureChanged { active }` as a follow-up so the TEA model (`AppState::mouse_capture_active`) reflects the new state. Intercepted by `process.rs` and queued in `AppState::pending_runner_actions` rather than routed through `handle_action`.
 - `WriteClipboard { text }` — Instruct the TUI runner to write `text` to the OS clipboard via the runner-owned `Clipboard` implementation. Fire-and-forget from the TEA perspective; a warning toast is shown on failure. Intercepted by `process.rs` and queued in `AppState::pending_runner_actions` rather than routed through `handle_action`.
 
 ---
