@@ -12,7 +12,7 @@ use tracing::{error, warn};
 
 use fdemon_app::config::should_auto_start_dap;
 use fdemon_app::message::Message;
-use fdemon_app::services::{Clipboard, MemoryClipboard, SystemClipboard};
+use fdemon_app::services::{Clipboard, NullClipboard, SystemClipboard};
 use fdemon_app::spawn;
 use fdemon_app::{Engine, ToastLevel, UpdateAction};
 use fdemon_core::prelude::*;
@@ -24,15 +24,15 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Create the engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
-    // Initialize clipboard. Failures fall back to MemoryClipboard so the
-    // right-click toast ("Copied: …") still appears even when the OS clipboard
-    // is unavailable (e.g. Linux without X11/Wayland). The warn! log gives
-    // operators a breadcrumb if clipboard writes appear to not work.
+    // Initialize clipboard. Failures fall back to NullClipboard so that every
+    // clipboard write returns an error, firing the runner's failure-toast path
+    // and showing the user that copy is non-functional. The warn! log gives
+    // operators a breadcrumb when this fallback is active.
     let mut clipboard: Box<dyn Clipboard> = match SystemClipboard::new() {
         Ok(cb) => Box::new(cb),
         Err(e) => {
             warn!("system clipboard unavailable: {e}");
-            Box::new(MemoryClipboard::default())
+            Box::new(NullClipboard)
         }
     };
 
@@ -143,7 +143,7 @@ pub async fn run_with_project_and_dap(
         Ok(cb) => Box::new(cb),
         Err(e) => {
             warn!("system clipboard unavailable: {e}");
-            Box::new(MemoryClipboard::default())
+            Box::new(NullClipboard)
         }
     };
 
@@ -208,9 +208,9 @@ pub async fn run() -> Result<()> {
     let dummy_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut engine = Engine::new(dummy_path);
 
-    // Demo mode: use MemoryClipboard — no display server may be available and
+    // Demo mode: use NullClipboard — no display server may be available and
     // this is not a user-facing entry point.
-    let mut clipboard: Box<dyn Clipboard> = Box::new(MemoryClipboard::default());
+    let mut clipboard: Box<dyn Clipboard> = Box::new(NullClipboard);
 
     // Demo mode does not enable mouse capture — settings are dummy values
     // and the path is not a user-facing entry point.
@@ -363,13 +363,28 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
 
 #[cfg(test)]
 mod tests {
-    use fdemon_app::services::MemoryClipboard;
     use fdemon_app::{Engine, UpdateAction};
     use fdemon_core::prelude::*;
 
     use super::handle_runner_actions;
 
     // ─── helpers ────────────────────────────────────────────────────────────────
+
+    /// In-memory clipboard stub for runner tests.
+    ///
+    /// Mirrors `fdemon_app::services::MemoryClipboard` but is defined locally
+    /// because `MemoryClipboard` is `#[cfg(test)]`-gated inside `fdemon-app` and
+    /// is therefore not accessible to depending crates in their test builds.
+    #[derive(Default)]
+    struct LocalMemoryClipboard {
+        pub writes: Vec<String>,
+    }
+    impl fdemon_app::services::Clipboard for LocalMemoryClipboard {
+        fn write_text(&mut self, text: &str) -> Result<()> {
+            self.writes.push(text.to_string());
+            Ok(())
+        }
+    }
 
     /// A `Clipboard` impl whose `write_text` always returns an error.
     /// Used to test the failure-toast path in `handle_runner_actions`.
@@ -413,7 +428,7 @@ mod tests {
             .pending_runner_actions
             .push(UpdateAction::SetMouseCapture(false));
 
-        let mut clipboard = MemoryClipboard::default();
+        let mut clipboard = LocalMemoryClipboard::default();
         handle_runner_actions(&mut engine, &mut clipboard);
 
         // The engine's message channel should now contain MouseCaptureChanged.
@@ -454,7 +469,7 @@ mod tests {
                 text: "hello clipboard".to_string(),
             });
 
-        let mut clipboard = MemoryClipboard::default();
+        let mut clipboard = LocalMemoryClipboard::default();
         handle_runner_actions(&mut engine, &mut clipboard);
 
         assert_eq!(

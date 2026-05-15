@@ -36,7 +36,9 @@ mod flutter_controller;
 mod log_service;
 mod state_service;
 
-pub use clipboard::{Clipboard, MemoryClipboard, SystemClipboard};
+#[cfg(test)]
+pub use clipboard::MemoryClipboard;
+pub use clipboard::{Clipboard, NullClipboard, SystemClipboard};
 
 pub use flutter_controller::{
     CommandSenderController, DaemonFlutterController, FlutterCommand, FlutterController,
