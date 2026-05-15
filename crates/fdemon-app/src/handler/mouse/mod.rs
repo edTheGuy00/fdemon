@@ -15,7 +15,7 @@ mod tag_filter; // Phase 5 task 05
 
 use crate::input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
 use crate::message::Message;
-use crate::state::{AppState, UiMode};
+use crate::state::{AppState, ToastLevel, UiMode};
 
 /// Convert a mouse event to a follow-up message based on the current UI mode.
 ///
@@ -48,6 +48,13 @@ pub fn handle_mouse(state: &mut AppState, input: MouseInput) -> Option<Message> 
 
 /// Route a button press to the appropriate per-mode handler.
 ///
+/// Right-click is handled first, uniformly across all modes, by
+/// [`handle_right_click`]: if the coordinates land on a log-row region, the
+/// handler emits [`Message::CopyLogEntryToClipboard`]; otherwise it pushes a
+/// dedup hint toast and returns `None`. This precedes both the tag-filter gate
+/// and the mode dispatch, so every mode receives the same right-click behaviour
+/// without per-mode changes.
+///
 /// The tag-filter overlay routes to its own per-mode handler when visible —
 /// see [`tag_filter::handle_press`]. (Earlier phases short-circuited press
 /// to `None` here; Phase 5 task 05 lifted that gate so the overlay's tag
@@ -66,6 +73,13 @@ fn handle_press(
     button: MouseButton,
     mods: KeyModSet,
 ) -> Option<Message> {
+    // ── Right-click: copy log line or show hint toast (log-text-selection fix) ──
+    // Handled uniformly above the tag-filter and mode dispatch so that every
+    // UI mode receives the same right-click behaviour without per-mode changes.
+    if button == MouseButton::Right {
+        return handle_right_click(state, x, y);
+    }
+
     // Tag-filter overlay routes to its own handler regardless of underlying ui_mode.
     if state.tag_filter_visible {
         return tag_filter::handle_press(state, x, y, button, mods);
@@ -86,6 +100,52 @@ fn handle_press(
         | UiMode::SearchInput
         | UiMode::FlutterVersion => None,
     }
+}
+
+/// Hint text shown when right-clicking outside a log row.
+///
+/// Kept as a named constant so the toast-push site and the dedup check
+/// reference the same string literal, and so tests can import it without
+/// embedding a magic string.
+pub(crate) const RIGHT_CLICK_HINT: &str =
+    "Right-click copies log lines; nothing to copy here.";
+
+/// Handle a right-click uniformly across all UI modes.
+///
+/// ## Option B hit-test rewrite
+///
+/// The [`crate::mouse_regions::MouseRegions`] registry does not store an
+/// `on_right` action (Option A). Instead, Option B is used: the registry is
+/// queried with [`MouseButton::Left`] at the same coordinates and z-ordering.
+/// If the resulting action resolves to [`Message::ClickLogRow`], the message
+/// is rewritten to [`Message::CopyLogEntryToClipboard`]. Any other hit (or a
+/// miss) falls through to the hint toast.
+///
+/// ## Dedup
+///
+/// Before pushing the fallback toast, [`AppState::toasts`] is scanned for an
+/// existing entry with the same text. If one is already present the toast is
+/// not pushed again — rapid right-clicks on empty space do not stack the
+/// same message.
+fn handle_right_click(state: &mut AppState, x: u16, y: u16) -> Option<Message> {
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    let regions = state.mouse_regions.take_guard();
+    let left_msg = regions
+        .hit_test(x, y, MouseButton::Left)
+        .and_then(|entry| entry.on_left.as_ref())
+        .map(|a| a.resolve(x, y));
+    // Put the registry back before any mutable state access below.
+    drop(regions);
+
+    if let Some(Message::ClickLogRow { entry_id, .. }) = left_msg {
+        return Some(Message::CopyLogEntryToClipboard { entry_id });
+    }
+
+    // Fallback: dedup-push hint toast.
+    if !state.toasts.iter().any(|t| t.text == RIGHT_CLICK_HINT) {
+        state.push_toast(ToastLevel::Info, RIGHT_CLICK_HINT);
+    }
+    None
 }
 
 /// Route a wheel scroll to the appropriate per-mode handler based on
@@ -346,6 +406,89 @@ mod tests {
             matches!(msg, Some(Message::NewSessionDialogDeviceUp)),
             "expected NewSessionDialogDeviceUp for NewSessionDialog + scroll-up, got {:?}",
             msg
+        );
+    }
+
+    // ── Right-click tests (log-text-selection-broken fix, Task 04) ────────────
+
+    fn make_right_press(x: u16, y: u16) -> MouseInput {
+        MouseInput::Press {
+            x,
+            y,
+            button: MouseButton::Right,
+            modifiers: KeyModSet::NONE,
+        }
+    }
+
+    /// Right-click over a registered log-row region emits `CopyLogEntryToClipboard`
+    /// with the correct `entry_id`.
+    #[test]
+    fn test_right_click_on_log_row_emits_copy_message() {
+        use crate::mouse_regions::{MouseAction, MouseRect};
+
+        let mut state = state_in_mode(UiMode::Normal);
+        let entry_id: u64 = 42;
+
+        // Register a log-row region (same as the TUI would during render).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 5, 80, 1),
+            MouseAction::emit(Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            }),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = handle_mouse(&mut state, make_right_press(10, 5));
+        assert!(
+            matches!(result, Some(Message::CopyLogEntryToClipboard { entry_id: id }) if id == entry_id),
+            "right-click on log row should emit CopyLogEntryToClipboard {{ entry_id: {} }}, got {:?}",
+            entry_id,
+            result
+        );
+    }
+
+    /// Right-click outside any log region pushes the hint toast and returns `None`.
+    #[test]
+    fn test_right_click_off_log_row_pushes_toast() {
+        let mut state = state_in_mode(UiMode::Normal);
+        // No regions registered.
+        let result = handle_mouse(&mut state, make_right_press(50, 10));
+        assert!(result.is_none(), "no log region → None");
+        assert_eq!(
+            state.toasts.len(),
+            1,
+            "one hint toast should be pushed when right-clicking off a log row"
+        );
+        assert_eq!(state.toasts[0].text, RIGHT_CLICK_HINT);
+    }
+
+    /// Right-click fallback toast also fires when in Settings mode (no log rows visible).
+    #[test]
+    fn test_right_click_in_settings_mode_pushes_toast() {
+        let mut state = state_in_mode(UiMode::Settings);
+        let result = handle_mouse(&mut state, make_right_press(0, 0));
+        assert!(result.is_none(), "Settings mode right-click → None");
+        assert_eq!(state.toasts.len(), 1, "hint toast pushed in Settings mode");
+        assert_eq!(state.toasts[0].text, RIGHT_CLICK_HINT);
+    }
+
+    /// Two consecutive right-clicks off log rows result in exactly one toast (dedup).
+    #[test]
+    fn test_right_click_dedup() {
+        let mut state = state_in_mode(UiMode::Normal);
+
+        // First right-click: toast is pushed.
+        let _ = handle_mouse(&mut state, make_right_press(0, 0));
+        assert_eq!(state.toasts.len(), 1, "first right-click pushes one toast");
+
+        // Second right-click: dedup prevents a second identical toast.
+        let _ = handle_mouse(&mut state, make_right_press(0, 0));
+        assert_eq!(
+            state.toasts.len(),
+            1,
+            "second right-click must not duplicate the same toast"
         );
     }
 }
