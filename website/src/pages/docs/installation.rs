@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 
 use crate::components::code_block::CodeBlock;
+use crate::data::FDEMON_VERSION;
 
 #[component]
 pub fn Installation() -> impl IntoView {
@@ -28,7 +29,13 @@ pub fn Installation() -> impl IntoView {
                     "To install a specific release, pass the "<code class="text-blue-400">"--version"</code>
                     " flag to the script:"
                 </p>
-                <CodeBlock code="curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash -s -- --version 0.1.0" />
+                {
+                    let install_cmd = format!(
+                        "curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash -s -- --version {}",
+                        FDEMON_VERSION
+                    );
+                    view! { <CodeBlock code=install_cmd /> }
+                }
             </Section>
 
             // ── Custom Install Directory ──────────────────────────────
@@ -146,7 +153,7 @@ pub fn Installation() -> impl IntoView {
                 </p>
                 <CodeBlock code="fdemon --version" />
                 <p class="text-slate-400 text-sm">
-                    "Expected output: "<code class="text-blue-400">"fdemon 0.1.0"</code>" (or the installed version)."
+                    "Expected output: "<code class="text-blue-400">{format!("fdemon {}", FDEMON_VERSION)}</code>" (or the installed version)."
                 </p>
             </Section>
 

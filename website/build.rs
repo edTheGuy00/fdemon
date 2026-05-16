@@ -119,8 +119,10 @@ fn escape(s: &str) -> String {
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let json_path = Path::new(&manifest_dir).join("changelog.json");
     let out_dir = env::var("OUT_DIR").unwrap();
+
+    // ── Existing changelog generation ────────────────────────────────────────
+    let json_path = Path::new(&manifest_dir).join("changelog.json");
     let out_path = Path::new(&out_dir).join("changelog_generated.rs");
 
     println!("cargo::rerun-if-changed=changelog.json");
@@ -136,6 +138,49 @@ fn main() {
     };
 
     fs::write(&out_path, code).expect("failed to write changelog_generated.rs");
+
+    // ── Emit FDEMON_VERSION constant from workspace Cargo.toml ──────────────
+    let workspace_cargo = Path::new(&manifest_dir).join("..").join("Cargo.toml");
+    let version_out = Path::new(&out_dir).join("version_generated.rs");
+    println!("cargo::rerun-if-changed=../Cargo.toml");
+
+    let version = read_workspace_version(&workspace_cargo).unwrap_or_else(|err| {
+        println!(
+            "cargo:warning=could not read workspace version ({err}); falling back to 'unknown'"
+        );
+        "unknown".to_string()
+    });
+    fs::write(
+        &version_out,
+        format!("pub const FDEMON_VERSION: &str = \"{}\";\n", escape(&version)),
+    )
+    .expect("failed to write version_generated.rs");
+}
+
+fn read_workspace_version(path: &Path) -> Result<String, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    // Minimal scan — avoids pulling in `toml` as a new build dependency.
+    // The workspace Cargo.toml has a single `version = "X.Y.Z"` under `[workspace.package]`.
+    let mut in_workspace_package = false;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_workspace_package = line == "[workspace.package]";
+            continue;
+        }
+        if in_workspace_package {
+            if let Some(rest) = line.strip_prefix("version") {
+                let rest = rest.trim_start();
+                if let Some(eq_rest) = rest.strip_prefix('=') {
+                    let value = eq_rest.trim().trim_matches('"');
+                    if !value.is_empty() {
+                        return Ok(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Err("could not find [workspace.package] version".into())
 }
 
 fn generate_entries(entries: &[VersionEntry]) -> String {
