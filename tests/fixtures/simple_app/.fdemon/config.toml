@@ -1,5 +1,5 @@
 # Flutter Demon Configuration
-# See: https://github.com/example/flutter-demon#configuration
+# See: https://fdemon.dev/docs/configuration
 
 [behavior]
 auto_start = false     # Start with device selector for predictable test behavior

@@ -6,13 +6,14 @@ use super::icons::{Check, Copy};
 
 #[component]
 pub fn CodeBlock(
-    code: &'static str,
+    #[prop(into)] code: String,
     #[prop(default = "bash")] language: &'static str,
 ) -> impl IntoView {
     let (copied, set_copied) = signal(false);
+    let code_for_copy = code.clone();
 
     let handle_copy = move |_| {
-        let code = code.to_string();
+        let code = code_for_copy.clone();
         leptos::task::spawn_local(async move {
             let window = web_sys::window().unwrap();
             let nav = window.navigator();
