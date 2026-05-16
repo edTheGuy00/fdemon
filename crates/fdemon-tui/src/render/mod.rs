@@ -212,6 +212,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             vm_connected: handle.session.vm_connected,
             dap_port: state.dap_status.port(),
             dap_config_ide: state.dap_config_status.as_ref().map(|s| s.ide_name.clone()),
+            mouse_capture_active: state.mouse_capture_active,
         };
         log_view = log_view.with_status(status_info);
 

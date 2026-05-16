@@ -47,6 +47,8 @@ use fdemon_daemon::{Device, FlutterExecutable};
 
 // Re-export main entry point
 pub use update::update;
+#[cfg(test)]
+pub(crate) use update::{resolve_entry_text, COPY_TOAST_PREVIEW_CHARS};
 
 /// Maximum elapsed time between two clicks on the same target for them to
 /// count as a double-click (inclusive boundary).
@@ -635,6 +637,22 @@ pub enum UpdateAction {
         /// `None` until hydrated by `process.rs`.
         cmd_sender: Option<fdemon_daemon::CommandSender>,
     },
+
+    /// Toggle terminal mouse capture at runtime. The runner calls
+    /// `terminal::set_mouse_capture(active)` and follows up with
+    /// `Message::MouseCaptureChanged { active }` on success.
+    SetMouseCapture(bool),
+
+    /// Write text to the system clipboard.
+    ///
+    /// Deferred to the runner so that `update()` stays pure (no I/O).  The
+    /// runner calls the injected `Clipboard` service and, if the write fails,
+    /// emits a warning toast via the event loop.
+    ///
+    /// Emitted by the `CopyLogEntryToClipboard` handler.  The handler also
+    /// pushes an optimistic success toast; on write failure the runner pushes
+    /// a warning toast on top of it.
+    WriteClipboard { text: String },
 }
 
 /// Background tasks to spawn

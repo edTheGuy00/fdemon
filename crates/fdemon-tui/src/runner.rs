@@ -12,8 +12,9 @@ use tracing::{error, warn};
 
 use fdemon_app::config::should_auto_start_dap;
 use fdemon_app::message::Message;
+use fdemon_app::services::{Clipboard, NullClipboard, SystemClipboard};
 use fdemon_app::spawn;
-use fdemon_app::Engine;
+use fdemon_app::{Engine, ToastLevel, UpdateAction};
 use fdemon_core::prelude::*;
 
 use crate::{event, render, startup, terminal};
@@ -22,6 +23,29 @@ use crate::{event, render, startup, terminal};
 pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Create the engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
+
+    // Initialize clipboard. Failures fall back to NullClipboard so that every
+    // clipboard write returns an error, firing the runner's failure-toast path
+    // and showing the user that copy is non-functional. The warn! log gives
+    // operators a breadcrumb when this fallback is active.
+    let (mut clipboard, clipboard_unavailable_reason): (Box<dyn Clipboard>, Option<String>) =
+        match SystemClipboard::new() {
+            Ok(cb) => (Box::new(cb), None),
+            Err(e) => {
+                let reason = format!("{e}");
+                warn!("system clipboard unavailable: {reason}");
+                (Box::new(NullClipboard), Some(reason))
+            }
+        };
+
+    // Push a startup toast if the clipboard is unavailable so the user knows
+    // before they attempt to right-click copy.
+    if let Some(reason) = clipboard_unavailable_reason {
+        engine.state.push_toast(
+            ToastLevel::Warn,
+            format!("Clipboard unavailable; right-click copy is disabled ({reason})"),
+        );
+    }
 
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
@@ -56,7 +80,7 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     dispatch_startup_action(&mut engine, startup_result);
 
     // Run the main loop
-    let result = run_loop(&mut term, &mut engine);
+    let result = run_loop(&mut term, &mut engine, &mut *clipboard);
 
     // Disable mouse capture FIRST: stops the terminal from generating new
     // SGR mouse reports before we drain the TTY queue.
@@ -125,6 +149,26 @@ pub async fn run_with_project_and_dap(
         engine.process_message(Message::StartDapServer);
     }
 
+    // Initialize clipboard (same fallback policy as run_with_project).
+    let (mut clipboard, clipboard_unavailable_reason): (Box<dyn Clipboard>, Option<String>) =
+        match SystemClipboard::new() {
+            Ok(cb) => (Box::new(cb), None),
+            Err(e) => {
+                let reason = format!("{e}");
+                warn!("system clipboard unavailable: {reason}");
+                (Box::new(NullClipboard), Some(reason))
+            }
+        };
+
+    // Push a startup toast if the clipboard is unavailable so the user knows
+    // before they attempt to right-click copy.
+    if let Some(reason) = clipboard_unavailable_reason {
+        engine.state.push_toast(
+            ToastLevel::Warn,
+            format!("Clipboard unavailable; right-click copy is disabled ({reason})"),
+        );
+    }
+
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
@@ -158,7 +202,7 @@ pub async fn run_with_project_and_dap(
     dispatch_startup_action(&mut engine, startup_result);
 
     // Run the main loop
-    let result = run_loop(&mut term, &mut engine);
+    let result = run_loop(&mut term, &mut engine, &mut *clipboard);
 
     // Disable mouse capture FIRST: stops the terminal from generating new
     // SGR mouse reports before we drain the TTY queue.
@@ -186,6 +230,10 @@ pub async fn run() -> Result<()> {
     let dummy_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut engine = Engine::new(dummy_path);
 
+    // Demo mode: use NullClipboard — no display server may be available and
+    // this is not a user-facing entry point.
+    let mut clipboard: Box<dyn Clipboard> = Box::new(NullClipboard);
+
     // Demo mode does not enable mouse capture — settings are dummy values
     // and the path is not a user-facing entry point.
     let mut term = ratatui::init();
@@ -195,7 +243,7 @@ pub async fn run() -> Result<()> {
     terminal::install_panic_hook();
 
     // Run the main loop
-    let result = run_loop(&mut term, &mut engine);
+    let result = run_loop(&mut term, &mut engine, &mut *clipboard);
 
     // Shutdown engine
     engine.shutdown().await;
@@ -247,10 +295,20 @@ fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) 
 }
 
 /// Main event loop
-fn run_loop(terminal: &mut ratatui::DefaultTerminal, engine: &mut Engine) -> Result<()> {
+fn run_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    engine: &mut Engine,
+    clipboard: &mut dyn Clipboard,
+) -> Result<()> {
     while !engine.should_quit() {
         // Drain and process all pending messages
         engine.drain_pending_messages();
+
+        // Execute any runner-side-effect actions queued by the TEA update cycle.
+        // `SetMouseCapture` and `WriteClipboard` require synchronous terminal /
+        // clipboard I/O that must be performed here, in the runner, rather than
+        // in the async `handle_action` dispatcher.
+        handle_runner_actions(engine, clipboard);
 
         // Flush batched logs
         engine.flush_pending_logs();
@@ -261,8 +319,400 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, engine: &mut Engine) -> Res
         // Handle terminal events (TUI-specific)
         if let Some(message) = event::poll()? {
             engine.process_message(message);
+            // Handle any runner actions produced by the event (e.g. user
+            // pressed Alt+m to toggle mouse capture, or right-clicked to copy).
+            handle_runner_actions(engine, clipboard);
         }
     }
 
     Ok(())
+}
+
+/// Execute runner-side-effect actions drained from the engine's pending queue.
+///
+/// `UpdateAction::SetMouseCapture` — calls [`terminal::set_mouse_capture`] and,
+/// on success, enqueues `Message::MouseCaptureChanged` so the TEA state reflects
+/// the new terminal mode.  If the channel is full (saturated), state is mutated
+/// directly and a warn toast is pushed (deliberate TEA exception — see inline
+/// comment).  On terminal I/O failure, pushes a warning toast and does NOT
+/// enqueue a state-change message (the flag stays unchanged).
+///
+/// `UpdateAction::WriteClipboard` — calls [`Clipboard::write_text`] on the
+/// runner-owned clipboard handle. On failure, pushes a warning toast.
+///
+/// All other `UpdateAction` variants are explicitly enumerated in a non-runner
+/// arm and emit a warn! if they unexpectedly arrive here.  The exhaustive match
+/// ensures the compiler requires an explicit decision whenever a new variant is
+/// added to the enum.
+pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Clipboard) {
+    for action in engine.drain_runner_actions() {
+        match action {
+            UpdateAction::SetMouseCapture(target) => {
+                match terminal::set_mouse_capture(target) {
+                    Ok(()) => {
+                        // Round-trip the state change through the message bus so
+                        // the TEA update cycle updates `mouse_capture_active`.
+                        // Use try_send: if the channel is full we fall back to
+                        // direct state mutation so the model never lies about the
+                        // terminal mode.
+                        let msg =
+                            fdemon_app::message::Message::MouseCaptureChanged { active: target };
+                        if let Err(e) = engine.msg_sender().try_send(msg) {
+                            // Channel is saturated. The MouseCaptureChanged handler
+                            // would have set state.mouse_capture_active = target and
+                            // pushed a status toast. Apply those side effects directly
+                            // here so the model does not lie about the terminal state.
+                            //
+                            // Direct state mutation from the runner is a deliberate
+                            // exception to the TEA "single update site" rule, justified
+                            // because we are reflecting an already-observed terminal
+                            // state change that the message would have applied if the
+                            // channel had capacity.
+                            error!(
+                                "MouseCaptureChanged channel full; applying state directly: {e}"
+                            );
+                            engine.state.mouse_capture_active = target;
+                            engine.state.push_toast(
+                                ToastLevel::Warn,
+                                if target {
+                                    "Mouse capture on (channel full; state applied directly)"
+                                } else {
+                                    "Mouse capture off (channel full; state applied directly)"
+                                }
+                                .to_string(),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("set_mouse_capture({target}) failed: {e}");
+                        engine.state.push_toast(
+                            ToastLevel::Warn,
+                            format!("Mouse capture toggle failed: {e}"),
+                        );
+                    }
+                }
+            }
+            UpdateAction::WriteClipboard { text } => {
+                if let Err(e) = clipboard.write_text(&text) {
+                    warn!("clipboard write failed: {e}");
+                    engine
+                        .state
+                        .push_toast(ToastLevel::Warn, format!("Clipboard write failed: {e}"));
+                }
+            }
+            // ── Non-runner variants ──────────────────────────────────────────────
+            // These variants are handled by process.rs::handle_action and should
+            // NEVER arrive in the runner queue. If one does it indicates a routing
+            // bug in process.rs; warn but do not panic so the user can continue.
+            //
+            // Compile-time note: when adding a new UpdateAction variant, decide
+            // whether it belongs to the runner queue (add an arm above) or the
+            // process.rs queue (add it to this list below).
+            UpdateAction::SpawnTask(..)
+            | UpdateAction::DiscoverDevices { .. }
+            | UpdateAction::RefreshDevicesBackground { .. }
+            | UpdateAction::RefreshDevicesAndBootableBackground { .. }
+            | UpdateAction::DiscoverDevicesAndBootable { .. }
+            | UpdateAction::DiscoverDevicesAndAutoLaunch { .. }
+            | UpdateAction::DiscoverEmulators { .. }
+            | UpdateAction::LaunchEmulator { .. }
+            | UpdateAction::LaunchIOSSimulator
+            | UpdateAction::SpawnSession { .. }
+            | UpdateAction::ReloadAllSessions { .. }
+            | UpdateAction::CheckToolAvailability
+            | UpdateAction::DiscoverBootableDevices
+            | UpdateAction::BootDevice { .. }
+            | UpdateAction::AutoSaveConfig { .. }
+            | UpdateAction::LaunchFlutterSession { .. }
+            | UpdateAction::DiscoverEntryPoints { .. }
+            | UpdateAction::ConnectVmService { .. }
+            | UpdateAction::StartPerformanceMonitoring { .. }
+            | UpdateAction::FetchWidgetTree { .. }
+            | UpdateAction::FetchLayoutData { .. }
+            | UpdateAction::ToggleOverlay { .. }
+            | UpdateAction::OpenBrowserDevTools { .. }
+            | UpdateAction::StartNetworkMonitoring { .. }
+            | UpdateAction::FetchHttpRequestDetail { .. }
+            | UpdateAction::ClearHttpProfile { .. }
+            | UpdateAction::DisposeDevToolsGroups { .. }
+            | UpdateAction::PauseIsolate { .. }
+            | UpdateAction::ResumeIsolate { .. }
+            | UpdateAction::AddBreakpoint { .. }
+            | UpdateAction::RemoveBreakpoint { .. }
+            | UpdateAction::SetIsolatePauseMode { .. }
+            | UpdateAction::SpawnDapServer { .. }
+            | UpdateAction::StopDapServer
+            | UpdateAction::ForwardDapDebugEvents(..)
+            | UpdateAction::GenerateIdeConfig { .. }
+            | UpdateAction::StartNativeLogCapture { .. }
+            | UpdateAction::SpawnPreAppSources { .. }
+            | UpdateAction::ScanInstalledSdks { .. }
+            | UpdateAction::SwitchFlutterVersion { .. }
+            | UpdateAction::RemoveFlutterVersion { .. }
+            | UpdateAction::ProbeFlutterVersion { .. }
+            | UpdateAction::SendDaemonCommand { .. } => {
+                warn!("runner action queue received non-runner variant: {action:?}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fdemon_app::{Engine, UpdateAction};
+    use fdemon_core::prelude::*;
+
+    use super::handle_runner_actions;
+
+    // ─── helpers ────────────────────────────────────────────────────────────────
+
+    /// In-memory clipboard stub for runner tests.
+    ///
+    /// Mirrors `fdemon_app::services::MemoryClipboard` but is defined locally
+    /// because `MemoryClipboard` is `#[cfg(test)]`-gated inside `fdemon-app` and
+    /// is therefore not accessible to depending crates in their test builds.
+    #[derive(Default)]
+    struct LocalMemoryClipboard {
+        pub writes: Vec<String>,
+    }
+    impl fdemon_app::services::Clipboard for LocalMemoryClipboard {
+        fn write_text(&mut self, text: &str) -> Result<()> {
+            self.writes.push(text.to_string());
+            Ok(())
+        }
+    }
+
+    /// A `Clipboard` impl whose `write_text` always returns an error.
+    /// Used to test the failure-toast path in `handle_runner_actions`.
+    struct FailingClipboard;
+    impl fdemon_app::services::Clipboard for FailingClipboard {
+        fn write_text(&mut self, _text: &str) -> Result<()> {
+            Err(fdemon_core::Error::terminal("simulated clipboard error"))
+        }
+    }
+
+    fn dummy_engine() -> Engine {
+        let path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        Engine::new(path)
+    }
+
+    // ─── SetMouseCapture — success path ─────────────────────────────────────────
+
+    /// When `set_mouse_capture` returns `Ok(())`, `handle_runner_actions` must
+    /// enqueue a `MouseCaptureChanged` follow-up message on the engine's channel.
+    ///
+    /// `set_mouse_capture(false)` when the MOUSE_CAPTURE_ON flag is already
+    /// `false` (the default in test environments) returns `Ok(())` via the
+    /// idempotency guard — it is a no-op that still indicates success.
+    /// The runner should enqueue `MouseCaptureChanged { active: false }`, and
+    /// after `drain_pending_messages`, `mouse_capture_active` should be `false`.
+    ///
+    /// Note: `mouse_capture_active` starts as `true` in `AppState::with_settings`
+    /// when `settings.ui.enable_mouse = true` (the default). After the handler
+    /// processes `MouseCaptureChanged { active: false }`, it becomes `false`.
+    ///
+    /// The `MouseCaptureChanged` handler also pushes an informational toast, so
+    /// we verify the toast level is Info (not Warn) to confirm the success path
+    /// (not the failure-toast path) was taken.
+    #[tokio::test]
+    async fn test_set_mouse_capture_action_enqueues_followup_message() {
+        let mut engine = dummy_engine();
+        // set_mouse_capture(false) with MOUSE_CAPTURE_ON = false returns Ok(())
+        // via idempotency, so the success branch executes without stdout writes.
+        engine
+            .state
+            .pending_runner_actions
+            .push(UpdateAction::SetMouseCapture(false));
+
+        let mut clipboard = LocalMemoryClipboard::default();
+        handle_runner_actions(&mut engine, &mut clipboard);
+
+        // The engine's message channel should now contain MouseCaptureChanged.
+        // drain_pending_messages() processes queued messages; after that,
+        // `mouse_capture_active` should reflect the new state (false).
+        engine.drain_pending_messages();
+        assert!(
+            !engine.state.mouse_capture_active,
+            "mouse_capture_active should be false after MouseCaptureChanged(false)"
+        );
+
+        // The MouseCaptureChanged handler pushes an Info toast ("Mouse capture off…").
+        // Verify the toast is Info (not Warn) — a Warn toast would indicate the
+        // failure path in handle_runner_actions was taken instead of the success path.
+        assert_eq!(
+            engine.state.toasts.len(),
+            1,
+            "expected exactly one Info toast from MouseCaptureChanged handler"
+        );
+        assert_eq!(
+            engine.state.toasts[0].level,
+            fdemon_app::ToastLevel::Info,
+            "toast must be Info (set_mouse_capture succeeded), not Warn (failure path)"
+        );
+    }
+
+    // ─── WriteClipboard — success path ──────────────────────────────────────────
+
+    /// `handle_runner_actions` for `WriteClipboard` must call `write_text` on
+    /// the runner-owned clipboard and NOT push a toast on success.
+    #[tokio::test]
+    async fn test_write_clipboard_action_writes_to_clipboard() {
+        let mut engine = dummy_engine();
+        engine
+            .state
+            .pending_runner_actions
+            .push(UpdateAction::WriteClipboard {
+                text: "hello clipboard".to_string(),
+            });
+
+        let mut clipboard = LocalMemoryClipboard::default();
+        handle_runner_actions(&mut engine, &mut clipboard);
+
+        assert_eq!(
+            clipboard.writes,
+            vec!["hello clipboard"],
+            "expected one write with the correct text"
+        );
+        assert!(
+            engine.state.toasts.is_empty(),
+            "no toasts expected on successful clipboard write"
+        );
+    }
+
+    // ─── WriteClipboard — failure path ──────────────────────────────────────────
+
+    /// When `write_text` returns an error, `handle_runner_actions` must push a
+    /// warning toast and NOT panic.
+    #[tokio::test]
+    async fn test_write_clipboard_failure_pushes_warning_toast() {
+        let mut engine = dummy_engine();
+        engine
+            .state
+            .pending_runner_actions
+            .push(UpdateAction::WriteClipboard {
+                text: "will fail".to_string(),
+            });
+
+        let mut clipboard = FailingClipboard;
+        handle_runner_actions(&mut engine, &mut clipboard);
+
+        assert_eq!(
+            engine.state.toasts.len(),
+            1,
+            "expected exactly one warning toast on clipboard write failure"
+        );
+        let toast = &engine.state.toasts[0];
+        assert!(
+            toast.text.contains("Clipboard write failed"),
+            "toast text should describe the failure, got: {}",
+            toast.text
+        );
+    }
+
+    // ─── SetMouseCapture — channel-full fallback ─────────────────────────────────
+
+    /// When the message channel is full and `try_send(MouseCaptureChanged)` fails,
+    /// `handle_runner_actions` must mutate `state.mouse_capture_active` directly
+    /// and push a `ToastLevel::Warn` toast so the model does not lie about the
+    /// terminal state.
+    ///
+    /// Strategy: drain the channel capacity by stuffing it with dummy messages,
+    /// then exercise `SetMouseCapture(true)` so `try_send` fails, then verify
+    /// both direct state and toast side-effects were applied.
+    ///
+    /// Note: `set_mouse_capture(false)` in test environments uses an idempotency
+    /// guard and returns `Ok(())` without touching the real TTY. We use `false`
+    /// here so the runner succeeds at the terminal level but the channel is full,
+    /// forcing the direct-mutation path.
+    #[tokio::test]
+    async fn test_mouse_capture_changed_channel_full_applies_state_directly() {
+        let mut engine = dummy_engine();
+
+        // Fill the channel to capacity (default is 256 for the engine channel).
+        // We saturate it by sending as many messages as the channel accepts.
+        let sender = engine.msg_sender();
+        let capacity = 256usize;
+        for _ in 0..capacity {
+            // Tick is a simple no-payload message — safe to use here without
+            // triggering side effects that would interfere with the test.
+            let _ = sender.try_send(fdemon_app::message::Message::Tick);
+        }
+
+        // The mouse_capture_active state starts as true (enable_mouse = true by default).
+        // We will set it to false via SetMouseCapture to verify the direct-mutation path.
+        // First set it to true explicitly so the transition is observable.
+        engine.state.mouse_capture_active = true;
+
+        // Push a SetMouseCapture(false) action — terminal succeeds (idempotency guard),
+        // but try_send should fail because the channel is full.
+        engine
+            .state
+            .pending_runner_actions
+            .push(UpdateAction::SetMouseCapture(false));
+
+        let mut clipboard = LocalMemoryClipboard::default();
+        handle_runner_actions(&mut engine, &mut clipboard);
+
+        // The direct-mutation path should have set mouse_capture_active = false.
+        assert!(
+            !engine.state.mouse_capture_active,
+            "mouse_capture_active must be false after channel-full direct mutation"
+        );
+
+        // A Warn toast should have been pushed (not an Info toast, which would indicate
+        // the normal success path via try_send was taken instead).
+        assert_eq!(
+            engine.state.toasts.len(),
+            1,
+            "expected exactly one Warn toast from channel-full fallback"
+        );
+        assert_eq!(
+            engine.state.toasts[0].level,
+            fdemon_app::ToastLevel::Warn,
+            "channel-full fallback must push a Warn toast, not Info"
+        );
+        assert!(
+            engine.state.toasts[0].text.contains("channel full"),
+            "toast must mention 'channel full', got: {}",
+            engine.state.toasts[0].text
+        );
+    }
+
+    // ─── NullClipboard — right-click produces failure toast ──────────────────────
+
+    /// When `NullClipboard` is the active clipboard and `WriteClipboard` is
+    /// dispatched, `handle_runner_actions` must push a `ToastLevel::Warn` toast
+    /// containing "Clipboard write failed". This verifies that the NullClipboard
+    /// adoption at runner fallback sites produces the correct UX signal.
+    #[tokio::test]
+    async fn test_null_clipboard_returns_err_and_runner_pushes_toast() {
+        let mut engine = dummy_engine();
+        engine
+            .state
+            .pending_runner_actions
+            .push(UpdateAction::WriteClipboard {
+                text: "some text to copy".to_string(),
+            });
+
+        // Use NullClipboard — simulates the clipboard-unavailable fallback path.
+        let mut clipboard = fdemon_app::services::NullClipboard;
+        handle_runner_actions(&mut engine, &mut clipboard);
+
+        assert_eq!(
+            engine.state.toasts.len(),
+            1,
+            "expected exactly one Warn toast when NullClipboard write fails"
+        );
+        let toast = &engine.state.toasts[0];
+        assert_eq!(
+            toast.level,
+            fdemon_app::ToastLevel::Warn,
+            "NullClipboard failure must produce a Warn toast"
+        );
+        assert!(
+            toast.text.contains("Clipboard write failed"),
+            "toast must mention 'Clipboard write failed', got: {}",
+            toast.text
+        );
+    }
 }

@@ -990,6 +990,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         vm_connected: false,
         dap_port: None,
         dap_config_ide: None,
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1206,6 +1207,7 @@ fn test_status_bar_no_dap_badge_when_off() {
         vm_connected: false,
         dap_port: None,
         dap_config_ide: None,
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1238,6 +1240,7 @@ fn test_status_bar_shows_dap_badge_with_port() {
         vm_connected: false,
         dap_port: Some(4711),
         dap_config_ide: None,
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1269,6 +1272,7 @@ fn test_status_bar_dap_badge_different_port() {
         vm_connected: false,
         dap_port: Some(54321),
         dap_config_ide: None,
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1301,6 +1305,7 @@ fn test_dap_badge_hidden_in_compact_mode() {
         vm_connected: false,
         dap_port: Some(4711),
         dap_config_ide: None,
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1336,6 +1341,7 @@ fn test_status_bar_shows_dap_with_ide_name() {
         vm_connected: false,
         dap_port: Some(4711),
         dap_config_ide: Some("VS Code".to_string()),
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1371,6 +1377,7 @@ fn test_status_bar_shows_dap_without_ide_name() {
         vm_connected: false,
         dap_port: Some(4711),
         dap_config_ide: None,
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1407,6 +1414,7 @@ fn test_status_bar_no_dap_with_ide_name_when_port_absent() {
         vm_connected: false,
         dap_port: None,
         dap_config_ide: Some("VS Code".to_string()),
+        mouse_capture_active: true,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2437,5 +2445,130 @@ fn wrap_mode_badge_off_screen_dropped() {
         badge_regions.len(),
         0,
         "badge at screen_y >= content_area.height must be dropped, got: {badge_regions:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Mouse capture status badge tests (Task 08)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_status_info_renders_mouse_on_badge() {
+    use crate::test_utils::TestTerminal;
+
+    // Wide terminal — full (non-compact) mode so badge is visible
+    let mut term = TestTerminal::with_size(120, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("[mouse]"),
+        "Status bar should show '[mouse]' badge when mouse_capture_active is true"
+    );
+    assert!(
+        !term.buffer_contains("[mouse-off]"),
+        "Status bar must not show '[mouse-off]' when mouse_capture_active is true"
+    );
+}
+
+#[test]
+fn test_status_info_renders_mouse_off_badge() {
+    use crate::test_utils::TestTerminal;
+
+    // Wide terminal — full (non-compact) mode so badge is visible
+    let mut term = TestTerminal::with_size(120, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: false,
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("[mouse-off]"),
+        "Status bar should show '[mouse-off]' badge when mouse_capture_active is false"
+    );
+    // `[mouse-off]` contains the substring `[mouse`, so a naive substring search
+    // for `[mouse` is always true when `[mouse-off]` is present. However, the
+    // 7-char sequence `[mouse]` (closing bracket, no `-off`) is only present in
+    // the on-state badge and will NOT match `[mouse-off]`. Assert its absence.
+    assert!(
+        !term.buffer_contains("[mouse]"),
+        "Status bar must not show plain '[mouse]' (the on-state badge) when capture is off"
+    );
+}
+
+#[test]
+fn test_status_info_drops_badge_when_width_too_narrow() {
+    use crate::test_utils::TestTerminal;
+
+    // Narrow terminal (40 cols) — compact mode kicks in (< MIN_FULL_STATUS_WIDTH = 60),
+    // which hides all right-side content including the mouse badge.
+    let mut term = TestTerminal::with_size(40, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    // In compact mode (width < 60) the right-side section (uptime + errors + badge)
+    // is suppressed entirely, so neither badge variant should appear.
+    // Note: `[mouse-off]` does NOT contain the substring `[mouse]` (the latter
+    // requires a `]` immediately after `e`), so we must assert both variants
+    // separately to catch a wrong-badge regression.
+    assert!(
+        !term.buffer_contains("[mouse]"),
+        "On-state mouse badge should be absent in compact mode (terminal width 40 < 60)"
+    );
+    assert!(
+        !term.buffer_contains("[mouse-off]"),
+        "Off-state mouse badge should also be absent in compact mode (terminal width 40 < 60)"
     );
 }

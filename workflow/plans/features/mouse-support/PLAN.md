@@ -524,3 +524,16 @@ enable_mouse = true
 - `docs/CODE_STANDARDS.md` Principle 3 — `Cell<usize>` render-hint exception, the existing precedent for the `Cell<MouseRegions>` pattern.
 - `docs/ARCHITECTURE.md` "TEA Message Flow (via Engine)" — the message bus that `Message::Mouse` plugs into.
 - `docs/IDEAS.md` §2 "Mouse Support" — original deferral rationale.
+
+---
+
+## Bugfix Follow-up
+
+The v1 "Out of scope" assumption that "Shift+drag passthrough suffices" (see §Out of
+scope above) turned out to be incorrect under the `?1003` (any-motion) mode that
+crossterm's `EnableMouseCapture` enables by default. With `?1003` active, virtually all
+modern terminals suppress native Shift+drag selection, making log text uncopyable. The
+bugfix ([BUG.md](../../bugs/log-text-selection-broken/BUG.md)) dropped `?1003` from the
+capture set (restoring Shift+drag), added an `Alt+m` runtime toggle so users can fully
+suspend capture when needed, and bound right-click on log rows to a full-line clipboard
+copy action.

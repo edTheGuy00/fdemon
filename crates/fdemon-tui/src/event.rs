@@ -110,6 +110,11 @@ pub fn key_event_to_input(key: KeyEvent) -> Option<InputKey> {
         KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(InputKey::CharCtrl(c))
         }
+        // Alt+char is checked before the plain Char arm so that Alt+c does not
+        // produce a plain `Char('c')`. Note: SHIFT may also be set for Alt+uppercase
+        // letters; we intentionally test only ALT (not SHIFT) so both Alt+m and
+        // Alt+M canonicalise to `CharAlt`.
+        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::ALT) => Some(InputKey::CharAlt(c)),
         KeyCode::Char(c) => Some(InputKey::Char(c)),
         KeyCode::Enter => Some(InputKey::Enter),
         KeyCode::Esc => Some(InputKey::Esc),

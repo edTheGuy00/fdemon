@@ -70,19 +70,31 @@ pub fn process_message(
             let action = action.and_then(|a| hydrate_send_daemon_command(a, state));
 
             if let Some(action) = action {
-                handle_action(
+                // `SetMouseCapture` and `WriteClipboard` require synchronous
+                // terminal/clipboard I/O that only the TUI runner can perform.
+                // Push them to the runner's drain queue instead of forwarding
+                // to `handle_action`, which runs on the Tokio thread pool and
+                // has no access to those resources.
+                if matches!(
                     action,
-                    msg_tx.clone(),
-                    session_cmd_sender,
-                    session_senders,
-                    session_tasks.clone(),
-                    shutdown_rx.clone(),
-                    project_path,
-                    state.tool_availability.clone(),
-                    dap_server_handle.clone(),
-                    vm_handle_for_dap.clone(),
-                    dap_debug_senders.clone(),
-                );
+                    UpdateAction::SetMouseCapture(_) | UpdateAction::WriteClipboard { .. }
+                ) {
+                    state.pending_runner_actions.push(action);
+                } else {
+                    handle_action(
+                        action,
+                        msg_tx.clone(),
+                        session_cmd_sender,
+                        session_senders,
+                        session_tasks.clone(),
+                        shutdown_rx.clone(),
+                        project_path,
+                        state.tool_availability.clone(),
+                        dap_server_handle.clone(),
+                        vm_handle_for_dap.clone(),
+                        dap_debug_senders.clone(),
+                    );
+                }
             } else {
                 // Hydration discarded the action. Send a failure message for
                 // fetch actions so the loading spinner is not stuck forever.

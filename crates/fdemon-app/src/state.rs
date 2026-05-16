@@ -1190,6 +1190,37 @@ pub struct AppState {
     /// Cleared whenever a double-click is consumed or the active tab
     /// changes.
     pub last_settings_click: Option<SettingsClickStamp>,
+
+    /// Whether terminal mouse capture is currently active.
+    ///
+    /// Initialized from `settings.ui.enable_mouse` at construction. Mutated only
+    /// by the `MouseCaptureChanged` handler arm (Task 06) after the runner has
+    /// performed the corresponding `terminal::set_mouse_capture` call. The
+    /// indicator in the bottom metadata bar (Task 08) reads this field.
+    pub mouse_capture_active: bool,
+
+    /// Terminal/clipboard actions queued for the runner to execute.
+    ///
+    /// `SetMouseCapture` and `WriteClipboard` require synchronous side effects
+    /// (terminal writes, OS clipboard I/O) that must be performed by the TUI
+    /// runner, not by `actions::handle_action` (which runs on the Tokio thread
+    /// pool and has no access to the terminal handle or the runner-owned
+    /// clipboard). `process.rs` intercepts these two variants and pushes them
+    /// here instead of forwarding them to `handle_action`. The runner drains
+    /// this queue after each `process_message()` call.
+    ///
+    /// **Access contract:** the legitimate production drain path is
+    /// `Engine::drain_runner_actions()` — do NOT drain or iterate this `Vec`
+    /// directly from outside the crate. The `pub` visibility is retained (rather
+    /// than `pub(crate)`) because integration tests in `fdemon-tui` push
+    /// synthetic actions directly to exercise `handle_runner_actions` without
+    /// going through a full message round-trip. Narrowing to `pub(crate)` is a
+    /// future cleanup item once those tests are refactored.
+    ///
+    /// Only `UpdateAction::SetMouseCapture` and `UpdateAction::WriteClipboard`
+    /// are ever pushed here; all other action variants flow through the normal
+    /// `handle_action` path.
+    pub pending_runner_actions: Vec<crate::handler::UpdateAction>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1218,6 +1249,8 @@ impl AppState {
     pub fn with_settings(project_path: PathBuf, settings: Settings) -> Self {
         // Parse project name from pubspec.yaml
         let project_name = fdemon_core::get_project_name(&project_path);
+
+        let mouse_capture_active = settings.ui.enable_mouse;
 
         Self {
             ui_mode: UiMode::Normal,
@@ -1253,6 +1286,8 @@ impl AppState {
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
             last_settings_click: None,
+            mouse_capture_active,
+            pending_runner_actions: Vec::new(),
         }
     }
 
@@ -2458,5 +2493,29 @@ mod tests {
         // immediately realloc.
         assert!(regions.iter().count() == 0);
         state.mouse_regions.set(regions);
+    }
+
+    // ── mouse_capture_active initialization tests (Task 03) ──────────────────
+
+    #[test]
+    fn test_appstate_initializes_mouse_capture_active_from_settings_true() {
+        let mut settings = crate::config::Settings::default();
+        settings.ui.enable_mouse = true;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            state.mouse_capture_active,
+            "mouse_capture_active should be true when settings.ui.enable_mouse is true"
+        );
+    }
+
+    #[test]
+    fn test_appstate_initializes_mouse_capture_active_from_settings_false() {
+        let mut settings = crate::config::Settings::default();
+        settings.ui.enable_mouse = false;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            !state.mouse_capture_active,
+            "mouse_capture_active should be false when settings.ui.enable_mouse is false"
+        );
     }
 }

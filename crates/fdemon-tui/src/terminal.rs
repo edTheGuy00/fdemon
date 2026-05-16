@@ -6,14 +6,39 @@
 //! - [`enable_mouse_capture`] / [`disable_mouse_capture`] — gated by an
 //!   `AtomicBool` so disable is a no-op when enable was never called or
 //!   failed (works around crossterm issue #613 on Windows).
+//! - [`set_mouse_capture`] — runtime toggle for the TEA side-effect channel.
 
 use std::io::{stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
-use crossterm::execute;
 use fdemon_core::prelude::*;
 use tracing::warn;
+
+/// DECSET sequences to enable mouse capture.
+///
+/// Enables only `?1000` (button events), `?1002` (button-event motion), and
+/// `?1006` (SGR extended coordinates). `?1003` (any-motion) and `?1015`
+/// (URXVT encoding) are intentionally omitted:
+///
+/// - `?1003` (any-motion) causes the terminal to route every pointer-movement
+///   event to the application, preventing the terminal's own text-selection
+///   engine from running (Shift+drag no longer selects text on macOS
+///   Terminal.app, iTerm2, Alacritty, Ghostty, Windows Terminal, etc.).
+///   fdemon's `event.rs` boundary already drops `Moved` events, so `?1003`
+///   provides zero value while damaging native-selection passthrough.
+///   See the log-text-selection-broken BUG.md for the root-cause analysis.
+///
+/// - `?1015` is redundant: its URXVT encoding is superseded by `?1006`'s SGR
+///   encoding, which is universally supported by modern terminals.
+const ENABLE_MOUSE_DECSET: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+
+/// DECSET sequences to disable mouse capture.
+///
+/// Disables modes in reverse order from [`ENABLE_MOUSE_DECSET`] per xterm
+/// convention: `?1006l` first, then `?1002l`, then `?1000l`. Reverse ordering
+/// avoids edge cases on minimalist terminals that process DECRST sequences
+/// sequentially and depend on mode-stack ordering.
+const DISABLE_MOUSE_DECSET: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
 /// OSC 22 sequence to request the `default` (arrow) mouse pointer shape.
 /// Supported by kitty, xterm, Ghostty, Foot, opt-in Alacritty.
@@ -92,10 +117,14 @@ pub fn install_panic_hook() {
 
 /// Enable terminal mouse capture (button events, drag, scroll wheel).
 ///
-/// Sends `?1000h ?1002h ?1003h ?1015h ?1006h` (the five sequences emitted
-/// by `crossterm::event::EnableMouseCapture`). On success, sets the
-/// `MOUSE_CAPTURE_ON` flag so the matching [`disable_mouse_capture`] call
-/// later actually runs.
+/// Emits `ENABLE_MOUSE_DECSET` (`?1000h ?1002h ?1006h`). `?1003` (any-motion)
+/// is intentionally omitted so that native text selection via Shift+drag
+/// continues to work on macOS Terminal.app, iTerm2, Alacritty, Ghostty,
+/// Windows Terminal, and others. See [`ENABLE_MOUSE_DECSET`] for full
+/// rationale and cross-reference to the log-text-selection-broken BUG.md.
+///
+/// On success, sets the `MOUSE_CAPTURE_ON` flag so the matching
+/// [`disable_mouse_capture`] call later actually runs.
 ///
 /// Also emits an OSC 22 sequence (`ESC]22;default ESC\\`) to request the
 /// arrow mouse cursor shape on supporting terminals (kitty, xterm, Ghostty,
@@ -104,18 +133,14 @@ pub fn install_panic_hook() {
 /// are logged at `warn` and swallowed — cursor shape is a polish item and
 /// must not prevent capture from succeeding.
 ///
-/// Returns an [`Error`] if the underlying `execute!` fails (terminal
-/// doesn't support mouse, or stdout write failed). The caller should log
-/// the failure and continue — the rest of the application works without
-/// mouse support.
+/// Returns an [`Error`] if the stdout write fails (terminal doesn't support
+/// mouse, or stdout write failed). The caller should log the failure and
+/// continue — the rest of the application works without mouse support.
 pub fn enable_mouse_capture() -> Result<()> {
-    // crossterm::EnableMouseCapture emits DECSET 1000/1002/1003/1015/1006.
-    // We include 1003 (any-motion) even though `Moved` events are dropped at
-    // the event.rs boundary. This trade-off keeps capture-mode setup symmetric
-    // with crossterm's defaults; consumers that need to minimize per-frame
-    // parser cost should switch to a tighter mode set (e.g. only 1002
-    // button-event motion) when `Moved` events become useful in a future phase.
-    execute!(stdout(), EnableMouseCapture).map_err(|e| {
+    // Write the hand-crafted DECSET sequence that omits ?1003 (any-motion).
+    // ?1003 breaks native text selection on every mainstream terminal; see
+    // ENABLE_MOUSE_DECSET constant for the full rationale.
+    stdout().write_all(ENABLE_MOUSE_DECSET).map_err(|e| {
         warn!("failed to enable mouse capture: {e}");
         Error::terminal(format!("EnableMouseCapture failed: {e}"))
     })?;
@@ -134,12 +159,17 @@ pub fn enable_mouse_capture() -> Result<()> {
 /// Disable terminal mouse capture if it was previously enabled.
 ///
 /// No-op if [`enable_mouse_capture`] was never called or returned an error.
-/// This guards against crossterm issue #613, which panics on Windows when
-/// `DisableMouseCapture` is sent without a prior `EnableMouseCapture`.
+/// This guards against sending DECRST sequences when DECSET was never sent,
+/// which avoids crossterm issue #613 (panics on Windows) and prevents
+/// confusing terminal state on other platforms.
 ///
-/// Errors from the underlying `execute!` are logged at `warn` level and
-/// then swallowed — this function must never panic, including from inside
-/// a panic hook.
+/// Emits `DISABLE_MOUSE_DECSET` (`?1006l ?1002l ?1000l`) — the mirror of
+/// [`ENABLE_MOUSE_DECSET`] in reverse order per xterm convention. `?1003` is
+/// intentionally absent because it was never enabled. See [`ENABLE_MOUSE_DECSET`]
+/// for the full rationale on why `?1003` (any-motion) is omitted.
+///
+/// Errors from the stdout write are logged at `warn` level and then swallowed —
+/// this function must never panic, including when called from inside a panic hook.
 pub fn disable_mouse_capture() {
     // AcqRel: acquires the Release store from enable_mouse_capture (so we
     // observe whether the terminal sequences were sent) and releases the
@@ -153,11 +183,53 @@ pub fn disable_mouse_capture() {
     // order established in runner.rs (disable_mouse_capture runs first).
     // Best-effort: errors are silently swallowed so we never block exit.
     let _ = stdout().write_all(OSC22_POINTER_RESET);
-    if let Err(e) = execute!(stdout(), DisableMouseCapture) {
-        // Use eprintln when in a panic context? No — we must not write to
-        // stdout in a panic; tracing is fine because it goes to the file
-        // log via tracing-appender (stdout is owned by the TUI).
+    // Write the hand-crafted DECRST sequence (reverse of ENABLE_MOUSE_DECSET).
+    // ?1003 is absent because it was never enabled.
+    if let Err(e) = stdout().write_all(DISABLE_MOUSE_DECSET) {
+        // We must not write to stdout in a panic; tracing is fine because it
+        // goes to the file log via tracing-appender (stdout is owned by the TUI).
         warn!("failed to disable mouse capture: {e}");
+    }
+}
+
+/// Runtime mouse-capture toggle for the TEA side-effect channel.
+///
+/// - `enabled = true` → calls [`enable_mouse_capture`]. Returns `Ok(())` without
+///   re-emitting DECSET sequences if capture is already on (idempotent).
+/// - `enabled = false` → calls [`disable_mouse_capture`] and **always returns
+///   `Ok(())`**. Write errors on the disable path are logged at `warn` level by
+///   [`disable_mouse_capture`] but cannot be propagated through this wrapper —
+///   the underlying function returns `()`, not `Result`. Callers must not rely on
+///   `Err` to detect disable failures; only the enable path surfaces write errors
+///   as `Err`. Returns `Ok(())` without re-emitting DECRST sequences if capture is
+///   already off (idempotent via the `MOUSE_CAPTURE_ON` flag).
+///
+/// The runner uses this as the single entry point for runtime toggling (e.g. when
+/// the user toggles `enable_mouse` in settings at runtime). The startup call in
+/// `runner.rs` keeps using [`enable_mouse_capture`] directly.
+///
+/// Note: called by the runner to handle `UpdateAction::SetMouseCapture` from the
+/// TEA pipeline. The runner drains `engine.drain_runner_actions()` after each
+/// message-processing cycle and calls this function for each `SetMouseCapture`
+/// action.
+pub fn set_mouse_capture(enabled: bool) -> Result<()> {
+    if enabled {
+        // Idempotency: if already on, enable_mouse_capture will still emit
+        // sequences. Guard with the flag to avoid re-emitting unnecessarily.
+        if MOUSE_CAPTURE_ON.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        enable_mouse_capture()
+    } else {
+        if !MOUSE_CAPTURE_ON.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        // Delegate to disable_mouse_capture for the flag swap, OSC 22 reset,
+        // and DECRST write. Any stdout write error is logged at warn level
+        // inside that function and cannot be propagated through this wrapper
+        // (see the function-level doc comment above for the full rationale).
+        disable_mouse_capture();
+        Ok(())
     }
 }
 
@@ -266,5 +338,111 @@ mod tests {
         // for subsequent tests.
         let _ = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
+    }
+
+    // --- DECSET sequence tests ---
+
+    #[test]
+    fn test_enable_decset_omits_1003() {
+        // ?1003 (any-motion) must NOT be in the enable sequence: it breaks
+        // native text selection on macOS Terminal.app, iTerm2, Alacritty,
+        // Ghostty, Windows Terminal, and others. See BUG.md §Root Cause.
+        assert!(
+            !ENABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1003"),
+            "ENABLE_MOUSE_DECSET must not contain ?1003 (any-motion tracking)"
+        );
+    }
+
+    #[test]
+    fn test_enable_decset_contains_1000_1002_1006() {
+        // All three required modes must be present in the enable sequence.
+        assert!(
+            ENABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1000"),
+            "ENABLE_MOUSE_DECSET must contain ?1000 (button events)"
+        );
+        assert!(
+            ENABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1002"),
+            "ENABLE_MOUSE_DECSET must contain ?1002 (button-event motion)"
+        );
+        assert!(
+            ENABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1006"),
+            "ENABLE_MOUSE_DECSET must contain ?1006 (SGR extended coordinates)"
+        );
+    }
+
+    #[test]
+    fn test_disable_decset_reverses_enable() {
+        // Disable must cover exactly the same three modes as enable, with
+        // 'l' (reset) instead of 'h' (set), in reverse order.
+        assert!(
+            DISABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1000"),
+            "DISABLE_MOUSE_DECSET must contain ?1000"
+        );
+        assert!(
+            DISABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1002"),
+            "DISABLE_MOUSE_DECSET must contain ?1002"
+        );
+        assert!(
+            DISABLE_MOUSE_DECSET.windows(5).any(|w| w == b"?1006"),
+            "DISABLE_MOUSE_DECSET must contain ?1006"
+        );
+        // Must use DECRST ('l') not DECSET ('h').
+        assert!(
+            !DISABLE_MOUSE_DECSET.windows(6).any(|w| w == b"?1000h"),
+            "DISABLE_MOUSE_DECSET must use 'l' (DECRST), not 'h' (DECSET) for ?1000"
+        );
+        assert!(
+            !DISABLE_MOUSE_DECSET.windows(6).any(|w| w == b"?1002h"),
+            "DISABLE_MOUSE_DECSET must use 'l' (DECRST), not 'h' (DECSET) for ?1002"
+        );
+        assert!(
+            !DISABLE_MOUSE_DECSET.windows(6).any(|w| w == b"?1006h"),
+            "DISABLE_MOUSE_DECSET must use 'l' (DECRST), not 'h' (DECSET) for ?1006"
+        );
+        // Verify reverse order: ?1006l appears before ?1002l, which appears before ?1000l.
+        let pos_1006 = DISABLE_MOUSE_DECSET
+            .windows(6)
+            .position(|w| w == b"?1006l")
+            .expect("?1006l must be present");
+        let pos_1002 = DISABLE_MOUSE_DECSET
+            .windows(6)
+            .position(|w| w == b"?1002l")
+            .expect("?1002l must be present");
+        let pos_1000 = DISABLE_MOUSE_DECSET
+            .windows(6)
+            .position(|w| w == b"?1000l")
+            .expect("?1000l must be present");
+        assert!(
+            pos_1006 < pos_1002,
+            "?1006l must appear before ?1002l in DISABLE_MOUSE_DECSET (reverse order)"
+        );
+        assert!(
+            pos_1002 < pos_1000,
+            "?1002l must appear before ?1000l in DISABLE_MOUSE_DECSET (reverse order)"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_set_mouse_capture_idempotent() {
+        reset_flag();
+        // Simulate already-enabled state by setting the flag directly.
+        // We cannot call enable_mouse_capture() in tests (non-TTY stdout).
+        MOUSE_CAPTURE_ON.store(true, Ordering::Release);
+
+        // Calling set_mouse_capture(true) when already on must be a no-op:
+        // returns Ok(()) without panicking. The flag stays true.
+        let result = set_mouse_capture(true);
+        assert!(
+            result.is_ok(),
+            "set_mouse_capture(true) must return Ok when already enabled"
+        );
+        assert!(
+            MOUSE_CAPTURE_ON.load(Ordering::Acquire),
+            "flag must remain true after idempotent set_mouse_capture(true)"
+        );
+
+        // Cleanup: reset flag so we don't leak state.
+        reset_flag();
     }
 }

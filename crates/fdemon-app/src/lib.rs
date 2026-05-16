@@ -94,6 +94,7 @@ pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
 pub use state::{
     AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, TagFilterUiState,
+    ToastLevel,
 };
 
 // Re-export action types used by TUI for startup

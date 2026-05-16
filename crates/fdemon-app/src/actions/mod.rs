@@ -860,6 +860,29 @@ pub fn handle_action(
             });
         }
 
+        // ── Mouse Capture (log-text-selection-broken fix) ─────────────────────
+        // This action is handled by the TUI runner event loop (not here) because
+        // it requires synchronous terminal I/O. Reaching this arm in the action
+        // dispatcher is unexpected — log at warn level.
+        UpdateAction::SetMouseCapture(active) => {
+            tracing::warn!(
+                "SetMouseCapture({}) reached handle_action — should be handled by the TUI runner",
+                active
+            );
+        }
+
+        // ── Clipboard Write (log-text-selection-broken fix) ───────────────────
+        // This action is handled by the TUI runner event loop (not here) because
+        // it requires synchronous clipboard I/O. Reaching this arm in the action
+        // dispatcher is unexpected — log at warn level.
+        UpdateAction::WriteClipboard { text } => {
+            tracing::warn!(
+                "WriteClipboard reached handle_action (text len={}) — \
+                 should be handled by the TUI runner",
+                text.len()
+            );
+        }
+
         UpdateAction::SendDaemonCommand {
             session_id,
             command,

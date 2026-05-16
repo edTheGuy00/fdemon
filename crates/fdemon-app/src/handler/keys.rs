@@ -7,6 +7,49 @@ use crate::state::{AppState, DevToolsPanel, UiMode};
 
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
+    // ── Global: Alt+m → ToggleMouseCapture ───────────────────────────────────
+    //
+    // This binding is mode-independent (works from Normal, DevTools, Loading,
+    // LinkHighlight, ConfirmDialog, FlutterVersion, etc.) so users can always
+    // recover native text selection regardless of where they are.
+    //
+    // Suppressed when a text-input field has focus, so Alt+m does not steal a
+    // keystroke intended for that field:
+    //   - SearchInput mode: the entire mode is a text field.
+    //   - Settings when `editing` is true: an inline text/number field is open.
+    //   - NewSessionDialog / Startup:
+    //       * Sub-modals (dart-defines, fuzzy search) always host text inputs.
+    //       * Main dialog: only the `LaunchContext` pane has text fields, so
+    //         suppress there. The `TargetSelector` pane is a device-picker
+    //         list with no text input — Alt+m still toggles capture there.
+    //
+    // The toggle is NOT gated on `is_busy` — it is a UI affordance, not an app
+    // action, and must be reachable even during a hot-reload.
+    if matches!(key, InputKey::CharAlt('m' | 'M')) {
+        let in_text_input = match state.ui_mode {
+            UiMode::SearchInput => true,
+            UiMode::Settings => state.settings_view_state.editing,
+            UiMode::Startup | UiMode::NewSessionDialog => {
+                use crate::new_session_dialog::DialogPane;
+                let dlg = &state.new_session_dialog_state;
+                // Sub-modals (dart defines, fuzzy search) always contain text inputs.
+                if dlg.dart_defines_modal.is_some() || dlg.fuzzy_modal.is_some() {
+                    true
+                } else {
+                    // Main dialog: only LaunchContext pane has text fields.
+                    // TargetSelector is a device-picker list — no text input.
+                    matches!(dlg.focused_pane, DialogPane::LaunchContext)
+                }
+            }
+            _ => false,
+        };
+        if !in_text_input {
+            return Some(Message::ToggleMouseCapture);
+        }
+        // In text-input contexts, fall through to the mode handler (which has
+        // no arm for CharAlt and will return None — correct behaviour).
+    }
+
     match state.ui_mode {
         UiMode::Startup | UiMode::NewSessionDialog => handle_key_new_session_dialog(key, state),
         UiMode::SearchInput => handle_key_search_input(state, key),
