@@ -38,9 +38,7 @@ fn group_order(group: &str) -> usize {
 fn strip_pr_suffix(s: &str) -> &str {
     // Match ` (#<digits>)` at end of string
     if let Some(idx) = s.rfind(" (#") {
-        if s[idx..].ends_with(')')
-            && s[idx + 3..s.len() - 1].chars().all(|c| c.is_ascii_digit())
-        {
+        if s[idx..].ends_with(')') && s[idx + 3..s.len() - 1].chars().all(|c| c.is_ascii_digit()) {
             return &s[..idx];
         }
     }
@@ -229,7 +227,10 @@ mod tests {
 
     #[test]
     fn clean_branch_name_feat() {
-        assert_eq!(clean_subject("Feat/session resilience"), "session resilience");
+        assert_eq!(
+            clean_subject("Feat/session resilience"),
+            "session resilience"
+        );
     }
 
     #[test]

@@ -14,8 +14,7 @@ use leptos_router::components::{Outlet, A};
 use leptos_router::hooks::use_location;
 
 use crate::components::icons::{
-    Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, MousePointer, ScrollText, Settings,
-    Terminal,
+    Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, MousePointer, ScrollText, Settings, Terminal,
 };
 
 struct DocItem {
