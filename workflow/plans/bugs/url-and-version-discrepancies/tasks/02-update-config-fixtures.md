@@ -61,4 +61,32 @@ cargo test --workspace
 ### Notes
 
 - These three files exist as user-facing examples / dev configs / Flutter test fixture configs. They are read at runtime by `fdemon` itself (parsing TOML), not by any test that asserts on the comment text. Verified by `grep -rn "github.com/example" --include='*.rs'` returning zero matches in tests.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/url-and-version-discrepancies
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `example/app1/.fdemon/config.toml` | Line 2: replaced `https://github.com/example/flutter-demon#configuration` with `https://fdemon.dev/docs/configuration` |
+| `tests/fixtures/simple_app/.fdemon/config.toml` | Line 2: replaced `https://github.com/example/flutter-demon#configuration` with `https://fdemon.dev/docs/configuration` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`crates/fdemon-tui/.fdemon/config.toml` does not exist**: The task and BUG.md reference this file, but it was intentionally deleted in a previous commit (`4f5bdf6` — "remove leaked dev-time config files and guard .gitignore"). Since the file does not exist, there is no placeholder URL to replace there, and `grep` against the non-existent path produces zero hits (satisfying acceptance criterion #3 for that path). The file was not recreated.
+
+### Testing Performed
+
+- `grep -n "fdemon.dev/docs/configuration" example/app1/.fdemon/config.toml tests/fixtures/simple_app/.fdemon/config.toml` - PASS (both files show the new URL on line 2)
+- `grep -rn "github.com/example" crates/fdemon-tui/.fdemon/ example/app1/.fdemon/ tests/fixtures/simple_app/.fdemon/` - PASS (no hits)
+- `cargo test --workspace` - PASS (5,573 tests passed across all crates, zero failures)
+
+### Risks/Limitations
+
+1. **Third file absent**: `crates/fdemon-tui/.fdemon/config.toml` was deleted prior to this task. The two remaining fixture files are now updated. If the fdemon-tui dev config is ever re-added to the repo, it should use the correct URL from the start.
 - This is independent of Task 01: Task 01 fixes the *generator* so newly-created configs use the right URL; this task fixes *checked-in* configs so the placeholder doesn't keep getting copy-pasted by anyone using the repo as a reference.

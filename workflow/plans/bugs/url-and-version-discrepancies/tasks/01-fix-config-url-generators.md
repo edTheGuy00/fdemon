@@ -104,3 +104,36 @@ cargo fmt --all -- --check && \
 - This task only touches the four generator functions plus the new test code. Do **not** edit `tests/fixtures/simple_app/.fdemon/config.toml`, `example/app1/.fdemon/config.toml`, or `crates/fdemon-tui/.fdemon/config.toml` — those are owned by Task 02.
 - The launch URL anchor (`#launch-configurations`) doesn't currently exist on the configuration page. Use the bare URL; a follow-up can re-add the fragment if a heading is later added.
 - The placeholder URL also appears in three historical workflow plan docs (`workflow/plans/features/...`). Those are immutable historical artifacts and explicitly out of scope.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/url-and-version-discrepancies
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/settings.rs` | Replaced placeholder URL in `init_project_config()`, `generate_config_header()`, and `generate_default_config()` with `https://fdemon.dev/docs/configuration`; added two new regression tests |
+| `crates/fdemon-app/src/config/launch.rs` | Replaced placeholder URL in `init_launch_file()` with `https://fdemon.dev/docs/configuration`; added one new regression test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Bare URL for launch.toml**: Confirmed the `#launch-configurations` anchor was dropped, using the bare `https://fdemon.dev/docs/configuration` URL as specified in the task notes.
+2. **Three regression tests**: Added `test_default_config_references_fdemon_dev_docs` (covers `save_settings` path), `test_init_fdemon_directory_config_references_fdemon_dev_docs` (covers first-run `init_fdemon_directory` path), and `test_default_launch_references_fdemon_dev_docs` (covers `init_launch_file` path).
+
+### Testing Performed
+
+- `cargo test -p fdemon-app config::settings` - Passed (67 tests)
+- `cargo test -p fdemon-app config::launch` - Passed (51 tests)
+- `cargo test -p fdemon-app "fdemon_dev_docs"` - Passed (3 new regression tests)
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: The changes are purely string replacements in generator functions and new test assertions. No logic was altered.
