@@ -1715,7 +1715,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `services::FlutterController` — Reload/restart operations
 - `services::LogService` — Log buffer access
 - `services::StateService` — App state queries
-- `services::Clipboard`, `services::SystemClipboard`, `services::MemoryClipboard` — Clipboard write trait and implementations
+- `services::Clipboard`, `services::SystemClipboard`, `services::NullClipboard` — Clipboard write trait and runtime implementations (`services::MemoryClipboard` is exported only behind `#[cfg(test)]`)
 - `config::Settings`, `config::LaunchConfig` — Configuration types
 
 **Internal** (`pub(crate)`):

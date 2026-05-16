@@ -17,9 +17,10 @@ pub enum InputKey {
     CharCtrl(char),
     /// Character with Alt modifier (Alt+a, Alt+m, etc.)
     ///
-    /// In some terminals, Alt is delivered as `Esc` followed by the key
-    /// (the "meta-prefix" encoding). The TUI boundary canonicalises both
-    /// delivery forms to `CharAlt` so handlers only need to check this variant.
+    /// Produced at the TUI boundary when crossterm reports a key event with
+    /// the `ALT` modifier set. The meta-prefix encoding (`Esc` followed by a
+    /// key) is **not** canonicalised to this variant — modern terminals
+    /// deliver true `ALT`, and a bare `Esc` is mapped to `InputKey::Esc`.
     CharAlt(char),
 
     // Navigation

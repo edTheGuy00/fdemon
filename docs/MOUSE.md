@@ -27,7 +27,7 @@ still misbehaves in your terminal.
 ### Right-click — full-line copy with toast confirmation
 
 Right-click on any log row to copy that entry's complete text to the system clipboard.
-A one-second status-bar toast confirms the copy: `Copied: <60-char preview…>`.
+A status-bar toast confirms the copy: `Copied: <60-char preview…>`.
 
 Right-clicking outside a log row (e.g., on the header or a DevTools panel) shows a brief
 informational toast and takes no action.

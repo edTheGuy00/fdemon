@@ -2560,8 +2560,15 @@ fn test_status_info_drops_badge_when_width_too_narrow() {
 
     // In compact mode (width < 60) the right-side section (uptime + errors + badge)
     // is suppressed entirely, so neither badge variant should appear.
+    // Note: `[mouse-off]` does NOT contain the substring `[mouse]` (the latter
+    // requires a `]` immediately after `e`), so we must assert both variants
+    // separately to catch a wrong-badge regression.
     assert!(
         !term.buffer_contains("[mouse]"),
-        "Mouse badge should be absent in compact mode (terminal width 40 < 60)"
+        "On-state mouse badge should be absent in compact mode (terminal width 40 < 60)"
+    );
+    assert!(
+        !term.buffer_contains("[mouse-off]"),
+        "Off-state mouse badge should also be absent in compact mode (terminal width 40 < 60)"
     );
 }

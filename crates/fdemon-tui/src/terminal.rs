@@ -221,18 +221,13 @@ pub fn set_mouse_capture(enabled: bool) -> Result<()> {
         }
         enable_mouse_capture()
     } else {
-        // disable_mouse_capture() swallows its error internally. To give the
-        // caller an opportunity to toast, we replicate its logic here and
-        // surface any write failure. The AcqRel flag swap is still the gate.
         if !MOUSE_CAPTURE_ON.load(Ordering::Acquire) {
             return Ok(());
         }
-        // Delegate to disable_mouse_capture which handles the flag swap and
-        // OSC 22 reset. We cannot surface its internal error from here, so
-        // we perform the write ourselves only if we need to propagate.
-        // Simpler: just call the function and note that its write errors are
-        // logged at warn. For the runner's toast use-case, warn-level logging
-        // is sufficient without changing disable_mouse_capture's signature.
+        // Delegate to disable_mouse_capture for the flag swap, OSC 22 reset,
+        // and DECRST write. Any stdout write error is logged at warn level
+        // inside that function and cannot be propagated through this wrapper
+        // (see the function-level doc comment above for the full rationale).
         disable_mouse_capture();
         Ok(())
     }

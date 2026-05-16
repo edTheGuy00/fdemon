@@ -13,10 +13,15 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
     // LinkHighlight, ConfirmDialog, FlutterVersion, etc.) so users can always
     // recover native text selection regardless of where they are.
     //
-    // Suppressed in text-input contexts so typing Alt+m literally still works:
+    // Suppressed when a text-input field has focus, so Alt+m does not steal a
+    // keystroke intended for that field:
     //   - SearchInput mode: the entire mode is a text field.
     //   - Settings when `editing` is true: an inline text/number field is open.
-    //   - NewSessionDialog / Startup: dialog contains text fields at all times.
+    //   - NewSessionDialog / Startup:
+    //       * Sub-modals (dart-defines, fuzzy search) always host text inputs.
+    //       * Main dialog: only the `LaunchContext` pane has text fields, so
+    //         suppress there. The `TargetSelector` pane is a device-picker
+    //         list with no text input — Alt+m still toggles capture there.
     //
     // The toggle is NOT gated on `is_busy` — it is a UI affordance, not an app
     // action, and must be reachable even during a hot-reload.
