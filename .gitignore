@@ -9,8 +9,8 @@
 # IDE auto-generated debug configs
 **/.zed/
 
-# Claude Code worktrees
-.claude/worktrees/
+# Claude Code session state (worktrees, scheduled-task locks, local settings)
+.claude/
 
 # fdemon runtime-generated config files (auto-created on first run; per-user)
 **/.fdemon/config.toml
