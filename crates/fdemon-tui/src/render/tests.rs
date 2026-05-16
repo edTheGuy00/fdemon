@@ -1264,6 +1264,12 @@ fn phase5_5_renderer_invariant_link_highlight_keeps_main_header_regions() {
 // Normal Mode Snapshots
 // ===========================================================================
 
+// Redact the rendered `vX.Y.Z` so version bumps in `Cargo.toml` don't
+// invalidate stored snapshots. Filtered content matches the literal
+// `vX.Y.Z` placeholder baked into the `.snap` files.
+const VERSION_FILTER: &[(&str, &str)] =
+    &[(r"Flutter Demon v\d+\.\d+\.\d+", "Flutter Demon vX.Y.Z")];
+
 #[test]
 fn snapshot_normal_mode_initializing() {
     let mut state = create_base_state();
@@ -1271,7 +1277,9 @@ fn snapshot_normal_mode_initializing() {
     state.phase = AppPhase::Initializing;
 
     let content = render_screen(&mut state);
-    assert_snapshot!("normal_initializing", content);
+    insta::with_settings!({ filters => VERSION_FILTER.to_vec() }, {
+        assert_snapshot!("normal_initializing", content);
+    });
 }
 
 #[test]
@@ -1285,7 +1293,9 @@ fn snapshot_normal_mode_running() {
     // For now, we'll test the basic render
 
     let content = render_screen(&mut state);
-    assert_snapshot!("normal_running", content);
+    insta::with_settings!({ filters => VERSION_FILTER.to_vec() }, {
+        assert_snapshot!("normal_running", content);
+    });
 }
 
 #[test]
@@ -1295,7 +1305,9 @@ fn snapshot_normal_mode_reloading() {
     state.phase = AppPhase::Reloading;
 
     let content = render_screen(&mut state);
-    assert_snapshot!("normal_reloading", content);
+    insta::with_settings!({ filters => VERSION_FILTER.to_vec() }, {
+        assert_snapshot!("normal_reloading", content);
+    });
 }
 
 #[test]
@@ -1305,7 +1317,9 @@ fn snapshot_normal_mode_stopped() {
     state.phase = AppPhase::Stopped;
 
     let content = render_screen(&mut state);
-    assert_snapshot!("normal_stopped", content);
+    insta::with_settings!({ filters => VERSION_FILTER.to_vec() }, {
+        assert_snapshot!("normal_stopped", content);
+    });
 }
 
 // ===========================================================================
