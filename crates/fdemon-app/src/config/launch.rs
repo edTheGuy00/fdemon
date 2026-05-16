@@ -120,7 +120,7 @@ pub fn init_launch_file(project_path: &Path) -> Result<()> {
     let launch_path = fdemon_dir.join(LAUNCH_FILENAME);
     if !launch_path.exists() {
         let default_content = r#"# Flutter Demon Launch Configurations
-# See: https://github.com/example/flutter-demon#launch-configurations
+# See: https://fdemon.dev/docs/configuration
 
 [[configurations]]
 name = "Debug"
@@ -609,6 +609,21 @@ mode = "profile"
 
         let content = std::fs::read_to_string(&launch_path).unwrap();
         assert!(content.contains("Custom"));
+    }
+
+    #[test]
+    fn test_default_launch_references_fdemon_dev_docs() {
+        let temp = tempdir().unwrap();
+        init_launch_file(temp.path()).unwrap();
+        let content = std::fs::read_to_string(temp.path().join(".fdemon/launch.toml")).unwrap();
+        assert!(
+            content.contains("https://fdemon.dev/docs/configuration"),
+            "launch.toml header must point at fdemon.dev docs"
+        );
+        assert!(
+            !content.contains("github.com/example"),
+            "launch.toml must not carry the placeholder URL"
+        );
     }
 
     #[test]
