@@ -50,8 +50,8 @@ pub fn Home() -> impl IntoView {
 
                     <div class="flex gap-2">
                         <img
-                            alt="Release"
-                            src="https://img.shields.io/badge/release-v0.1.0-blue?style=flat&labelColor=1d1d1d&color=54c5f8"
+                            alt="GitHub Release"
+                            src="https://img.shields.io/github/v/release/edTheGuy00/fdemon?style=flat&labelColor=1d1d1d&color=54c5f8&logo=GitHub&logoColor=white"
                             class="h-6"
                         />
                         <img
