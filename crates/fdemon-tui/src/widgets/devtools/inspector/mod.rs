@@ -3,6 +3,7 @@
 //! Renders the Flutter widget tree as an expandable/collapsible tree view
 //! with the selected widget's details shown in a side panel.
 
+mod details;
 mod layout_panel;
 mod tree_panel;
 
