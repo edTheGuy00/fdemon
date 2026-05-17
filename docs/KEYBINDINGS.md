@@ -78,8 +78,8 @@ Flutter Demon supports running up to 9 simultaneous device sessions.
 | `1`-`9` | Switch Session | Switch to session 1-9 by index |
 | `Tab` | Next Session | Cycle to the next session |
 | `Shift+Tab` | Previous Session | Cycle to the previous session |
-| `x` | Close Session | Close the current session |
-| `Ctrl+W` | Close Session | Alternative binding to close current session |
+| `x` | Close Session | Close the current session. If only one session remains and it's still running, quits fdemon. If only one session remains and it has stopped (device disconnected, process exited), dismisses it and returns to the device picker instead of quitting. |
+| `Ctrl+W` | Close Session | Alternative binding to close current session (same Stopped-session behavior as `x`). |
 | `+` | Start New Session | Start a new session (shows Startup Dialog if no sessions, Device Selector if sessions exist) |
 | `d` | DevTools Mode | Enter DevTools mode (Inspector/Performance/Network panels) |
 | `D` | Toggle DAP Server | Start or stop the DAP debug adapter server |

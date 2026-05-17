@@ -277,13 +277,23 @@ fn close_session_internal(state: &mut AppState, session_id: SessionId) -> Update
 
 /// Handle close current session message
 pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
-    // If there's only one session (or none), treat 'x' as quit request
-    if state.session_manager.len() <= 1 {
+    let current_session_id = state.session_manager.selected_id();
+
+    // A Stopped session is a dead tab the user wants to dismiss — never let
+    // `x` on a dead session quit fdemon. Fall through to close_session_internal
+    // so it's removed and (if it was the last) the device picker reappears.
+    let current_is_stopped = current_session_id
+        .and_then(|id| state.session_manager.get(id))
+        .map(|h| h.session.phase == AppPhase::Stopped)
+        .unwrap_or(false);
+
+    // If there's only one (live) session (or none), treat 'x' as quit request
+    if state.session_manager.len() <= 1 && !current_is_stopped {
         state.request_quit();
         return UpdateResult::none();
     }
 
-    let Some(current_session_id) = state.session_manager.selected_id() else {
+    let Some(current_session_id) = current_session_id else {
         return UpdateResult::none();
     };
 

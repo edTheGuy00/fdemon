@@ -118,6 +118,11 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
         handle
             .session
             .add_log(LogEntry::new(level, LogSource::App, message));
+        handle.session.add_log(LogEntry::new(
+            LogLevel::Info,
+            LogSource::App,
+            "Press 'x' or Ctrl+W to return to the device picker.".to_string(),
+        ));
         handle.session.phase = AppPhase::Stopped;
         handle.session.vm_connected = false;
 

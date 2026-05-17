@@ -5098,6 +5098,117 @@ fn test_session_exited_cleans_up_network_monitoring() {
     );
 }
 
+// ─────────────────────────────────────────────────────────
+// Dismiss-on-stopped-session → return to picker (instead of quit fdemon)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_close_current_session_on_stopped_only_session_returns_to_picker() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Simulate a dead session: device disconnected / process exited.
+    state
+        .session_manager
+        .get_mut(session_id)
+        .unwrap()
+        .session
+        .phase = AppPhase::Stopped;
+
+    // Action: user presses 'x' on the dead tab.
+    super::session_lifecycle::handle_close_current_session(&mut state);
+
+    assert_ne!(
+        state.phase,
+        AppPhase::Quitting,
+        "closing a Stopped session must not quit fdemon"
+    );
+    assert!(
+        state.session_manager.is_empty(),
+        "the dead session should be removed"
+    );
+    assert_eq!(
+        state.ui_mode,
+        UiMode::NewSessionDialog,
+        "after dismissing the last dead session the device picker should reappear"
+    );
+}
+
+#[test]
+fn test_close_current_session_on_running_only_session_still_quits() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    let alive_phase = state.session_manager.get(session_id).unwrap().session.phase;
+    assert_ne!(
+        alive_phase,
+        AppPhase::Stopped,
+        "precondition: a freshly created session must not be Stopped"
+    );
+
+    super::session_lifecycle::handle_close_current_session(&mut state);
+
+    assert_eq!(
+        state.phase,
+        AppPhase::Quitting,
+        "pressing 'x' on the only live session should still quit fdemon"
+    );
+}
+
+#[test]
+fn test_session_exited_appends_picker_hint_log() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    super::session::handle_session_exited(&mut state, session_id, Some(0));
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    let messages: Vec<&str> = handle
+        .session
+        .logs
+        .iter()
+        .map(|e| e.message.as_str())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("exited")),
+        "expected an 'exited' log line; got: {:?}",
+        messages
+    );
+    assert_eq!(
+        messages.iter().filter(|m| m.contains("Press 'x'")).count(),
+        1,
+        "expected exactly one picker-hint line; got: {:?}",
+        messages
+    );
+}
+
+#[test]
+fn test_duplicate_session_exit_does_not_double_log_hint() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    super::session::handle_session_exited(&mut state, session_id, Some(0));
+    super::session::handle_session_exited(&mut state, session_id, Some(0));
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    let hint_count = handle
+        .session
+        .logs
+        .iter()
+        .filter(|e| e.message.contains("Press 'x'"))
+        .count();
+    assert_eq!(
+        hint_count, 1,
+        "duplicate exit events must not duplicate the picker hint"
+    );
+}
+
 #[test]
 fn test_app_stop_signals_perf_shutdown() {
     use fdemon_core::{AppStart, AppStop, DaemonMessage};
