@@ -555,6 +555,20 @@ impl InspectorState {
             .map(|r| r.node.description.clone())
     }
 
+    /// Returns the currently-selected row from the active row list, or `None`
+    /// if the selection is out of bounds.
+    ///
+    /// The returned row carries its [`fdemon_core::RowGroup`] which callers can
+    /// match on to decide whether the row is a chain leader, member, or
+    /// standalone.
+    ///
+    /// Returns `None` when no tree is loaded or `selected_index` is out of
+    /// bounds.
+    pub fn selected_row(&self) -> Option<InspectorRow<'_>> {
+        let rows = self.inspector_rows();
+        rows.into_iter().nth(self.selected_index)
+    }
+
     /// Return the `value_id` of the currently selected visible row.
     ///
     /// Used by handler code to obtain the identifier needed for RPC calls
@@ -563,9 +577,7 @@ impl InspectorState {
     /// Returns `None` when no tree is loaded, `selected_index` is out of
     /// bounds, or the node at that position has no `value_id`.
     pub fn selected_value_id(&self) -> Option<String> {
-        let rows = self.inspector_rows();
-        rows.get(self.selected_index)
-            .and_then(|r| r.node.value_id.clone())
+        self.selected_row().and_then(|r| r.node.value_id.clone())
     }
 }
 
@@ -2161,6 +2173,75 @@ mod tests {
             state.selected_value_id().as_deref(),
             Some("child-1-id"),
             "index 1 should be SecondNode"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // selected_row() Tests (phase-1-fixes Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    /// Build a root wrapper node (local-project) with a 3-deep implementation
+    /// chain (non-local-project, single child each) as its sole child.
+    /// The wrapper is always visible; the chain starts at index 1 when the
+    /// wrapper is expanded.
+    fn make_root_with_chain() -> DiagnosticsNode {
+        // Chain: chain-0 → chain-1 → chain-2 (all non-local-project)
+        let chain = make_chain(3);
+        DiagnosticsNode {
+            description: "RootWrapper".to_string(),
+            value_id: Some("wrapper-id".to_string()),
+            created_by_local_project: true,
+            children: vec![chain],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn selected_row_returns_row_with_group_for_chain_leader() {
+        let mut inspector = InspectorState::default();
+        // Build a tree with a foldable chain (non-local-project, single-child)
+        let root = make_root_with_chain();
+        inspector.root = Some(root);
+        // Expand the wrapper so the chain leader is visible at index 1
+        inspector.expanded.insert("wrapper-id".to_string());
+        inspector.hide_implementation_widgets = true;
+        inspector.selected_index = 1; // the leader row
+        let row = inspector.selected_row().expect("row should exist");
+        assert!(
+            matches!(row.group, fdemon_core::RowGroup::LeaderCollapsed { .. }),
+            "Expected LeaderCollapsed but got: {:?}",
+            row.group
+        );
+    }
+
+    #[test]
+    fn selected_row_returns_none_when_index_out_of_bounds() {
+        let inspector = InspectorState {
+            root: Some(make_single_node()),
+            selected_index: 99,
+            ..Default::default()
+        };
+        assert!(
+            inspector.selected_row().is_none(),
+            "index 99 should be out of bounds for a single-node tree"
+        );
+    }
+
+    #[test]
+    fn selected_row_returns_row_for_standalone_widget() {
+        let inspector = InspectorState {
+            root: Some(make_single_node()),
+            hide_implementation_widgets: true,
+            selected_index: 0,
+            ..Default::default()
+        };
+        let row = inspector
+            .selected_row()
+            .expect("row should exist at index 0");
+        assert_eq!(
+            row.group,
+            fdemon_core::RowGroup::None,
+            "standalone widget should have RowGroup::None"
         );
     }
 
