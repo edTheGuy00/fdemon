@@ -1115,6 +1115,189 @@ fn tree_pushes_row_rect_then_glyph_rect_for_last_pushed_wins_invariant() {
     );
 }
 
+// ── Task 04: C3/C4 correctness tests ─────────────────────────────────────────
+
+/// Look up the character at a specific (x, y) position in the buffer.
+fn buf_cell_char(buf: &Buffer, x: u16, y: u16) -> char {
+    buf.cell((x, y))
+        .and_then(|c| c.symbol().chars().next())
+        .unwrap_or(' ')
+}
+
+/// Build a state: Root → ChildA (non-last) + ChildB (last), with ChildA also
+/// having one child (GrandChild).  Root is user-code so it's always visible.
+///
+/// Tree layout:
+///   Root           (depth 0, always-visible)
+///   ├─ ChildA      (depth 1, non-last, has children)
+///   │  └─ GrandChild (depth 2)
+///   └─ ChildB      (depth 1, last)
+fn make_guideline_tree() -> InspectorState {
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        created_by_local_project: true,
+        children: vec![
+            DiagnosticsNode {
+                description: "ChildA".to_string(),
+                value_id: Some("ca".to_string()),
+                children: vec![DiagnosticsNode {
+                    description: "GrandChild".to_string(),
+                    value_id: Some("gc".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "ChildB".to_string(),
+                value_id: Some("cb".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state.expanded.insert("ca".to_string());
+    state.hide_implementation_widgets = false;
+    state
+}
+
+#[test]
+fn tree_renders_branch_tick_at_tree_inner_x_plus_zero_for_depth_one_child() {
+    // C3 fix: branch tick for a depth-1 node is at branch_col = glyph_col(0) = 0,
+    // so branch_x = tree_inner.x + 0.  With area Rect::new(0, 0, 40, 10) and a
+    // `Borders::ALL` block, tree_inner.x = 1, so branch_x = 1.
+    //
+    // Before the C3 fix the guard was `branch_x > 0` which would have incorrectly
+    // skipped drawing when tree_inner.x = 0.  After the fix the guard is
+    // `if let Some(bx) = branch_x` which correctly handles x=0.
+    //
+    // We use tree_inner.x=1 here because render_tree_panel_inner always adds a border;
+    // the key assertion is that the tick IS drawn at tree_inner.x + branch_col = 1.
+    let state = make_guideline_tree();
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    // The tree block has a 1-cell border → tree_inner.x = 1, tree_inner.y = 1.
+    // Row layout (y in buf coordinates):
+    //   y=1: Root   (depth 0, no branch tick)
+    //   y=2: ChildA (depth 1, non-last → ├─ at tree_inner.x + glyph_col(0) = 1+0 = 1)
+    //   y=3: GrandChild (depth 2)
+    //   y=4: ChildB (depth 1, last → └─ at tree_inner.x + glyph_col(0) = 1)
+    let child_a_ch = buf_cell_char(&buf, 1, 2);
+    assert_eq!(
+        child_a_ch, '├',
+        "ChildA (non-last depth-1): expected '├' at (1,2), got {:?}",
+        child_a_ch
+    );
+
+    let child_b_ch = buf_cell_char(&buf, 1, 4);
+    assert_eq!(
+        child_b_ch, '└',
+        "ChildB (last depth-1): expected '└' at (1,4), got {:?}",
+        child_b_ch
+    );
+}
+
+#[test]
+fn tree_guideline_column_matches_parent_branch_tick_column() {
+    // C4 fix: the guideline `│` for a depth-2 grandchild should be at the
+    // same column as the `├` branch tick drawn for its depth-1 non-last parent.
+    //
+    // Tree:
+    //   Root           y=1, depth 0
+    //   ├─ ChildA      y=2, depth 1, non-last → ├ at col tree_inner.x + glyph_col(0)
+    //   │  └─ GrandChild y=3, depth 2 → │ guideline at same col as ChildA's ├
+    //   └─ ChildB      y=4, depth 1, last
+    //
+    // After C4 fix: open_ticks.push(depth.saturating_sub(1)) means ChildA (depth=1)
+    // pushes 0 to open_ticks.  The renderer draws │ at glyph_col(0)=0, i.e. col
+    // tree_inner.x + 0 = tree_inner.x.  ChildA's branch tick is also at
+    // glyph_col(depth-1) = glyph_col(0) = 0 → col tree_inner.x.  They align.
+    let state = make_guideline_tree();
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    // tree_inner.x = 1 (1-cell border).
+    // ChildA branch tick column: 1 + glyph_col(0) = 1 + 0 = 1.
+    let child_a_tick_col: u16 = 1;
+    let child_a_tick_char = buf_cell_char(&buf, child_a_tick_col, 2);
+    assert_eq!(
+        child_a_tick_char, '├',
+        "ChildA branch tick must be '├' at column {child_a_tick_col}"
+    );
+
+    // GrandChild row is at y=3. The guideline │ should be at the same column.
+    let grandchild_guideline_char = buf_cell_char(&buf, child_a_tick_col, 3);
+    assert_eq!(
+        grandchild_guideline_char, '│',
+        "GrandChild guideline '│' must align with ChildA's branch tick column ({child_a_tick_col}), got {:?}",
+        grandchild_guideline_char
+    );
+}
+
+#[test]
+fn tree_renders_guidelines_for_nonlast_sibling_ancestors_exact_column() {
+    // Strengthened version of the existing `tree_renders_guidelines_for_nonlast_sibling_ancestors`
+    // test.  Asserts the exact column of the `│` guideline, not just that it
+    // appears somewhere in the row.
+    //
+    // With C4 fix: open_ticks.push(depth.saturating_sub(1)) for a node at depth=1
+    // pushes 0, so the guideline is at glyph_col(0) = 0 → col tree_inner.x + 0.
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        children: vec![
+            DiagnosticsNode {
+                description: "ChildA".to_string(),
+                value_id: Some("ca".to_string()),
+                children: vec![DiagnosticsNode {
+                    description: "GrandChild".to_string(),
+                    value_id: Some("gc".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "ChildB".to_string(),
+                value_id: Some("cb".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state.expanded.insert("ca".to_string());
+    state.hide_implementation_widgets = false;
+
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    // tree_inner.x = 1 (1-cell border), tree_inner.y = 1.
+    // Row layout:
+    //   y=1: Root (depth 0)
+    //   y=2: ChildA (depth 1, non-last) — branch tick at col 1
+    //   y=3: GrandChild (depth 2) — guideline at col 1 (parent's branch tick column)
+    //   y=4: ChildB (depth 1, last)
+    //
+    // Guideline column = tree_inner.x + glyph_col(0) = 1 + 0 = 1.
+    let expected_guideline_col: u16 = 1;
+    let guideline_char = buf_cell_char(&buf, expected_guideline_col, 3);
+    assert_eq!(
+        guideline_char, '│',
+        "GrandChild row: expected '│' at exact column {expected_guideline_col} \
+         (matching ChildA's branch tick column), got {:?}",
+        guideline_char
+    );
+}
+
 // ── Task 09: mode-switch tests ────────────────────────────────────────────────
 
 /// Build a minimal inspector state with a loaded tree and an expanded root.

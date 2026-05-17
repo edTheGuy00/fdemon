@@ -221,12 +221,16 @@ impl WidgetInspector<'_> {
             //
             // Drawn at the column of the node's parent depth (depth-1),
             // occupying the two cells [glyph_col(depth-1), glyph_col(depth)-1].
+            //
+            // `branch_x` uses `Option<u16>` instead of a `0` sentinel so that a
+            // tree whose `tree_inner.x == 0` and `branch_col == 0` still draws the
+            // tick correctly at column 0 (C3 fix).
             if row.depth > 0 {
                 let branch_col = glyph_col(row.depth.saturating_sub(1));
-                let branch_x = match tree_inner.x.checked_add(branch_col) {
-                    Some(x) if x < tree_inner.right() => x,
-                    _ => 0, // out of bounds — will be skipped below
-                };
+                let branch_x: Option<u16> = tree_inner
+                    .x
+                    .checked_add(branch_col)
+                    .filter(|&x| x < tree_inner.right());
 
                 let tick_style = Style::default().fg(palette::TREE_BRANCH_TICK);
                 let (ch1, ch2) = if row.line_to_parent {
@@ -235,13 +239,13 @@ impl WidgetInspector<'_> {
                     ('\u{2514}', '\u{2500}') // └─
                 };
 
-                if branch_x > 0 && branch_x < tree_inner.right() {
-                    if let Some(cell) = buf.cell_mut((branch_x, y)) {
+                if let Some(bx) = branch_x {
+                    if let Some(cell) = buf.cell_mut((bx, y)) {
                         cell.set_char(ch1).set_style(tick_style);
                     }
-                    let branch_x2 = branch_x + 1;
-                    if branch_x2 < tree_inner.right() {
-                        if let Some(cell) = buf.cell_mut((branch_x2, y)) {
+                    let bx2 = bx + 1;
+                    if bx2 < tree_inner.right() {
+                        if let Some(cell) = buf.cell_mut((bx2, y)) {
                             cell.set_char(ch2).set_style(tick_style);
                         }
                     }

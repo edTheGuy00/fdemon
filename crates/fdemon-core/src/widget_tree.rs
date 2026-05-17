@@ -23,6 +23,12 @@ use std::collections::HashSet;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
+/// Maximum recursion depth for widget-tree walkers. Trees deeper than this
+/// are truncated to prevent stack exhaustion on malformed or adversarial
+/// VM Service responses. serde_json's default recursion limit (128) is the
+/// first line of defence; this cap is a defence-in-depth fallback.
+pub(crate) const MAX_TREE_WALK_DEPTH: usize = 512;
+
 // ============================================================================
 // DiagnosticsNode
 // ============================================================================
@@ -128,16 +134,23 @@ impl DiagnosticsNode {
     /// Hidden nodes (level = `"hidden"` or `"off"`) and their entire subtrees
     /// are excluded — visible children of a hidden parent are NOT counted.
     ///
-    /// Note: Flutter widget trees rarely exceed ~100 levels deep, so the
-    /// recursive approach is safe in practice.
+    /// Trees deeper than [`MAX_TREE_WALK_DEPTH`] are truncated to prevent stack
+    /// exhaustion on malformed VM Service responses.
     pub fn visible_node_count(&self) -> usize {
+        self.visible_node_count_inner(0)
+    }
+
+    fn visible_node_count_inner(&self, depth: usize) -> usize {
+        if depth > MAX_TREE_WALK_DEPTH {
+            return 0;
+        }
         if !self.is_visible() {
             return 0;
         }
         1 + self
             .children
             .iter()
-            .map(|c| c.visible_node_count())
+            .map(|c| c.visible_node_count_inner(depth + 1))
             .sum::<usize>()
     }
 
@@ -324,8 +337,7 @@ pub fn build_inspector_rows<'a>(inputs: InspectorRowBuilderInputs<'a>) -> Vec<In
         inputs.expanded,
         inputs.expanded_groups,
         inputs.hide_implementation,
-        0,     // parent_child_count: root has no parent → 0
-        false, // is_member: root is never a chain member
+        0, // parent_child_count: root has no parent → 0
         &mut rows,
     );
 
@@ -344,9 +356,6 @@ pub fn build_inspector_rows<'a>(inputs: InspectorRowBuilderInputs<'a>) -> Vec<In
 /// - `expanded_groups` — expanded group leader id set.
 /// - `hide_implementation` — whether chain-folding is active.
 /// - `parent_child_count` — number of children on the node's parent (0 for root).
-/// - `is_member` — whether this node is being emitted as a `Member` row of an
-///   already-open chain (avoids re-checking group membership for subordinates
-///   the caller has already decided to emit).
 /// - `rows` — accumulator.
 #[allow(clippy::too_many_arguments)]
 fn walk_node<'a>(
@@ -358,13 +367,17 @@ fn walk_node<'a>(
     expanded_groups: &HashSet<String>,
     hide_implementation: bool,
     parent_child_count: usize,
-    is_member: bool,
     rows: &mut Vec<InspectorRow<'a>>,
 ) {
+    // Defence-in-depth: truncate pathologically deep trees (e.g. malformed VM
+    // Service responses).  serde_json's recursion limit (128) is the first line
+    // of defence; this cap prevents stack exhaustion in the tree walker itself.
+    if depth > MAX_TREE_WALK_DEPTH {
+        return;
+    }
+
     // Determine the RowGroup for this node.
-    let group = if is_member {
-        RowGroup::Member
-    } else if hide_implementation && !node.is_always_visible(parent_child_count) {
+    let group = if hide_implementation && !node.is_always_visible(parent_child_count) {
         // This node is an implementation node.  Check whether it belongs to a
         // chain (parent is always-visible-with-this-as-only-child OR parent is
         // also an implementation node) — but in the recursive walk we model this
@@ -400,7 +413,7 @@ fn walk_node<'a>(
         depth,
         ticks,
         line_to_parent,
-        group: group.clone(),
+        group, // move — `group` is not used after this point
     });
 
     // Decide whether to recurse into children.
@@ -413,14 +426,22 @@ fn walk_node<'a>(
         return;
     }
 
-    // If this node is not the last child of its parent, push its own depth so
-    // that all descendants see a `│` at this column (indicating siblings of
-    // this node come after the subtree).
+    // If this node is not the last child of its parent, push `depth - 1` (the
+    // column of this node's own branch tick) so that all descendants see a `│`
+    // at the correct column — i.e. aligned with the `├─` or `└─` tick drawn
+    // for *this* node, not at this node's glyph column.
+    //
+    // Using `depth` (before this fix) placed the guideline at `glyph_col(depth)`
+    // which is the same column as this node's *icon*, overwriting it.  The correct
+    // column is `glyph_col(depth.saturating_sub(1))` — the parent depth.
     if line_to_parent {
-        open_ticks.push(depth);
+        open_ticks.push(depth.saturating_sub(1));
     }
 
-    match &group {
+    // Re-read the group from the last pushed row (we moved it above).
+    let group_ref = &rows.last().expect("just pushed").group;
+
+    match group_ref {
         RowGroup::LeaderCollapsed { .. } => {
             // Subordinates are suppressed — do not recurse.
         }
@@ -454,7 +475,6 @@ fn walk_node<'a>(
                     expanded_groups,
                     hide_implementation,
                     child_count,
-                    false,
                     rows,
                 );
             }
@@ -470,8 +490,12 @@ fn walk_node<'a>(
 /// [`RowGroup::Member`] rows.
 ///
 /// The chain continues as long as each node is an implementation node (not
-/// always-visible, single child, no siblings).  The walk stops when it
-/// encounters an always-visible node or a node with >1 child.
+/// always-visible, single child, no siblings) **and** the node is expanded
+/// in the regular tree expand/collapse sense.
+///
+/// This walk guard mirrors [`count_visible_chain_subordinates`] exactly: both
+/// functions stop when `!should_expand || child.children.is_empty()` so that
+/// the count badge and the number of emitted Member rows always agree.
 fn emit_chain_members<'a>(
     leader_node: &'a DiagnosticsNode,
     leader_depth: usize,
@@ -535,6 +559,17 @@ fn emit_chain_members<'a>(
             group: RowGroup::Member,
         });
 
+        // Mirror the counter's stop condition: if the child is not expanded
+        // (or has no children) we stop here — the counter would stop too, so
+        // the number of emitted members stays equal to `hidden_count`.
+        let should_expand = child
+            .value_id
+            .as_deref()
+            .is_none_or(|id| expanded.contains(id));
+        if !should_expand || child.children.is_empty() {
+            break;
+        }
+
         current = child;
         depth += 1;
     }
@@ -568,7 +603,6 @@ fn walk_children<'a>(
             expanded_groups,
             hide_implementation,
             child_count,
-            false,
             rows,
         );
     }
@@ -583,7 +617,7 @@ fn walk_children<'a>(
 ///
 /// Returns `0` when `node` has no children or when the first child would
 /// break the chain (is always-visible or has siblings).
-pub fn count_visible_chain_subordinates(
+pub(crate) fn count_visible_chain_subordinates(
     node: &DiagnosticsNode,
     expanded: &HashSet<String>,
     hide_implementation: bool,
@@ -1728,12 +1762,19 @@ mod tests {
         // └─ child_b (last child of root)
         //    └─ grandchild_b (last child of child_b)
         //
-        // Expected ticks:
+        // Expected ticks (after C4 fix — push depth.saturating_sub(1)):
+        //
+        // When child_a (depth=1, line_to_parent=true) is visited, we push
+        // `1.saturating_sub(1) = 0` to open_ticks.  This records depth 0
+        // as the column where the guideline │ should be drawn for descendants
+        // of child_a — which is the column of child_a's own branch tick
+        // (glyph_col(0) = 0), matching where └─ or ├─ was drawn for child_a.
+        //
         // root:          depth=0, ticks=[]
-        // child_a:       depth=1, ticks=[]      (depth-0 pushed, line_to_parent=true)
-        // grandchild_a:  depth=2, ticks=[0]     (depth-0 open because child_b follows)
+        // child_a:       depth=1, ticks=[]      (no ancestor with pending siblings)
+        // grandchild_a:  depth=2, ticks=[0]     (tick at depth-0 because child_b follows root)
         // child_b:       depth=1, ticks=[]      (last child of root)
-        // grandchild_b:  depth=2, ticks=[]      (last child of child_b)
+        // grandchild_b:  depth=2, ticks=[]      (no pending siblings anywhere in ancestry)
 
         let mut root = make_test_node("Root");
         root.value_id = Some("root".to_string());
@@ -1777,13 +1818,18 @@ mod tests {
         assert!(rows[1].line_to_parent);
         assert!(rows[1].ticks.is_empty());
 
-        // grandchild_a: ancestor child_a at depth 1 is not last (child_b follows),
-        // so a │ connector is needed at column 1.
+        // grandchild_a: child_a (depth 1, non-last) pushed depth.saturating_sub(1)=0
+        // to open_ticks, so grandchild_a sees a tick at depth 0.
+        // The renderer draws │ at glyph_col(0) = 0 — aligned with child_a's ├ tick.
         assert_eq!(rows[2].depth, 2);
         assert!(!rows[2].line_to_parent, "last child of child_a");
         assert!(
-            rows[2].ticks.contains(&1),
-            "depth-1 tick expected because child_a (depth 1) has sibling child_b"
+            rows[2].ticks.contains(&0),
+            "depth-0 tick expected (C4 fix): child_a pushed 0 not 1 to open_ticks"
+        );
+        assert!(
+            !rows[2].ticks.contains(&1),
+            "depth-1 tick must NOT be present after C4 fix"
         );
 
         // child_b (last child of root → line_to_parent false)
@@ -1877,5 +1923,200 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert!(rows[1].line_to_parent, "first child: not last → true");
         assert!(!rows[2].line_to_parent, "second child: last → false");
+    }
+
+    // -----------------------------------------------------------------------
+    // M4: count/emit agreement tests
+    // -----------------------------------------------------------------------
+
+    /// Collect the number of Member rows emitted for a chain leader when the
+    /// group is expanded, to compare against the `hidden_count` badge.
+    fn count_emitted_members(
+        root: &DiagnosticsNode,
+        expanded: &HashSet<String>,
+        expanded_groups: &HashSet<String>,
+    ) -> (usize, usize) {
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root,
+            expanded,
+            expanded_groups,
+            hide_implementation: true,
+        });
+
+        // Find the hidden_count from the collapsed leader (before expansion).
+        let no_groups = empty_set();
+        let collapsed_rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root,
+            expanded,
+            expanded_groups: &no_groups,
+            hide_implementation: true,
+        });
+
+        let badge = collapsed_rows.iter().find_map(|r| {
+            if let RowGroup::LeaderCollapsed { hidden_count } = r.group {
+                Some(hidden_count)
+            } else {
+                None
+            }
+        });
+
+        let member_count = rows.iter().filter(|r| r.group == RowGroup::Member).count();
+
+        (badge.unwrap_or(0), member_count)
+    }
+
+    /// Table of (chain_length, expanded_ids) test cases for count/emit parity.
+    ///
+    /// Each entry verifies that the badge count (`hidden_count`) equals the
+    /// number of `Member` rows when the leader's group is expanded.
+    #[test]
+    fn count_and_emit_agree_for_various_chain_shapes() {
+        // Case 1: Chain of 4 nodes, all expanded.
+        // Root (always-visible) → impl1 (leader) → impl2 → impl3
+        // badge = 2, emitted members = 2.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3"]);
+            let expanded = set_of(&["id-0", "id-1", "id-2"]);
+            let expanded_groups = set_of(&["id-1"]); // leader = id-1 (Impl1)
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 1] badge={badge} members={members}: chain length 4, all expanded"
+            );
+        }
+
+        // Case 2: Chain of 5 nodes, all expanded.
+        // Root → impl1 (leader) → impl2 → impl3 → impl4
+        // badge = 3, emitted members = 3.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3", "Impl4"]);
+            let expanded = set_of(&["id-0", "id-1", "id-2", "id-3"]);
+            let expanded_groups = set_of(&["id-1"]);
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 2] badge={badge} members={members}: chain length 5, all expanded"
+            );
+        }
+
+        // Case 3: Chain of 4 nodes, middle node NOT expanded.
+        // Root → impl1 (leader) → impl2 [NOT expanded] → impl3 (unreachable).
+        // Both counter and emitter should stop at impl2 because its subtree is
+        // collapsed.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3"]);
+            // id-2 (Impl2) is NOT in expanded — its children are hidden.
+            let expanded = set_of(&["id-0", "id-1"]); // id-2 omitted
+            let expanded_groups = set_of(&["id-1"]);
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 3] badge={badge} members={members}: chain of 4 with collapsed middle node"
+            );
+        }
+
+        // Case 4: Chain of 2 nodes only (leader + 1 member).
+        // Root → impl1 (leader) → impl2 (single subordinate).
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2"]);
+            let expanded = set_of(&["id-0", "id-1"]);
+            let expanded_groups = set_of(&["id-1"]);
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 4] badge={badge} members={members}: chain of 3 (root + leader + 1 member)"
+            );
+        }
+
+        // Case 5: Collapsed-state only — badge must equal the count from
+        // count_visible_chain_subordinates.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3"]);
+            let expanded = set_of(&["id-0", "id-1", "id-2"]);
+            let expected_count =
+                count_visible_chain_subordinates(&chain.children[0], &expanded, true);
+            let no_groups = empty_set();
+            let collapsed_rows = build_inspector_rows(InspectorRowBuilderInputs {
+                root: &chain,
+                expanded: &expanded,
+                expanded_groups: &no_groups,
+                hide_implementation: true,
+            });
+            let badge = collapsed_rows.iter().find_map(|r| {
+                if let RowGroup::LeaderCollapsed { hidden_count } = r.group {
+                    Some(hidden_count)
+                } else {
+                    None
+                }
+            });
+            assert_eq!(
+                badge,
+                Some(expected_count),
+                "[case 5] badge must equal count_visible_chain_subordinates"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // m9: depth cap tests
+    // -----------------------------------------------------------------------
+
+    /// Build a linear chain of `n` single-child nodes (all implementation
+    /// nodes so they don't trigger chain-folding when hide_implementation is false).
+    fn make_deep_chain(n: usize) -> DiagnosticsNode {
+        let mut nodes: Vec<DiagnosticsNode> = (0..n)
+            .map(|i| {
+                let mut node = make_test_node(&format!("Node{i}"));
+                node.value_id = Some(format!("deep-{i}"));
+                node
+            })
+            .collect();
+        // Wire: each node's only child is the next one.
+        for i in (0..nodes.len() - 1).rev() {
+            let child = nodes.remove(i + 1);
+            nodes[i].children = vec![child];
+            nodes[i].has_children = true;
+        }
+        nodes.remove(0)
+    }
+
+    #[test]
+    fn walk_node_returns_early_at_max_depth() {
+        // Build a chain of MAX_TREE_WALK_DEPTH + 100 nodes.
+        let deep = make_deep_chain(MAX_TREE_WALK_DEPTH + 100);
+
+        // Expand all nodes so the walker would recurse the full depth if uncapped.
+        let expanded: HashSet<String> = (0..(MAX_TREE_WALK_DEPTH + 100))
+            .map(|i| format!("deep-{i}"))
+            .collect();
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &deep,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: false,
+        });
+
+        // The walker should stop at MAX_TREE_WALK_DEPTH+1 (depth 0..=MAX_TREE_WALK_DEPTH).
+        // Give a small slack (+8) for any slight variance in boundary handling.
+        assert!(
+            rows.len() <= MAX_TREE_WALK_DEPTH + 8,
+            "expected at most {} rows for a deep chain (got {})",
+            MAX_TREE_WALK_DEPTH + 8,
+            rows.len()
+        );
+    }
+
+    #[test]
+    fn visible_node_count_truncated_at_max_depth() {
+        // A chain deeper than MAX_TREE_WALK_DEPTH should be truncated.
+        let deep = make_deep_chain(MAX_TREE_WALK_DEPTH + 100);
+        let count = deep.visible_node_count();
+        // Should be capped around MAX_TREE_WALK_DEPTH + 1.
+        assert!(
+            count <= MAX_TREE_WALK_DEPTH + 2,
+            "visible_node_count should be capped at max depth (got {count})"
+        );
     }
 }
