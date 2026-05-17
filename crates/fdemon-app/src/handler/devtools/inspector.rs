@@ -5,6 +5,8 @@
 
 use std::time::Instant;
 
+use fdemon_core::RowGroup;
+
 use crate::config::save_settings;
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::InspectorNav;
@@ -62,7 +64,7 @@ pub fn handle_widget_tree_fetched(
 
         // Auto-fetch layout for the initially selected node (root at index 0)
         // so the layout panel shows data immediately on Inspector entry.
-        if let Some(node_id) = get_selected_value_id(&state.devtools_view_state.inspector) {
+        if let Some(node_id) = state.devtools_view_state.inspector.selected_value_id() {
             state.devtools_view_state.inspector.layout_loading = true;
             state.devtools_view_state.inspector.pending_node_id = Some(node_id.clone());
             state.devtools_view_state.inspector.layout_last_fetch_time = Some(Instant::now());
@@ -119,6 +121,57 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
     // Phase 2: read the visible node count and current selection, then handle navigation.
     // We scope the mutable borrow of `inspector` here so it ends before we access
     // `state.session_manager` below.
+    // Expand / Collapse: use selected_row() to branch on RowGroup so that
+    // chain leaders mutate `expanded_groups` and standalone nodes mutate
+    // `expanded`.  These arms early-return (no layout fetch needed).
+    if matches!(nav, InspectorNav::Expand | InspectorNav::Collapse) {
+        let inspector = &mut state.devtools_view_state.inspector;
+        let row = match inspector.selected_row() {
+            Some(r) => r,
+            None => return UpdateResult::none(),
+        };
+        // Capture the group and value_id before the immutable borrow on `row`
+        // ends (row borrows from inspector).
+        let group = row.group.clone();
+        let value_id = row.node.value_id.clone();
+        let has_children = !row.node.children.is_empty();
+
+        match nav {
+            InspectorNav::Expand => match group {
+                RowGroup::LeaderCollapsed { .. } => {
+                    if let Some(id) = value_id {
+                        inspector.expanded_groups.insert(id);
+                    }
+                }
+                _ => {
+                    // Standard node: insert into `expanded`.
+                    if has_children {
+                        if let Some(id) = value_id {
+                            if !inspector.is_expanded(&id) {
+                                inspector.expanded.insert(id);
+                            }
+                        }
+                    }
+                }
+            },
+            InspectorNav::Collapse => match group {
+                RowGroup::LeaderExpanded => {
+                    if let Some(id) = value_id {
+                        inspector.expanded_groups.remove(&id);
+                    }
+                }
+                _ => {
+                    if let Some(id) = value_id {
+                        inspector.expanded.remove(&id);
+                    }
+                }
+            },
+            _ => unreachable!("arm limited to Expand | Collapse"),
+        }
+        return UpdateResult::none();
+    }
+
+    // Up / Down: use visible_nodes() for count and value_id extraction.
     let should_fetch_layout = {
         let inspector = &mut state.devtools_view_state.inspector;
         let visible = inspector.visible_nodes();
@@ -127,16 +180,6 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
         if count == 0 {
             return UpdateResult::none();
         }
-
-        // Collect the data we need before the mutable borrow below.
-        let (value_id, has_children) = visible
-            .get(inspector.selected_index)
-            .and_then(|(node, _depth)| {
-                node.value_id
-                    .as_ref()
-                    .map(|id| (id.clone(), !node.children.is_empty()))
-            })
-            .unzip();
 
         let old_index = inspector.selected_index;
 
@@ -151,19 +194,8 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
                     inspector.selected_index += 1;
                 }
             }
-            InspectorNav::Expand => {
-                if let (Some(value_id), Some(true)) = (value_id, has_children) {
-                    if !inspector.is_expanded(&value_id) {
-                        inspector.expanded.insert(value_id);
-                    }
-                }
-                return UpdateResult::none();
-            }
-            InspectorNav::Collapse => {
-                if let Some(value_id) = value_id {
-                    inspector.expanded.remove(&value_id);
-                }
-                return UpdateResult::none();
+            InspectorNav::Expand | InspectorNav::Collapse => {
+                unreachable!("Expand/Collapse are handled above")
             }
         }
 
@@ -201,17 +233,6 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
     UpdateResult::none()
 }
 
-/// Extract the `value_id` of the currently selected visible node.
-///
-/// Returns `None` when the inspector has no tree loaded or the selected index
-/// is out of range, or when the node has no `value_id`.
-fn get_selected_value_id(inspector: &InspectorState) -> Option<String> {
-    let visible = inspector.visible_nodes();
-    visible
-        .get(inspector.selected_index)
-        .and_then(|(node, _depth)| node.value_id.clone())
-}
-
 /// If the currently-selected inspector node has a `value_id`, isn't debounced,
 /// and isn't already cached as `last_fetched_node_id`, mark fetch state and
 /// return the node id to fetch. Otherwise return `None`.
@@ -222,7 +243,7 @@ fn maybe_fetch_layout(inspector: &mut InspectorState) -> Option<String> {
     if inspector.is_layout_fetch_debounced() {
         return None;
     }
-    let node_id = get_selected_value_id(inspector)?;
+    let node_id = inspector.selected_value_id()?;
     if inspector.last_fetched_node_id.as_deref() == Some(node_id.as_str()) {
         return None;
     }
@@ -281,7 +302,7 @@ pub fn handle_layout_data_fetched(
         // Guard against stale responses: if the user navigated away from the
         // node this fetch was dispatched for, discard the response so the UI
         // does not show layout data for the wrong node.
-        let selected_id = get_selected_value_id(&state.devtools_view_state.inspector);
+        let selected_id = state.devtools_view_state.inspector.selected_value_id();
         let pending_id = state
             .devtools_view_state
             .inspector
@@ -431,23 +452,24 @@ pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> Update
 /// Clicking on a leaf node (no children) or a node without a `value_id` is a
 /// no-op for the expanded set; selection still changes normally.
 pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> UpdateResult {
-    // Step 1: capture value_id and has_children before delegating, so that
-    // visible_nodes() is only traversed once (the delegate also calls it internally).
-    let (value_id, has_children) = {
+    // Step 1: capture value_id, has_children, and group before delegating, so
+    // that inspector_rows() is only traversed once (the delegate also calls it
+    // internally).
+    let (value_id, has_children, group) = {
         let inspector = &state.devtools_view_state.inspector;
-        let visible = inspector.visible_nodes();
-        if index >= visible.len() {
+        let rows = inspector.inspector_rows();
+        if index >= rows.len() {
             // Out-of-range click — no selection change, no expanded-set mutation.
             return UpdateResult::none();
         }
-        visible
-            .get(index)
-            .and_then(|(node, _depth)| {
-                node.value_id
-                    .as_ref()
-                    .map(|id| (id.clone(), !node.children.is_empty()))
-            })
-            .unzip()
+        match rows.get(index) {
+            Some(row) => (
+                row.node.value_id.clone(),
+                !row.node.children.is_empty(),
+                row.group.clone(),
+            ),
+            None => return UpdateResult::none(),
+        }
     };
     // `inspector` immutable borrow has ended.
 
@@ -455,13 +477,30 @@ pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> Updat
     // clears stale layout, dispatches fetch under debounce rules).
     let select_result = handle_inspector_select_row(state, index);
 
-    // Step 3: toggle the node's expanded state.
-    if let (Some(value_id), Some(true)) = (value_id, has_children) {
+    // Step 3: toggle the node's expanded state, branching on RowGroup so that
+    // chain leader glyph clicks mutate `expanded_groups` and standalone nodes
+    // mutate `expanded`.
+    if let Some(id) = value_id {
         let inspector = &mut state.devtools_view_state.inspector;
-        if inspector.is_expanded(&value_id) {
-            inspector.expanded.remove(&value_id);
-        } else {
-            inspector.expanded.insert(value_id);
+        match group {
+            RowGroup::LeaderCollapsed { .. } => {
+                // Expand the chain.
+                inspector.expanded_groups.insert(id);
+            }
+            RowGroup::LeaderExpanded => {
+                // Collapse the chain.
+                inspector.expanded_groups.remove(&id);
+            }
+            _ => {
+                // Standard node: toggle `expanded` (guarded by has_children).
+                if has_children {
+                    if inspector.is_expanded(&id) {
+                        inspector.expanded.remove(&id);
+                    } else {
+                        inspector.expanded.insert(id);
+                    }
+                }
+            }
         }
     }
 
@@ -516,8 +555,9 @@ pub fn handle_open_details(state: &mut AppState) -> UpdateResult {
 /// Close the Details panel.
 ///
 /// Sets `details_open = false` and clears `details_node_id`. The `details_tab`
-/// is intentionally left at its last value so that reopening the panel returns
-/// the user to where they were.
+/// is left at its current value; [`handle_open_details`] always resets it to
+/// `Properties` on the next open, so the value stored here is not observed by
+/// the user.
 ///
 /// No-op when Details is already closed.
 pub fn handle_close_details(state: &mut AppState) -> UpdateResult {
@@ -527,8 +567,6 @@ pub fn handle_close_details(state: &mut AppState) -> UpdateResult {
     }
     inspector.details_open = false;
     inspector.details_node_id = None;
-    // details_tab is left at its last value so reopening defaults to where
-    // the user was. Reset to Properties only if you want fresh-open semantics.
     UpdateResult::none()
 }
 
@@ -2185,6 +2223,246 @@ mod tests {
         assert_eq!(
             state.devtools_view_state.inspector.selected_index, 0,
             "row selection should be frozen when details is open"
+        );
+    }
+
+    // ── Task 06: expanded_groups wiring ──────────────────────────────────────
+
+    /// Build a state with a session and a folded chain:
+    ///   - root wrapper (local project, expanded) at index 0
+    ///   - chain leader (non-local, `RowGroup::LeaderCollapsed`) at index 1
+    ///     with `value_id` = "leader-id"
+    ///
+    /// `hide_implementation_widgets` is set to `true` so the builder folds the
+    /// chain.
+    fn make_state_with_folded_chain() -> AppState {
+        let mut state = make_state_with_session();
+        // Chain: 3 non-local-project nodes (chain-0 → chain-1 → chain-2).
+        let chain = fdemon_core::DiagnosticsNode {
+            description: "chain-0".to_string(),
+            value_id: Some("leader-id".to_string()),
+            created_by_local_project: false,
+            children: vec![fdemon_core::DiagnosticsNode {
+                description: "chain-1".to_string(),
+                value_id: Some("member-1-id".to_string()),
+                created_by_local_project: false,
+                children: vec![fdemon_core::DiagnosticsNode {
+                    description: "chain-2".to_string(),
+                    value_id: Some("member-2-id".to_string()),
+                    created_by_local_project: false,
+                    children: vec![],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let root = fdemon_core::DiagnosticsNode {
+            description: "RootWrapper".to_string(),
+            value_id: Some("wrapper-id".to_string()),
+            created_by_local_project: true,
+            children: vec![chain],
+            ..Default::default()
+        };
+        state.devtools_view_state.inspector.root = Some(root);
+        // Expand the wrapper so the chain leader is visible at index 1.
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("wrapper-id".to_string());
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = true;
+        state.devtools_view_state.inspector.selected_index = 1; // chain leader
+        state
+    }
+
+    /// Build a state with a folded chain whose leader is already expanded in
+    /// `expanded_groups` (i.e. `RowGroup::LeaderExpanded`).
+    fn make_state_with_expanded_chain() -> AppState {
+        let mut state = make_state_with_folded_chain();
+        state
+            .devtools_view_state
+            .inspector
+            .expanded_groups
+            .insert("leader-id".to_string());
+        state
+    }
+
+    #[test]
+    fn expand_on_leader_collapsed_inserts_into_expanded_groups() {
+        let mut state = make_state_with_folded_chain();
+        // Verify precondition: the selected row is a LeaderCollapsed.
+        {
+            let row = state
+                .devtools_view_state
+                .inspector
+                .selected_row()
+                .expect("row should exist at index 1");
+            assert!(
+                matches!(row.group, fdemon_core::RowGroup::LeaderCollapsed { .. }),
+                "Expected LeaderCollapsed but got: {:?}",
+                row.group
+            );
+        }
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Expand);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .contains("leader-id"),
+            "expanded_groups should contain leader-id after Expand on LeaderCollapsed"
+        );
+    }
+
+    #[test]
+    fn expand_on_leader_collapsed_does_not_insert_into_expanded() {
+        let mut state = make_state_with_folded_chain();
+        let before_len = state.devtools_view_state.inspector.expanded.len();
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Expand);
+
+        assert_eq!(
+            state.devtools_view_state.inspector.expanded.len(),
+            before_len,
+            "expanded set must not be mutated when expanding a chain leader"
+        );
+    }
+
+    #[test]
+    fn collapse_on_leader_expanded_removes_from_expanded_groups() {
+        let mut state = make_state_with_expanded_chain();
+        // Verify precondition: the selected row is a LeaderExpanded.
+        {
+            let row = state
+                .devtools_view_state
+                .inspector
+                .selected_row()
+                .expect("row should exist at index 1");
+            assert_eq!(
+                row.group,
+                fdemon_core::RowGroup::LeaderExpanded,
+                "Expected LeaderExpanded but got: {:?}",
+                row.group
+            );
+        }
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Collapse);
+
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .contains("leader-id"),
+            "expanded_groups should not contain leader-id after Collapse on LeaderExpanded"
+        );
+    }
+
+    #[test]
+    fn expand_on_standalone_row_inserts_into_expanded() {
+        // Regression guard: standalone nodes must still use `expanded`.
+        let mut state = make_state_with_session();
+        // Build a simple parent/child tree, both local-project (so RowGroup::None).
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Parent",
+            "valueId": "parent-id",
+            "createdByLocalProject": true,
+            "children": [{
+                "description": "Child",
+                "valueId": "child-id",
+                "createdByLocalProject": true,
+                "children": []
+            }]
+        }))
+        .expect("valid tree");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Expand);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded
+                .contains("parent-id"),
+            "expanded should contain parent-id after Expand on a standalone row"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .is_empty(),
+            "expanded_groups must remain empty when expanding a standalone row"
+        );
+    }
+
+    #[test]
+    fn mouse_toggle_on_leader_glyph_mutates_expanded_groups_not_expanded() {
+        let mut state = make_state_with_folded_chain();
+        let before_expanded_len = state.devtools_view_state.inspector.expanded.len();
+
+        // Index 1 = chain leader (LeaderCollapsed).
+        handle_inspector_toggle_node(&mut state, 1);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .contains("leader-id"),
+            "expanded_groups should contain leader-id after toggle on LeaderCollapsed"
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.expanded.len(),
+            before_expanded_len,
+            "expanded set must not be mutated when toggling a chain leader"
+        );
+    }
+
+    #[test]
+    fn mouse_toggle_on_standalone_glyph_mutates_expanded() {
+        // Regression guard: standalone nodes must still use `expanded`.
+        let mut state = make_state_with_session();
+        let tree = make_tree_with_children();
+        state.devtools_view_state.inspector.root = Some(tree);
+        // hide_implementation_widgets = true but root + child are not part of a
+        // chain (root has a child, so root is not a single-child non-local node
+        // in the strict chain definition — verify RowGroup::None at index 0).
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        handle_inspector_toggle_node(&mut state, 0);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded
+                .contains("root-id"),
+            "expanded should contain root-id after toggle on a standalone row"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .is_empty(),
+            "expanded_groups must remain empty when toggling a standalone row"
         );
     }
 }
