@@ -14,9 +14,10 @@ pub(crate) mod network;
 pub(crate) mod performance;
 
 pub use inspector::{
-    handle_inspector_navigate, handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout,
-    handle_layout_data_fetched, handle_widget_tree_fetch_failed, handle_widget_tree_fetch_timeout,
-    handle_widget_tree_fetched,
+    handle_close_details, handle_cycle_tab, handle_inspector_navigate,
+    handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout, handle_layout_data_fetched,
+    handle_open_details, handle_toggle_hide_implementation, handle_widget_tree_fetch_failed,
+    handle_widget_tree_fetch_timeout, handle_widget_tree_fetched,
 };
 
 pub(crate) use performance::{
@@ -309,6 +310,27 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     }
 
     UpdateResult::none()
+}
+
+/// Handle the DevTools Esc key with tiered close semantics.
+///
+/// **Tier 1 — Details panel close**: When the Inspector tab is active and the
+/// Details panel is open, the first Esc closes the Details panel instead of
+/// exiting DevTools mode. This mirrors the behaviour of Flutter DevTools where
+/// Esc dismisses the innermost selection before navigating outward.
+///
+/// **Tier 2 — Exit DevTools**: When no inner panel is open (or a non-Inspector
+/// panel is active), delegates to [`handle_exit_devtools_mode`] which returns
+/// to Normal mode and disposes VM object groups.
+pub fn handle_devtools_escape(state: &mut AppState) -> UpdateResult {
+    // Tiered Esc: close Details first when the Inspector is active.
+    if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
+        && state.devtools_view_state.inspector.details_open
+    {
+        return inspector::handle_close_details(state);
+    }
+    // Fall through to the existing exit-DevTools logic.
+    handle_exit_devtools_mode(state)
 }
 
 /// Handle exiting DevTools mode — returns to Normal and disposes VM object groups.
@@ -1790,6 +1812,86 @@ mod tests {
             "Found {raw_reads} raw `state.settings.devtools.inspector_readiness_poll_*` read(s) \
              in handler/devtools/mod.rs. All dispatch sites must use \
              clamped_readiness_poll_config() instead."
+        );
+    }
+
+    // ── Tiered Esc tests (Phase 1, Task 05) ──────────────────────────────────
+
+    fn make_state_with_tree_and_devtools() -> AppState {
+        let mut state = make_state_with_session();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "root-id",
+            "children": []
+        }))
+        .expect("valid DiagnosticsNode for tiered-esc test");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+    }
+
+    #[test]
+    fn tiered_esc_closes_details_first_then_exits_devtools() {
+        let mut state = make_state_with_tree_and_devtools();
+
+        // Open the Details panel.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("root-id".to_string());
+
+        // First Esc: should close Details, NOT exit DevTools.
+        handle_devtools_escape(&mut state);
+
+        assert!(
+            !state.devtools_view_state.inspector.details_open,
+            "First Esc should close the Details panel"
+        );
+        assert_eq!(
+            state.ui_mode,
+            UiMode::DevTools,
+            "First Esc should NOT exit DevTools mode"
+        );
+
+        // Second Esc: Details is now closed, so this exits DevTools.
+        handle_devtools_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "Second Esc should exit DevTools mode"
+        );
+    }
+
+    #[test]
+    fn tiered_esc_exits_devtools_directly_when_details_closed() {
+        let mut state = make_state_with_tree_and_devtools();
+        // Details is already closed.
+        state.devtools_view_state.inspector.details_open = false;
+
+        handle_devtools_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "Esc with details closed should exit DevTools immediately"
+        );
+    }
+
+    #[test]
+    fn tiered_esc_on_performance_panel_exits_devtools() {
+        let mut state = make_state_with_session();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        // Inspector details_open is irrelevant when the active panel is Performance.
+        state.devtools_view_state.inspector.details_open = true;
+
+        handle_devtools_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "Esc on Performance panel should exit DevTools even if inspector.details_open"
         );
     }
 }

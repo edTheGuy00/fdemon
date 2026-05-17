@@ -795,11 +795,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             crate::handler::devtools::inspector::handle_inspector_toggle_node(state, index)
         }
 
-        // Task 05 will replace these stubs with real handler calls.
-        Message::DevToolsInspectorOpenDetails => UpdateResult::none(),
-        Message::DevToolsInspectorCloseDetails => UpdateResult::none(),
-        Message::DevToolsInspectorCycleTab { .. } => UpdateResult::none(),
-        Message::DevToolsInspectorToggleHideImplementation => UpdateResult::none(),
+        Message::DevToolsInspectorOpenDetails => {
+            crate::handler::devtools::handle_open_details(state)
+        }
+        Message::DevToolsInspectorCloseDetails => {
+            crate::handler::devtools::handle_close_details(state)
+        }
+        Message::DevToolsInspectorCycleTab { forward } => {
+            crate::handler::devtools::handle_cycle_tab(state, forward)
+        }
+        Message::DevToolsInspectorToggleHideImplementation => {
+            crate::handler::devtools::handle_toggle_hide_implementation(state)
+        }
 
         // ─────────────────────────────────────────────────────────
         // Wrap Mode (v1-refinements Phase 1)
@@ -1908,7 +1915,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::EnterDevToolsMode => devtools::handle_enter_devtools_mode(state),
 
-        Message::ExitDevToolsMode => devtools::handle_exit_devtools_mode(state),
+        // Tiered Esc: closes Details panel first when Inspector is active,
+        // then exits DevTools mode on the second press.
+        Message::ExitDevToolsMode => devtools::handle_devtools_escape(state),
 
         Message::SwitchDevToolsPanel(panel) => devtools::handle_switch_panel(state, panel),
 

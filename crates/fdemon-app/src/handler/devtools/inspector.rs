@@ -5,10 +5,11 @@
 
 use std::time::Instant;
 
+use crate::config::save_settings;
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::InspectorNav;
 use crate::session::SessionId;
-use crate::state::{AppState, DevToolsError, InspectorState};
+use crate::state::{AppState, DetailsTab, DevToolsError, InspectorState};
 
 use super::map_rpc_error;
 
@@ -107,7 +108,15 @@ pub fn handle_widget_tree_fetch_failed(
 ///
 /// On Expand/Collapse: no layout fetch is triggered (selection does not change).
 pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> UpdateResult {
-    // Phase 1: read the visible node count and current selection, then handle navigation.
+    // Phase 1: when Details is open, Up/Down/Left/Right are all no-ops in the
+    // tree. The user must press Esc to return to tree mode first.
+    // Left/Right are repurposed as cycle-tab by the key handler (task 06) and
+    // must NOT reach this function when details_open == true — this guard is a
+    // safety net for any path that bypasses the key handler.
+    if state.devtools_view_state.inspector.details_open {
+        return UpdateResult::none();
+    }
+    // Phase 2: read the visible node count and current selection, then handle navigation.
     // We scope the mutable borrow of `inspector` here so it ends before we access
     // `state.session_manager` below.
     let should_fetch_layout = {
@@ -356,6 +365,11 @@ pub fn handle_layout_data_fetch_timeout(
 /// Out-of-range clicks (e.g. the tree shrank between render and click) are
 /// silently ignored — no action is emitted.
 pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> UpdateResult {
+    // When Details is open, selection is frozen — clicks do not change the
+    // selected row. The user must press Esc to close Details first.
+    if state.devtools_view_state.inspector.details_open {
+        return UpdateResult::none();
+    }
     // Phase 1: bounds-check and update selection.
     // Scope the mutable borrow of `inspector` so it ends before we access
     // `state.session_manager` below.
@@ -452,6 +466,130 @@ pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> Updat
     }
 
     select_result
+}
+
+// ── Details Panel Handlers (Phase 1, Task 05) ────────────────────────────────
+
+/// Open the Details panel for the currently selected inspector node.
+///
+/// Sets `details_open = true`, snaps `details_tab` back to `Properties`, and
+/// records `details_node_id` so the TUI can render the correct content. If
+/// layout data for the node is not yet cached, a `FetchLayoutData` action is
+/// dispatched so the Properties tab has content immediately.
+///
+/// No-op when:
+/// - Details is already open.
+/// - No tree row is currently selected (empty tree or out-of-range index).
+pub fn handle_open_details(state: &mut AppState) -> UpdateResult {
+    let inspector = &mut state.devtools_view_state.inspector;
+    if inspector.details_open {
+        return UpdateResult::none();
+    }
+    let Some(node_id) = inspector.selected_value_id() else {
+        return UpdateResult::none(); // no selection, nothing to open
+    };
+    inspector.details_open = true;
+    inspector.details_tab = DetailsTab::Properties; // always start on first tab
+    inspector.details_node_id = Some(node_id.clone());
+
+    // Layout data is fetched by the existing nav-driven path. If the user
+    // opens Details immediately on initial selection, the data is already
+    // warm. If not, dispatch an extra FetchLayoutData here so the
+    // Properties tab has content.
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if let Some(session_id) = active_id {
+        let inspector = &mut state.devtools_view_state.inspector;
+        if inspector.last_fetched_node_id.as_deref() != Some(&node_id) && !inspector.layout_loading
+        {
+            inspector.layout_loading = true;
+            inspector.pending_node_id = Some(node_id.clone());
+            return UpdateResult::action(UpdateAction::FetchLayoutData {
+                session_id,
+                node_id,
+                vm_handle: None,
+            });
+        }
+    }
+    UpdateResult::none()
+}
+
+/// Close the Details panel.
+///
+/// Sets `details_open = false` and clears `details_node_id`. The `details_tab`
+/// is intentionally left at its last value so that reopening the panel returns
+/// the user to where they were.
+///
+/// No-op when Details is already closed.
+pub fn handle_close_details(state: &mut AppState) -> UpdateResult {
+    let inspector = &mut state.devtools_view_state.inspector;
+    if !inspector.details_open {
+        return UpdateResult::none();
+    }
+    inspector.details_open = false;
+    inspector.details_node_id = None;
+    // details_tab is left at its last value so reopening defaults to where
+    // the user was. Reset to Properties only if you want fresh-open semantics.
+    UpdateResult::none()
+}
+
+/// Cycle the active Details tab forward or backward.
+///
+/// Wraps around at both ends (Properties → RenderObject → FlexExplorer →
+/// Properties when `forward == true`). No-op when Details is not open.
+pub fn handle_cycle_tab(state: &mut AppState, forward: bool) -> UpdateResult {
+    let inspector = &mut state.devtools_view_state.inspector;
+    if !inspector.details_open {
+        return UpdateResult::none();
+    }
+    inspector.details_tab = if forward {
+        inspector.details_tab.next()
+    } else {
+        inspector.details_tab.prev()
+    };
+    UpdateResult::none()
+}
+
+/// Toggle the `hide_implementation_widgets` flag.
+///
+/// Flips the flag on the inspector state, clamps `selected_index` to a valid
+/// row if the visible row count has shrunk (folding can hide rows), and
+/// mirrors the new value back to `state.settings.devtools` so the setting
+/// survives a DevTools-mode switch.
+///
+/// Also attempts to persist the setting to `.fdemon/config.toml` via
+/// [`save_settings`]. Persistence failures are logged at `warn!` level and
+/// do not block the toggle (the in-memory setting is already updated).
+pub fn handle_toggle_hide_implementation(state: &mut AppState) -> UpdateResult {
+    state
+        .devtools_view_state
+        .inspector
+        .hide_implementation_widgets = !state
+        .devtools_view_state
+        .inspector
+        .hide_implementation_widgets;
+
+    // Clamp selected_index — row count may have shrunk if folding turned on.
+    let row_count = state.devtools_view_state.inspector.inspector_rows().len();
+    if row_count > 0 && state.devtools_view_state.inspector.selected_index >= row_count {
+        state.devtools_view_state.inspector.selected_index = row_count - 1;
+    }
+
+    // Mirror back to Settings so the value survives re-opening DevTools.
+    state.settings.devtools.hide_implementation_widgets = state
+        .devtools_view_state
+        .inspector
+        .hide_implementation_widgets;
+
+    // Persist to disk. Failure is non-fatal — the in-memory state is already
+    // updated and the user's preference is applied for this session.
+    if let Err(e) = save_settings(&state.project_path, &state.settings) {
+        tracing::warn!(
+            "Failed to persist hide_implementation_widgets setting: {}",
+            e
+        );
+    }
+
+    UpdateResult::none()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1741,6 +1879,312 @@ mod tests {
         assert!(
             state.devtools_view_state.inspector.error.is_some(),
             "error must be set after fetch failure (scenario 4)"
+        );
+    }
+
+    // ── Details panel handlers (Phase 1, Task 05) ─────────────────────────────
+
+    /// Build a state with a session and a tree whose root has value_id "node-0-value-id"
+    /// and a child at index 1 with value_id "node-1-value-id". The root is expanded
+    /// so both rows are visible.
+    fn make_state_with_tree() -> AppState {
+        let mut state = make_state_with_session();
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "node-0-value-id",
+            "children": [{
+                "description": "Child",
+                "valueId": "node-1-value-id",
+                "children": []
+            }]
+        }))
+        .expect("valid DiagnosticsNode for make_state_with_tree");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("node-0-value-id".to_string());
+        state
+    }
+
+    #[test]
+    fn handle_open_details_sets_details_open_and_snapshots_node_id() {
+        let mut state = make_state_with_tree();
+        // Select the child (index 1) whose value_id is "node-1-value-id".
+        state.devtools_view_state.inspector.selected_index = 1;
+
+        let _ = handle_open_details(&mut state);
+
+        assert!(state.devtools_view_state.inspector.details_open);
+        assert_eq!(
+            state
+                .devtools_view_state
+                .inspector
+                .details_node_id
+                .as_deref(),
+            Some("node-1-value-id"),
+            "details_node_id should be set to the selected node's value_id"
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "details_tab should be reset to Properties on open"
+        );
+    }
+
+    #[test]
+    fn handle_open_details_is_no_op_when_no_selection() {
+        let mut state = make_state_with_session();
+        // No tree loaded — selected_value_id() returns None.
+        let result = handle_open_details(&mut state);
+        assert!(!state.devtools_view_state.inspector.details_open);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handle_open_details_is_no_op_when_already_open() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("existing-id".to_string());
+
+        let result = handle_open_details(&mut state);
+        // Should return immediately — no state change.
+        assert_eq!(
+            state
+                .devtools_view_state
+                .inspector
+                .details_node_id
+                .as_deref(),
+            Some("existing-id"),
+            "details_node_id should not be updated when details already open"
+        );
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handle_open_details_dispatches_fetch_layout_when_data_stale() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        // Ensure layout data is stale (last_fetched_node_id differs or is None).
+        state.devtools_view_state.inspector.last_fetched_node_id = None;
+        state.devtools_view_state.inspector.layout_loading = false;
+
+        let result = handle_open_details(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
+            "Should dispatch FetchLayoutData when layout data is stale"
+        );
+        assert!(state.devtools_view_state.inspector.layout_loading);
+    }
+
+    #[test]
+    fn handle_open_details_skips_fetch_when_data_already_cached() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        // Pre-cache the layout data for "node-0-value-id".
+        state.devtools_view_state.inspector.last_fetched_node_id =
+            Some("node-0-value-id".to_string());
+        state.devtools_view_state.inspector.layout_loading = false;
+
+        let result = handle_open_details(&mut state);
+
+        assert!(
+            result.action.is_none(),
+            "Should NOT dispatch FetchLayoutData when layout data is already cached"
+        );
+        assert!(
+            !state.devtools_view_state.inspector.layout_loading,
+            "layout_loading should remain false when data is cached"
+        );
+    }
+
+    #[test]
+    fn handle_close_details_clears_details_node_id() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("some-node-id".to_string());
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::RenderObject;
+
+        handle_close_details(&mut state);
+
+        assert!(!state.devtools_view_state.inspector.details_open);
+        assert!(state
+            .devtools_view_state
+            .inspector
+            .details_node_id
+            .is_none());
+        // details_tab is intentionally preserved.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "details_tab should be preserved across close/reopen"
+        );
+    }
+
+    #[test]
+    fn handle_close_details_is_no_op_when_already_closed() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = false;
+
+        let result = handle_close_details(&mut state);
+        assert!(!state.devtools_view_state.inspector.details_open);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handle_cycle_tab_forward_advances_through_three_tabs_with_wrap() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject
+        );
+
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::FlexExplorer
+        );
+
+        // Wrap around.
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_backward_advances_through_three_tabs_with_wrap() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::FlexExplorer
+        );
+
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject
+        );
+
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_is_no_op_when_details_closed() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = false;
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+
+        handle_cycle_tab(&mut state, true);
+
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "Tab should not change when details is closed"
+        );
+    }
+
+    #[test]
+    fn handle_toggle_hide_implementation_flips_flag_and_clamps_selection() {
+        let mut state = make_state_with_tree();
+        // Default is hide_implementation_widgets = true.
+        // With our two-node tree (root + child), tree shows both rows when hide=false
+        // and may collapse chains when hide=true.
+        let was = state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets;
+
+        handle_toggle_hide_implementation(&mut state);
+
+        assert_ne!(
+            state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            was,
+            "hide_implementation_widgets should be flipped"
+        );
+
+        // selected_index must be valid (< row_count).
+        let row_count = state.devtools_view_state.inspector.inspector_rows().len();
+        assert!(
+            state.devtools_view_state.inspector.selected_index < row_count.max(1),
+            "selected_index should be clamped to a valid row after toggle"
+        );
+    }
+
+    #[test]
+    fn handle_toggle_hide_implementation_writes_back_to_settings() {
+        let mut state = make_state_with_tree();
+        let original = state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets;
+
+        handle_toggle_hide_implementation(&mut state);
+
+        assert_eq!(
+            state.settings.devtools.hide_implementation_widgets, !original,
+            "Settings must reflect the toggled value"
+        );
+        assert_eq!(
+            state.settings.devtools.hide_implementation_widgets,
+            state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "Settings and inspector state must be in sync after toggle"
+        );
+    }
+
+    #[test]
+    fn handle_inspector_navigate_is_no_op_when_details_open() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_navigate(&mut state, InspectorNav::Down);
+
+        assert!(
+            result.action.is_none(),
+            "navigate should return no action when details is open"
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 0,
+            "selected_index should not change when details is open"
+        );
+    }
+
+    #[test]
+    fn handle_inspector_select_row_is_no_op_when_details_open() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_select_row(&mut state, 1);
+
+        assert!(result.action.is_none());
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 0,
+            "row selection should be frozen when details is open"
         );
     }
 }
