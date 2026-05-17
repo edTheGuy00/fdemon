@@ -61,16 +61,26 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done ✅
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/ARCHITECTURE.md` | Extended `InspectorState` paragraph with `selected_row()` and `reset_details_and_groups()` helpers; added `AutoSaveConfig` and `PersistSettings` entries to the UpdateAction variants list. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **KEYBINDINGS.md unchanged**: The Details-mode Up/Down row already reads `**No-op** — selection frozen while details is open`. This is the correct user-facing summary. The task 09 review confirmed that "No-op" remains the right framing — no footnote was warranted.
+2. **AutoSaveConfig included**: The UpdateAction list previously omitted `AutoSaveConfig` (an earlier variant). Added it alongside `PersistSettings` so the list is coherent.
+3. **No code samples in ARCHITECTURE.md**: The `selected_row()` and `reset_details_and_groups()` entries use minimal inline signatures only, consistent with the content-boundary rule (full code examples belong in CODE_STANDARDS.md).
+
 ### Testing Performed
 
+- `cargo doc --workspace --no-deps` completed with only pre-existing warnings unrelated to these changes.
+- Verified ARCHITECTURE.md entries cross-reference the correct file (`crates/fdemon-app/src/state.rs`).
+
 ### Risks/Limitations
+
+- None. The pre-existing broken intra-doc-link warnings in `fdemon-tui` are unrelated to this task.

@@ -185,16 +185,38 @@ fn tree_guideline_column_matches_parent_branch_tick_column() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added `MAX_TREE_WALK_DEPTH = 512` constant (m9); added depth cap to `walk_node` and `visible_node_count_inner` (m9); removed `is_member` parameter from `walk_node` and `RowGroup::Member` arm is now only reachable via `emit_chain_members` (m5); changed `open_ticks.push(depth)` to `push(depth.saturating_sub(1))` for guideline alignment (C4); fixed `group.clone()` to a move in row-push (m10); made `emit_chain_members` honour `expanded` set matching `count_visible_chain_subordinates` (M4); changed `count_visible_chain_subordinates` to `pub(crate)` (m8); updated existing `test_build_rows_ticks_computed_correctly` to match C4 semantics; added new tests for M4 (count/emit agreement, 5 cases), m9 (depth cap for walker and visible_node_count) |
+| `crates/fdemon-core/src/lib.rs` | Removed `count_visible_chain_subordinates` from the public re-export (m8) |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs` | Replaced `branch_x = 0` sentinel with `Option<u16>` using `.filter()` and `if let Some(bx)` guard (C3) |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | Added 3 new tests: `tree_renders_branch_tick_at_tree_inner_x_plus_zero_for_depth_one_child` (C3), `tree_guideline_column_matches_parent_branch_tick_column` (C4), `tree_renders_guidelines_for_nonlast_sibling_ancestors_exact_column` (C4 — strengthened existing test with exact-column assertion) |
 
 ### Notable Decisions/Tradeoffs
 
+1. **C4 tick depth semantics**: The old code pushed `depth` (the non-last child's own depth) to `open_ticks`, causing the guideline `│` to be drawn at `glyph_col(depth)` which overwrites the icon glyph. The fix pushes `depth.saturating_sub(1)` — the parent's branch tick column — so the guideline aligns with `├─`/`└─` drawn for the non-last ancestor. This required updating the existing `test_build_rows_ticks_computed_correctly` test to assert `ticks.contains(&0)` (not `&1`) for a depth-2 grandchild.
+
+2. **m5 `is_member` removal**: The `is_member: bool` parameter was always passed as `false` at all call sites except the root, where the comment said "root is never a chain member". The `RowGroup::Member` arm in `walk_node` was unreachable since chain members are exclusively emitted by `emit_chain_members`. Removing the parameter simplifies the signature and eliminates dead code.
+
+3. **m10 move vs clone**: `group` is computed just before the `rows.push()` and never used again — but the match below needed to inspect `group`. Solved by pushing `group` (moved into the struct), then reading back from `rows.last()`. This is slightly less obvious but avoids the clone and is safe since we just pushed.
+
+4. **M4 emit/count parity**: The `emit_chain_members` loop now stops when `!should_expand || child.children.is_empty()`, mirroring `count_visible_chain_subordinates`. The expanded-set check was simply missing from the emitter.
+
+5. **C3 test limitation**: `render_tree_panel_inner` always draws a `Borders::ALL` block, so `tree_inner.x` is always `>= 1`. We cannot render to a buffer where `tree_inner.x == 0` through the public API. The C3 test instead verifies the fix works at the smallest possible value (`tree_inner.x = 1`, `branch_col = 0`), which exercises the same code path that the old `branch_x > 0` guard would have incorrectly skipped for `x = 0`.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-core` — Passed (415 tests)
+- `cargo test -p fdemon-tui` — Passed (1089 tests)
+- `cargo test --workspace` — Passed (all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+
 ### Risks/Limitations
+
+1. **C4 semantic change**: The tick semantics changed from "child's own depth" to "parent's branch tick column". This is the correct semantic (guideline aligns with branch tick), but any code that interpreted ticks as "child depth N has a non-last sibling" will need updating. The only consumer is the TUI renderer which draws `│` at `glyph_col(d)` for each `d` in ticks — this now correctly aligns with the branch tick column.

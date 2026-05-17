@@ -109,16 +109,39 @@ The variant + dispatch arm presence is verified by `cargo check`.
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** worktree-agent-a53831211ce0294ab
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::PersistSettings { settings, project_path }` variant adjacent to `AutoSaveConfig` |
+| `crates/fdemon-app/src/message.rs` | Added `Message::SettingsPersisted` and `Message::SettingsPersistFailed { error }` variants with doc comments |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `PersistSettings` dispatch arm using `tokio::spawn` + `spawn_blocking` pattern; added two `#[tokio::test]` tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added `SettingsPersisted` (no-op) and `SettingsPersistFailed` (`warn!` + no-op) match arms |
+| `crates/fdemon-tui/src/runner.rs` | Added `PersistSettings { .. }` to the non-runner variants list in `handle_runner_actions` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`spawn_blocking` wrapped in `tokio::spawn`**: Used the same pattern as `ScanInstalledSdks` (async outer task, blocking inner), allowing `.await` on the sender rather than `blocking_send`. This keeps the style consistent with the rest of `handle_action`.
+
+2. **`JoinError` arm**: Added an extra match arm for the `Err(JoinErr)` case when the blocking task panics, sending `SettingsPersistFailed` with the panic message. This is defensive and mirrors best practice for `spawn_blocking`.
+
+3. **Two unit tests instead of one**: Added both success and failure tests for full coverage of the dispatch arm. The failure test uses a non-existent path to trigger an I/O error.
+
+4. **runner.rs exhaustive match**: The `UpdateAction` enum match in `fdemon-tui/src/runner.rs` is exhaustive by design; added `PersistSettings { .. }` to the non-runner variants list as required.
+
 ### Testing Performed
 
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (all test results ok, no failures)
+- New tests: `persist_settings_action_sends_persisted_message_on_success` — Passed
+- New tests: `persist_settings_action_sends_failed_message_on_error` — Passed
+
 ### Risks/Limitations
+
+1. **No call sites yet**: This task intentionally does not wire up any call sites. Task 08 owns the migration of `handle_toggle_hide_implementation` and `handler/settings_handlers.rs` to use `UpdateAction::PersistSettings`.
+
+2. **No UI surface**: `SettingsPersisted` and `SettingsPersistFailed` are no-op stubs in Phase 1.5. Future phases can add toast/status-bar surfacing without further infrastructure changes.

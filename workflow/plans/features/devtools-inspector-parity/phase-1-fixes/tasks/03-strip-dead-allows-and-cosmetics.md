@@ -81,16 +81,29 @@ cargo test -p fdemon-tui
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** worktree-agent-a4856d2f96afa20a4
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` | Removed two `#[allow(dead_code)]` annotations from `render` and `render_centered_text` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/render_object_tab.rs` | Removed two `#[allow(dead_code)]` annotations from `render` and `render_centered_text` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` | Removed four `#[allow(dead_code)]` annotations from `MIN_LAYOUT_PREVIEW_HEIGHT`, `PROPERTY_LIST_HEIGHT`, `render_properties_tab`, and `render_property_list_placeholder` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Renamed `_tab` binding to `tab` in the `render_tab_strip` loop (line 136), and updated the usage on the next line from `*_tab` to `*tab` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **No dead code surfaced after removal**: Clippy `-D warnings` passed cleanly — all functions were genuinely reachable via `render_details_panel`, confirming the annotations were stale.
+2. **Single-slash doc-comment fix**: The `/ 2 rows:` line mentioned in the task was already `/// 2 rows:` in the current branch — no action needed.
+
 ### Testing Performed
 
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo test -p fdemon-tui` — Passed (1086 unit tests + 7 doc tests)
+- `cargo fmt --all -- --check` — Passed
+
 ### Risks/Limitations
+
+None. Pure cosmetic changes — no logic altered.

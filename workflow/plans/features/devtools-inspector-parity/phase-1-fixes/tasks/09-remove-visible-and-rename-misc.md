@@ -163,16 +163,40 @@ The single-call assertion (criterion 8a) is hard to enforce in a unit test witho
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs` | Removed `_visible: &[(&DiagnosticsNode, usize)]` parameter; replaced with `rows: &[InspectorRow<'_>]`; removed internal `inspector_rows()` call; updated doc comment |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Changed `render_impl` to call `inspector_rows()` once per frame; updated `render_tree_core` and `render_tree_with_regions` to accept `rows: &[InspectorRow<'_>]`; threaded slice to both `render_tree_panel_inner` and `render_details_panel`; added `#[cfg(test)] pub(crate) mod test_helpers` with canonical `collect_buf_text` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Added `rows: &[InspectorRow<'_>]` parameter to `render_details_panel`; removed `visible_nodes()` call and `refs` re-collect; derives `visible` from `rows` inline; removed duplicate `collect_buf_text`; updated all test calls to pass `&[]` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` | Removed duplicate `collect_buf_text`; imports from shared `test_helpers` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/render_object_tab.rs` | Removed duplicate `collect_buf_text`; imports from shared `test_helpers` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` | Removed duplicate `collect_buf_text`; imports from shared `test_helpers` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | Removed duplicate `collect_buf_text`; imports from shared `test_helpers`; updated `render_tree_inner` to build rows from state; added 2 new regression tests |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/layout_panel_tests.rs` | Removed duplicate `collect_buf_text`; imports from shared `test_helpers` via `super::super::test_helpers` |
+| `crates/fdemon-app/src/message.rs` | Renamed `ExitDevToolsMode` → `DevToolsEscape`; updated doc comment to describe tiered Esc semantics |
+| `crates/fdemon-app/src/handler/keys.rs` | Updated `ExitDevToolsMode` → `DevToolsEscape` at call site; fixed Up/Down comment at L633–638 to accurately describe handler behaviour |
+| `crates/fdemon-app/src/handler/update.rs` | Updated match arm `ExitDevToolsMode` → `DevToolsEscape` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`render_layout_panel` not changed**: `render_layout_panel` retains its `visible: &[(&DiagnosticsNode, usize)]` signature since the task scope doesn't include changing it. `render_tree_core` derives the `visible` slice inline from the `rows` parameter for the layout-panel call.
+
+2. **Shared `test_helpers` as `pub(crate)` in `inspector/mod.rs`**: The task allowed placement in `widgets/devtools/inspector/mod.rs` or a separate `test_helpers.rs`. Used an inline `#[cfg(test)] pub(crate) mod test_helpers` block in `mod.rs` to keep it co-located with the inspector module. `pub(crate)` visibility (rather than `pub(super)`) is needed because the callers span multiple depths of the module tree.
+
+3. **`render_tree_inner` test helper updated**: The test helper now calls `state.inspector_rows()` and passes the real rows slice. This mirrors the production code invariant and ensures test output matches what the user sees.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all tests: 5,726 passing, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **`render_details_panel` tests pass empty rows**: The tests in `details/mod.rs` pass `&[]` for rows, so no node-specific content is rendered in those tests. This is acceptable for the tab-strip and coming-soon stub tests, which don't depend on node data.

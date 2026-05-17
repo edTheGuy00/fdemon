@@ -90,16 +90,28 @@ fn selected_row_returns_row_with_group_for_chain_leader() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `selected_row()` method on `InspectorState`; refactored `selected_value_id()` to delegate to it; added 3 new tests plus a `make_root_with_chain()` fixture helper |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`rows.into_iter().nth(idx)` over `rows.get(idx).cloned()`**: The task spec calls for `into_iter().nth()` and it cleanly owns the vector and extracts the element without a clone, consistent with the existing `selected_value_id` pattern. The vector is short-lived so there is no performance concern.
+2. **`make_root_with_chain()` fixture reuses `make_chain()`**: Rather than duplicating inline node construction, the new fixture composes the existing `make_chain(3)` helper into a local-project wrapper, keeping test setup DRY.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-app selected_row` — 3 new tests pass
+- `cargo test -p fdemon-app` — 2336 tests pass, 0 failures
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — no warnings
+- `cargo fmt --all -- --check` — passes
+- `cargo check --workspace --all-targets` — passes
+
 ### Risks/Limitations
+
+1. **None identified**: The change is purely additive — a new method and delegation. No existing behaviour was altered.

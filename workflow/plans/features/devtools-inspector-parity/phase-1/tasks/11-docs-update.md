@@ -107,16 +107,25 @@ the leader to expand the chain in place.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done ✅
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/ARCHITECTURE.md` | Expanded `InspectorState` description with new state fields, row-builder algorithm paragraph, and `has_ever_rendered_tree` note; updated Widget Inspector Panel in structure overview. |
+| `docs/KEYBINDINGS.md` | Replaced the flat Widget Inspector Panel key table with two-mode structure (tree mode / details mode), added `Shift+H`, `Enter`, `Tab`/`Shift+Tab`, tiered Esc semantics, and chain-collapsing explanatory prose. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Retroactive status flip**: This completion summary was written during Phase 1.5 task 10 (doc update pass). The actual doc changes landed on the same branch (`feat/devtools-inspector-parity`) as part of the Phase 1 doc pass but the status field was never updated. The docs themselves are consistent with the Phase 1 implementation.
+
 ### Testing Performed
 
+- Verified `cargo doc --workspace --no-deps` produces a clean output.
+- Cross-referenced ARCHITECTURE.md state description against `crates/fdemon-app/src/state.rs` field inventory.
+
 ### Risks/Limitations
+
+- None. Docs are current and consistent with the Phase 1 implementation as merged.

@@ -69,16 +69,16 @@ Wave 6 (doc_maintainer)                ▼                       ▼
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-inspector-state-helpers](tasks/01-inspector-state-helpers.md) | Not Started | — | 0.5–1h | `crates/fdemon-app/src/state.rs` |
-| 02 | [02-persist-settings-action](tasks/02-persist-settings-action.md) | Not Started | — | 1–1.5h | `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/actions/mod.rs`, `crates/fdemon-app/src/message.rs` |
-| 03 | [03-strip-dead-allows-and-cosmetics](tasks/03-strip-dead-allows-and-cosmetics.md) | Not Started | — | 0.5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/{flex_explorer_tab,render_object_tab,properties_tab,mod}.rs` |
-| 04 | [04-tree-rendering-correctness](tasks/04-tree-rendering-correctness.md) | Not Started | — | 2–3h | `crates/fdemon-core/src/widget_tree.rs`, `crates/fdemon-core/src/lib.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` |
-| 05 | [05-sanitize-vm-service-strings](tasks/05-sanitize-vm-service-strings.md) | Not Started | 04 | 1h | `crates/fdemon-core/src/widget_tree.rs` |
-| 06 | [06-wire-expanded-groups-and-cleanup](tasks/06-wire-expanded-groups-and-cleanup.md) | Not Started | 01, 04 | 2h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
-| 07 | [07-reset-state-on-refresh-restart](tasks/07-reset-state-on-refresh-restart.md) | Not Started | 06 | 1h | `crates/fdemon-app/src/handler/devtools/inspector.rs`, `crates/fdemon-app/src/handler/update.rs` |
-| 08 | [08-async-settings-persistence](tasks/08-async-settings-persistence.md) | Not Started | 02, 07 | 1–1.5h | `crates/fdemon-app/src/handler/devtools/inspector.rs`, `crates/fdemon-app/src/handler/settings_handlers.rs`, `crates/fdemon-app/src/config/settings.rs` |
-| 09 | [09-remove-visible-and-rename-misc](tasks/09-remove-visible-and-rename-misc.md) | Not Started | 04, 06 | 1.5–2h | `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs`, `crates/fdemon-app/src/message.rs`, `crates/fdemon-app/src/handler/keys.rs`, `crates/fdemon-app/src/handler/update.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` |
-| 10 | [10-docs-update](tasks/10-docs-update.md) | Not Started | 01–09 | 0.5–1h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-inspector-state-helpers](tasks/01-inspector-state-helpers.md) | Done ✅ | — | 0.5–1h | `crates/fdemon-app/src/state.rs` |
+| 02 | [02-persist-settings-action](tasks/02-persist-settings-action.md) | Done ✅ | — | 1–1.5h | `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/actions/mod.rs`, `crates/fdemon-app/src/message.rs` |
+| 03 | [03-strip-dead-allows-and-cosmetics](tasks/03-strip-dead-allows-and-cosmetics.md) | Done ✅ | — | 0.5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/{flex_explorer_tab,render_object_tab,properties_tab,mod}.rs` |
+| 04 | [04-tree-rendering-correctness](tasks/04-tree-rendering-correctness.md) | Done ⚠️ CONCERN | — | 2–3h | `crates/fdemon-core/src/widget_tree.rs`, `crates/fdemon-core/src/lib.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` |
+| 05 | [05-sanitize-vm-service-strings](tasks/05-sanitize-vm-service-strings.md) | Done ✅ | 04 | 1h | `crates/fdemon-core/src/widget_tree.rs` |
+| 06 | [06-wire-expanded-groups-and-cleanup](tasks/06-wire-expanded-groups-and-cleanup.md) | Done ✅ | 01, 04 | 2h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
+| 07 | [07-reset-state-on-refresh-restart](tasks/07-reset-state-on-refresh-restart.md) | Done ✅ | 06 | 1h | `crates/fdemon-app/src/handler/devtools/inspector.rs`, `crates/fdemon-app/src/handler/update.rs` |
+| 08 | [08-async-settings-persistence](tasks/08-async-settings-persistence.md) | Done ✅ | 02, 07 | 1–1.5h | `crates/fdemon-app/src/handler/devtools/inspector.rs`, `crates/fdemon-app/src/handler/settings_handlers.rs`, `crates/fdemon-app/src/config/settings.rs` |
+| 09 | [09-remove-visible-and-rename-misc](tasks/09-remove-visible-and-rename-misc.md) | Done ✅ | 04, 06 | 1.5–2h | `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs`, `crates/fdemon-app/src/message.rs`, `crates/fdemon-app/src/handler/keys.rs`, `crates/fdemon-app/src/handler/update.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` |
+| 10 | [10-docs-update](tasks/10-docs-update.md) | Done ✅ | 01–09 | 0.5–1h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
 
 ## Wave Schedule
 

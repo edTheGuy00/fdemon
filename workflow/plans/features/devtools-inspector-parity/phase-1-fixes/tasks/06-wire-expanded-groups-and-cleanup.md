@@ -136,16 +136,40 @@ If `make_state_with_folded_chain` doesn't exist, add it as a test helper.
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** worktree-agent-a9801e57e5f9b738e
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | C1+M8: rewired Expand/Collapse to use `selected_row()` + `RowGroup` branching; M8: `handle_inspector_toggle_node` now branches on `RowGroup`; M1: deleted `get_selected_value_id`, all 3 callers replaced with `inspector.selected_value_id()`; m2: fixed `handle_close_details` doc comment; added 6 new tests + 2 test helpers |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Expand/Collapse refactor structure**: The original `handle_inspector_navigate` used a single scoped block that called `visible_nodes()` for all four nav variants. The Expand/Collapse arms now exit early using `selected_row()` + RowGroup branching before the scoped block for Up/Down is reached. This avoids a large refactor of the Up/Down path while keeping the RowGroup dispatch clean.
+
+2. **`handle_inspector_toggle_node` uses `inspector_rows()` instead of `visible_nodes()`**: The toggle handler was already using `visible_nodes()` to check the index. Switched to `inspector_rows()` (the canonical method) to get the `RowGroup` metadata on the row. Both methods are equivalent for this purpose.
+
+3. **`RowGroup::Member` treated as standard node in toggle**: When the user clicks the glyph of a Member row, the current code falls through to the standard `expanded` path. Member rows are internal to an expanded chain and typically have no children of their own, so the `has_children` guard means nothing happens — which is the correct UX (you can't collapse individual members).
+
+4. **`use fdemon_core::RowGroup`** added at the top of the file to reduce verbosity in the match arms.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2344 fdemon-app tests, all others passing)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+
+All 6 new required tests pass:
+- `expand_on_leader_collapsed_inserts_into_expanded_groups`
+- `expand_on_leader_collapsed_does_not_insert_into_expanded`
+- `collapse_on_leader_expanded_removes_from_expanded_groups`
+- `expand_on_standalone_row_inserts_into_expanded`
+- `mouse_toggle_on_leader_glyph_mutates_expanded_groups_not_expanded`
+- `mouse_toggle_on_standalone_glyph_mutates_expanded`
+
 ### Risks/Limitations
+
+1. **`make_state_with_folded_chain` visibility**: The chain structure requires `hide_implementation_widgets = true` and exactly 3 non-local nodes to produce a `LeaderCollapsed` at index 1. If `build_inspector_rows` folding logic changes, these tests may need updating.

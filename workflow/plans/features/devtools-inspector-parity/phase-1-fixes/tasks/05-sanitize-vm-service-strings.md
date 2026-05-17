@@ -116,16 +116,36 @@ fn deserialize_preserves_unicode_box_drawing() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added two serde helper functions (`deserialize_sanitized_string`, `deserialize_sanitized_option_string`); applied `#[serde(deserialize_with = ...)]` to `DiagnosticsNode.description`, `CreationLocation.file`, `CreationLocation.name`, `LayoutInfo.description`, and `LayoutInfo.flex_fit`; added 8 new tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Scope extended to `LayoutInfo`**: The task specified `DiagnosticsNode` and `CreationLocation`, but audit of `crates/fdemon-tui/src/widgets/devtools/inspector/layout_panel.rs` revealed that `LayoutInfo.description` and `LayoutInfo.flex_fit` are also directly rendered to the terminal (lines 501–503). Both were sanitized for completeness, matching the spirit of acceptance criterion 3.
+
+2. **`serde(default)` preserved**: All annotated fields had `default` added alongside `deserialize_with` to ensure missing-field resilience is not regressed. `CreationLocation.file` originally had no `default` annotation (deserialize failure would have been the prior behavior for a missing file field) but adding `default` is more resilient and consistent with the rest of the struct.
+
+3. **JSON test approach**: `serde_json::from_str` rejects literal ESC bytes (0x1B) in JSON strings per the JSON spec. Tests use raw Rust string literals containing the JSON escape sequence `` — `serde_json` decodes this to the actual ESC byte before passing the `String` to our sanitizer, giving end-to-end coverage without embedding control characters in source.
+
+4. **Non-terminal fields not sanitized**: `DiagnosticsNode.name`, `node_type`, `level`, `style`, and `property_type` fields are used programmatically (boolean checks, pattern matching, enum parsing) and never rendered as text strings to the terminal. They were intentionally left without the sanitize attribute to avoid unnecessary processing overhead on every deserialized node.
+
 ### Testing Performed
 
+- `cargo check -p fdemon-core` — Passed
+- `cargo test -p fdemon-core` — Passed (423 unit tests, 8 new)
+- `cargo clippy -p fdemon-core --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **`strip_ansi_codes` also strips trailing backslashes and backslash-escaped box-drawing chars**: Per the task notes, this is intentional and acceptable for VM Service strings. Widget names are Dart identifiers and cannot legitimately contain these patterns.
+
+2. **`LayoutInfo.flex_factor` not sanitized**: This is an `Option<f64>` (a float field), so there is no string data to sanitize — no issue.

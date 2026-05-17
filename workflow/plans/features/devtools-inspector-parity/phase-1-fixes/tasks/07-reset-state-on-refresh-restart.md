@@ -117,16 +117,33 @@ fn widget_tree_fetched_clears_details_state_when_details_was_open() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `InspectorState::reset_details_and_groups()` helper method with full doc-comment |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Called `reset_details_and_groups()` at end of layout-clear block in `handle_widget_tree_fetched`; added 4 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Called `reset_details_and_groups()` after `has_ever_rendered_tree = false` in `SessionRestartCompleted` handler |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Placement of reset_details_and_groups call in inspector.rs**: The call is placed after all the layout-data clears (lines 56-63) and before the auto-fetch layout block, so all stale identity-based state is wiped before any new fetch is dispatched.
+
+2. **`reset_details_and_groups` does not clear `has_ever_rendered_tree`**: Deliberately matches the task spec — only `SessionRestartCompleted` touches that flag. The regression guard test (`reset_details_and_groups_preserves_has_ever_rendered_tree`) documents this invariant.
+
+3. **Test helper `make_state_with_details_open` returns `(AppState, SessionId)`**: Because `session_restart_completed_clears_details_state` needs the `session_id` to dispatch the message, but the inspector-only tests only need the state. Returning a tuple avoids duplicating fixture setup.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app` — Passed (2348 tests; 4 new tests added)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **`properties` / `render_properties` fields**: The task spec lists them as fields to clear, and the implementation clears them. Currently they are always empty in Phase 1 (populated in Phase 2), so the clear is a no-op in practice but is correct for future-proofing.
+2. **No test for `properties_loading`/`properties_error` clearing via the tree-fetch path**: These are covered implicitly by the `make_state_with_details_open` setup (sets both fields) and the `widget_tree_fetched_clears_details_state_when_details_was_open` assertion (checks `properties_loading == false`, `properties_error == None`).

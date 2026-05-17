@@ -129,16 +129,37 @@ fn handle_toggle_hide_implementation_returns_persist_settings_action() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** —
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/Cargo.toml` | Promoted `tempfile` from dev-dependency to runtime dependency |
+| `crates/fdemon-app/src/config/settings.rs` | Replaced fixed `.config.toml.tmp` temp filename with `tempfile::Builder` (unique per-invocation); updated `test_save_settings_atomic_write` to scan for pattern rather than fixed name; added `save_settings_two_concurrent_writes_do_not_collide` test |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Removed `use crate::config::save_settings` import; `handle_toggle_hide_implementation` now returns `UpdateResult::action(UpdateAction::PersistSettings {...})` instead of calling `save_settings` synchronously; added `handle_toggle_hide_implementation_returns_persist_settings_action` test |
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Added `UpdateAction` to imports; changed `save_active_tab` return type from `Result<()>` to `Result<Option<UpdateAction>>`; Project tab now returns `Some(PersistSettings)` instead of calling `save_settings`; updated `handle_settings_save` and `handle_settings_save_and_close` to propagate the optional action |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`tempfile` promoted to runtime dep**: The task specified this was acceptable (small, widely-used crate). The alternative (hand-rolled temp naming with `process::id()` + counter) is more fragile and requires atomic counter infrastructure. Chose `tempfile`.
+
+2. **`save_active_tab` return type change**: Changed from `Result<()>` to `Result<Option<UpdateAction>>` rather than inlining the tab dispatch into both callers. This keeps the `match active_tab` block in one place (DRY) while still allowing the callers to decide what to do with the action. The `Project` arm returns `Ok(Some(PersistSettings {...}))` early; other arms fall through to `Ok(None)`.
+
+3. **Optimistic close in `handle_settings_save_and_close`**: For the Project tab async path, the settings panel is closed before the background write completes. If the write fails, the action dispatch arm logs `warn!` but the panel is already closed. This is the specified behavior for Phase 1.5 (UI surfacing of failures is Phase 2+).
+
+4. **Existing tests unchanged**: The two pre-existing `handle_toggle_hide_implementation_*` tests do not assert on the return value, so they continue to pass without modification.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2350 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (zero warnings)
+- `grep -rn "save_settings" crates/fdemon-app/src/handler/` - Zero hits (acceptance criterion 3)
+
 ### Risks/Limitations
+
+1. **UserPrefs and LaunchConfig tabs still use sync I/O**: Only the `Project` tab (`config.toml`) was migrated to async. The other writable tabs remain synchronous. This is acceptable per the task scope — the task only targets `save_settings` calls, not `save_user_preferences` or `save_launch_configs`.
