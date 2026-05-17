@@ -437,14 +437,20 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// - `Ctrl+d` — toggle debug paint overlay
 /// - `j`/Down — scroll/navigate down (in Inspector: move selection down)
 /// - `k`/Up — scroll/navigate up (in Inspector: move selection up)
-/// - `h`/Left — in Inspector: collapse node; in Performance: previous frame
-/// - `Right`/`Enter` — in Inspector: expand node; in Performance (Right): next frame
+/// - `h`/Left — in Inspector tree mode: collapse node; in Performance: previous frame
+/// - `Right` — in Inspector tree mode: expand node; in Inspector details mode: next tab; in Performance: next frame
+/// - `Left` — in Inspector details mode: previous tab
+/// - `Enter` — in Inspector tree mode: open details view
+/// - `H` — in Inspector: toggle hide-implementation-widgets
+/// - `Tab` — in Inspector details mode: cycle tabs forward
+/// - `Shift+Tab` — in Inspector details mode: cycle tabs backward
 /// - `r` — in Inspector: refresh widget tree
 /// - `q` — request quit
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
     let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
     let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
+    let details_open = in_inspector && state.devtools_view_state.inspector.details_open;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
 
     // ── Network filter input mode ─────────────────────────────────────────────
@@ -625,18 +631,55 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Char('/') if in_network => Some(Message::NetworkEnterFilterMode),
 
         // ── Inspector navigation (only active in Inspector panel) ─────────────
+        //
+        // Navigation keys (Up/Down/j/k) work in both tree and details modes
+        // so the user can still move around while details is open.
         InputKey::Up | InputKey::Char('k') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Up))
         }
         InputKey::Down | InputKey::Char('j') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Down))
         }
-        InputKey::Enter | InputKey::Right if in_inspector => {
+
+        // Enter opens the details view only when in tree mode.  In details
+        // mode Enter has no binding so it falls through to None.
+        InputKey::Enter if in_inspector && !details_open => {
+            Some(Message::DevToolsInspectorOpenDetails)
+        }
+
+        // Right expands a tree node in tree mode; in details mode it cycles
+        // tabs forward so the arrow keys can navigate tabs without the keyboard.
+        InputKey::Right if in_inspector && !details_open => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
         }
-        InputKey::Left | InputKey::Char('h') if in_inspector => {
+        InputKey::Right if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: true })
+        }
+
+        // Left cycles tabs backward when details are open; otherwise it
+        // collapses the currently selected tree node (same as 'h').
+        InputKey::Left if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: false })
+        }
+        InputKey::Left | InputKey::Char('h') if in_inspector && !details_open => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Collapse))
         }
+
+        // Tab / Shift+Tab cycle Details tabs; only active when Details is open.
+        InputKey::Tab if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: true })
+        }
+        InputKey::BackTab if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: false })
+        }
+
+        // 'H' (Shift+H) toggles the "hide implementation widgets" filter.
+        // 'h' (lowercase) is already bound above to tree collapse so there is
+        // no conflict; the project convention is case-sensitive `Char('H')`.
+        InputKey::Char('H') if in_inspector => {
+            Some(Message::DevToolsInspectorToggleHideImplementation)
+        }
+
         // 'r' in Inspector panel refreshes the widget tree.
         InputKey::Char('r') if in_inspector => {
             active_id.map(|session_id| Message::RequestWidgetTree { session_id })
@@ -2201,5 +2244,172 @@ mod flutter_version_key_tests {
         let state = fv_state();
         let msg = handle_key(&state, InputKey::BackTab);
         assert!(msg.is_none());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inspector Phase-1 key binding tests (task 06)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod inspector_phase1_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Build a state that is in DevTools / Inspector panel.
+    ///
+    /// `details_open` controls whether the Details pane is currently visible.
+    fn make_state_in_inspector_tab(details_open: bool) -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        state.devtools_view_state.inspector.details_open = details_open;
+        state
+    }
+
+    // ── Enter ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_enter_in_inspector_tree_mode_emits_open_details() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::DevToolsInspectorOpenDetails)),
+            "Enter in tree mode should emit DevToolsInspectorOpenDetails"
+        );
+    }
+
+    #[test]
+    fn test_enter_in_inspector_details_mode_is_unbound() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            msg.is_none(),
+            "Enter in details mode should return None (no binding)"
+        );
+    }
+
+    // ── H / h ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_uppercase_h_in_inspector_emits_toggle_hide_implementation() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Char('H'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorToggleHideImplementation)
+            ),
+            "Uppercase H in Inspector should emit DevToolsInspectorToggleHideImplementation"
+        );
+    }
+
+    #[test]
+    fn test_lowercase_h_in_inspector_still_emits_collapse() {
+        // Regression guard: 'h' must remain bound to Collapse even after adding 'H'.
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Char('h'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Collapse))
+            ),
+            "'h' (lowercase) in Inspector tree mode should still emit Collapse"
+        );
+    }
+
+    // ── Tab / BackTab ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tab_in_inspector_details_mode_emits_cycle_tab_forward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: true })
+            ),
+            "Tab in details mode should emit CycleTab {{ forward: true }}"
+        );
+    }
+
+    #[test]
+    fn test_back_tab_in_inspector_details_mode_emits_cycle_tab_backward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::BackTab);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: false })
+            ),
+            "BackTab in details mode should emit CycleTab {{ forward: false }}"
+        );
+    }
+
+    #[test]
+    fn test_tab_in_inspector_tree_mode_is_unbound() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            msg.is_none(),
+            "Tab in tree mode (details closed) should return None"
+        );
+    }
+
+    // ── Left / Right in details mode ──────────────────────────────────────────
+
+    #[test]
+    fn test_left_in_inspector_details_mode_emits_cycle_tab_backward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: false })
+            ),
+            "Left arrow in details mode should emit CycleTab {{ forward: false }}"
+        );
+    }
+
+    #[test]
+    fn test_right_in_inspector_details_mode_emits_cycle_tab_forward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Right);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: true })
+            ),
+            "Right arrow in details mode should emit CycleTab {{ forward: true }}"
+        );
+    }
+
+    // ── Right in tree mode still expands ─────────────────────────────────────
+
+    #[test]
+    fn test_right_in_inspector_tree_mode_emits_expand() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Right);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
+            ),
+            "Right arrow in tree mode should still emit Expand"
+        );
     }
 }
