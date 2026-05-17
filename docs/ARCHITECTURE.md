@@ -890,7 +890,7 @@ DevTools state lives at two levels:
 
 - **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
 - **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
-- **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, and the `has_ever_rendered_tree` flag. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag survives `reset()` calls — it is sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches.
+- **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, the `has_ever_rendered_tree` flag, the `hide_implementation_widgets` toggle, and the Details view fields (`details_open`, `details_tab: DetailsTab`, `details_node_id`, `properties`, `render_properties`). `hide_implementation_widgets` survives `reset()` because it is a user preference; the Details fields are cleared on reset. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag is also sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches. The active row list is produced by `inspector_rows()`, which folds contiguous chains of non-local-project wrapper widgets into a leader row when `hide_implementation_widgets == true`. `visible_nodes()` is kept as a backwards-compatible flat-tuple shim over the row builder.
 
 Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 
@@ -933,6 +933,8 @@ Each widget-tree fetch carries a `FetchTrigger` variant — `Initial` or `Refres
 - `Refresh` — user-initiated `r` press after a tree has been rendered at least once; skips the readiness poll and fetches immediately, avoiding an unnecessary 2.5 s wait when the framework is already running.
 
 The sticky `has_ever_rendered_tree` flag on `InspectorState` gates whether `r` dispatches a `Refresh` or an `Initial` trigger.
+
+**Tree row builder.** The rendered tree is built by `build_inspector_rows()` in `fdemon-core/widget_tree.rs`. The algorithm computes per-row metadata (`ticks` for ancestor guideline columns, `line_to_parent` for `├─`/`└─` branch ticks, `RowGroup` for chain-fold leaders and members) and folds contiguous chains of non-local-project wrapper widgets behind a `+ N more widgets` leader row when the user's `hide_implementation_widgets` toggle is on. This mirrors DevTools' `_alwaysVisible` heuristic (`createdByLocalProject || has >1 children || has siblings || is root`).
 
 ### Browser DevTools URL (Served Endpoint)
 

@@ -444,15 +444,43 @@ Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connecti
 
 ### Widget Inspector Panel
 
-When the Inspector panel is active:
+The Inspector panel has two modes: **tree mode** (default) and **details mode**
+(after pressing `Enter` on a selected widget). Key bindings differ between
+modes.
 
-| Key | Action | Description |
-|-----|--------|-------------|
-| `Up` / `k` | Move Up | Move selection up in widget tree |
-| `Down` / `j` | Move Down | Move selection down in widget tree |
-| `Enter` / `Right` | Expand | Expand selected tree node |
-| `Left` / `h` | Collapse | Collapse selected tree node |
-| `r` | Refresh | Refresh widget tree from VM Service |
+#### Tree mode
+
+| Key | Action |
+|-----|--------|
+| `Up` / `k` | Move selection up |
+| `Down` / `j` | Move selection down |
+| `Right` / `l` | Expand node (or expand collapsed group) |
+| `Left` / `h` | Collapse node |
+| `Enter` | Open Details view for selected widget |
+| `Shift+H` | Toggle "Hide implementation widgets" (chain collapsing) |
+| `r` | Refresh widget tree |
+| `b` | Open Flutter DevTools in browser |
+| `Esc` | Exit DevTools → Logs |
+
+#### Details mode
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Right` / `l` | Cycle to next tab (Widget properties → Render object → Flex explorer → wrap) |
+| `Shift+Tab` / `Left` / `h` | Cycle to previous tab |
+| `Esc` | Close Details (return to tree mode) |
+| `r` | Refresh details |
+| `b` | Open Flutter DevTools in browser |
+| `Up` / `Down` / `j` / `k` | **No-op** — selection frozen while details is open |
+
+Press `Esc` from Details to return to tree mode; press `Esc` again to exit
+DevTools to the log view.
+
+Chain collapsing: when "Hide implementation widgets" is on (default,
+`[devtools] hide_implementation_widgets = true` in `.fdemon/config.toml`),
+long single-child chains of non-local-project wrapper widgets (e.g. nested
+`BlocProvider`s) fold into a single `+ N more widgets` row. Press `Right` on
+the leader to expand the chain in place.
 
 The Inspector panel shows a 50/50 split: widget tree on one side, layout explorer on the other. Layout data auto-fetches when a tree node is selected.
 
