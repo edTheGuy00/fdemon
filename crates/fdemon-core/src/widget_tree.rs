@@ -44,7 +44,7 @@ pub(crate) const MAX_TREE_WALK_DEPTH: usize = 512;
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsNode {
     /// Widget/object description (e.g., "Container", "Text('Hello')")
-    #[serde(deserialize_with = "deserialize_sanitized_string", default)]
+    #[serde(deserialize_with = "deserialize_sanitized_string")]
     pub description: String,
 
     /// Runtime type as string
@@ -672,7 +672,7 @@ pub(crate) fn count_visible_chain_subordinates(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreationLocation {
     /// File URI (e.g., "file:///path/to/main.dart")
-    #[serde(deserialize_with = "deserialize_sanitized_string", default)]
+    #[serde(deserialize_with = "deserialize_sanitized_string")]
     pub file: String,
 
     /// Line number (1-based)
