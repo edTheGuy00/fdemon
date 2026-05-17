@@ -483,6 +483,10 @@ network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
 inspector_readiness_poll_attempts = 2           # isWidgetTreeReady poll attempts before proceeding
 inspector_readiness_poll_interval_ms = 250      # Sleep between poll attempts (ms)
 inspector_readiness_poll_call_timeout_ms = 1000 # Per-call timeout for isWidgetTreeReady RPC (ms)
+# Hide implementation widgets in the inspector tree.
+# When true, long chains of wrapper widgets (BlocProvider, etc.) collapse
+# into a "+ N more widgets" leader row. Toggle at runtime with Shift+H.
+hide_implementation_widgets = true
 
 [editor]
 # Editor command (leave empty for auto-detection)
@@ -691,6 +695,10 @@ network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
 inspector_readiness_poll_attempts = 2           # isWidgetTreeReady poll attempts before proceeding
 inspector_readiness_poll_interval_ms = 250      # Sleep between poll attempts (ms)
 inspector_readiness_poll_call_timeout_ms = 1000 # Per-call timeout for isWidgetTreeReady RPC (ms)
+# Hide implementation widgets in the inspector tree.
+# When true, long chains of wrapper widgets (BlocProvider, etc.) collapse
+# into a "+ N more widgets" leader row. Toggle at runtime with Shift+H.
+hide_implementation_widgets = true
 
 [editor]
 # Editor command (leave empty for auto-detection)

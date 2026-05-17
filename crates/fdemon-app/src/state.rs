@@ -1369,6 +1369,13 @@ impl AppState {
 
         let mouse_capture_active = settings.ui.enable_mouse;
 
+        let mut devtools_view_state = DevToolsViewState::default();
+        // Bridge settings into DevTools state at startup. The InspectorState
+        // Default impl is settings-agnostic (per task 03 requirements), so we
+        // propagate persisted preferences here, at the single bridge site.
+        devtools_view_state.inspector.hide_implementation_widgets =
+            settings.devtools.hide_implementation_widgets;
+
         Self {
             ui_mode: UiMode::Normal,
             session_manager: SessionManager::new(),
@@ -1386,7 +1393,7 @@ impl AppState {
             android_avds_cache: None,
             bootable_last_updated: None,
             tool_availability: ToolAvailability::default(),
-            devtools_view_state: DevToolsViewState::default(),
+            devtools_view_state,
             dap_status: DapStatus::Off,
             file_watcher_suspended: false,
             pending_file_changes: 0,
@@ -2881,6 +2888,36 @@ mod tests {
         assert!(
             !state.mouse_capture_active,
             "mouse_capture_active should be false when settings.ui.enable_mouse is false"
+        );
+    }
+
+    // ── hide_implementation_widgets wire-up tests (task 03) ──────────────────
+
+    #[test]
+    fn test_appstate_propagates_hide_implementation_true_from_settings() {
+        let mut settings = crate::config::Settings::default();
+        settings.devtools.hide_implementation_widgets = true;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "inspector.hide_implementation_widgets should mirror settings on startup"
+        );
+    }
+
+    #[test]
+    fn test_appstate_propagates_hide_implementation_false_from_settings() {
+        let mut settings = crate::config::Settings::default();
+        settings.devtools.hide_implementation_widgets = false;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "inspector.hide_implementation_widgets should mirror settings (false) on startup"
         );
     }
 }

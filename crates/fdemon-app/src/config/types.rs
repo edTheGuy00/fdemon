@@ -416,6 +416,14 @@ pub struct DevToolsSettings {
     #[serde(default = "default_inspector_readiness_poll_call_timeout_ms")]
     pub inspector_readiness_poll_call_timeout_ms: u64,
 
+    /// Whether to collapse long single-child chains of non-local-project
+    /// wrapper widgets in the Inspector tree. When `true` (default), DevTools'
+    /// `_alwaysVisible` heuristic is applied — chains of implementation
+    /// widgets fold behind a `+ N more widgets` leader row. Toggle at runtime
+    /// with `Shift+H`.
+    #[serde(default = "default_hide_implementation_widgets")]
+    pub hide_implementation_widgets: bool,
+
     /// Logging sub-settings
     #[serde(default)]
     pub logging: DevToolsLoggingSettings,
@@ -441,9 +449,14 @@ impl Default for DevToolsSettings {
             inspector_readiness_poll_interval_ms: default_inspector_readiness_poll_interval_ms(),
             inspector_readiness_poll_call_timeout_ms:
                 default_inspector_readiness_poll_call_timeout_ms(),
+            hide_implementation_widgets: default_hide_implementation_widgets(),
             logging: DevToolsLoggingSettings::default(),
         }
     }
+}
+
+fn default_hide_implementation_widgets() -> bool {
+    true
 }
 
 fn default_devtools_panel() -> String {
@@ -1490,6 +1503,34 @@ debounce_ms = 1000
         assert!(settings.behavior.confirm_quit); // default
         assert_eq!(settings.watcher.debounce_ms, 1000);
         assert!(settings.watcher.auto_reload); // default
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DevToolsSettings hide_implementation_widgets Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_devtools_settings_default_has_hide_implementation_true() {
+        let settings = DevToolsSettings::default();
+        assert!(settings.hide_implementation_widgets);
+    }
+
+    #[test]
+    fn test_devtools_settings_deserializes_hide_implementation_false() {
+        let toml_str = "[devtools]\nhide_implementation_widgets = false\n";
+        let parsed: Settings = toml::from_str(toml_str).unwrap();
+        assert!(!parsed.devtools.hide_implementation_widgets);
+    }
+
+    #[test]
+    fn test_devtools_settings_deserializes_omitted_field_uses_default() {
+        // Existing config files without the field must default to true.
+        let toml_str = "[devtools]\nauto_open = false\n";
+        let parsed: Settings = toml::from_str(toml_str).unwrap();
+        assert!(
+            parsed.devtools.hide_implementation_widgets,
+            "omitted hide_implementation_widgets should default to true"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
