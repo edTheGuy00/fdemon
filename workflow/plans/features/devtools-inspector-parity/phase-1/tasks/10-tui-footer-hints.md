@@ -92,16 +92,28 @@ fn inspector_footer_in_details_mode_includes_esc_close_hint() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/devtools-inspector-parity
+**Status:** Done
+**Branch:** worktree-agent-a0e2743f6fe01690a
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Updated `render_footer` Inspector arm to branch on `details_open`; added `make_state_in_devtools_inspector`, `footer_string` test helpers and three new tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **footer_string helper uses 200-column width**: The tree-mode hint is ~95 characters, so an 80-column test buffer would truncate it and break assertions. Using width=200 avoids truncation without changing any production code.
+2. **Test helper reads row y=23 (last row of a 24-row buffer)**: The DevTools layout splits the area into a 3-row tab bar + 21-row panel content; `render_footer` writes to `panel.y + panel.height - 1 = 23`. This is deterministic for the fixed 24-row test area.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui` - Passed (1061 tests)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
 ### Risks/Limitations
+
+1. **Narrow terminal truncation**: The tree-mode hint (~95 chars) is truncated on terminals narrower than ~97 cols. The existing truncation logic (`hints.chars().take(max_width)`) handles this gracefully — no visual corruption, just shorter hints. This is acceptable per the task spec.

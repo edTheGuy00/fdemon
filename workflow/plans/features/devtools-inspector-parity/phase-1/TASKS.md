@@ -62,17 +62,17 @@ Phase 1 of the DevTools Inspector parity feature. Replaces the current right-shi
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-core-diagnostics-and-row-builder](tasks/01-core-diagnostics-and-row-builder.md) | Not Started | — | 4–6h | `crates/fdemon-core/src/widget_tree.rs` |
-| 02 | [02-state-inspector-extensions](tasks/02-state-inspector-extensions.md) | Not Started | 01 | 3–4h | `crates/fdemon-app/src/state.rs` |
-| 03 | [03-settings-hide-implementation](tasks/03-settings-hide-implementation.md) | Not Started | 02 | 1–2h | `crates/fdemon-app/src/config/types.rs`, `crates/fdemon-app/src/config/settings.rs`, one engine init site |
-| 04 | [04-message-variants](tasks/04-message-variants.md) | Not Started | 02 | 1h | `crates/fdemon-app/src/message.rs` |
-| 05 | [05-handlers-details-and-toggle](tasks/05-handlers-details-and-toggle.md) | Not Started | 02, 04 | 3–4h | `crates/fdemon-app/src/handler/devtools/inspector.rs`, `crates/fdemon-app/src/handler/devtools/mod.rs` |
-| 06 | [06-key-bindings](tasks/06-key-bindings.md) | Not Started | 02, 04 | 2–3h | `crates/fdemon-app/src/handler/keys.rs` |
-| 07 | [07-tui-tree-rendering](tasks/07-tui-tree-rendering.md) | Not Started | 01, 02 | 5–7h | `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` |
-| 08 | [08-tui-details-tabs](tasks/08-tui-details-tabs.md) | Not Started | 02 | 4–5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` **NEW**, `details/properties_tab.rs` **NEW**, `details/render_object_tab.rs` **NEW**, `details/flex_explorer_tab.rs` **NEW** |
-| 09 | [09-tui-inspector-mode-switch](tasks/09-tui-inspector-mode-switch.md) | Not Started | 08 | 2h | `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` |
-| 10 | [10-tui-footer-hints](tasks/10-tui-footer-hints.md) | Not Started | 02 | 1h | `crates/fdemon-tui/src/widgets/devtools/mod.rs` |
-| 11 | [11-docs-update](tasks/11-docs-update.md) | Not Started | 01–10 | 1–2h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-core-diagnostics-and-row-builder](tasks/01-core-diagnostics-and-row-builder.md) | Done ✅ | — | 4–6h | `crates/fdemon-core/src/widget_tree.rs` |
+| 02 | [02-state-inspector-extensions](tasks/02-state-inspector-extensions.md) | Done ✅ | 01 | 3–4h | `crates/fdemon-app/src/state.rs` |
+| 03 | [03-settings-hide-implementation](tasks/03-settings-hide-implementation.md) | Done ✅ | 02 | 1–2h | `crates/fdemon-app/src/config/types.rs`, `crates/fdemon-app/src/config/settings.rs`, one engine init site |
+| 04 | [04-message-variants](tasks/04-message-variants.md) | Done ✅ | 02 | 1h | `crates/fdemon-app/src/message.rs` |
+| 05 | [05-handlers-details-and-toggle](tasks/05-handlers-details-and-toggle.md) | Done ✅ | 02, 04 | 3–4h | `crates/fdemon-app/src/handler/devtools/inspector.rs`, `crates/fdemon-app/src/handler/devtools/mod.rs` |
+| 06 | [06-key-bindings](tasks/06-key-bindings.md) | Done ✅ | 02, 04 | 2–3h | `crates/fdemon-app/src/handler/keys.rs` |
+| 07 | [07-tui-tree-rendering](tasks/07-tui-tree-rendering.md) | Done ✅ | 01, 02 | 5–7h | `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs`, `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` |
+| 08 | [08-tui-details-tabs](tasks/08-tui-details-tabs.md) | Done ✅ | 02 | 4–5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` **NEW**, `details/properties_tab.rs` **NEW**, `details/render_object_tab.rs` **NEW**, `details/flex_explorer_tab.rs` **NEW** |
+| 09 | [09-tui-inspector-mode-switch](tasks/09-tui-inspector-mode-switch.md) | Done ✅ | 08 | 2h | `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` |
+| 10 | [10-tui-footer-hints](tasks/10-tui-footer-hints.md) | Done ✅ | 02 | 1h | `crates/fdemon-tui/src/widgets/devtools/mod.rs` |
+| 11 | [11-docs-update](tasks/11-docs-update.md) | Done ✅ | 01–10 | 1–2h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
 
 ## Wave Schedule
 

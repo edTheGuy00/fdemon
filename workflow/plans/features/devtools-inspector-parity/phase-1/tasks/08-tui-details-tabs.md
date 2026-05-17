@@ -172,16 +172,41 @@ fn tab_strip_underlines_active_tab() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/devtools-inspector-parity
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity (worktree-agent-aab5eb93a36f1de0a)
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Added `mod details;` declaration |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/layout_panel.rs` | Changed `pub(super)` to `pub(in crate::widgets::devtools::inspector)` on `render_layout_panel`, `render_box_model`, `render_size_box`, and `format_constraint_value` so they are visible to `details/` submodules |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | **NEW** — tab strip rendering + dispatch to per-tab renderers; 10 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` | **NEW** — Properties tab: delegates to `render_layout_panel` (layout preview) + property-list placeholder; 6 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/render_object_tab.rs` | **NEW** — Render-object tab stub; centered "Coming soon — Phase 2"; 3 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` | **NEW** — Flex-explorer tab stub; centered "Coming soon — Phase 2"; 3 unit tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Visibility bump approach (b) used**: Changed `pub(super)` helpers in `layout_panel.rs` to `pub(in crate::widgets::devtools::inspector)`. This makes helpers visible throughout the `inspector` subtree without leaking to `devtools` or wider. Avoids duplicating rendering code.
+
+2. **`render_layout_panel` call from properties tab**: Rather than copying the rendering logic, `render_properties_tab` calls `self.render_layout_panel(layout_area, ...)` for the top section. This ensures the Properties tab remains in sync with any future changes to the layout panel.
+
+3. **`#[allow(dead_code)]` annotations**: All new functions/methods/constants are annotated with `#[allow(dead_code)]` since task 09 wires the call to `render_details_panel` from the inspector render path. This keeps clippy `-D warnings` passing without suppressing the concept of "unused code" broadly.
+
+4. **Tab strip uses `pub(in crate::widgets::devtools::inspector)` scope throughout**: The `render_details_panel` method is `pub(super)` on `WidgetInspector` — just visible within the `inspector` module — which is the correct level since only `inspector/mod.rs` (task 09) calls it.
+
+5. **Tab mouse-click regions deferred**: Per the task spec, tab-label mouse clicks are a Phase 2 polish item. A `TODO` comment in `details/mod.rs` documents the deferral.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (4460+ tests, 0 failed)
+  - 22 new tests in `details/` submodules (mod, properties_tab, render_object_tab, flex_explorer_tab)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Task 09 dependency**: `render_details_panel` is not yet wired into the inspector render path. The tests exercise it directly; the visual integration is task 09's responsibility.
+2. **Properties tab re-uses layout panel title**: The Properties tab currently shows "Layout Explorer" as the block title because it delegates to `render_layout_panel`. Task 09 or a follow-up can rename or refactor this title if needed.

@@ -119,16 +119,32 @@ fn test_devtools_settings_deserializes_hide_implementation_false() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `hide_implementation_widgets: bool` field to `DevToolsSettings` with `#[serde(default = "default_hide_implementation_widgets")]`; added `default_hide_implementation_widgets() -> bool { true }` function; updated `Default` impl to include the field; added 3 new tests |
+| `crates/fdemon-app/src/config/settings.rs` | Updated both example `[devtools]` TOML config strings (at the init-file path and the `generate_config_header` path) to include the `hide_implementation_widgets` entry with comments |
+| `crates/fdemon-app/src/state.rs` | Wired `settings.devtools.hide_implementation_widgets` into `devtools_view_state.inspector.hide_implementation_widgets` inside `AppState::with_settings`; added 2 wire-up verification tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Wire-up site is `AppState::with_settings`**: The task identifies this as the correct bridge site (not `InspectorState::default()`). The `Default` impl remains settings-agnostic. The explicit propagation in `with_settings` is guarded by a comment explaining the pattern.
+2. **`save_settings` helper already exists**: `crates/fdemon-app/src/config/settings.rs:522` has `pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()>`. Task 05 can directly call this to persist the runtime toggle — no new write helper needed.
+3. **Extra wire-up tests added**: Two extra `AppState::with_settings` tests were added to `state.rs` (alongside the existing mouse-capture pattern) to explicitly verify the bridge is working. This exceeded the minimal spec but provides robust regression coverage.
+
 ### Testing Performed
 
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (2306 tests: 2306 passed, 0 failed)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Persistence on toggle deferred to task 05**: `save_settings` exists and is ready — task 05 just needs to call it after flipping `state.settings.devtools.hide_implementation_widgets` in the toggle handler.

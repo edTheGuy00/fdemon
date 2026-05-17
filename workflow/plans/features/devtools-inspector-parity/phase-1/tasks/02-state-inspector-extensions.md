@@ -207,16 +207,32 @@ fn test_inspector_rows_folds_chain_when_hide_implementation_true() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `DetailsTab` enum; manual `Default` for `InspectorState` (hide_implementation_widgets=true); new fields (expanded_groups, hide_implementation_widgets, details_open, details_tab, details_node_id, properties, render_properties, properties_loading, properties_error); `inspector_rows()` method; updated `visible_nodes()` shim; rewritten `selected_node_description()`; new `selected_value_id()`; updated `reset()`; removed old `collect_visible` + `find_nth_description`; added 11 new tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Test helper updated**: `make_tree_with_three_nodes()` and `make_single_node()` now set `created_by_local_project: true` on all nodes. This prevents chain-folding in existing tests (which were written before folding existed) so they continue to pass unchanged. The alternative — adding `hide_implementation_widgets: false` to each existing test — would have required modifying many tests.
+
+2. **`collect_visible` / `find_nth_description` removed**: Both old recursive helpers were deleted because `selected_node_description()` and `visible_nodes()` are now fully implemented on top of `inspector_rows()`. No callers outside `state.rs` referenced these private helpers.
+
+3. **Manual `Default` impl**: Switching from `#[derive(Default)]` to a manual impl was required to set `hide_implementation_widgets: true` (the DevTools default) without requiring all callsites to explicitly opt in.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2301 tests)
+- `cargo test --workspace` - Passed (5502 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
 ### Risks/Limitations
+
+1. **handler/devtools/inspector.rs still has `get_selected_value_id`**: This private function duplicates the new `InspectorState::selected_value_id()`. It is preserved to avoid scope creep; task 05 will switch it to use the method directly.
+2. **Phase 2 fields are stubs**: `properties`, `render_properties`, `properties_loading`, `properties_error` are empty/false by default and will be populated in Phase 2 — as intended by the task.

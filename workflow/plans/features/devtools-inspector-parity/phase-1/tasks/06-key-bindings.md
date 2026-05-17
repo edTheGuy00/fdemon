@@ -139,16 +139,32 @@ fn test_uppercase_h_in_inspector_emits_toggle_hide_implementation() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Split `Enter|Right` and `Left|h` inspector bindings by `details_open`; added `Enter` → `DevToolsInspectorOpenDetails` (tree mode only); added `Right`/`Left` → `DevToolsInspectorCycleTab` (details mode); added `Tab`/`BackTab` → `DevToolsInspectorCycleTab` (details mode); added `Char('H')` → `DevToolsInspectorToggleHideImplementation`; introduced `details_open` local; updated doc comment; added 10 new tests in `inspector_phase1_key_tests` module |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`matches!` instead of `assert_eq!`**: `Message` does not implement `PartialEq`, so all test assertions use `assert!(matches!(...))` — consistent with every other test in this file.
+2. **`details_open` local extracted at top of `handle_key_devtools`**: Set to `in_inspector && state.devtools_view_state.inspector.details_open` so the guards are readable and DRY. The boolean short-circuits to `false` when not in the Inspector panel, so other panels are unaffected.
+3. **`'h'` collapse guard tightened**: Changed `InputKey::Left | InputKey::Char('h') if in_inspector` to add `&& !details_open` to avoid conflicting with the new `Left` → CycleTab binding in details mode.
+4. **`Right` kept as single key for Expand in tree mode**: The original `Enter | Right` for Expand was split: `Right` still handles Expand (tree mode) and CycleTab (details mode); `Enter` became the details-open trigger.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-app inspector_phase1` — Passed (10/10 new tests)
+- `cargo test -p fdemon-app` — Passed (2316 tests, 0 failures)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+
 ### Risks/Limitations
+
+1. **Up/Down still work in details mode**: Navigation keys `j`/`k`/Up/Down remain unguarded by `details_open`. This is intentional — it allows cursor movement in the tree while details are open, which matches Flutter DevTools behavior. The task spec did not ask to block these.
+2. **`'h'` in details mode is now unbound**: Previously `Left | h` collapsed the tree; in details mode `Left` now cycles tabs and `'h'` falls through to `None`. This is correct per the spec but is a behavior change if the user presses `h` while details are open (was Collapse, now no-op).

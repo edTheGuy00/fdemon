@@ -80,16 +80,28 @@ This task does not add tests of its own. The variants are exercised by:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/message.rs` | Added four new `Message` variants: `DevToolsInspectorOpenDetails`, `DevToolsInspectorCloseDetails`, `DevToolsInspectorCycleTab { forward: bool }`, `DevToolsInspectorToggleHideImplementation` with full `///` doc comments |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub match arms for the four new variants returning `UpdateResult::none()` to satisfy exhaustive match; task 05 replaces these with real handler calls |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Stub arms in update.rs**: The `match message` in `handler/update.rs` is exhaustive — adding variants to `Message` without covering them causes a compile error. Added four `UpdateResult::none()` stubs so the crate compiles cleanly. Each stub is commented to indicate task 05 owns the real implementation.
+
+2. **No `Direction` enum**: Used `forward: bool` for `DevToolsInspectorCycleTab` per task spec, consistent with existing `Message` style.
+
 ### Testing Performed
 
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no dead-code warnings; `pub enum Message` suppresses them)
+- `cargo fmt --all -- --check` — Passed
+
 ### Risks/Limitations
+
+1. **Stub arms**: Until task 05 lands, pressing the keys bound to these messages will silently no-op. This is expected and noted in the stub comments.

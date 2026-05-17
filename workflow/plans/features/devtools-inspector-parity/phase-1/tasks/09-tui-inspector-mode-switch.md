@@ -121,16 +121,30 @@ fn mod_switches_to_details_panel_when_details_open() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Added `details_open` branch in `render_tree_core`: when true, calls `render_details_panel`; when false, calls `render_layout_panel`. Added mouse-region suppression (`tree_ctx = None` when `details_open`). |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Removed all `#[allow(dead_code)]` annotations on `TAB_STRIP_HEIGHT`, `TAB_LABELS`, `TAB_GAP`, `render_details_panel`, and `render_tab_strip` — all are now reachable via the wired call site. |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | Added 4 new tests: `mod_switches_to_details_panel_when_details_open`, `mod_renders_layout_panel_when_details_closed`, `mod_suppresses_tree_mouse_regions_when_details_open`, `mod_passes_mouse_regions_to_tree_when_details_closed`. Added `make_inspector_state_with_tree` and `buf_to_string` test helpers. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Mouse suppression via `None` ctx**: When `details_open`, `tree_ctx` is set to `None` before calling `render_tree_panel_inner`, which prevents any `SelectRow`/`ToggleNode` regions from being registered. The tree itself still renders (selection highlight preserved) — only interactivity is suppressed. This matches the "Modal Precedence" pattern in CODE_STANDARDS.md.
+
+2. **`_visible` parameter kept for now**: The task notes that `_visible` on `render_tree_panel_inner` could be removed (option a). Since `render_tree_panel_inner` already ignores it internally (task 07 left it as `_visible`), and removing it would require cascading changes to all call sites plus test helpers, this task leaves the parameter in place. It is still unused but consistently named with the underscore prefix.
+
+3. **Split type renamed for clarity**: Renamed `layout_area` variable to `right_area` in the branched section to make the semantic intent clearer (the right pane now holds either layout OR details).
+
 ### Testing Performed
 
+- `cargo test -p fdemon-tui` — Passed (1086 tests, 0 failed)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — Passed (0 warnings)
+
 ### Risks/Limitations
+
+1. **Narrow terminal details**: When the terminal is narrower than `WIDE_TERMINAL_THRESHOLD` (100 cols) and the height is below `MIN_SPLIT_PANEL_HEIGHT`, `layout_area` is `None` — in that case the details panel is also skipped. This is consistent with the layout panel's existing behaviour and not a regression.

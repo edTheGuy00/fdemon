@@ -193,16 +193,37 @@ fn tree_renders_branch_tick_last_child_uses_box_drawing_l() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs` | Full rewrite: switched from `"  ".repeat(depth)` indent to DevTools-style rendering with vertical `│` guidelines, `├─`/`└─` branch ticks, per-widget-type icon glyphs via `glyph_for_widget()`, `RowGroup`-aware icon/text/style selection, and updated mouse region math using `glyph_col()`. Signature unchanged (`_visible` parameter kept for task 09). |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | Added 9 new tests: guideline rendering, branch-tick last/non-last, collapsed/expanded group leaders, type icon rendering (no-panic), mouse glyph rect math (depth 0), row rect full-width invariant, last-pushed-wins invariant regression test. |
+| `crates/fdemon-tui/src/theme/palette.rs` | Added 4 new color constants: `TREE_GUIDELINE`, `TREE_BRANCH_TICK`, `TREE_CHAIN_MEMBER_TEXT`, `TREE_GROUP_LEADER_TEXT`. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Signature preserved (`_visible` parameter)**: The task spec required keeping the existing `render_tree_panel_inner` signature to avoid touching `mod.rs` (owned by task 09). The `_visible` parameter is prefixed with `_` and documented with a pointer to task 09.
+
+2. **`glyph_for_widget` uses prefix matching**: The glyph table does prefix matching (`widget_type.starts_with(prefix)`) to handle generic types like `BlocProvider<AppBloc>`. Ordering most-specific first avoids false matches.
+
+3. **RowGroup::LeaderCollapsed badge text**: The badge shows `{name} +{hidden_count} more` inline at the name position. The `+` icon at the glyph position signals expandability.
+
+4. **Branch tick character ordering**: The branch tick renders at `[glyph_col(depth-1), glyph_col(depth-1)+1]` — exactly the 2-column `TREE_INDENT_COLS` slot. The guideline rendering skips cells that are overwritten by the branch tick (renders `│` or ` ` only for `d in 0..row.depth`, which excludes the branch column).
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-tui` — Passed (1058 tests, 9 new tests added)
+- `cargo test --workspace` — Passed (all tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Task 09 dependency**: The `_visible` parameter will remain in the signature until task 09 restructures `mod.rs`. Until then, `mod.rs` calls `visible_nodes()` and passes the result, but `render_tree_panel_inner` ignores it in favor of `inspector_rows()`. The two must stay in sync (same row count) — the shim in `visible_nodes()` guarantees this since it calls `inspector_rows()` internally.
+
+2. **Branch tick / guideline overlap**: The current implementation draws guidelines first, then overwrites with branch ticks. This works correctly because the branch tick is at column `glyph_col(depth-1)` while the guideline loop covers `d in 0..row.depth` — the last pass (`d = depth-1`) would draw at the same column, but since the branch tick is drawn afterwards it wins.

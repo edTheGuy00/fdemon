@@ -194,16 +194,36 @@ fn handle_open_details_sets_details_open_and_snapshots_node_id() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Added `use crate::config::save_settings` and `DetailsTab` imports; added frozen-nav guard to `handle_inspector_navigate` and `handle_inspector_select_row`; added 4 new public handlers: `handle_open_details`, `handle_close_details`, `handle_cycle_tab`, `handle_toggle_hide_implementation`; added 14 new tests |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Exported the 4 new handlers; added `handle_devtools_escape` with tiered Esc logic; added 3 tiered-Esc tests |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced 4 stub `UpdateResult::none()` match arms with real handler calls; routed `ExitDevToolsMode` through `handle_devtools_escape` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Tiered Esc via ExitDevToolsMode**: Rather than adding a new `Message::DevToolsEscape` variant, the existing `ExitDevToolsMode` handler was rerouted through `handle_devtools_escape`. This is minimal-change and keeps `keys.rs` unchanged. The tiered logic lives entirely in the handler layer.
+
+2. **Settings persistence on toggle**: `handle_toggle_hide_implementation` calls `save_settings` directly (same pattern as `settings_handlers.rs`). Persistence failures are logged at `warn!` and are non-fatal — the in-memory state is already updated.
+
+3. **details_tab preserved on close**: `handle_close_details` intentionally leaves `details_tab` at its last value so reopening the Details panel returns the user to where they were. The task spec explicitly documented this choice.
+
+4. **Frozen selection applies to mouse clicks too**: The `handle_inspector_select_row` guard was added as the task notes required — mouse clicks are also frozen when `details_open == true`.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2323 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+All 14 new inspector tests and 3 tiered-Esc tests pass.
+
 ### Risks/Limitations
+
+1. **Disk write on every toggle**: `save_settings` is a synchronous filesystem write. This is consistent with the existing settings-panel pattern and is acceptable for a rare user action.

@@ -155,16 +155,35 @@ Snapshot-style unit tests built with hand-rolled `DiagnosticsNode` fixtures (a s
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added `property_type` field to `DiagnosticsNode`; added `widget_runtime_type`, `is_always_visible`, `is_flex`, `is_flex_layout`, `is_render_object_property` methods; added `InspectorRow`, `RowGroup`, `InspectorRowBuilderInputs` types; added `build_inspector_rows` and `count_visible_chain_subordinates` free functions; added 29 new unit tests; updated `make_test_node` helper. |
+| `crates/fdemon-core/src/lib.rs` | Re-exported `build_inspector_rows`, `count_visible_chain_subordinates`, `InspectorRow`, `InspectorRowBuilderInputs`, `RowGroup` from crate root. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Tick computation approach**: Ticks are pushed by each non-last node into `open_ticks` AFTER emitting its own row and BEFORE recursing into children. This ensures a node's own row does not include a tick for its own non-last status — only its descendants see that tick. The alternative (pushing from parent before calling walk_node for child) incorrectly inflates the child's own ticks.
+
+2. **Chain detection in `walk_node` vs pre-pass**: Chain detection happens inline during the walk rather than a separate pre-pass. This keeps the code simpler at the cost of calling `count_visible_chain_subordinates` for each implementation node encountered. Since widget trees are shallow in practice this is fine.
+
+3. **IIFE avoided**: After resolving the tick logic, the match-with-no-early-return can be written cleanly without an IIFE closure.
+
+4. **`widget_runtime_type` uses `description`**: The task spec says to use `self.description` (stripping `<…>`) rather than a separate `widgetRuntimeType` JSON field. DevTools has both; we follow the task spec.
+
+5. **File size**: The file grew from ~500 lines to ~1650 lines. As the task notes, splitting is deferred to a follow-up cleanup task to avoid blowing up the blast radius.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo test -p fdemon-core` — PASS (412 tests, 29 new)
+- `cargo clippy -p fdemon-core --all-targets -- -D warnings` — PASS
+
 ### Risks/Limitations
+
+1. **Chain-folding algorithm is single-pass**: The `count_visible_chain_subordinates` helper walks the chain twice (once to count, once to emit). For very deep single-child chains this doubles traversal, but Flutter trees are shallow enough that this is not a concern in practice.
