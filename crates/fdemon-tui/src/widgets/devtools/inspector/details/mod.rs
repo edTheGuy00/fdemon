@@ -39,13 +39,9 @@ mod render_object_tab;
 
 /// Height of the tab strip above the tab content.
 /// 1 row for tab labels + 1 row for the underline / separator.
-// Phase 1: used by render_details_panel (wired in task 09) and tests.
-#[allow(dead_code)]
 const TAB_STRIP_HEIGHT: u16 = 2;
 
 /// The three tab labels in display order.
-// Phase 1: used by render_tab_strip (wired in task 09) and tests.
-#[allow(dead_code)]
 const TAB_LABELS: &[(&str, DetailsTab)] = &[
     ("Widget properties", DetailsTab::Properties),
     ("Render object", DetailsTab::RenderObject),
@@ -53,8 +49,6 @@ const TAB_LABELS: &[(&str, DetailsTab)] = &[
 ];
 
 /// Horizontal spacing between tab labels (spaces).
-// Phase 1: used by render_tab_strip (wired in task 09) and tests.
-#[allow(dead_code)]
 const TAB_GAP: usize = 3;
 
 // ── impl WidgetInspector ──────────────────────────────────────────────────────
@@ -63,9 +57,6 @@ impl WidgetInspector<'_> {
     /// Render the tabbed details view in `area`.
     ///
     /// Called from `inspector/mod.rs` when `inspector_state.details_open == true`.
-    ///
-    /// Wired into the inspector render path by task 09.
-    #[allow(dead_code)] // Task 09 wires the call site in inspector/mod.rs
     pub(super) fn render_details_panel(&self, area: Rect, buf: &mut Buffer) {
         // ── Outer block + title ───────────────────────────────────────────────
         let block = Block::default()
@@ -126,7 +117,6 @@ impl WidgetInspector<'_> {
 ///
 /// The active tab is highlighted (bold + accent colour) and has an underline
 /// of `━` characters in the second row. Inactive tabs use `TEXT_MUTED`.
-#[allow(dead_code)] // Called by render_details_panel — wired by task 09
 fn render_tab_strip(area: Rect, buf: &mut Buffer, state: &InspectorState) {
     if area.height == 0 || area.width == 0 {
         return;

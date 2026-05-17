@@ -223,11 +223,26 @@ impl WidgetInspector<'_> {
             }
         };
 
-        self.render_tree_panel_inner(tree_area, buf, visible, selected, ctx);
+        // When the details panel is open, suppress tree mouse-click regions so
+        // the user cannot accidentally re-select a row while the details view
+        // is active.  The tree remains visible and the selection highlight is
+        // preserved; only the interactive regions are suppressed.
+        // See CODE_STANDARDS.md § "Modal Precedence and Sub-Modal Gates".
+        let tree_ctx: Option<&mut MouseCtx<'_>> = if self.inspector_state.details_open {
+            None
+        } else {
+            ctx
+        };
 
-        if let Some(lay_area) = layout_area {
-            // Layout panel is not clickable in v1; pass no ctx.
-            self.render_layout_panel(lay_area, buf, visible, selected);
+        self.render_tree_panel_inner(tree_area, buf, visible, selected, tree_ctx);
+
+        if let Some(right_area) = layout_area {
+            if self.inspector_state.details_open {
+                self.render_details_panel(right_area, buf);
+            } else {
+                // Layout panel is not clickable in v1; pass no ctx.
+                self.render_layout_panel(right_area, buf, visible, selected);
+            }
         }
     }
 

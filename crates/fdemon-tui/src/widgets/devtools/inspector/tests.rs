@@ -1114,3 +1114,120 @@ fn tree_pushes_row_rect_then_glyph_rect_for_last_pushed_wins_invariant() {
         "non-glyph cell must return SelectRow, got: {row_action:?}"
     );
 }
+
+// ── Task 09: mode-switch tests ────────────────────────────────────────────────
+
+/// Build a minimal inspector state with a loaded tree and an expanded root.
+fn make_inspector_state_with_tree() -> InspectorState {
+    let root = DiagnosticsNode {
+        description: "MyApp".to_string(),
+        value_id: Some("root".to_string()),
+        children: vec![DiagnosticsNode {
+            description: "Scaffold".to_string(),
+            value_id: Some("c1".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state
+}
+
+/// Collect every character in the buffer into a single `String`.
+fn buf_to_string(buf: &Buffer) -> String {
+    let area = buf.area();
+    collect_buf_text(buf, area.width, area.height)
+}
+
+#[test]
+fn mod_switches_to_details_panel_when_details_open() {
+    let mut state = make_inspector_state_with_tree();
+    state.details_open = true;
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 30));
+    widget.render(buf.area, &mut buf);
+
+    // Right half should contain the tab strip — look for one of the tab labels.
+    let s = buf_to_string(&buf);
+    assert!(
+        s.contains("Widget properties"),
+        "Expected 'Widget properties' tab label when details_open=true, got: {s:?}"
+    );
+}
+
+#[test]
+fn mod_renders_layout_panel_when_details_closed() {
+    let mut state = make_inspector_state_with_tree();
+    state.details_open = false;
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 30));
+    widget.render(buf.area, &mut buf);
+
+    // Right half should contain the layout panel title, NOT the details tab strip.
+    let s = buf_to_string(&buf);
+    assert!(
+        s.contains("Layout Explorer"),
+        "Expected 'Layout Explorer' panel when details_open=false, got: {s:?}"
+    );
+    assert!(
+        !s.contains("Widget properties"),
+        "Details tab strip should NOT appear when details_open=false, got: {s:?}"
+    );
+}
+
+#[test]
+fn mod_suppresses_tree_mouse_regions_when_details_open() {
+    use fdemon_app::{MouseButton, MouseRegions};
+
+    let mut state = make_inspector_state_with_tree();
+    state.details_open = true;
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    // No tree row/glyph regions should be registered when details is open.
+    let hit = regions.hit_test(1, 1, MouseButton::Left);
+    assert!(
+        hit.is_none(),
+        "Tree mouse regions must be suppressed when details_open=true, got: {hit:?}"
+    );
+}
+
+#[test]
+fn mod_passes_mouse_regions_to_tree_when_details_closed() {
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseButton, MouseRegions};
+
+    let mut state = make_inspector_state_with_tree();
+    state.details_open = false;
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    // Tree row regions must be registered when details is closed.
+    // The root node is at row y=1 (inside the tree block border); hit at (30, 1).
+    let hit = regions.hit_test(30, 1, MouseButton::Left);
+    let action = hit
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(30, 1));
+    assert!(
+        matches!(action, Some(Message::DevToolsInspectorSelectRow { .. })),
+        "Tree row regions must be active when details_open=false, got: {action:?}"
+    );
+}
