@@ -62,6 +62,14 @@ pub fn handle_widget_tree_fetched(
         state.devtools_view_state.inspector.pending_node_id = None;
         state.devtools_view_state.inspector.layout_last_fetch_time = None;
 
+        // Clear Details and group expansion state — node ids from the previous
+        // tree are invalid after a refresh; the Details panel must not render
+        // against freed Dart object ids.
+        state
+            .devtools_view_state
+            .inspector
+            .reset_details_and_groups();
+
         // Auto-fetch layout for the initially selected node (root at index 0)
         // so the layout panel shows data immediately on Inspector entry.
         if let Some(node_id) = state.devtools_view_state.inspector.selected_value_id() {
@@ -2463,6 +2471,192 @@ mod tests {
                 .expanded_groups
                 .is_empty(),
             "expanded_groups must remain empty when toggling a standalone row"
+        );
+    }
+
+    // ── Task 07: reset_details_and_groups ────────────────────────────────────
+
+    /// Build a state with details open, a node id snapshotted, a non-default
+    /// tab, a non-empty expanded_groups set, and populated properties vectors.
+    /// This is the "dirty" precondition for tests below.
+    fn make_state_with_details_open() -> (AppState, crate::session::SessionId) {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "root-id",
+            "children": [{
+                "description": "Child",
+                "valueId": "child-id",
+                "children": []
+            }]
+        }))
+        .expect("valid DiagnosticsNode for make_state_with_details_open");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        // Open details with a snapshotted node id.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("root-id".to_string());
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::RenderObject;
+        // Populate expanded_groups with a fake leader id.
+        state
+            .devtools_view_state
+            .inspector
+            .expanded_groups
+            .insert("leader-id".to_string());
+        // Simulate populated properties cache.
+        state.devtools_view_state.inspector.properties =
+            vec![serde_json::from_value(serde_json::json!({
+                "description": "prop-a",
+                "propertyType": "color"
+            }))
+            .unwrap()];
+        state.devtools_view_state.inspector.render_properties =
+            vec![serde_json::from_value(serde_json::json!({
+                "description": "render-prop-b",
+                "propertyType": "RenderObject"
+            }))
+            .unwrap()];
+        state.devtools_view_state.inspector.properties_loading = true;
+        state.devtools_view_state.inspector.properties_error =
+            Some(DevToolsError::new("old error", "hint"));
+        (state, session_id)
+    }
+
+    /// After fetching a new tree, the Details panel must be closed and all
+    /// details-related state must be cleared (C2 fix).
+    #[test]
+    fn widget_tree_fetched_clears_details_state_when_details_was_open() {
+        let (mut state, session_id) = make_state_with_details_open();
+
+        let new_tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "NewRoot",
+            "valueId": "new-root-id"
+        }))
+        .unwrap();
+        let _ = handle_widget_tree_fetched(&mut state, session_id, Box::new(new_tree));
+
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            !inspector.details_open,
+            "details_open must be false after tree refresh"
+        );
+        assert!(
+            inspector.details_node_id.is_none(),
+            "details_node_id must be None after tree refresh"
+        );
+        assert_eq!(
+            inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "details_tab must be reset to Properties after tree refresh"
+        );
+        assert!(
+            inspector.expanded_groups.is_empty(),
+            "expanded_groups must be empty after tree refresh"
+        );
+        assert!(
+            inspector.properties.is_empty(),
+            "properties must be empty after tree refresh"
+        );
+        assert!(
+            inspector.render_properties.is_empty(),
+            "render_properties must be empty after tree refresh"
+        );
+        assert!(
+            !inspector.properties_loading,
+            "properties_loading must be false after tree refresh"
+        );
+        assert!(
+            inspector.properties_error.is_none(),
+            "properties_error must be None after tree refresh"
+        );
+    }
+
+    /// Regression guard: `hide_implementation_widgets` must be preserved by
+    /// `reset_details_and_groups` because it is a user preference.
+    #[test]
+    fn reset_details_and_groups_preserves_hide_implementation_widgets() {
+        let mut state = make_state_with_session();
+        // Set the flag to a non-default value (default is true).
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = false;
+
+        state
+            .devtools_view_state
+            .inspector
+            .reset_details_and_groups();
+
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "hide_implementation_widgets must not be touched by reset_details_and_groups"
+        );
+    }
+
+    /// Regression guard: `reset_details_and_groups` itself does NOT clear
+    /// `has_ever_rendered_tree` — only `SessionRestartCompleted` does that.
+    #[test]
+    fn reset_details_and_groups_preserves_has_ever_rendered_tree() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.has_ever_rendered_tree = true;
+
+        state
+            .devtools_view_state
+            .inspector
+            .reset_details_and_groups();
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree,
+            "has_ever_rendered_tree must not be cleared by reset_details_and_groups; \
+             only SessionRestartCompleted should clear it"
+        );
+    }
+
+    /// After hot restart, Details and groups state must be cleared alongside
+    /// `has_ever_rendered_tree`.
+    #[test]
+    fn session_restart_completed_clears_details_state() {
+        let (mut state, session_id) = make_state_with_details_open();
+        // Also prime has_ever_rendered_tree so we can check it is cleared.
+        state.devtools_view_state.inspector.has_ever_rendered_tree = true;
+
+        use crate::handler::update::update;
+        use crate::message::Message;
+        let _ = update(&mut state, Message::SessionRestartCompleted { session_id });
+
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            !inspector.details_open,
+            "details_open must be false after hot restart"
+        );
+        assert!(
+            inspector.details_node_id.is_none(),
+            "details_node_id must be None after hot restart"
+        );
+        assert_eq!(
+            inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "details_tab must be reset to Properties after hot restart"
+        );
+        assert!(
+            inspector.expanded_groups.is_empty(),
+            "expanded_groups must be empty after hot restart"
+        );
+        assert!(
+            inspector.properties.is_empty(),
+            "properties must be empty after hot restart"
+        );
+        assert!(
+            !inspector.has_ever_rendered_tree,
+            "has_ever_rendered_tree must be false after hot restart"
         );
     }
 }

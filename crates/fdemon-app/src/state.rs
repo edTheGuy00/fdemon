@@ -442,6 +442,30 @@ impl InspectorState {
         self.properties_error = None;
     }
 
+    /// Clears state that does not survive a tree refresh or hot restart.
+    ///
+    /// Unlike [`Self::reset`], this preserves the user's tree-shape preferences
+    /// (`hide_implementation_widgets`) and the sticky `has_ever_rendered_tree`
+    /// flag. It clears state that points at specific widget identities that
+    /// would be invalidated by a new tree (group leader ids, details snapshot)
+    /// or a new Dart isolate (Dart object ids referenced by `details_node_id`).
+    ///
+    /// Called from:
+    /// - [`crate::handler::devtools::handle_widget_tree_fetched`] — on each
+    ///   successful tree refresh, to discard stale details pointing at old nodes.
+    /// - The `Message::SessionRestartCompleted` handler — after hot restart,
+    ///   because a new isolate invalidates all Dart object ids.
+    pub fn reset_details_and_groups(&mut self) {
+        self.details_open = false;
+        self.details_node_id = None;
+        self.details_tab = DetailsTab::Properties;
+        self.expanded_groups.clear();
+        self.properties.clear();
+        self.render_properties.clear();
+        self.properties_loading = false;
+        self.properties_error = None;
+    }
+
     /// Returns `true` after the first successful widget tree render.
     ///
     /// This flag is sticky: it is set to `true` by

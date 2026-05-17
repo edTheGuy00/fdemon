@@ -240,6 +240,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if state.devtools_view_state.inspector.has_ever_rendered_tree {
                 state.devtools_view_state.inspector.has_ever_rendered_tree = false;
             }
+            // Clear Details and group expansion state — hot restart creates a
+            // new Dart isolate, so all previously captured Dart object ids
+            // (stored in details_node_id, properties, etc.) are now invalid.
+            state
+                .devtools_view_state
+                .inspector
+                .reset_details_and_groups();
             UpdateResult::none()
         }
 
