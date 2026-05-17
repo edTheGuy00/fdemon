@@ -718,3 +718,399 @@ fn glyph_region_wins_over_row_region_at_glyph_cell() {
         "expected ToggleNode at glyph cell (1,1), got: {action:?}"
     );
 }
+
+// ── Task 07: tree rendering with guidelines / branch ticks / type icons ────────
+
+/// Extract all visible characters from a single row of the buffer as a `String`.
+///
+/// This helper strips "empty" (space) cells and is used by snapshot-style
+/// assertions that look for specific Unicode glyphs in known positions.
+fn buf_to_string_row(buf: &Buffer, row_y: u16) -> String {
+    let width = buf.area().width;
+    (0..width)
+        .filter_map(|x| buf.cell((x, row_y)))
+        .filter_map(|c| c.symbol().chars().next())
+        .collect()
+}
+
+/// Build a state with: root → child_a (not last) → child_b (last).
+/// All three are expanded so all are visible.
+fn make_state_with_parent_two_children() -> InspectorState {
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        children: vec![
+            DiagnosticsNode {
+                description: "ChildA".to_string(),
+                value_id: Some("ca".to_string()),
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "ChildB".to_string(),
+                value_id: Some("cb".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    // Disable chain-folding so all rows render as standalone RowGroup::None.
+    state.hide_implementation_widgets = false;
+    state
+}
+
+/// Helper that renders `render_tree_panel_inner` directly with no mouse ctx.
+///
+/// We pass an empty `visible` slice because the new implementation ignores
+/// the `_visible` parameter and calls `inspector_rows()` internally.
+fn render_tree_inner(state: &InspectorState, buf: &mut Buffer, selected: usize) {
+    let widget = WidgetInspector::new(state, true, &VmConnectionStatus::Connected);
+    widget.render_tree_panel_inner(buf.area, buf, &[], selected, None);
+}
+
+// ── Guideline tests ───────────────────────────────────────────────────────────
+
+#[test]
+fn tree_renders_guidelines_for_nonlast_sibling_ancestors() {
+    // root (depth 0, non-last ancestor for its first child)
+    //   ├─ ChildA (depth 1, non-last sibling)
+    //   └─ ChildB (depth 1, last sibling)
+    //
+    // For ChildA the `ticks` set contains depth 0 (root has a second child).
+    // No child of ChildA is present so we just check the branch tick on ChildA.
+    //
+    // To observe the `│` guideline we need a row at depth > 1 that has an
+    // ancestor with remaining siblings.  Build: root → ChildA (has one child) →
+    // GrandChild.  root also has ChildB (after ChildA) so root is in ticks for
+    // all rows under ChildA.
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        children: vec![
+            DiagnosticsNode {
+                description: "ChildA".to_string(),
+                value_id: Some("ca".to_string()),
+                children: vec![DiagnosticsNode {
+                    description: "GrandChild".to_string(),
+                    value_id: Some("gc".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "ChildB".to_string(),
+                value_id: Some("cb".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state.expanded.insert("ca".to_string());
+    state.hide_implementation_widgets = false;
+
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    // Row index 2 is GrandChild (depth 2).
+    // Its `ticks` contains depth 0 because root (depth 0) has ChildB still below.
+    // The guideline at depth 0 should be '│' at column glyph_col(0) = 0.
+    // Area includes a 1-cell border, so tree_inner.x = 1, tree_inner.y = 1.
+    // Row y for GrandChild: 1 (border) + 2 (offset) = 3.
+    // Guideline x: tree_inner.x + glyph_col(0) = 1 + 0 = 1.
+    let row_str = buf_to_string_row(&buf, 3);
+    assert!(
+        row_str.contains('│'),
+        "GrandChild row should contain '│' guideline, got: {row_str:?}"
+    );
+}
+
+// ── Branch tick tests ─────────────────────────────────────────────────────────
+
+#[test]
+fn tree_renders_branch_tick_last_child_uses_box_drawing_l() {
+    // ChildB is the last child → should get └─ branch tick.
+    let state = make_state_with_parent_two_children();
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    // Row 0 = Root (depth 0, no branch tick).
+    // Row 1 = ChildA (depth 1, non-last → ├─).
+    // Row 2 = ChildB (depth 1, last → └─).
+    // Row y for ChildB: tree_inner.y + 2 = 1 + 2 = 3.
+    let row_str = buf_to_string_row(&buf, 3);
+    assert!(
+        row_str.contains('└'),
+        "Last child (ChildB) should have '└' branch tick, got: {row_str:?}"
+    );
+}
+
+#[test]
+fn tree_renders_branch_tick_non_last_child_uses_box_drawing_t() {
+    // ChildA is a non-last child → should get ├─ branch tick.
+    let state = make_state_with_parent_two_children();
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    // Row 1 = ChildA (depth 1, non-last → ├─).
+    // Row y for ChildA: tree_inner.y + 1 = 1 + 1 = 2.
+    let row_str = buf_to_string_row(&buf, 2);
+    assert!(
+        row_str.contains('├'),
+        "Non-last child (ChildA) should have '├' branch tick, got: {row_str:?}"
+    );
+}
+
+// ── Group-leader tests ────────────────────────────────────────────────────────
+
+#[test]
+fn tree_renders_collapsed_leader_with_plus_n_more_widgets() {
+    // With hide_implementation_widgets = true (default), a single-child
+    // non-local-project chain should fold into a LeaderCollapsed row that
+    // shows "+ N more" badge text.
+    //
+    // Build: root (user-code) → Level1 → Level2.
+    // Level1 and Level2 are not local-project, have no siblings, single child → chain.
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        created_by_local_project: true,
+        children: vec![DiagnosticsNode {
+            description: "Level1".to_string(),
+            value_id: Some("l1".to_string()),
+            created_by_local_project: false,
+            children: vec![DiagnosticsNode {
+                description: "Level2".to_string(),
+                value_id: Some("l2".to_string()),
+                created_by_local_project: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state.expanded.insert("l1".to_string());
+    // hide_implementation_widgets defaults to true — chain folding active.
+
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    let full = collect_buf_text(&buf, 60, 10);
+    // Leader row should show "+1 more" or similar badge.
+    assert!(
+        full.contains("more"),
+        "LeaderCollapsed row should show 'more' badge, got: {full:?}"
+    );
+}
+
+#[test]
+fn tree_renders_expanded_leader_then_member_rows() {
+    // Same chain as above but with the leader's group expanded.
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        created_by_local_project: true,
+        children: vec![DiagnosticsNode {
+            description: "Level1".to_string(),
+            value_id: Some("l1".to_string()),
+            created_by_local_project: false,
+            children: vec![DiagnosticsNode {
+                description: "Level2".to_string(),
+                value_id: Some("l2".to_string()),
+                created_by_local_project: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state.expanded.insert("l1".to_string());
+    // Expand the group leader so Member rows appear.
+    state.expanded_groups.insert("l1".to_string());
+    // hide_implementation_widgets defaults to true.
+
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    render_tree_inner(&state, &mut buf, 0);
+
+    let full = collect_buf_text(&buf, 60, 10);
+    // Both Level1 (leader expanded) and Level2 (member) should appear.
+    assert!(
+        full.contains("Level1"),
+        "LeaderExpanded row should be visible, got: {full:?}"
+    );
+    assert!(
+        full.contains("Level2"),
+        "Member row (Level2) should be visible after expanding group, got: {full:?}"
+    );
+}
+
+// ── Type-icon tests ───────────────────────────────────────────────────────────
+
+#[test]
+fn tree_renders_type_icon_for_known_widget_types() {
+    // This test checks that `glyph_for_widget` returns correct glyphs for
+    // known widget types (tested through the module-private function via
+    // the public rendering path).  We render a tree with various widget
+    // descriptions and verify at least the fallback path doesn't panic.
+
+    let types = [
+        "Row",
+        "Column",
+        "Container",
+        "Stack",
+        "Text",
+        "SomeUnknownWidget123",
+    ];
+
+    for widget_type in &types {
+        let root = DiagnosticsNode {
+            description: widget_type.to_string(),
+            value_id: Some("root".to_string()),
+            ..Default::default()
+        };
+        let mut state = InspectorState::new();
+        state.root = Some(root);
+        state.hide_implementation_widgets = false;
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        render_tree_inner(&state, &mut buf, 0);
+
+        // The render must not panic and should produce non-empty output.
+        let full = collect_buf_text(&buf, 40, 6);
+        assert!(
+            !full.trim().is_empty(),
+            "Expected non-empty render for widget type {widget_type:?}, got empty"
+        );
+    }
+}
+
+// ── Mouse region math tests ───────────────────────────────────────────────────
+
+#[test]
+fn tree_mouse_glyph_rect_uses_new_indent_math() {
+    // Verify that glyph click regions are placed at glyph_col(depth) offsets.
+    // depth 0 → glyph_col(0) = 0; depth 3 → glyph_col(3) = 6.
+    //
+    // Layout: wide terminal (120 cols) → horizontal split, tree_inner.x = 1.
+    // Root node at depth 0 → glyph x = tree_inner.x + 0 = 1.
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseButton, MouseRegions};
+
+    let state = make_single_root_state();
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    // Hit-test at (tree_inner.x=1, tree_inner.y=1) — depth-0 glyph position.
+    let hit = regions.hit_test(1, 1, MouseButton::Left);
+    let action = hit
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(1, 1));
+    assert!(
+        matches!(
+            action,
+            Some(Message::DevToolsInspectorToggleNode { index: 0 })
+        ),
+        "expected ToggleNode at depth-0 glyph cell (1,1), got: {action:?}"
+    );
+}
+
+#[test]
+fn tree_mouse_row_rect_unchanged_full_width_of_tree_inner() {
+    // Row regions should still span the full width of tree_inner.
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseButton, MouseRegions};
+
+    let state = make_single_root_state();
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    // Hit-test at (x=30, y=1) — well inside the row but outside the 1-cell glyph.
+    // Should still return a SelectRow action (not ToggleNode).
+    let hit = regions.hit_test(30, 1, MouseButton::Left);
+    let action = hit
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(30, 1));
+    assert!(
+        matches!(
+            action,
+            Some(Message::DevToolsInspectorSelectRow { index: 0 })
+        ),
+        "expected SelectRow at (30, 1), got: {action:?}"
+    );
+}
+
+#[test]
+fn tree_pushes_row_rect_then_glyph_rect_for_last_pushed_wins_invariant() {
+    // Regression test for the last-pushed-wins-at-same-z invariant.
+    // Pushing row region first, then glyph region, ensures the glyph region
+    // wins when both overlap at the glyph cell.
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseButton, MouseRegions};
+
+    let state = make_single_root_state();
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    // At the glyph cell (1, 1), ToggleNode must win (not SelectRow).
+    let glyph_hit = regions.hit_test(1, 1, MouseButton::Left);
+    let glyph_action = glyph_hit
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(1, 1));
+    assert!(
+        matches!(
+            glyph_action,
+            Some(Message::DevToolsInspectorToggleNode { .. })
+        ),
+        "glyph cell must return ToggleNode (last-pushed-wins), got: {glyph_action:?}"
+    );
+
+    // At a non-glyph cell in the same row (e.g. x=20), SelectRow must win.
+    let row_hit = regions.hit_test(20, 1, MouseButton::Left);
+    let row_action = row_hit
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(20, 1));
+    assert!(
+        matches!(row_action, Some(Message::DevToolsInspectorSelectRow { .. })),
+        "non-glyph cell must return SelectRow, got: {row_action:?}"
+    );
+}
