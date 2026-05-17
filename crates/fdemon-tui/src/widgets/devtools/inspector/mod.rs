@@ -8,7 +8,7 @@ mod layout_panel;
 mod tree_panel;
 
 use fdemon_app::state::{DevToolsError, InspectorState, VmConnectionStatus};
-use fdemon_core::widget_tree::DiagnosticsNode;
+use fdemon_core::widget_tree::{DiagnosticsNode, InspectorRow};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -153,11 +153,15 @@ impl WidgetInspector<'_> {
         } else if let Some(ref error) = self.inspector_state.error {
             self.render_error_box(area, buf, error);
         } else if self.inspector_state.root.is_some() {
-            let visible = self.inspector_state.visible_nodes();
-            if visible.is_empty() {
+            // Build rows exactly once per frame. The slice is threaded through
+            // both render_tree_panel_inner and render_details_panel so neither
+            // callee rebuilds the list.
+            // INVARIANT: inspector_rows() is called exactly once per render frame.
+            let rows = self.inspector_state.inspector_rows();
+            if rows.is_empty() {
                 self.render_empty(area, buf);
             } else {
-                self.render_tree_with_regions(area, buf, &visible, ctx);
+                self.render_tree_with_regions(area, buf, &rows, ctx);
             }
         } else {
             self.render_empty(area, buf);
@@ -176,14 +180,14 @@ impl WidgetInspector<'_> {
         &self,
         area: Rect,
         buf: &mut Buffer,
-        visible: &[(&DiagnosticsNode, usize)],
+        rows: &[InspectorRow<'_>],
         selected: usize,
         ctx: Option<&mut MouseCtx<'_>>,
     ) {
         // Guard: if the area is too small for a two-panel layout, show a compact
         // single-line summary instead of potentially garbled split output.
         if area.height < MIN_TREE_RENDER_HEIGHT {
-            let node_count = visible.len();
+            let node_count = rows.len();
             let msg = if node_count == 0 {
                 "No widget tree".to_string()
             } else {
@@ -234,14 +238,18 @@ impl WidgetInspector<'_> {
             ctx
         };
 
-        self.render_tree_panel_inner(tree_area, buf, visible, selected, tree_ctx);
+        self.render_tree_panel_inner(tree_area, buf, rows, selected, tree_ctx);
 
         if let Some(right_area) = layout_area {
             if self.inspector_state.details_open {
-                self.render_details_panel(right_area, buf);
+                self.render_details_panel(right_area, buf, rows);
             } else {
+                // Derive (node, depth) pairs for the layout panel from the
+                // pre-built rows slice — no extra visible_nodes() call.
+                let visible: Vec<(&DiagnosticsNode, usize)> =
+                    rows.iter().map(|r| (r.node, r.depth)).collect();
                 // Layout panel is not clickable in v1; pass no ctx.
-                self.render_layout_panel(right_area, buf, visible, selected);
+                self.render_layout_panel(right_area, buf, &visible, selected);
             }
         }
     }
@@ -255,11 +263,11 @@ impl WidgetInspector<'_> {
         &self,
         area: Rect,
         buf: &mut Buffer,
-        visible: &[(&DiagnosticsNode, usize)],
+        rows: &[InspectorRow<'_>],
         ctx: Option<&mut MouseCtx<'_>>,
     ) {
         let selected = self.inspector_state.selected_index;
-        self.render_tree_core(area, buf, visible, selected, ctx);
+        self.render_tree_core(area, buf, rows, selected, ctx);
     }
 
     // ── Loading / Error / Empty / Disconnected states ─────────────────────────
@@ -481,6 +489,40 @@ pub fn render_with_regions(
     ctx: Option<&mut MouseCtx<'_>>,
 ) {
     widget.render_impl(area, buf, ctx);
+}
+
+/// Shared test helpers for the inspector subtree.
+///
+/// `collect_buf_text` was duplicated across six test modules (m13). One
+/// canonical copy lives here, accessible to all inspector test modules:
+///
+/// - `inspector/tests.rs`        → `super::test_helpers::collect_buf_text`
+/// - `inspector/layout_panel_tests.rs` → `super::super::test_helpers::collect_buf_text`
+/// - `inspector/details/mod.rs`  → `super::super::test_helpers::collect_buf_text`
+/// - `inspector/details/properties_tab.rs` → `super::super::super::test_helpers::collect_buf_text`
+/// - `inspector/details/render_object_tab.rs` → same
+/// - `inspector/details/flex_explorer_tab.rs` → same
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use ratatui::buffer::Buffer;
+
+    /// Collect all characters from a buffer into a single `String`.
+    ///
+    /// Iterates every cell in row-major order, appending the first character
+    /// of each cell's symbol. Used for content assertions in inspector tests.
+    pub(crate) fn collect_buf_text(buf: &Buffer, width: u16, height: u16) -> String {
+        let mut full = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        full
+    }
 }
 
 #[cfg(test)]

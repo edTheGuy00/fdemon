@@ -8,19 +8,8 @@ use ratatui::layout::Rect;
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-fn collect_buf_text(buf: &Buffer, width: u16, height: u16) -> String {
-    let mut full = String::new();
-    for y in 0..height {
-        for x in 0..width {
-            if let Some(c) = buf.cell((x, y)) {
-                if let Some(ch) = c.symbol().chars().next() {
-                    full.push(ch);
-                }
-            }
-        }
-    }
-    full
-}
+// Canonical copy lives in inspector::test_helpers (m13 fix).
+use super::super::test_helpers::collect_buf_text;
 
 fn make_layout_with_all() -> LayoutInfo {
     LayoutInfo {

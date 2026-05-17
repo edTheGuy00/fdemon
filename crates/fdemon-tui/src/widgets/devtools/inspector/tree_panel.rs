@@ -140,18 +140,15 @@ impl WidgetInspector<'_> {
     ///
     /// ## Signature note
     ///
-    /// The `_visible` parameter is the backwards-compatible `(node, depth)` slice
-    /// that `mod.rs` passes from `visible_nodes()`. This task ignores it in favour
-    /// of `self.inspector_state.inspector_rows()` (which carries the richer
-    /// `InspectorRow` data including guideline ticks and group annotations).
-    /// Task 09 will remove the parameter entirely once it restructures `mod.rs`.
+    /// The `rows` slice is pre-built by `render_impl` (via `inspector_rows()`)
+    /// so that `inspector_rows()` is called exactly once per render frame and
+    /// the slice is threaded through both the tree renderer and the details
+    /// renderer without a redundant rebuild.
     pub(super) fn render_tree_panel_inner(
         &self,
         area: Rect,
         buf: &mut Buffer,
-        // NOTE: intentionally unused — this task reads inspector_rows() directly.
-        // Task 09 will remove this parameter when it restructures mod.rs.
-        _visible: &[(&DiagnosticsNode, usize)],
+        rows: &[InspectorRow<'_>],
         selected: usize,
         mut ctx: Option<&mut MouseCtx<'_>>,
     ) {
@@ -171,8 +168,9 @@ impl WidgetInspector<'_> {
             return;
         }
 
-        // Obtain rich row data with guideline ticks / branch info / group status.
-        let rows = self.inspector_state.inspector_rows();
+        // `rows` is pre-built by the caller (render_impl via inspector_rows()) —
+        // one call per frame, threaded through both the tree and details renderers.
+        // INVARIANT: inspector_rows() is called exactly once per render frame.
         let total = rows.len();
         let viewport_height = tree_inner.height as usize;
         let (start, end) = self.visible_viewport_range(viewport_height, total);

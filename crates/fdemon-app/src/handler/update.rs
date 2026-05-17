@@ -1924,7 +1924,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         // Tiered Esc: closes Details panel first when Inspector is active,
         // then exits DevTools mode on the second press.
-        Message::ExitDevToolsMode => devtools::handle_devtools_escape(state),
+        Message::DevToolsEscape => devtools::handle_devtools_escape(state),
 
         Message::SwitchDevToolsPanel(panel) => devtools::handle_switch_panel(state, panel),
 

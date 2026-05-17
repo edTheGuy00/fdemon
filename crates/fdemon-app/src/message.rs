@@ -896,8 +896,11 @@ pub enum Message {
     /// Enter DevTools mode (from Normal mode via 'd' key).
     EnterDevToolsMode,
 
-    /// Exit DevTools mode (return to Normal mode via Esc).
-    ExitDevToolsMode,
+    /// Escape key pressed while in DevTools mode. The handler routes this
+    /// through [`handle_devtools_escape`]:
+    /// - Inspector tab + details open → close details, stay in DevTools.
+    /// - Otherwise → exit DevTools back to Logs.
+    DevToolsEscape,
 
     /// Switch to a specific DevTools sub-panel.
     SwitchDevToolsPanel(DevToolsPanel),

@@ -552,7 +552,7 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     return Some(Message::NetworkSelectRequest { index: None });
                 }
             }
-            Some(Message::ExitDevToolsMode)
+            Some(Message::DevToolsEscape)
         }
 
         // ── Sub-panel switching ───────────────────────────────────────────────
@@ -632,8 +632,10 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // ── Inspector navigation (only active in Inspector panel) ─────────────
         //
-        // Navigation keys (Up/Down/j/k) work in both tree and details modes
-        // so the user can still move around while details is open.
+        // Navigation keys (Up/Down/j/k) are emitted in both tree and details
+        // modes; the handler returns no-op when `details_open == true` (selection
+        // frozen). See handler/devtools/inspector.rs::handle_inspector_navigate
+        // for the guard.
         InputKey::Up | InputKey::Char('k') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Up))
         }

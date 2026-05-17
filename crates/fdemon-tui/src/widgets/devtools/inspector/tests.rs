@@ -2,6 +2,8 @@ use super::*;
 use fdemon_app::state::{DevToolsError, InspectorState, VmConnectionStatus};
 use fdemon_core::widget_tree::{CreationLocation, DiagnosticsNode};
 
+use super::test_helpers::collect_buf_text;
+
 fn make_test_tree() -> DiagnosticsNode {
     DiagnosticsNode {
         description: "MyApp".to_string(),
@@ -18,21 +20,6 @@ fn make_test_tree() -> DiagnosticsNode {
         }],
         ..Default::default()
     }
-}
-
-/// Collect all text from a buffer into a single string.
-fn collect_buf_text(buf: &Buffer, width: u16, height: u16) -> String {
-    let mut full = String::new();
-    for y in 0..height {
-        for x in 0..width {
-            if let Some(c) = buf.cell((x, y)) {
-                if let Some(ch) = c.symbol().chars().next() {
-                    full.push(ch);
-                }
-            }
-        }
-    }
-    full
 }
 
 #[test]
@@ -763,11 +750,12 @@ fn make_state_with_parent_two_children() -> InspectorState {
 
 /// Helper that renders `render_tree_panel_inner` directly with no mouse ctx.
 ///
-/// We pass an empty `visible` slice because the new implementation ignores
-/// the `_visible` parameter and calls `inspector_rows()` internally.
+/// Builds the rows from `state` (one call per test frame) and passes the
+/// slice through — mirrors the real render_impl invariant.
 fn render_tree_inner(state: &InspectorState, buf: &mut Buffer, selected: usize) {
+    let rows = state.inspector_rows();
     let widget = WidgetInspector::new(state, true, &VmConnectionStatus::Connected);
-    widget.render_tree_panel_inner(buf.area, buf, &[], selected, None);
+    widget.render_tree_panel_inner(buf.area, buf, &rows, selected, None);
 }
 
 // ── Guideline tests ───────────────────────────────────────────────────────────
@@ -1412,5 +1400,47 @@ fn mod_passes_mouse_regions_to_tree_when_details_closed() {
     assert!(
         matches!(action, Some(Message::DevToolsInspectorSelectRow { .. })),
         "Tree row regions must be active when details_open=false, got: {action:?}"
+    );
+}
+
+// ── Task 09: signature-change regression tests ────────────────────────────────
+
+#[test]
+fn render_tree_panel_with_empty_rows_slice_does_not_panic() {
+    // Regression guard: render_tree_panel_inner must not panic when given an
+    // empty rows slice (narrow terminal / first render before tree fetch).
+    let state = InspectorState::default();
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let rows: Vec<fdemon_core::widget_tree::InspectorRow<'_>> = Vec::new();
+    widget.render_tree_panel_inner(area, &mut buf, &rows, 0, None);
+    // Must not panic; output is irrelevant (no rows to render).
+}
+
+#[test]
+fn render_tree_panel_passes_rows_slice_directly() {
+    // Structural test: render_tree_panel_inner uses the passed-in rows slice,
+    // not a fresh inspector_rows() call.  If we pass an empty slice the panel
+    // renders no row content (only the border + title).
+    // This complements the code-level invariant comment in render_impl.
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.expanded.insert("widget-1".to_string());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    // Pass an empty rows slice — no widget names should appear in the output.
+    let rows: Vec<fdemon_core::widget_tree::InspectorRow<'_>> = Vec::new();
+    widget.render_tree_panel_inner(area, &mut buf, &rows, 0, None);
+
+    let text = collect_buf_text(&buf, 80, 24);
+    // The tree has nodes (MyApp, MaterialApp, Scaffold) but none should appear
+    // because we passed an empty rows slice.
+    assert!(
+        !text.contains("MyApp") && !text.contains("MaterialApp"),
+        "With empty rows slice, no node names should appear in the tree panel, got: {text:?}"
     );
 }

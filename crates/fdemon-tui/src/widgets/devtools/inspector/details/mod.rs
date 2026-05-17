@@ -20,6 +20,7 @@
 //! For Phase 1, keyboard cycling (Tab / Shift+Tab) is sufficient.
 
 use fdemon_app::state::{DetailsTab, InspectorState};
+use fdemon_core::widget_tree::InspectorRow;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -57,7 +58,15 @@ impl WidgetInspector<'_> {
     /// Render the tabbed details view in `area`.
     ///
     /// Called from `inspector/mod.rs` when `inspector_state.details_open == true`.
-    pub(super) fn render_details_panel(&self, area: Rect, buf: &mut Buffer) {
+    /// `rows` is the pre-built row slice from `inspector_rows()` (called once per
+    /// frame at the top of `render_impl`) — using it here avoids a redundant
+    /// `visible_nodes()` call (review item m11).
+    pub(super) fn render_details_panel(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        rows: &[InspectorRow<'_>],
+    ) {
         // ── Outer block + title ───────────────────────────────────────────────
         let block = Block::default()
             .borders(Borders::ALL)
@@ -92,14 +101,15 @@ impl WidgetInspector<'_> {
         render_tab_strip(strip_area, buf, self.inspector_state);
 
         // ── Tab content ───────────────────────────────────────────────────────
-        let visible = self.inspector_state.visible_nodes();
+        // Derive the (node, depth) pairs the layout panel needs directly from the
+        // pre-built row slice — no extra visible_nodes() call here (m11 fix).
+        let visible: Vec<(&fdemon_core::widget_tree::DiagnosticsNode, usize)> =
+            rows.iter().map(|r| (r.node, r.depth)).collect();
         let selected = self.inspector_state.selected_index;
-        let refs: Vec<(&fdemon_core::widget_tree::DiagnosticsNode, usize)> =
-            visible.iter().map(|&(n, d)| (n, d)).collect();
 
         match self.inspector_state.details_tab {
             DetailsTab::Properties => {
-                self.render_properties_tab(content_area, buf, &refs, selected);
+                self.render_properties_tab(content_area, buf, &visible, selected);
             }
             DetailsTab::RenderObject => {
                 render_object_tab::render(content_area, buf);
@@ -210,19 +220,8 @@ mod tests {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    fn collect_buf_text(buf: &Buffer, width: u16, height: u16) -> String {
-        let mut full = String::new();
-        for y in 0..height {
-            for x in 0..width {
-                if let Some(c) = buf.cell((x, y)) {
-                    if let Some(ch) = c.symbol().chars().next() {
-                        full.push(ch);
-                    }
-                }
-            }
-        }
-        full
-    }
+    // Canonical copy lives in inspector::test_helpers (m13 fix).
+    use super::super::test_helpers::collect_buf_text;
 
     fn collect_row(buf: &Buffer, y: u16, width: u16) -> String {
         (0..width)
@@ -252,7 +251,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::Properties);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let text = collect_buf_text(&buf, 80, 20);
         // All three tab labels must appear.
@@ -279,7 +278,7 @@ mod tests {
         // Inner area: border (1) + label row (1) + underline row (1) + content.
         // Use area (0, 0, 80, 20) so all rows are visible.
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
 
         // The underline row is at: block border top (row 0 = '┌'), inner starts
         // at y=1. Tab strip occupies inner rows y=1 (labels) and y=2 (underline).
@@ -303,7 +302,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::Properties);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let underline_row = collect_row(&buf, 2, 80);
         // Count ━ characters: should equal "Widget properties" label length (17).
@@ -322,7 +321,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::RenderObject);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let text = collect_buf_text(&buf, 80, 20);
         assert!(
@@ -336,7 +335,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::FlexExplorer);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let text = collect_buf_text(&buf, 80, 20);
         assert!(
@@ -352,7 +351,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::Properties);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let text = collect_buf_text(&buf, 80, 20);
         // Should NOT show "Coming soon".
@@ -369,7 +368,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::Properties);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 0, 0));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
         // Should not panic
     }
 
@@ -378,7 +377,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::Properties);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 1));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
         // Should not panic
     }
 
@@ -388,7 +387,7 @@ mod tests {
         let state = make_state_with_details_open(DetailsTab::Properties);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 10));
-        widget.render_details_panel(buf.area, &mut buf);
+        widget.render_details_panel(buf.area, &mut buf, &[]);
         // Should not panic
     }
 
@@ -403,7 +402,7 @@ mod tests {
             let state = make_state_with_details_open(tab);
             let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
             let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
-            widget.render_details_panel(buf.area, &mut buf);
+            widget.render_details_panel(buf.area, &mut buf, &[]);
         }
     }
 }
