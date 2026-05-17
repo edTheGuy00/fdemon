@@ -183,6 +183,41 @@ pub fn handle_action(
             });
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Settings Persistence (devtools-inspector-parity Phase 1.5, Task 02)
+        //
+        // Mirrors `AutoSaveConfig` but writes `.fdemon/config.toml` (Settings)
+        // rather than the launch configs. Uses `spawn_blocking` because
+        // `save_settings` is synchronous std I/O.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::PersistSettings {
+            settings,
+            project_path,
+        } => {
+            let tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::config::settings::save_settings(&project_path, &settings)
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {
+                        let _ = tx.send(Message::SettingsPersisted).await;
+                    }
+                    Ok(Err(e)) => {
+                        let msg = format!("save_settings failed: {e}");
+                        tracing::warn!("{msg}");
+                        let _ = tx.send(Message::SettingsPersistFailed { error: msg }).await;
+                    }
+                    Err(join_err) => {
+                        let msg = format!("save_settings task panicked: {join_err}");
+                        tracing::warn!("{msg}");
+                        let _ = tx.send(Message::SettingsPersistFailed { error: msg }).await;
+                    }
+                }
+            });
+        }
+
         UpdateAction::LaunchFlutterSession {
             device: _,
             mode: _,
@@ -1153,6 +1188,131 @@ mod tests {
         assert!(
             raw.contains('\n'),
             "expected pretty-printed JSON, got: {raw}"
+        );
+    }
+
+    // ── PersistSettings dispatch tests ──────────────────────────────────────
+
+    /// Build the minimal set of arguments `handle_action` expects.
+    ///
+    /// We only need the `msg_tx` / `shutdown_rx` pair for the
+    /// `PersistSettings` arm; all other parameters are stubbed.
+    fn make_handle_action_args() -> (
+        tokio::sync::mpsc::Sender<crate::message::Message>,
+        tokio::sync::mpsc::Receiver<crate::message::Message>,
+        tokio::sync::watch::Receiver<bool>,
+    ) {
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(32);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        (msg_tx, msg_rx, shutdown_rx)
+    }
+
+    #[tokio::test]
+    async fn persist_settings_action_sends_persisted_message_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Ensure the `.fdemon` dir exists so `save_settings` can write to it.
+        std::fs::create_dir_all(dir.path().join(".fdemon")).unwrap();
+
+        let settings = crate::config::Settings::default();
+        let project_path = dir.path().to_path_buf();
+
+        let (msg_tx, mut msg_rx, shutdown_rx) = make_handle_action_args();
+
+        let session_tasks: SessionTaskMap =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot =
+            Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let dap_debug_senders: Arc<
+            std::sync::Mutex<
+                Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>,
+            >,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        handle_action(
+            crate::UpdateAction::PersistSettings {
+                settings,
+                project_path: project_path.clone(),
+            },
+            msg_tx,
+            None,                                           // session_cmd_sender
+            vec![],                                         // session_senders
+            session_tasks,
+            shutdown_rx,
+            &project_path,
+            fdemon_daemon::ToolAvailability::default(),
+            dap_server_handle,
+            vm_handle_for_dap,
+            dap_debug_senders,
+        );
+
+        // Allow the spawned tasks to run.
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            msg_rx.recv(),
+        )
+        .await
+        .expect("timed out waiting for SettingsPersisted")
+        .expect("channel closed");
+
+        assert!(
+            matches!(msg, crate::message::Message::SettingsPersisted),
+            "expected SettingsPersisted, got: {msg:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_settings_action_sends_failed_message_on_error() {
+        // Use a path that cannot be written to (non-existent parent).
+        let project_path =
+            std::path::PathBuf::from("/nonexistent/path/that/cannot/be/created/12345");
+
+        let settings = crate::config::Settings::default();
+
+        let (msg_tx, mut msg_rx, shutdown_rx) = make_handle_action_args();
+
+        let session_tasks: SessionTaskMap =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot =
+            Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let dap_debug_senders: Arc<
+            std::sync::Mutex<
+                Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>,
+            >,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        handle_action(
+            crate::UpdateAction::PersistSettings {
+                settings,
+                project_path: project_path.clone(),
+            },
+            msg_tx,
+            None,
+            vec![],
+            session_tasks,
+            shutdown_rx,
+            &project_path,
+            fdemon_daemon::ToolAvailability::default(),
+            dap_server_handle,
+            vm_handle_for_dap,
+            dap_debug_senders,
+        );
+
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            msg_rx.recv(),
+        )
+        .await
+        .expect("timed out waiting for SettingsPersistFailed")
+        .expect("channel closed");
+
+        assert!(
+            matches!(msg, crate::message::Message::SettingsPersistFailed { .. }),
+            "expected SettingsPersistFailed, got: {msg:?}"
         );
     }
 }

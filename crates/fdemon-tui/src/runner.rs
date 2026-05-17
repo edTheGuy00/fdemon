@@ -423,6 +423,7 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::DiscoverBootableDevices
             | UpdateAction::BootDevice { .. }
             | UpdateAction::AutoSaveConfig { .. }
+            | UpdateAction::PersistSettings { .. }
             | UpdateAction::LaunchFlutterSession { .. }
             | UpdateAction::DiscoverEntryPoints { .. }
             | UpdateAction::ConnectVmService { .. }

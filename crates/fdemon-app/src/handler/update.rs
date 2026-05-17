@@ -2919,6 +2919,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             state.push_toast(crate::state::ToastLevel::Info, label);
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Background Settings Persistence Handshake
+        // (devtools-inspector-parity Phase 1.5, Task 02)
+        // ─────────────────────────────────────────────────────────
+        // Success is a no-op in Phase 1.5; future phases may surface
+        // a toast or status-bar indicator.
+        Message::SettingsPersisted => UpdateResult::none(),
+
+        // Log the error at warn level so it surfaces in tracing output;
+        // no UI change in Phase 1.5.
+        Message::SettingsPersistFailed { error } => {
+            warn!("Settings persist failed: {error}");
+            UpdateResult::none()
+        }
     }
 }
 

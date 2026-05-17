@@ -397,6 +397,17 @@ pub enum Message {
     ForceHideSettings,
 
     // ─────────────────────────────────────────────────────────────
+    // Background Settings Persistence Handshake
+    // (devtools-inspector-parity Phase 1.5, Task 02)
+    // ─────────────────────────────────────────────────────────────
+    /// Confirmation that a `UpdateAction::PersistSettings` completed successfully.
+    SettingsPersisted,
+
+    /// A `UpdateAction::PersistSettings` write failed.
+    /// `error` carries the formatted error string for logging/UI surfacing.
+    SettingsPersistFailed { error: String },
+
+    // ─────────────────────────────────────────────────────────────
     // Launch Config Editing Messages (Phase 5, Task 07)
     // ─────────────────────────────────────────────────────────────
     /// Create a new launch configuration

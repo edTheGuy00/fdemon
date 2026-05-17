@@ -200,6 +200,17 @@ pub enum UpdateAction {
     /// Auto-save FDemon config after field changes (Phase 6, Task 05)
     AutoSaveConfig { configs: LoadedConfigs },
 
+    /// Persist the current settings to `.fdemon/config.toml` on a background
+    /// task. Used to keep the TEA event loop unblocked when a settings toggle
+    /// (e.g. `Shift+H` in the Inspector tab) flips a persisted boolean.
+    ///
+    /// Emits [`Message::SettingsPersisted`] on success, or
+    /// [`Message::SettingsPersistFailed`] on failure.
+    PersistSettings {
+        settings: crate::config::Settings,
+        project_path: std::path::PathBuf,
+    },
+
     /// Launch a new Flutter session from NewSessionDialog (Phase 6, Task 05)
     LaunchFlutterSession {
         device: Device,
