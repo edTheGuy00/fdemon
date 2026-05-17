@@ -1219,16 +1219,13 @@ mod tests {
 
         let (msg_tx, mut msg_rx, shutdown_rx) = make_handle_action_args();
 
-        let session_tasks: SessionTaskMap =
-            Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let dap_server_handle: DapHandleSlot =
-            Arc::new(std::sync::Mutex::new(None));
-        let vm_handle_for_dap: Arc<std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>> =
-            Arc::new(std::sync::Mutex::new(None));
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot = Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<
+            std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>,
+        > = Arc::new(std::sync::Mutex::new(None));
         let dap_debug_senders: Arc<
-            std::sync::Mutex<
-                Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>,
-            >,
+            std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>,
         > = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         handle_action(
@@ -1237,8 +1234,8 @@ mod tests {
                 project_path: project_path.clone(),
             },
             msg_tx,
-            None,                                           // session_cmd_sender
-            vec![],                                         // session_senders
+            None,   // session_cmd_sender
+            vec![], // session_senders
             session_tasks,
             shutdown_rx,
             &project_path,
@@ -1249,13 +1246,10 @@ mod tests {
         );
 
         // Allow the spawned tasks to run.
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            msg_rx.recv(),
-        )
-        .await
-        .expect("timed out waiting for SettingsPersisted")
-        .expect("channel closed");
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for SettingsPersisted")
+            .expect("channel closed");
 
         assert!(
             matches!(msg, crate::message::Message::SettingsPersisted),
@@ -1273,16 +1267,13 @@ mod tests {
 
         let (msg_tx, mut msg_rx, shutdown_rx) = make_handle_action_args();
 
-        let session_tasks: SessionTaskMap =
-            Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let dap_server_handle: DapHandleSlot =
-            Arc::new(std::sync::Mutex::new(None));
-        let vm_handle_for_dap: Arc<std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>> =
-            Arc::new(std::sync::Mutex::new(None));
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot = Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<
+            std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>,
+        > = Arc::new(std::sync::Mutex::new(None));
         let dap_debug_senders: Arc<
-            std::sync::Mutex<
-                Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>,
-            >,
+            std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>,
         > = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         handle_action(
@@ -1302,13 +1293,10 @@ mod tests {
             dap_debug_senders,
         );
 
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            msg_rx.recv(),
-        )
-        .await
-        .expect("timed out waiting for SettingsPersistFailed")
-        .expect("channel closed");
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for SettingsPersistFailed")
+            .expect("channel closed");
 
         assert!(
             matches!(msg, crate::message::Message::SettingsPersistFailed { .. }),
