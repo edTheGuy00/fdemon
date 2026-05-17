@@ -795,6 +795,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             crate::handler::devtools::inspector::handle_inspector_toggle_node(state, index)
         }
 
+        // Task 05 will replace these stubs with real handler calls.
+        Message::DevToolsInspectorOpenDetails => UpdateResult::none(),
+        Message::DevToolsInspectorCloseDetails => UpdateResult::none(),
+        Message::DevToolsInspectorCycleTab { .. } => UpdateResult::none(),
+        Message::DevToolsInspectorToggleHideImplementation => UpdateResult::none(),
+
         // ─────────────────────────────────────────────────────────
         // Wrap Mode (v1-refinements Phase 1)
         // ─────────────────────────────────────────────────────────

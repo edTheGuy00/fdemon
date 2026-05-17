@@ -1595,6 +1595,48 @@ pub enum Message {
     /// for leaf nodes.
     DevToolsInspectorToggleNode { index: usize },
 
+    /// Opens the Details view for the currently selected widget in the
+    /// Inspector tree.
+    ///
+    /// Snapshots the selected `value_id` into `InspectorState::details_node_id`
+    /// and sets `InspectorState::details_open = true`. In Phase 1 this also
+    /// fires `FetchLayoutData` for the snapshotted node if it isn't already
+    /// cached. Phase 2 will additionally fire `FetchInspectorProperties`.
+    ///
+    /// Key binding: `Enter` while the Inspector tree is focused (task 06).
+    DevToolsInspectorOpenDetails,
+
+    /// Closes the Details view and returns the Inspector tab to tree mode.
+    ///
+    /// Sets `InspectorState::details_open = false`. Tied to the first `Esc`
+    /// press while details is open (tiered Esc — a second `Esc` exits DevTools
+    /// mode entirely).
+    ///
+    /// Key binding: `Esc` while details view is open (task 06).
+    DevToolsInspectorCloseDetails,
+
+    /// Cycles the active Details tab forward or backward.
+    ///
+    /// `forward = true` advances to the next [`crate::state::DetailsTab`]
+    /// (wrapping at the end); `forward = false` steps to the previous tab
+    /// (wrapping at the start). The cycle order is
+    /// `Properties → RenderObject → FlexExplorer → Properties`.
+    ///
+    /// Key bindings: `Tab` (forward) and `Shift+Tab` (backward) while the
+    /// Details view is open (task 06).
+    DevToolsInspectorCycleTab { forward: bool },
+
+    /// Toggles `InspectorState::hide_implementation_widgets`.
+    ///
+    /// The handler reads the current value, flips it, rebuilds the visible-row
+    /// list, and persists the new value to `.fdemon/config.toml` (task 03 /
+    /// task 05). This variant is parameterless — the toggle is not signed
+    /// (cannot force a specific value via the message bus), consistent with
+    /// other toggle variants in this enum.
+    ///
+    /// Key binding: `H` while the Inspector panel is active (task 06).
+    DevToolsInspectorToggleHideImplementation,
+
     // ── Mouse Capture (log-text-selection-broken fix) ─────────────────────────
     /// Copy a specific log entry's rendered text to the system clipboard.
     ///
