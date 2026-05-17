@@ -346,7 +346,11 @@ impl DevToolsView<'_> {
 
         let hints = match self.state.active_panel {
             DevToolsPanel::Inspector => {
-                "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [r] Refresh  [b] Browser"
+                if self.state.inspector.details_open {
+                    "[Esc] Close  [Tab] Next Tab  [Shift+Tab] Prev Tab  [r] Refresh  [b] Browser"
+                } else {
+                    "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [Enter] Details  [Shift+H] Hide Impl  [r] Refresh  [b] Browser"
+                }
             }
             DevToolsPanel::Performance => {
                 "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
@@ -982,5 +986,72 @@ mod tests {
             None,
         );
         // No assert needed — the absence of panic is the pass condition.
+    }
+
+    // ── Inspector footer mode tests ───────────────────────────────────────────
+
+    /// Build a `DevToolsViewState` with the Inspector panel active and
+    /// `details_open` set to the specified value.
+    fn make_state_in_devtools_inspector(details_open: bool) -> DevToolsViewState {
+        use fdemon_app::state::InspectorState;
+        DevToolsViewState {
+            active_panel: DevToolsPanel::Inspector,
+            inspector: InspectorState {
+                details_open,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Render a full DevToolsView (80×24) and return the text on the last row
+    /// of the panel content area — this is where `render_footer` writes hints.
+    fn footer_string(state: &DevToolsViewState) -> String {
+        let area = Rect::new(0, 0, 200, 24);
+        let mut buf = Buffer::empty(area);
+        DevToolsView::new(state, None, IconSet::default()).render(area, &mut buf);
+
+        // The layout splits the area into a 3-row tab bar (chunks[0]) and the
+        // remaining 21 rows for panel content (chunks[1]).  render_footer draws
+        // on the last row of chunks[1]: y = 3 + 21 - 1 = 23.
+        let footer_y = area.height - 1;
+        let mut row = String::new();
+        for x in 0..area.width {
+            if let Some(cell) = buf.cell((x, footer_y)) {
+                row.push_str(cell.symbol());
+            }
+        }
+        row
+    }
+
+    #[test]
+    fn inspector_footer_in_tree_mode_includes_enter_details_hint() {
+        let state = make_state_in_devtools_inspector(false);
+        let s = footer_string(&state);
+        assert!(s.contains("[Enter] Details"), "footer was: {s}");
+        assert!(s.contains("[Shift+H] Hide Impl"), "footer was: {s}");
+    }
+
+    #[test]
+    fn inspector_footer_in_details_mode_includes_esc_close_hint() {
+        let state = make_state_in_devtools_inspector(true);
+        let s = footer_string(&state);
+        assert!(s.contains("[Esc] Close"), "footer was: {s}");
+        assert!(s.contains("[Tab] Next Tab"), "footer was: {s}");
+        assert!(
+            !s.contains("[↑↓] Navigate"),
+            "navigate hint should be hidden in details mode; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn inspector_footer_in_details_mode_does_not_include_navigate_hint() {
+        let state = make_state_in_devtools_inspector(true);
+        let s = footer_string(&state);
+        assert!(
+            !s.contains("[↑↓] Navigate"),
+            "navigate hint must not appear in details mode; footer was: {s}"
+        );
+        assert!(s.contains("[Shift+Tab] Prev Tab"), "footer was: {s}");
     }
 }
