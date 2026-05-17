@@ -21,12 +21,10 @@ use crate::theme::palette;
 ///
 /// If the content area is smaller than this the property list is omitted and
 /// the full area is given to the layout panel.
-#[allow(dead_code)] // Used by render_properties_tab — wired by task 09
 const MIN_LAYOUT_PREVIEW_HEIGHT: u16 = 8;
 
 /// Height reserved for the property-list area (header + placeholder row).
 /// 2 rows: 1 for the section header, 1 for the placeholder text.
-#[allow(dead_code)] // Used by render_properties_tab — wired by task 09
 const PROPERTY_LIST_HEIGHT: u16 = 3;
 
 impl WidgetInspector<'_> {
@@ -37,7 +35,6 @@ impl WidgetInspector<'_> {
     /// - Bottom portion: property list (Phase 1: placeholder text).
     ///
     /// Called from `details/mod.rs` when `DetailsTab::Properties` is active.
-    #[allow(dead_code)] // Called by details/mod.rs render_details_panel — wired by task 09
     pub(super) fn render_properties_tab(
         &self,
         area: Rect,
@@ -79,7 +76,6 @@ impl WidgetInspector<'_> {
 ///
 /// Phase 1: always shows a placeholder row because `properties` is empty.
 /// Phase 2 will replace this function body with an actual property table.
-#[allow(dead_code)] // Called by render_properties_tab — wired by task 09
 fn render_property_list_placeholder(area: Rect, buf: &mut Buffer, property_count: usize) {
     if area.height == 0 || area.width == 0 {
         return;

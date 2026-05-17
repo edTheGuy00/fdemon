@@ -10,12 +10,10 @@ use crate::theme::palette;
 /// Phase 1 stub: displays a centered "Coming soon — Phase 2" message.
 /// Phase 2 will replace this body with a rendered list of render-object
 /// property nodes from `inspector_state.render_properties`.
-#[allow(dead_code)] // Called by details/mod.rs render_details_panel — wired by task 09
 pub(super) fn render(area: Rect, buf: &mut Buffer) {
     render_centered_text(area, buf, "Coming soon \u{2014} Phase 2");
 }
 
-#[allow(dead_code)] // Called by render — wired by task 09
 fn render_centered_text(area: Rect, buf: &mut Buffer, text: &str) {
     if area.height == 0 || area.width == 0 {
         return;

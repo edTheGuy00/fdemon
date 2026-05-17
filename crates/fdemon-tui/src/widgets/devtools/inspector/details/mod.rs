@@ -133,7 +133,7 @@ fn render_tab_strip(area: Rect, buf: &mut Buffer, state: &InspectorState) {
     let mut tab_widths: Vec<u16> = Vec::with_capacity(TAB_LABELS.len());
 
     let mut cursor_x = area.x;
-    for (i, (label, _tab)) in TAB_LABELS.iter().enumerate() {
+    for (i, (label, tab)) in TAB_LABELS.iter().enumerate() {
         if cursor_x >= area.x + area.width {
             break;
         }
@@ -145,7 +145,7 @@ fn render_tab_strip(area: Rect, buf: &mut Buffer, state: &InspectorState) {
         tab_widths.push(render_len);
 
         // Draw label text.
-        let is_active = *_tab == active;
+        let is_active = *tab == active;
         let style = if is_active {
             Style::default()
                 .fg(palette::ACCENT)
