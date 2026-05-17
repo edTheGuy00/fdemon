@@ -8,7 +8,7 @@ use crate::message::Message;
 use crate::settings_items::get_selected_item;
 use crate::state::{AppState, SettingsClickStamp};
 
-use super::{update, UpdateResult, DOUBLE_CLICK_WINDOW_MS};
+use super::{update, UpdateAction, UpdateResult, DOUBLE_CLICK_WINDOW_MS};
 
 /// Handle show settings message
 pub fn handle_show_settings(state: &mut AppState) -> UpdateResult {
@@ -155,22 +155,32 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
-/// Save the active settings tab to disk and mark the form clean on success.
+/// Save the active settings tab and mark the form clean on success.
 ///
 /// This is the single authoritative save path shared by [`handle_settings_save`]
 /// and [`handle_settings_save_and_close`]. Both public handlers delegate here so
 /// the `match active_tab` block exists in exactly one place.
 ///
-/// On success the dirty flag is cleared and any previously displayed error is
-/// removed. On failure the error message is stored for the UI to display; the
-/// caller decides whether to close the settings panel.
-fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<()> {
-    use crate::config::{launch::save_launch_configs, save_settings, save_user_preferences};
+/// Returns `Ok(Some(action))` when the caller must dispatch an [`UpdateAction`]
+/// (currently only for [`SettingsTab::Project`] which uses the async
+/// [`UpdateAction::PersistSettings`] path).  Returns `Ok(None)` when the save
+/// was completed synchronously.  On failure an error is returned and the caller
+/// decides whether to close the settings panel.
+fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<Option<UpdateAction>> {
+    use crate::config::{launch::save_launch_configs, save_user_preferences};
 
     match state.settings_view_state.active_tab {
         SettingsTab::Project => {
-            // Save project settings (config.toml)
-            save_settings(&state.project_path, &state.settings)?;
+            // Persist project settings (config.toml) asynchronously so that
+            // file I/O never blocks the TEA event loop.  The caller must
+            // dispatch the returned action.
+            let action = UpdateAction::PersistSettings {
+                settings: state.settings.clone(),
+                project_path: state.project_path.clone(),
+            };
+            state.settings_view_state.clear_dirty();
+            state.settings_view_state.error = None;
+            return Ok(Some(action));
         }
         SettingsTab::UserPrefs => {
             // Save user preferences (settings.local.toml)
@@ -190,23 +200,27 @@ fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<()> {
 
     state.settings_view_state.clear_dirty();
     state.settings_view_state.error = None;
-    Ok(())
+    Ok(None)
 }
 
 /// Handle settings save message
 pub fn handle_settings_save(state: &mut AppState) -> UpdateResult {
     match save_active_tab(state) {
-        Ok(()) => {
+        Ok(Some(action)) => {
+            tracing::info!("Settings save dispatched asynchronously");
+            UpdateResult::action(action)
+        }
+        Ok(None) => {
             tracing::info!("Settings saved successfully");
+            UpdateResult::none()
         }
         Err(e) => {
             let error_msg = format!("Save failed: {}", e);
             tracing::error!("{}", error_msg);
             state.settings_view_state.error = Some(error_msg);
+            UpdateResult::none()
         }
     }
-
-    UpdateResult::none()
 }
 
 /// Handle settings reset item message
@@ -358,19 +372,28 @@ pub fn handle_settings_remove_list_item(state: &mut AppState) -> UpdateResult {
 pub fn handle_settings_save_and_close(state: &mut AppState) -> UpdateResult {
     // Delegate to the shared save helper then close on success.
     match save_active_tab(state) {
-        Ok(()) => {
+        Ok(Some(action)) => {
+            // For async saves (Project tab), close optimistically — the write
+            // happens in the background.  If it fails, a `tracing::warn!` is
+            // emitted by the action dispatch arm; surfacing it to the UI is a
+            // Phase-2-or-later concern.
+            state.hide_settings();
+            tracing::info!("Settings save dispatched asynchronously, settings panel closed");
+            UpdateResult::action(action)
+        }
+        Ok(None) => {
             state.hide_settings();
             tracing::info!("Settings saved and closed");
+            UpdateResult::none()
         }
         Err(e) => {
             let error_msg = format!("Save failed: {}", e);
             tracing::error!("{}", error_msg);
             state.settings_view_state.error = Some(error_msg);
             // Don't close on error — stay in settings so the error is visible.
+            UpdateResult::none()
         }
     }
-
-    UpdateResult::none()
 }
 
 /// Handle force hide settings message

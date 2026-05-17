@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use fdemon_core::RowGroup;
 
-use crate::config::save_settings;
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::InspectorNav;
 use crate::session::SessionId;
@@ -602,9 +601,10 @@ pub fn handle_cycle_tab(state: &mut AppState, forward: bool) -> UpdateResult {
 /// mirrors the new value back to `state.settings.devtools` so the setting
 /// survives a DevTools-mode switch.
 ///
-/// Also attempts to persist the setting to `.fdemon/config.toml` via
-/// [`save_settings`]. Persistence failures are logged at `warn!` level and
-/// do not block the toggle (the in-memory setting is already updated).
+/// Returns [`UpdateAction::PersistSettings`] so the settings are written to
+/// `.fdemon/config.toml` on a background tokio task, keeping the TEA event
+/// loop unblocked.  Persistence failures are handled by the action dispatch
+/// arm (logged at `warn!` level) and do not block the toggle.
 pub fn handle_toggle_hide_implementation(state: &mut AppState) -> UpdateResult {
     state
         .devtools_view_state
@@ -626,16 +626,12 @@ pub fn handle_toggle_hide_implementation(state: &mut AppState) -> UpdateResult {
         .inspector
         .hide_implementation_widgets;
 
-    // Persist to disk. Failure is non-fatal — the in-memory state is already
-    // updated and the user's preference is applied for this session.
-    if let Err(e) = save_settings(&state.project_path, &state.settings) {
-        tracing::warn!(
-            "Failed to persist hide_implementation_widgets setting: {}",
-            e
-        );
-    }
-
-    UpdateResult::none()
+    // Persist asynchronously — file I/O runs on a background tokio task so the
+    // TUI event loop is never stalled by disk writes.
+    UpdateResult::action(UpdateAction::PersistSettings {
+        settings: state.settings.clone(),
+        project_path: state.project_path.clone(),
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2199,6 +2195,41 @@ mod tests {
                 .hide_implementation_widgets,
             "Settings and inspector state must be in sync after toggle"
         );
+    }
+
+    #[test]
+    fn handle_toggle_hide_implementation_returns_persist_settings_action() {
+        let mut state = make_state_with_tree();
+        let initial = state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets;
+        let expected_project_path = state.project_path.clone();
+
+        let result = handle_toggle_hide_implementation(&mut state);
+
+        // Must return a PersistSettings action — never UpdateResult::none().
+        let action = match result.action {
+            Some(a) => a,
+            None => panic!("expected PersistSettings action, got none"),
+        };
+
+        match action {
+            UpdateAction::PersistSettings {
+                settings,
+                project_path,
+            } => {
+                assert_eq!(
+                    settings.devtools.hide_implementation_widgets, !initial,
+                    "PersistSettings payload must carry the toggled value"
+                );
+                assert_eq!(
+                    project_path, expected_project_path,
+                    "PersistSettings must use the state's project_path"
+                );
+            }
+            other => panic!("expected PersistSettings, got {:?}", other),
+        }
     }
 
     #[test]
