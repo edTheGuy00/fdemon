@@ -44,6 +44,7 @@ pub(crate) const MAX_TREE_WALK_DEPTH: usize = 512;
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsNode {
     /// Widget/object description (e.g., "Container", "Text('Hello')")
+    #[serde(deserialize_with = "deserialize_sanitized_string", default)]
     pub description: String,
 
     /// Runtime type as string
@@ -671,6 +672,7 @@ pub(crate) fn count_visible_chain_subordinates(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreationLocation {
     /// File URI (e.g., "file:///path/to/main.dart")
+    #[serde(deserialize_with = "deserialize_sanitized_string", default)]
     pub file: String,
 
     /// Line number (1-based)
@@ -680,6 +682,7 @@ pub struct CreationLocation {
     pub column: u32,
 
     /// Widget class name at this creation site
+    #[serde(deserialize_with = "deserialize_sanitized_option_string", default)]
     pub name: Option<String>,
 }
 
@@ -800,9 +803,11 @@ pub struct LayoutInfo {
     pub flex_factor: Option<f64>,
 
     /// Flex fit: "tight" or "loose"
+    #[serde(deserialize_with = "deserialize_sanitized_option_string", default)]
     pub flex_fit: Option<String>,
 
     /// Widget description (e.g., "Column", "SizedBox")
+    #[serde(deserialize_with = "deserialize_sanitized_option_string", default)]
     pub description: Option<String>,
 
     /// Padding applied inside this widget's box
@@ -988,6 +993,36 @@ impl std::str::FromStr for DiagnosticLevel {
 // ============================================================================
 // Serde helpers
 // ============================================================================
+
+/// Deserialize a `String` field, stripping any ANSI escape sequences.
+///
+/// Applied to string fields on [`DiagnosticsNode`] and [`CreationLocation`]
+/// that are rendered directly to the terminal. Stripping at the deserialize
+/// boundary prevents ANSI bytes from the Dart VM Service from leaking through
+/// to Ratatui's buffer.
+///
+/// Uses [`crate::ansi::strip_ansi_codes`], which additionally removes
+/// backslash-prefixed box-drawing characters and trailing backslashes from
+/// Flutter's `--machine` mode output.
+fn deserialize_sanitized_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: String = serde::Deserialize::deserialize(deserializer)?;
+    Ok(crate::ansi::strip_ansi_codes(&raw))
+}
+
+/// Deserialize an `Option<String>` field, stripping any ANSI escape sequences.
+///
+/// `None` and JSON `null` are preserved as `None`. When a string value is
+/// present, [`crate::ansi::strip_ansi_codes`] is applied before returning.
+fn deserialize_sanitized_option_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(raw.map(|s| crate::ansi::strip_ansi_codes(&s)))
+}
 
 /// Deserialize a value that may be a string or an integer into `Option<String>`.
 ///
@@ -2118,5 +2153,76 @@ mod tests {
             count <= MAX_TREE_WALK_DEPTH + 2,
             "visible_node_count should be capped at max depth (got {count})"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // ANSI sanitisation at deserialize boundary (M7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn deserialize_strips_ansi_escape_from_description() {
+        // JSON \u001b is the ESC byte (0x1B). serde_json decodes this before
+        // calling our deserializer, so the sanitizer receives a string with a
+        // real ESC byte and strips it.  We use a raw string literal so the
+        // \u001b is passed verbatim to serde_json as the JSON-level escape.
+        let json = r#"{"description": "\u001b[31mContainerRED\u001b[0m"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.description, "ContainerRED");
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_creation_location_file() {
+        // Embed a CSI sequence in the file path (adversarial VM Service output).
+        let json =
+            r#"{"file": "file:///path/to/\u001b[32mmain\u001b[0m.dart", "line": 10, "column": 5}"#;
+        let loc: CreationLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.file, "file:///path/to/main.dart");
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_creation_location_name() {
+        let json = r#"{"file": "file:///main.dart", "line": 1, "column": 1, "name": "My\u001b[1mWidget\u001b[0m"}"#;
+        let loc: CreationLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.name.as_deref(), Some("MyWidget"));
+    }
+
+    #[test]
+    fn deserialize_creation_location_name_none_preserved() {
+        // When name is absent, it should remain None (not default to empty string).
+        let json = r#"{"file": "file:///main.dart", "line": 1, "column": 1}"#;
+        let loc: CreationLocation = serde_json::from_str(json).unwrap();
+        assert!(loc.name.is_none());
+    }
+
+    #[test]
+    fn deserialize_preserves_unicode_box_drawing_in_description() {
+        // Box-drawing characters (U+2502, U+251C, U+2500) must survive stripping.
+        let json = r#"{"description": "\u2502 Column \u251c\u2500 child"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.description, "\u{2502} Column \u{251c}\u{2500} child");
+    }
+
+    #[test]
+    fn deserialize_strips_caret_notation_from_description() {
+        // Flutter --machine mode encodes ESC as the two-char sequence ^[ (caret + bracket),
+        // which is valid JSON text (no control characters) and must also be stripped.
+        let json = r#"{"description": "^[[31mContainer^[[0m"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.description, "Container");
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_layout_info_description() {
+        let json = r#"{"description": "\u001b[33mColumn\u001b[0m"}"#;
+        let info: LayoutInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.description.as_deref(), Some("Column"));
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_layout_info_flex_fit() {
+        // LayoutInfo uses snake_case field names (no rename_all = "camelCase").
+        let json = r#"{"flex_fit": "\u001b[32mtight\u001b[0m"}"#;
+        let info: LayoutInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.flex_fit.as_deref(), Some("tight"));
     }
 }
