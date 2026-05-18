@@ -20,7 +20,7 @@
 //! For Phase 1, keyboard cycling (Tab / Shift+Tab) is sufficient.
 
 use fdemon_app::state::{DetailsTab, InspectorState};
-use fdemon_core::widget_tree::InspectorRow;
+use fdemon_core::widget_tree::{DiagnosticsNode, InspectorRow};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -35,6 +35,33 @@ use crate::theme::palette;
 mod flex_explorer_tab;
 mod properties_tab;
 mod render_object_tab;
+
+// ── Shared helper ─────────────────────────────────────────────────────────────
+
+/// Filter hidden-level properties and separate default-level (`"fine"`) ones to
+/// the end of the list.
+///
+/// Returns a `Vec` of `(&DiagnosticsNode, bool)` pairs where the `bool` is
+/// `true` for default/fine-level nodes (rendered muted) and `false` for
+/// non-default nodes (rendered normally). Hidden-level nodes are dropped.
+///
+/// Both `properties_tab` and `render_object_tab` use this helper to keep the
+/// sort/filter logic in one place.
+pub(super) fn filter_and_sort_by_level<'a>(
+    props: &'a [DiagnosticsNode],
+) -> Vec<(&'a DiagnosticsNode, bool)> {
+    let mut non_default: Vec<(&'a DiagnosticsNode, bool)> = Vec::new();
+    let mut default: Vec<(&'a DiagnosticsNode, bool)> = Vec::new();
+    for p in props {
+        match p.level.as_deref() {
+            Some("hidden") => continue,
+            Some("fine") => default.push((p, true)),
+            _ => non_default.push((p, false)),
+        }
+    }
+    non_default.extend(default);
+    non_default
+}
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
