@@ -501,8 +501,10 @@ When the Performance panel is active:
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Cycle focus between Frame Chart and Details Tab |
+| `Tab` / `Shift+Tab` | Cycle focus between Frame Chart and Details pane |
 | `←` / `→` | Select previous / next frame |
+| `]` | Cycle details tab forward (Frame Analysis → Rebuild Stats → Timeline Events) |
+| `[` | Cycle details tab backward |
 | `↑` / `k` | Scroll focused section up |
 | `↓` / `j` | Scroll focused section down |
 | `PageUp` / `PageDown` | Page-scroll focused section |
@@ -510,6 +512,8 @@ When the Performance panel is active:
 | `Esc` | Deselect frame; or, if no frame selected, return to Logs |
 | `Ctrl+p` | Toggle performance overlay on device |
 | `b` | Open DevTools in browser |
+
+> The `]`/`[` cycle only fires when the Details pane has focus (press `Tab` from the Frame Chart). Frame Analysis is populated in Phase 2; Rebuild Stats and Timeline Events show a "Coming soon" stub until Phase 3.
 
 ### Memory Panel
 

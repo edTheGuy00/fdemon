@@ -372,7 +372,7 @@ impl DevToolsView<'_> {
                 }
             }
             DevToolsPanel::Performance => {
-                "[Esc] Logs  [←/→] Frames  [j/k] Scroll  [b] Browser  [Ctrl+p] PerfOverlay"
+                "[Esc] Logs  [←/→] Frames  [Tab] Section  []/[] Tabs  [j/k] Scroll  [b] Browser"
             }
             DevToolsPanel::Memory => {
                 let has_alloc_selection = self
@@ -1097,6 +1097,35 @@ mod tests {
             "navigate hint must not appear in details mode; footer was: {s}"
         );
         assert!(s.contains("[Shift+Tab] Prev Tab"), "footer was: {s}");
+    }
+
+    // ── Performance footer tests ──────────────────────────────────────────────
+
+    #[test]
+    fn performance_footer_mentions_details_tab_cycling() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
+        let s = footer_string(&state);
+        assert!(s.contains("]/[") || s.contains("] /["), "footer was: {s}");
+        assert!(
+            s.contains("Tabs"),
+            "footer should mention Tabs; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn performance_footer_mentions_tab_section_cycling() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
+        let s = footer_string(&state);
+        assert!(
+            s.contains("Section"),
+            "footer should mention Section; footer was: {s}"
+        );
     }
 
     // ── Memory panel tests ────────────────────────────────────────────────────
