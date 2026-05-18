@@ -301,7 +301,8 @@ flutter-demon/
 │   │       │   └── devtools/     # DevTools mode handlers
 │   │       │       ├── mod.rs    # Panel switching, enter/exit, overlays
 │   │       │       ├── inspector.rs  # Widget tree fetch, layout data fetch
-│   │       │       ├── performance.rs # Frame selection, memory samples, allocations
+│   │       │       ├── performance.rs # Frame selection and chart navigation
+│   │       │       ├── memory.rs     # Memory samples, allocation profile, memory chart/table nav
 │   │       │       └── network.rs    # Network navigation, recording, filter, polling
 │   │       ├── session/          # Per-device session state
 │   │       │   ├── mod.rs
@@ -309,6 +310,7 @@ flutter-demon/
 │   │       │   ├── handle.rs     # SessionHandle
 │   │       │   ├── network.rs    # NetworkState — per-session network monitoring
 │   │       │   ├── performance.rs # PerformanceState — per-session perf monitoring
+│   │       │   ├── memory.rs      # MemoryState — per-session memory monitoring
 │   │       │   └── native_tags.rs # NativeTagState — per-session tag discovery/filtering
 │   │       ├── session_manager.rs  # Multi-session coordination
 │   │       ├── watcher.rs        # File system watching
@@ -368,19 +370,24 @@ flutter-demon/
 │                   ├── inspector/    # Widget Inspector (tree + layout explorer)
 │                   │   ├── mod.rs
 │                   │   ├── tree_panel.rs
-│                   │   └── layout_panel.rs
-│                   ├── performance/  # Performance monitoring
-│                   │   ├── mod.rs
-│                   │   ├── styles.rs
-│                   │   ├── frame_chart/  # Frame timing bar chart
-│                   │   │   ├── mod.rs
-│                   │   │   ├── bars.rs
-│                   │   │   └── detail.rs
-│                   │   └── memory_chart/ # Memory time-series + allocation table
+│                   │   ├── layout_panel.rs
+│                   │   └── details/  # Inspector details view (Phase 2+)
 │                   │       ├── mod.rs
-│                   │       ├── chart.rs
-│                   │       ├── table.rs
-│                   │       └── braille_canvas.rs
+│                   │       ├── properties_tab.rs
+│                   │       ├── render_object_tab.rs
+│                   │       └── flex_explorer_tab.rs
+│                   ├── performance/  # Performance monitoring (frame chart only)
+│                   │   ├── mod.rs
+│                   │   └── frame_chart/  # Frame timing bar chart
+│                   │       ├── mod.rs
+│                   │       ├── bars.rs
+│                   │       └── detail.rs
+│                   ├── memory/       # Memory monitoring (MemoryPanel widget)
+│                   │   ├── mod.rs    # MemoryPanel — top-level memory widget
+│                   │   ├── chart.rs  # Memory time-series chart
+│                   │   ├── table.rs  # Class allocation table
+│                   │   ├── braille_canvas.rs  # Braille-pixel rendering
+│                   │   └── tests.rs
 │                   └── network/      # Network monitor
 │                       ├── mod.rs
 │                       ├── request_table.rs
@@ -541,7 +548,7 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 | `handler/mouse/` | Per-mode mouse event handlers; `mod.rs` dispatches by `UiMode`, sub-modules handle scroll and click hit-testing per mode |
 | `input_mouse.rs` | `MouseInput`, `MouseButton`, `ScrollDir`, `KeyModSet` — raw mouse event types |
 | `mouse_regions.rs` | Per-frame click-region registry (`MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, `MouseRegionsCell`, `MouseRegionGuard`). `fdemon-app` does **not** depend on `ratatui`; `MouseRect` mirrors `ratatui::layout::Rect` locally, with conversion handled at the `fdemon-tui` boundary. |
-| `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `NetworkState`, `NativeTagState` |
+| `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `MemoryState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
 
@@ -745,6 +752,7 @@ SessionHandle
 ├── vm_shutdown_tx / vm_request_handle  (VM Service connection)
 ├── perf_shutdown_tx / perf_task_handle  (performance monitoring task)
 ├── perf_pause_tx: Option<Arc<watch::Sender<bool>>>  (pause/resume perf polling)
+├── alloc_pause_tx: Option<Arc<watch::Sender<bool>>>  (pause/resume allocation profile polling)
 ├── network_shutdown_tx / network_task_handle  (network monitoring task)
 ├── network_pause_tx: Option<Arc<watch::Sender<bool>>>  (pause/resume network polling)
 ├── debug_shutdown_tx / debug_task_handle  (DAP debug event task)
@@ -840,62 +848,64 @@ Prior to `MouseRegionGuard`, a widget panic between `Cell::take()` and `Cell::se
 
 ## DevTools Subsystem
 
-The DevTools mode provides three inspection panels — Inspector, Performance, and Network — accessible by pressing `d` when a Flutter session has a VM Service connection.
+The DevTools mode provides four inspection panels — Inspector, Performance, Memory, and Network — accessible by pressing `d` when a Flutter session has a VM Service connection.
 
 ### Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    DevTools View                          │
-│           (fdemon-tui/widgets/devtools/)                  │
-│  ┌────────────┐  ┌────────────────┐  ┌────────────────┐  │
-│  │ Inspector  │  │  Performance   │  │   Network      │  │
-│  │ tree_panel │  │  frame_chart   │  │ request_table  │  │
-│  │layout_panel│  │  memory_chart  │  │request_details │  │
-│  └──────┬─────┘  └──────┬─────────┘  └──────┬─────────┘  │
-└─────────┼───────────────┼───────────────────┼────────────┘
-          │               │                   │
-          ▼               ▼                   ▼
-┌──────────────────────────────────────────────────────────┐
-│               DevTools Handlers                          │
-│         (fdemon-app/handler/devtools/)                    │
-│  inspector.rs   performance.rs   network.rs   mod.rs     │
-└─────────┬───────────────┬───────────────────┬────────────┘
-          │               │                   │
-          ▼               ▼                   ▼
-┌──────────────────────────────────────────────────────────┐
-│              Per-Session State                            │
-│         (fdemon-app/session/)                             │
-│  InspectorState    PerformanceState    NetworkState       │
-│  (in state.rs)     (performance.rs)    (network.rs)      │
-└─────────┬───────────────┬───────────────────┬────────────┘
-          │               │                   │
-          ▼               ▼                   ▼
-┌──────────────────────────────────────────────────────────┐
-│              VM Service Client                           │
-│        (fdemon-daemon/vm_service/)                        │
-│  extensions/    performance.rs    network.rs   timeline  │
-└─────────┬───────────────┬───────────────────┬────────────┘
-          │               │                   │
-          ▼               ▼                   ▼
-┌──────────────────────────────────────────────────────────┐
-│              Domain Types                                │
-│            (fdemon-core/)                                 │
-│  widget_tree.rs    performance.rs    network.rs           │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                          DevTools View                                  │
+│                  (fdemon-tui/widgets/devtools/)                         │
+│  ┌────────────┐  ┌───────────────┐  ┌─────────────┐  ┌─────────────┐  │
+│  │ Inspector  │  │  Performance  │  │   Memory    │  │   Network   │  │
+│  │ tree_panel │  │  frame_chart/ │  │MemoryPanel  │  │request_table│  │
+│  │layout_panel│  │               │  │ (memory/)   │  │req_details  │  │
+│  │  details/  │  │               │  │             │  │             │  │
+│  └──────┬─────┘  └──────┬────────┘  └──────┬──────┘  └──────┬──────┘  │
+└─────────┼───────────────┼─────────────────┼──────────────────┼────────┘
+          │               │                 │                  │
+          ▼               ▼                 ▼                  ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        DevTools Handlers                                │
+│                  (fdemon-app/handler/devtools/)                         │
+│  inspector.rs   performance.rs   memory.rs   network.rs   mod.rs       │
+└─────────┬───────────────┬─────────────────┬──────────────────┬────────┘
+          │               │                 │                  │
+          ▼               ▼                 ▼                  ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                       Per-Session State                                 │
+│                    (fdemon-app/session/)                                │
+│  InspectorState   PerformanceState   MemoryState    NetworkState        │
+│  (in state.rs)    (performance.rs)   (memory.rs)    (network.rs)       │
+└─────────┬───────────────┬─────────────────┬──────────────────┬────────┘
+          │               │                 │                  │
+          ▼               ▼                 ▼                  ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                       VM Service Client                                 │
+│                  (fdemon-daemon/vm_service/)                            │
+│  extensions/    performance.rs    network.rs   timeline                │
+└─────────┬───────────────┬─────────────────────────────────┬────────────┘
+          │               │                                 │
+          ▼               ▼                                 ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                         Domain Types                                    │
+│                       (fdemon-core/)                                    │
+│  widget_tree.rs    performance.rs    network.rs                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Panel State Model
 
 DevTools state lives at two levels:
 
-- **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
-- **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
+- **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel (`DevToolsPanel` enum: `Inspector`, `Performance`, `Memory`, `Network`), overlay toggles, VM connection status. Reset when exiting DevTools mode. `DevToolsPanel::Inspector` is the default. `DevToolsPanel::Memory` was added in Phase 1 of the performance/memory split, placing it between Performance and Network in tab order.
+- **Session state** (`PerformanceState`, `MemoryState`, `NetworkState` on `Session`): Per-session data. `PerformanceState` holds frame timing history; `MemoryState` holds memory snapshots, GC event history, allocation profile, and memory chart/table scroll state; `NetworkState` holds HTTP profile entries. All three persist across tab switches and survive DevTools mode exit.
 - **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, the `has_ever_rendered_tree` flag, the `hide_implementation_widgets` toggle, and the Details view fields (`details_open`, `details_tab: DetailsTab`, `details_node_id`, `details_context: DetailsContext`, `properties`, `render_properties`). `hide_implementation_widgets` survives `reset()` because it is a user preference; the Details fields are cleared on reset. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag is also sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches. The active row list is produced by `inspector_rows()`, which folds contiguous chains of non-local-project wrapper widgets into a leader row when `hide_implementation_widgets == true`. `visible_nodes()` is kept as a backwards-compatible flat-tuple shim over the row builder. `selected_row() -> Option<InspectorRow<'_>>` returns the currently selected visible row along with its `RowGroup` variant — used by handler code to decide whether a row is a chain leader, member, or standalone node (see `crates/fdemon-app/src/state.rs`). `reset_details_and_groups()` is the canonical reset point for all transient details state (`details_open`, `details_node_id`, `details_tab`, `expanded_groups`, `properties`, `render_properties`); it is called after every successful tree refresh and after hot restart, because both events invalidate Dart object ids. Two cache fields track in-flight and completed properties fetches: `last_fetched_properties_node_id: Option<String>` is set when a `getProperties` round-trip succeeds (cache key — `handle_open_details` skips re-dispatch when this equals the selected node's `value_id`); `pending_properties_node_id: Option<String>` is set when a fetch is dispatched and cleared when the response arrives. The stale-response guard in `handle_inspector_properties_fetched` (and its layout counterpart `handle_layout_data_fetched`) discards responses whose `node_id` does not match `inspector.details_node_id` — the unified comparison key for both handlers. Using `details_node_id` as the single source of truth prevents a close-then-reopen race (user closes details on node A, immediately reopens on node B; A's in-flight response arrives and is discarded rather than applied to B's panel). When a stale response arrives and `pending_*_node_id` still points to that same stale node, both `pending_*_node_id` and `*_loading` are cleared so the next `handle_open_details` for the correct node can dispatch a fresh fetch. Both cache fields are cleared by both `reset()` (session switch) and `reset_details_and_groups()` (tree refresh / hot restart), mirroring the layout-fetch cache pair (`last_fetched_node_id`, `pending_node_id`).
 
 Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 
-- `perf_pause_tx` — pauses the performance polling loop (memory + allocation ticks) when the user is not in DevTools; unpaused on DevTools entry, paused on DevTools exit.
+- `perf_pause_tx` — pauses the frame-timing polling loop when the user is not in DevTools; unpaused on DevTools entry, paused on DevTools exit.
+- `alloc_pause_tx` — pauses the allocation profile polling loop. Entering either the Performance tab or the Memory tab sends `false` (unpause); exiting DevTools sends `true` (pause). Both tabs share the same sender so the polling task remains active whenever either panel is visible.
 - `network_pause_tx` — pauses the network polling loop when the user is not on the Network tab; unpaused on Network tab entry, paused on Network tab exit.
 
 ### VM Service Data Flow
@@ -1005,37 +1015,64 @@ The `devtools.serve` method is available on Flutter SDK ≥ 1.22 (October 2020).
 
 ### Performance Panel Interactivity
 
-The Performance panel is divided into three independently-navigable sub-sections. Focus, scrolling, and selection state are tracked on `PerformanceState` (in `fdemon-app/src/session/performance.rs`).
+The Performance panel shows the frame timing chart. Focus, scrolling, and selection state are tracked on `PerformanceState` (in `fdemon-app/src/session/performance.rs`).
 
 **Section focus (`PerfSection` enum):**
 
-`PerfSection` has three variants — `FrameChart`, `MemoryChart`, `MemoryList` — corresponding to the frame timing bar chart, the memory usage time-series chart, and the class allocation table respectively. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` forward and backward through this order; section-specific key and mouse events are gated on which section currently has focus.
+`PerfSection` has two variants — `FrameChart` and `DetailsTab` — corresponding to the frame timing bar chart and a details pane placeholder for future phases. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` between them.
 
 **Scroll-offset model (live-edge drift):**
 
-Both chart sections use "frames back from live edge" scroll semantics:
+The frame chart uses "frames back from live edge" scroll semantics:
 
 - `frame_chart_scroll_offset` — how many bars the frame chart has been scrolled back from the newest frame. `0` means the live edge is visible (most recent frames are at the right of the chart).
-- `memory_chart_scroll_offset` — same model for the memory chart samples.
-- `alloc_table_scroll_offset` — row scroll offset for the allocation table (rows scrolled past the top).
 
-Pressing `End` (or the equivalent mouse click on the live-edge indicator) resets the relevant offset to `0`, snapping the view back to the live edge.
+Pressing `End` (or the equivalent mouse click on the live-edge indicator) resets the offset to `0`, snapping the view back to the live edge.
 
-**Render-hint `Cell<usize>` fields:**
+**Render-hint `Cell<usize>` field:**
 
-Three fields use `Cell<usize>` interior mutability to feed geometry back from the renderer to the handler without violating the TEA immutability contract on the model:
-
-| Field | Purpose |
-|---|---|
-| `frame_chart_visible_width` | Columns available in the frame chart area; used by the scroll handler to clamp scroll offset. |
-| `memory_chart_visible_width` | Columns available in the memory chart area; same purpose. |
-| `alloc_table_visible_height` | Rows visible in the allocation table; used by `PgUp`/`PgDn` to page by the correct amount. |
-
-All three default to `0` ("not yet rendered — use fallback"). This is the same approved TEA exception class as the `MouseRegions` cell and the tag-filter render-hint cell. See `docs/CODE_STANDARDS.md` Principle 3 for the canonical definition of this pattern.
+`frame_chart_visible_width` uses `Cell<usize>` interior mutability to feed the chart width back from the renderer to the scroll handler without violating the TEA immutability contract. It defaults to `0` ("not yet rendered — use fallback"). This is the same approved TEA exception class as the `MouseRegions` cell and the tag-filter render-hint cell. See `docs/CODE_STANDARDS.md` Principle 3 for the canonical definition of this pattern.
 
 **Frame history capacity:**
 
 `DEFAULT_FRAME_HISTORY_SIZE` is 1800 frames (30 seconds at 60 FPS), up from the previous 300-frame default. This provides enough scroll-back history for meaningful post-hoc analysis of jank events.
+
+### Memory Panel Interactivity
+
+The Memory panel shows the memory usage time-series chart and the class allocation table. Focus, scrolling, and selection state are tracked on `MemoryState` (in `fdemon-app/src/session/memory.rs`). The top-level widget is `MemoryPanel` (`fdemon-tui/src/widgets/devtools/memory/mod.rs`).
+
+**Section focus (`MemorySection` enum):**
+
+`MemorySection` has two variants — `Chart` (the memory usage time-series chart, default) and `AllocationList` (the class allocation table). `Tab` and `Shift+Tab` cycle between them. Section-specific key and scroll events are gated on the currently focused section.
+
+**Scroll-offset model (live-edge drift):**
+
+- `memory_chart_scroll_offset` — how many samples the memory chart has been scrolled back from the live edge. `0` means the live edge is visible.
+- `alloc_table_scroll_offset` — row scroll offset for the allocation table (rows scrolled past the top).
+- `alloc_table_selected_row` — index of the selected row in the allocation table, if any.
+
+**Render-hint `Cell<usize>` fields:**
+
+Two fields on `MemoryState` use `Cell<usize>` interior mutability:
+
+| Field | Purpose |
+|---|---|
+| `memory_chart_visible_width` | Columns available in the memory chart area; used by the scroll handler to clamp scroll offset. |
+| `alloc_table_visible_height` | Rows visible in the allocation table; used by `PgUp`/`PgDn` to page by the correct amount. |
+
+Both default to `0` ("not yet rendered — use fallback"). These are the same approved TEA exception class as the existing render-hint cells on `PerformanceState`, `MouseRegions`, and `TagFilterUiState`. No new exception class is introduced — these are renames of the fields that previously lived on `PerformanceState`.
+
+**Buffer sizes:**
+
+| Constant | Value | Coverage |
+|---|---|---|
+| `DEFAULT_MEMORY_HISTORY_SIZE` | 60 | 2 minutes at 2 s poll interval |
+| `DEFAULT_GC_HISTORY_SIZE` | 50 | Major GC events only (Scavenge events filtered) |
+| `DEFAULT_MEMORY_SAMPLE_SIZE` | 120 | 60 seconds at 500 ms poll interval |
+
+**Allocation sort (`AllocationSortColumn` enum):**
+
+`AllocationSortColumn` has two variants — `BySize` (total allocated bytes, descending, default) and `ByInstances` (total instance count, descending). This enum was relocated from `session/performance.rs` to `session/memory.rs` as part of the Phase 1 split.
 
 ---
 
