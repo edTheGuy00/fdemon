@@ -7,6 +7,7 @@
 //! [`crate::session::performance`] and [`crate::session::memory`] for the
 //! data ownership split.
 
+use super::scroll_helpers::{clamp_chart_scroll, ScrollDir};
 use crate::handler::UpdateResult;
 use crate::session::performance::PerfSection;
 use crate::state::AppState;
@@ -15,31 +16,6 @@ use crate::state::AppState;
 
 /// Fallback page size when the render-hint visible dimension is 0 (not yet rendered).
 const DEFAULT_PERF_PAGE_SIZE: usize = 10;
-
-/// Scroll direction used by [`handle_perf_scroll`] and [`handle_perf_page`].
-pub(crate) enum ScrollDir {
-    Up,
-    Down,
-}
-
-/// Clamp a chart scroll offset.
-///
-/// `buffer_len` is the number of items in the chart's data buffer.
-/// `visible_width` is the number of items visible at once (render hint; 0 = use 1).
-/// `current` is the current scroll offset (0 = live edge, higher = more scrolled back).
-/// `delta` is the signed change (+1 scrolls back, -1 scrolls toward live edge).
-///
-/// Returns the new offset clamped to `[0, buffer_len.saturating_sub(visible_width.max(1))]`.
-fn clamp_chart_scroll(
-    buffer_len: usize,
-    visible_width: usize,
-    current: usize,
-    delta: i64,
-) -> usize {
-    let max_back = buffer_len.saturating_sub(visible_width.max(1));
-    let new = current as i64 + delta;
-    new.clamp(0, max_back as i64) as usize
-}
 
 /// Handle frame selection by direct index.
 ///
@@ -538,9 +514,10 @@ mod tests {
 
     // ── Phase 2 keyboard interactivity tests ─────────────────────────────────
 
+    use super::super::ScrollDir;
     use super::{
         handle_perf_focus_section, handle_perf_jump_to_end, handle_perf_jump_to_start,
-        handle_perf_page, handle_perf_scroll, ScrollDir,
+        handle_perf_page, handle_perf_scroll,
     };
     use crate::session::performance::PerfSection;
 

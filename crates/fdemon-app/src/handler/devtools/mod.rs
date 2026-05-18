@@ -7,12 +7,19 @@
 //! Sub-modules:
 //! - `inspector`: Widget tree fetch handlers, inspector navigation, and layout data handlers
 //! - `performance`: Frame selection, memory sample, and allocation profile handlers
+//! - `scroll_helpers`: Shared chart-scroll helpers used by `performance` and `memory`
 
 pub(crate) mod debug;
 pub mod inspector;
 pub(crate) mod memory;
 pub(crate) mod network;
 pub(crate) mod performance;
+pub(crate) mod scroll_helpers;
+
+/// Re-export `ScrollDir` from `scroll_helpers` at the `devtools` crate-level so
+/// that `handler/update.rs` can refer to `devtools::ScrollDir` without reaching
+/// into a specific panel submodule.
+pub(crate) use scroll_helpers::ScrollDir;
 
 pub use inspector::{
     handle_close_details, handle_cycle_tab, handle_inspector_navigate,

@@ -2319,18 +2319,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::MemFocusSection(section) => {
             devtools::memory::handle_mem_focus_section(state, section)
         }
-        Message::MemScrollUp => {
-            devtools::memory::handle_mem_scroll(state, devtools::memory::ScrollDir::Up)
-        }
+        Message::MemScrollUp => devtools::memory::handle_mem_scroll(state, devtools::ScrollDir::Up),
         Message::MemScrollDown => {
-            devtools::memory::handle_mem_scroll(state, devtools::memory::ScrollDir::Down)
+            devtools::memory::handle_mem_scroll(state, devtools::ScrollDir::Down)
         }
-        Message::MemPageUp => {
-            devtools::memory::handle_mem_page(state, devtools::memory::ScrollDir::Up)
-        }
-        Message::MemPageDown => {
-            devtools::memory::handle_mem_page(state, devtools::memory::ScrollDir::Down)
-        }
+        Message::MemPageUp => devtools::memory::handle_mem_page(state, devtools::ScrollDir::Up),
+        Message::MemPageDown => devtools::memory::handle_mem_page(state, devtools::ScrollDir::Down),
         Message::MemJumpToStart => devtools::memory::handle_mem_jump_to_start(state),
         Message::MemJumpToEnd => devtools::memory::handle_mem_jump_to_end(state),
         Message::MemSelectAllocRow { index } => {
@@ -2343,16 +2337,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             devtools::performance::handle_perf_focus_section(state, section)
         }
         Message::PerfScrollUp => {
-            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Up)
+            devtools::performance::handle_perf_scroll(state, devtools::ScrollDir::Up)
         }
         Message::PerfScrollDown => {
-            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Down)
+            devtools::performance::handle_perf_scroll(state, devtools::ScrollDir::Down)
         }
         Message::PerfPageUp => {
-            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Up)
+            devtools::performance::handle_perf_page(state, devtools::ScrollDir::Up)
         }
         Message::PerfPageDown => {
-            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Down)
+            devtools::performance::handle_perf_page(state, devtools::ScrollDir::Down)
         }
         Message::PerfJumpToStart => devtools::performance::handle_perf_jump_to_start(state),
         Message::PerfJumpToEnd => devtools::performance::handle_perf_jump_to_end(state),
