@@ -14,8 +14,8 @@ use crate::mouse_regions::{MouseRegions, MouseRegionsCell};
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{
-    build_inspector_rows, AppPhase, DiagnosticsNode, InspectorRow, InspectorRowBuilderInputs,
-    LayoutInfo,
+    build_inspector_rows, AppPhase, DetailsContext, DiagnosticsNode, InspectorRow,
+    InspectorRowBuilderInputs, LayoutInfo,
 };
 use fdemon_daemon::{AndroidAvd, Device, FlutterSdk, IosSimulator, ToolAvailability};
 
@@ -360,6 +360,19 @@ pub struct InspectorState {
     /// guard in `handle_properties_fetched`: if the user closes Details or
     /// switches to a different node mid-flight, the late response is discarded.
     pub pending_properties_node_id: Option<String>,
+
+    /// Cached tree-derived predicates for the open details session.
+    ///
+    /// Populated by `handle_open_details` via
+    /// [`fdemon_core::widget_tree::compute_details_context`]. Used by
+    /// [`Self::visible_tabs`] to decide which tabs render. Cleared by
+    /// [`Self::reset`] and [`Self::reset_details_and_groups`]; overwritten on
+    /// every successful `handle_open_details`.
+    ///
+    /// Default value (`DetailsContext::default()`) is harmless because
+    /// `visible_tabs` is only consumed while `details_open == true`, and
+    /// `handle_open_details` always writes here before flipping `details_open`.
+    pub details_context: DetailsContext,
 }
 
 impl Default for InspectorState {
@@ -392,6 +405,7 @@ impl Default for InspectorState {
             properties_error: None,
             last_fetched_properties_node_id: None,
             pending_properties_node_id: None,
+            details_context: DetailsContext::default(),
         }
     }
 }
@@ -448,6 +462,7 @@ impl InspectorState {
         self.details_open = false;
         self.details_tab = DetailsTab::Properties;
         self.details_node_id = None;
+        self.details_context = DetailsContext::default();
         self.properties.clear();
         self.render_properties.clear();
         self.properties_loading = false;
@@ -473,6 +488,7 @@ impl InspectorState {
         self.details_open = false;
         self.details_node_id = None;
         self.details_tab = DetailsTab::Properties;
+        self.details_context = DetailsContext::default();
         self.expanded_groups.clear();
         self.properties.clear();
         self.render_properties.clear();
@@ -618,6 +634,56 @@ impl InspectorState {
     /// bounds, or the node at that position has no `value_id`.
     pub fn selected_value_id(&self) -> Option<String> {
         self.selected_row().and_then(|r| r.node.value_id.clone())
+    }
+
+    /// Return the ordered list of tabs that should be visible in the Details
+    /// strip given current state.
+    ///
+    /// Visibility rules (DevTools parity, parent PLAN §5.4):
+    /// - [`DetailsTab::Properties`] is always included.
+    /// - [`DetailsTab::RenderObject`] is included iff
+    ///   `!self.render_properties.is_empty()`.
+    /// - [`DetailsTab::FlexExplorer`] is included iff
+    ///   `self.details_context.is_flex_layout` (precomputed by
+    ///   `handle_open_details` via `compute_details_context`).
+    ///
+    /// Returned in display order. Caller is free to assume the first element
+    /// is always `Properties` and to use the order for cycling.
+    ///
+    /// Pure: does not walk the tree, does not allocate beyond the returned vec,
+    /// and never mutates state. Safe to call from the TUI renderer.
+    pub fn visible_tabs(&self) -> Vec<DetailsTab> {
+        let mut tabs = Vec::with_capacity(3);
+        tabs.push(DetailsTab::Properties);
+        if !self.render_properties.is_empty() {
+            tabs.push(DetailsTab::RenderObject);
+        }
+        if self.details_context.is_flex_layout {
+            tabs.push(DetailsTab::FlexExplorer);
+        }
+        tabs
+    }
+
+    /// Ensure `self.details_tab` is in [`Self::visible_tabs`]; if not, set it
+    /// to the first visible tab (always `Properties`).
+    ///
+    /// Call this after any state transition that may have removed the active
+    /// tab from the visible set:
+    /// - `handle_inspector_properties_fetched` (fetch may yield empty
+    ///   `render_properties` → Render Object tab disappears).
+    /// - `handle_inspector_properties_fetch_failed` (same, depending on
+    ///   pre-failure cache state).
+    ///
+    /// `handle_open_details` already sets `details_tab = Properties` directly
+    /// and does not need to call this method.
+    ///
+    /// `handle_close_details` does not need this — the renderer never sees
+    /// state while `details_open == false`.
+    pub fn clamp_details_tab(&mut self) {
+        let visible = self.visible_tabs();
+        if !visible.contains(&self.details_tab) {
+            self.details_tab = visible.first().copied().unwrap_or(DetailsTab::Properties);
+        }
     }
 }
 
@@ -3078,5 +3144,131 @@ mod tests {
             state.pending_properties_node_id.is_none(),
             "reset_details_and_groups() must clear pending_properties_node_id"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // visible_tabs / clamp_details_tab / details_context tests
+    // (Phase 3, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn visible_tabs_default_is_properties_only() {
+        let state = InspectorState::default();
+        assert_eq!(state.visible_tabs(), vec![DetailsTab::Properties]);
+    }
+
+    #[test]
+    fn visible_tabs_includes_render_object_when_render_properties_non_empty() {
+        let state = InspectorState {
+            render_properties: vec![DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            state.visible_tabs(),
+            vec![DetailsTab::Properties, DetailsTab::RenderObject]
+        );
+    }
+
+    #[test]
+    fn visible_tabs_includes_flex_explorer_when_context_is_flex_layout() {
+        let state = InspectorState {
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            state.visible_tabs(),
+            vec![DetailsTab::Properties, DetailsTab::FlexExplorer]
+        );
+    }
+
+    #[test]
+    fn visible_tabs_includes_all_three_when_both_conditions_hold() {
+        let state = InspectorState {
+            render_properties: vec![DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }],
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: Some("Column".into()),
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            state.visible_tabs(),
+            vec![
+                DetailsTab::Properties,
+                DetailsTab::RenderObject,
+                DetailsTab::FlexExplorer
+            ]
+        );
+    }
+
+    #[test]
+    fn clamp_details_tab_snaps_to_properties_when_render_object_hidden() {
+        let mut state = InspectorState {
+            details_tab: DetailsTab::RenderObject,
+            // render_properties intentionally empty → RenderObject hidden
+            ..Default::default()
+        };
+        state.clamp_details_tab();
+        assert_eq!(state.details_tab, DetailsTab::Properties);
+    }
+
+    #[test]
+    fn clamp_details_tab_snaps_to_properties_when_flex_explorer_hidden() {
+        let mut state = InspectorState {
+            details_tab: DetailsTab::FlexExplorer,
+            // details_context.is_flex_layout intentionally false → FlexExplorer hidden
+            ..Default::default()
+        };
+        state.clamp_details_tab();
+        assert_eq!(state.details_tab, DetailsTab::Properties);
+    }
+
+    #[test]
+    fn clamp_details_tab_noop_when_active_tab_visible() {
+        let mut state = InspectorState {
+            details_tab: DetailsTab::RenderObject,
+            render_properties: vec![DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        state.clamp_details_tab();
+        assert_eq!(state.details_tab, DetailsTab::RenderObject);
+    }
+
+    #[test]
+    fn reset_clears_details_context() {
+        let mut state = InspectorState {
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: Some("Column".into()),
+            },
+            ..Default::default()
+        };
+        state.reset();
+        assert_eq!(state.details_context, DetailsContext::default());
+    }
+
+    #[test]
+    fn reset_details_and_groups_clears_details_context() {
+        let mut state = InspectorState {
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: Some("Row".into()),
+            },
+            ..Default::default()
+        };
+        state.reset_details_and_groups();
+        assert_eq!(state.details_context, DetailsContext::default());
     }
 }
