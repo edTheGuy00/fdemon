@@ -144,6 +144,21 @@ impl WidgetInspector<'_> {
         // must be robust), fall back to the first visible tab (always Properties).
         // The renderer is pure and cannot mutate state to fix this.
         let visible_tabs = self.inspector_state.visible_tabs();
+        // In debug / test builds, assert the invariant that the handler layer
+        // guarantees: details_tab must always be in visible_tabs() before the
+        // renderer runs. A violation means a handler missed a clamp_details_tab()
+        // call (see workflow/reviews/features/devtools-inspector-parity/phase-3/
+        // ACTION_ITEMS.md item m2). Compiled out in release builds — zero cost.
+        debug_assert!(
+            visible_tabs.contains(&self.inspector_state.details_tab),
+            "details_tab {:?} is not in visible_tabs {:?} — a handler missed a \
+             clamp_details_tab() call. The renderer will fall back to the first \
+             visible tab, but this masks a state inconsistency that should be \
+             fixed in the handler layer. See workflow/reviews/features/\
+             devtools-inspector-parity/phase-3/ACTION_ITEMS.md item m2.",
+            self.inspector_state.details_tab,
+            visible_tabs
+        );
         let dispatch_tab = if visible_tabs.contains(&self.inspector_state.details_tab) {
             self.inspector_state.details_tab
         } else {
@@ -717,40 +732,42 @@ mod tests {
 
     // ── Defensive dispatch test ───────────────────────────────────────────────
 
-    /// If `details_tab` is stale (e.g. `RenderObject` but `render_properties`
-    /// is empty), the renderer must fall back to Properties without panicking
-    /// and without mutating state.
+    /// Happy path: `details_tab` is in `visible_tabs`; the renderer dispatches
+    /// to the correct tab without triggering the `debug_assert!`.
+    ///
+    /// Note: The previous test `details_panel_falls_back_to_properties_when_active_tab_hidden`
+    /// has been removed. With the new `debug_assert!` in the dispatch block, a
+    /// state where `details_tab` is not in `visible_tabs()` is treated as a
+    /// handler-layer bug to surface loudly in dev/test/CI rather than silently
+    /// absorb. The release-build fallback is preserved for end-user resilience
+    /// but is not unit-tested (see workflow/reviews/features/devtools-inspector-parity/
+    /// phase-3/ACTION_ITEMS.md item m2).
     #[test]
-    fn details_panel_falls_back_to_properties_when_active_tab_hidden() {
-        let state = InspectorState {
-            details_open: true,
-            details_tab: DetailsTab::RenderObject, // stale — RenderObject tab is hidden
-            details_node_id: Some("c-id".into()),
-            root: Some(DiagnosticsNode {
-                description: "Container".into(),
-                value_id: Some("c-id".into()),
-                ..Default::default()
-            }),
-            // render_properties empty → RenderObject tab hidden
-            // details_context default → FlexExplorer tab hidden
-            ..Default::default()
-        };
-        // Render should not panic.
+    fn details_panel_renders_active_tab_when_visible() {
+        // Happy path: details_tab = Properties, and Properties is always in
+        // visible_tabs (the only tab when render_properties is empty and
+        // is_flex_layout is false). The assert must not fire; Properties content
+        // must be rendered.
+        let state = make_state_with_details_open(DetailsTab::Properties);
         let text = render_for_state(&state, 80, 10);
-        // Only the Widget properties label is in the strip.
+        // The "Widget properties" label must appear in the tab strip.
         assert!(
             text.contains("Widget properties"),
-            "Fallback: expected 'Widget properties' label in strip, got: {text:?}"
+            "Happy path: expected 'Widget properties' label in strip, got: {text:?}"
         );
-        // The Render object label must NOT appear (tab is hidden).
+        // The Render object and Flex explorer labels must NOT appear (hidden).
         assert!(
             !text.contains("Render object"),
-            "Fallback: 'Render object' tab must not be visible, got: {text:?}"
+            "Happy path: 'Render object' tab must not be visible, got: {text:?}"
         );
-        // State is not mutated — details_tab is still RenderObject.
+        assert!(
+            !text.contains("Flex explorer"),
+            "Happy path: 'Flex explorer' tab must not be visible, got: {text:?}"
+        );
+        // State is not mutated — details_tab is still Properties.
         assert_eq!(
             state.details_tab,
-            DetailsTab::RenderObject,
+            DetailsTab::Properties,
             "Renderer must not mutate state.details_tab"
         );
     }
