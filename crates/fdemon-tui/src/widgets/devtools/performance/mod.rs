@@ -175,7 +175,7 @@ impl PerformancePanel<'_> {
 
         if usable.height < MIN_DUAL_PANE_HEIGHT {
             // Short terminals — Frame Chart fills the entire usable area, same as Phase 1.
-            self.render_chart_only(usable, buf, ctx.as_deref_mut());
+            self.render_chart_only(usable, buf, ctx.as_deref_mut(), false);
             return;
         }
 
@@ -187,7 +187,7 @@ impl PerformancePanel<'_> {
         ])
         .split(usable);
 
-        self.render_chart_only(chunks[0], buf, ctx.as_deref_mut());
+        self.render_chart_only(chunks[0], buf, ctx.as_deref_mut(), true);
         self.render_details_pane(chunks[1], buf, ctx);
     }
 
@@ -197,7 +197,19 @@ impl PerformancePanel<'_> {
     ///
     /// Called both as the sole content on short terminals and as the upper half
     /// of the dual-pane layout on taller terminals.
-    fn render_chart_only(&self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
+    ///
+    /// `dual_pane` must be `true` when this is the upper pane of a dual-pane
+    /// layout so that [`FrameChart`] suppresses its per-frame detail strip
+    /// (the Details pane below already shows that data). Pass `false` for the
+    /// chart-only fallback (small terminals) where the strip is the only place
+    /// per-frame detail can appear.
+    fn render_chart_only(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mut ctx: Option<&mut MouseCtx<'_>>,
+        dual_pane: bool,
+    ) {
         let frame_focused = self.performance.focused_section == PerfSection::FrameChart;
         let frame_border_color = if frame_focused {
             COLOR_FOCUSED_BORDER
@@ -234,6 +246,7 @@ impl PerformancePanel<'_> {
             false,
             self.performance.frame_chart_scroll_offset,
             &self.performance.frame_chart_visible_width,
+            dual_pane,
         )
         .render_with_regions(frame_inner, buf, ctx);
     }

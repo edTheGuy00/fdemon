@@ -90,7 +90,7 @@ fn test_renders_empty_history_without_panic() {
     let history = RingBuffer::new(100);
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -103,7 +103,7 @@ fn test_renders_single_frame_without_panic() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     // Verify at least one non-space character is present in the chart area
     let text = collect_text(&buf, 80, 20);
@@ -119,7 +119,7 @@ fn test_jank_frame_uses_red_color() {
     history.push(make_janky_frame(1)); // 20ms > 16ms
     let stats = make_stats(Some(50.0), 1, Some(20.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     assert!(
         has_color(&buf, 40, 20, COLOR_JANK),
@@ -133,7 +133,7 @@ fn test_normal_frame_uses_cyan_and_green() {
     history.push(make_frame(1, 5_000, 3_000)); // 8ms total, well under budget
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     assert!(
         has_color(&buf, 40, 20, COLOR_UI_NORMAL) || has_color(&buf, 40, 20, COLOR_RASTER_NORMAL),
@@ -147,7 +147,7 @@ fn test_shader_frame_uses_magenta() {
     history.push(make_shader_frame(1));
     let stats = make_stats(Some(30.0), 0, Some(35.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     assert!(
         has_color(&buf, 40, 20, COLOR_SHADER),
@@ -161,7 +161,7 @@ fn test_budget_line_label_drawn() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -176,7 +176,7 @@ fn test_selected_frame_shows_highlight() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     let text = collect_text(&buf, 40, 20);
     // Selection highlight uses '▔'
@@ -192,7 +192,7 @@ fn test_detail_panel_shows_frame_info_when_selected() {
     history.push(make_frame(42, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     // Should contain frame number
@@ -208,7 +208,7 @@ fn test_summary_line_when_no_selection() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 2, Some(8.2), 100);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -226,7 +226,7 @@ fn test_compact_mode_for_small_area_no_panic() {
     let history = RingBuffer::new(100);
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     // Area too small for chart (height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT = 7)
     let area = Rect::new(0, 0, 80, 3);
     let mut buf = Buffer::empty(area);
@@ -239,7 +239,7 @@ fn test_zero_area_no_panic() {
     let history = RingBuffer::new(100);
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let area = Rect::new(0, 0, 0, 0);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -255,7 +255,7 @@ fn test_frame_count_fits_width() {
     }
     let stats = make_stats(Some(60.0), 0, Some(8.0), 20);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     // Width 30 → max_visible = 30 / 3 = 10 frames
     let buf = render_widget(widget, 30, 20);
     // Should not panic and should render something
@@ -273,7 +273,7 @@ fn test_auto_scaling_minimum_range() {
     }
     let stats = make_stats(Some(60.0), 0, Some(3.0), 10);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     // Budget line should still appear because MIN_Y_RANGE_MS = 20ms > 3ms frame time
@@ -297,7 +297,7 @@ fn test_detail_panel_with_phases() {
     history.push(frame);
     let stats = make_stats(Some(60.0), 0, Some(12.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     // Phase breakdown should include "Build", "Layout", "Paint"
@@ -313,7 +313,7 @@ fn test_detail_panel_jank_label() {
     history.push(make_janky_frame(99));
     let stats = make_stats(Some(50.0), 1, Some(20.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -328,7 +328,7 @@ fn test_detail_panel_shader_label() {
     history.push(make_shader_frame(7));
     let stats = make_stats(Some(30.0), 0, Some(35.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -347,7 +347,7 @@ fn test_many_frames_shows_most_recent() {
     }
     let stats = make_stats(Some(60.0), 0, Some(8.0), 100);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     // width 30 → 10 frames visible in the bar chart
     let buf = render_widget(widget, 30, 20);
     // No panic is the minimum requirement; verify something was rendered
@@ -363,7 +363,7 @@ fn test_full_buffer_history_no_panic() {
     }
     let stats = make_stats(Some(60.0), 5, Some(8.0), 300);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 24);
     let text = collect_text(&buf, 80, 24);
     assert!(!text.is_empty());
@@ -438,7 +438,7 @@ fn frame_chart_records_one_region_per_visible_frame() {
     }
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let mut regions = MouseRegions::default();
     let area = Rect::new(0, 0, 80, 24);
@@ -480,7 +480,7 @@ fn frame_chart_in_compact_mode_records_no_regions() {
     history.push(make_timing(1));
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     // Compact: height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT (= 4 + 3 = 7).
     let mut regions = MouseRegions::default();
@@ -514,7 +514,7 @@ fn frame_chart_region_width_is_chars_per_frame() {
     }
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let mut regions = MouseRegions::default();
     let area = Rect::new(0, 0, 80, 20);
@@ -552,7 +552,7 @@ fn frame_chart_region_height_equals_chart_height() {
     history.push(make_timing(42));
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let total_h: u16 = 20;
     let expected_chart_h = total_h - DETAIL_PANEL_HEIGHT;
@@ -592,7 +592,7 @@ fn frame_chart_no_regions_without_ctx() {
     }
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);

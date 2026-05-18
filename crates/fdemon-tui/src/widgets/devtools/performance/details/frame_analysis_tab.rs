@@ -281,9 +281,7 @@ fn render_verdict(area: Rect, buf: &mut Buffer, frame: &FrameTiming, refresh_rat
             Span::raw("  "),
             Span::styled(
                 format!("— JANK +{excess:.1} ms"),
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
         ])
     } else {
@@ -442,7 +440,10 @@ mod tests {
             text.contains("Budget @ 120 Hz: 8.3 ms"),
             "missing 120 Hz budget: {text}"
         );
-        assert!(text.contains("JANK"), "10ms frame is janky at 120 Hz: {text}");
+        assert!(
+            text.contains("JANK"),
+            "10ms frame is janky at 120 Hz: {text}"
+        );
     }
 
     // ── Proportional phase bar ───────────────────────────────────────────────

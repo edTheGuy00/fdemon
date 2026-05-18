@@ -78,6 +78,13 @@ pub(crate) struct FrameChart<'a> {
     /// keyboard handler can use the real viewport width for scroll clamping.
     // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
     pub(super) frame_chart_visible_width: &'a Cell<usize>,
+    /// When `true`, the chart is rendered as the upper pane of the dual-pane
+    /// layout, meaning per-frame detail is already shown in the Details pane
+    /// below. In that mode, `render_detail_panel` shows the aggregate summary
+    /// line (`FPS: / Avg:`) even when a frame is selected, avoiding duplicate
+    /// data. When `false` (chart-only fallback), the existing behaviour applies:
+    /// per-frame detail is rendered in the chart's strip when a frame is selected.
+    pub(super) dual_pane: bool,
 }
 
 impl<'a> FrameChart<'a> {
@@ -91,6 +98,10 @@ impl<'a> FrameChart<'a> {
     /// * `scroll_offset` - Frames scrolled back from the live edge (0 = live mode).
     /// * `frame_chart_visible_width` - Render-hint Cell updated each frame with the
     ///   visible bar count.
+    /// * `dual_pane` - When `true`, the chart is the upper pane of a dual-pane layout;
+    ///   per-frame detail is suppressed in the chart's strip (it lives in the Details pane
+    ///   below). When `false`, the chart is the sole content area and renders per-frame
+    ///   detail in its strip as the chart-only fallback.
     pub fn new(
         frame_history: &'a RingBuffer<FrameTiming>,
         selected_frame: Option<usize>,
@@ -98,6 +109,7 @@ impl<'a> FrameChart<'a> {
         icons: bool,
         scroll_offset: usize,
         frame_chart_visible_width: &'a Cell<usize>,
+        dual_pane: bool,
     ) -> Self {
         Self {
             frame_history,
@@ -106,6 +118,7 @@ impl<'a> FrameChart<'a> {
             icons,
             scroll_offset,
             frame_chart_visible_width,
+            dual_pane,
         }
     }
 }

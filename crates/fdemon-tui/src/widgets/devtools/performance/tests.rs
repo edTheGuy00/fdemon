@@ -592,3 +592,93 @@ fn render_with_regions_matches_widget_render_buffer() {
         "Widget::render and render_with_regions must produce identical buffers"
     );
 }
+
+// ── Phase 2 followup T01: C1 dual-pane detail-deduplication regression tests ──
+
+/// Count the number of non-overlapping occurrences of `needle` in `haystack`.
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    let mut count = 0;
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        count += 1;
+        start += pos + needle.len();
+    }
+    count
+}
+
+fn make_perf_with_selected_frame() -> PerformanceState {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        selected_frame: Some(5),
+        ..Default::default()
+    };
+    for i in 0u64..30 {
+        perf.frame_history.push(FrameTiming {
+            number: i,
+            build_micros: 5_000 + (i * 100),
+            raster_micros: 3_000 + (i * 50),
+            elapsed_micros: 8_000 + (i * 150),
+            timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: false,
+        });
+    }
+    perf.stats.fps = Some(60.0);
+    perf.stats.jank_count = 2;
+    perf.stats.avg_frame_ms = Some(8.5);
+    perf.stats.buffered_frames = 30;
+    perf
+}
+
+/// C1 regression: in dual-pane mode (200×30) with a frame selected, the chart's
+/// bottom strip must NOT render the per-frame "Frame #N" detail — that data is
+/// already shown in the Frame Analysis tab below. The substring "Frame #" must
+/// not appear anywhere in the buffer (the Frame Analysis tab uses the text
+/// "Flutter frame:" for its header, not "Frame #").
+#[test]
+fn frame_detail_suppressed_in_dual_pane_at_200x30_with_selection() {
+    let perf = make_perf_with_selected_frame();
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+
+    let frame_hash_count = count_occurrences(&text, "Frame #");
+    assert_eq!(
+        frame_hash_count, 0,
+        "In dual-pane mode with a frame selected, the chart's bottom strip must \
+         not render 'Frame #N' detail — found {frame_hash_count} occurrences.\n\
+         Buffer text:\n{text}"
+    );
+}
+
+/// C4 regression: in chart-only fallback mode (200×16, `usable.height < MIN_DUAL_PANE_HEIGHT`),
+/// the chart's bottom strip still renders the per-frame "Frame #N" detail when a frame is
+/// selected (there is no Details pane below to show it).
+#[test]
+fn chart_only_fallback_still_renders_frame_detail() {
+    let perf = make_perf_with_selected_frame();
+    // Height 16 → usable = 15, which is < MIN_DUAL_PANE_HEIGHT (18) → chart-only
+    let buf = render_panel(&perf, 200, 16);
+    let text = collect_full_text(&buf);
+
+    assert!(
+        text.contains("Frame #"),
+        "In chart-only fallback mode, the chart's bottom strip must render \
+         the per-frame 'Frame #N' detail.\nBuffer text:\n{text}"
+    );
+}
+
+/// C3 regression: in dual-pane mode (200×30) with a frame selected, the chart's
+/// bottom strip must show the aggregate summary line (FPS / Avg / Jank / Shader)
+/// so the strip remains informative rather than blank.
+#[test]
+fn dual_pane_chart_strip_shows_summary_when_frame_selected() {
+    let perf = make_perf_with_selected_frame();
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+
+    assert!(
+        text.contains("FPS:") || text.contains("Avg:"),
+        "In dual-pane mode with a frame selected, the chart's bottom strip \
+         must show the aggregate summary line (FPS: or Avg:).\nBuffer text:\n{text}"
+    );
+}
