@@ -62,6 +62,22 @@ Phase 2 implementation introduces five distinct architectural changes that need 
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added `getProperties` extension table; added "Inspector Properties Fetch (Two-Stage Pipeline)" subsection; updated `InspectorState` description with two new cache fields and their stale-guard/reset semantics; extended `UpdateResult` with `extra_actions` field description; added `FetchLayoutData` and `FetchInspectorProperties` to `UpdateAction` variants list; updated `widget_tree.rs` description in project structure and fdemon-core public API section to list the six new flex/axis types; added `properties.rs` to the extensions directory listing |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A — N/A (no violations found)
+
+### Notable Decisions/Tradeoffs
+
+1. **No LayoutInfo field list added**: The current ARCHITECTURE.md has no existing field-by-field table for `LayoutInfo`. The acceptance criterion says "if present in current ARCHITECTURE.md" — it was not present, so only the type-level mentions in the project structure and API surface sections were updated to name the five new fields.
+2. **VM Service extension table placed in new subsection**: Rather than appending `getProperties` to a prose sentence, a proper table of all inspector VM Service extensions was added in the new "Inspector Properties Fetch" subsection. This is more discoverable and easier to maintain as further extensions are added.
+3. **`FetchLayoutData` documented alongside `FetchInspectorProperties`**: The two actions work in tandem and are dispatched together, so both were added to the `UpdateAction` variants list for completeness — `FetchLayoutData` was previously undocumented there.

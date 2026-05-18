@@ -241,7 +241,7 @@ flutter-demon/
 │   │       ├── prelude.rs        # Common imports
 │   │       ├── network.rs        # Network domain types (HttpProfileEntry, NetworkTiming, etc.)
 │   │       ├── performance.rs    # Performance domain types (FrameTiming, MemorySample, RingBuffer, etc.)
-│   │       └── widget_tree.rs    # Widget tree types (DiagnosticsNode, LayoutInfo, EdgeInsets)
+│   │       └── widget_tree.rs    # Widget tree types (DiagnosticsNode, LayoutInfo, EdgeInsets, FlexChild, FlexFit, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize)
 │   │
 │   ├── fdemon-daemon/            # Flutter process management
 │   │   ├── Cargo.toml            # depends: fdemon-core
@@ -284,6 +284,7 @@ flutter-demon/
 │   │               ├── mod.rs
 │   │               ├── inspector.rs
 │   │               ├── layout.rs
+│   │               ├── properties.rs  # getProperties response parsing + widget/render-object split
 │   │               ├── overlays.rs
 │   │               └── dumps.rs
 │   │
@@ -890,7 +891,7 @@ DevTools state lives at two levels:
 
 - **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
 - **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
-- **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, the `has_ever_rendered_tree` flag, the `hide_implementation_widgets` toggle, and the Details view fields (`details_open`, `details_tab: DetailsTab`, `details_node_id`, `properties`, `render_properties`). `hide_implementation_widgets` survives `reset()` because it is a user preference; the Details fields are cleared on reset. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag is also sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches. The active row list is produced by `inspector_rows()`, which folds contiguous chains of non-local-project wrapper widgets into a leader row when `hide_implementation_widgets == true`. `visible_nodes()` is kept as a backwards-compatible flat-tuple shim over the row builder. `selected_row() -> Option<InspectorRow<'_>>` returns the currently selected visible row along with its `RowGroup` variant — used by handler code to decide whether a row is a chain leader, member, or standalone node (see `crates/fdemon-app/src/state.rs`). `reset_details_and_groups()` is the canonical reset point for all transient details state (`details_open`, `details_node_id`, `details_tab`, `expanded_groups`, `properties`, `render_properties`); it is called after every successful tree refresh and after hot restart, because both events invalidate Dart object ids.
+- **Inspector state** (`InspectorState` within `DevToolsViewState`): Holds the widget tree, layout data, selected node, the `has_ever_rendered_tree` flag, the `hide_implementation_widgets` toggle, and the Details view fields (`details_open`, `details_tab: DetailsTab`, `details_node_id`, `properties`, `render_properties`). `hide_implementation_widgets` survives `reset()` because it is a user preference; the Details fields are cleared on reset. Unlike the rest of `DevToolsViewState`, the `has_ever_rendered_tree` flag is also sticky for the session lifetime and determines whether a readiness poll is run on subsequent fetches. The active row list is produced by `inspector_rows()`, which folds contiguous chains of non-local-project wrapper widgets into a leader row when `hide_implementation_widgets == true`. `visible_nodes()` is kept as a backwards-compatible flat-tuple shim over the row builder. `selected_row() -> Option<InspectorRow<'_>>` returns the currently selected visible row along with its `RowGroup` variant — used by handler code to decide whether a row is a chain leader, member, or standalone node (see `crates/fdemon-app/src/state.rs`). `reset_details_and_groups()` is the canonical reset point for all transient details state (`details_open`, `details_node_id`, `details_tab`, `expanded_groups`, `properties`, `render_properties`); it is called after every successful tree refresh and after hot restart, because both events invalidate Dart object ids. Two cache fields track in-flight and completed properties fetches: `last_fetched_properties_node_id: Option<String>` is set when a `getProperties` round-trip succeeds (cache key — `handle_open_details` skips re-dispatch when this equals the selected node's `value_id`); `pending_properties_node_id: Option<String>` is set when a fetch is dispatched and cleared when the response arrives. The stale-response guard in `handle_inspector_properties_fetched` discards responses whose `node_id` does not match `pending_properties_node_id`, preventing late responses from a previous node from overwriting state for the current node. Both fields are cleared by both `reset()` (session switch) and `reset_details_and_groups()` (tree refresh / hot restart), mirroring the layout-fetch cache pair (`last_fetched_node_id`, `pending_node_id`).
 
 Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 
@@ -935,6 +936,32 @@ Each widget-tree fetch carries a `FetchTrigger` variant — `Initial` or `Refres
 The sticky `has_ever_rendered_tree` flag on `InspectorState` gates whether `r` dispatches a `Refresh` or an `Initial` trigger.
 
 **Tree row builder.** The rendered tree is built by `build_inspector_rows()` in `fdemon-core/widget_tree.rs`. The algorithm computes per-row metadata (`ticks` for ancestor guideline columns, `line_to_parent` for `├─`/`└─` branch ticks, `RowGroup` for chain-fold leaders and members) and folds contiguous chains of non-local-project wrapper widgets behind a `+ N more widgets` leader row when the user's `hide_implementation_widgets` toggle is on. This mirrors DevTools' `_alwaysVisible` heuristic (`createdByLocalProject || has >1 children || has siblings || is root`).
+
+### Inspector Properties Fetch (Two-Stage Pipeline)
+
+When the user presses Enter to open the Details view, `handle_open_details` dispatches both a `FetchLayoutData` action (existing) and a `FetchInspectorProperties` action (Phase 2). Both actions are returned together via `UpdateResult::actions_vec`, which packs them into the `action` and `extra_actions` fields of `UpdateResult` (see the UpdateResult section below). The engine processes both in the same `process_message` cycle.
+
+`FetchInspectorProperties` (declared in `fdemon-app/handler/mod.rs`) triggers `spawn_fetch_inspector_properties` in `fdemon-app/actions/inspector/mod.rs`. This background task performs a two-stage `ext.flutter.inspector.getProperties` round-trip:
+
+1. **Widget-level call** — issues one `getProperties` RPC for the selected widget's `value_id`. The response is an array of `DiagnosticsNode`s (one per property). `split_widget_and_render_properties` partitions this array: nodes with `property_type == "RenderObject"` go into the render bucket; all others go into the widget bucket.
+
+2. **Render-object sub-call** — for each node in the render bucket that has a `value_id`, issues a second `getProperties` call to fetch the render object's own sub-properties (constraints, size, layer, semantics, etc.). Sub-property results are merged into the render bucket. Sub-fetch failures are logged at debug level and do not abort the action — partial data is better than no data (mirrors DevTools' `_loadPropertiesForNode` best-effort behavior).
+
+The parsing helpers (`parse_properties_response`, `split_widget_and_render_properties`) live in `fdemon-daemon/vm_service/extensions/properties.rs`. The action layer calls `ext::GET_PROPERTIES` (`"ext.flutter.inspector.getProperties"`) directly via `VmRequestHandle::call_extension`, reusing the same `INSPECTOR_OBJECT_GROUP` used by all other inspector RPCs.
+
+On success, `Message::DevToolsInspectorPropertiesFetched` carries `widget_properties` and `render_properties` back to the TEA handler. `handle_inspector_properties_fetched` applies the stale-response guard (`pending_properties_node_id`), stores the results into `InspectorState`, and sets `last_fetched_properties_node_id` as the cache key. The full 10-second time budget (`PROPERTIES_FETCH_TIMEOUT`) covers both the initial widget call and all sub-calls combined.
+
+**VM Service extensions used by the Inspector:**
+
+| Extension | Purpose |
+|-----------|---------|
+| `ext.flutter.inspector.isWidgetTreeReady` | Readiness poll before first tree fetch |
+| `ext.flutter.inspector.getRootWidgetTree` | Fetch the full widget tree |
+| `ext.flutter.inspector.getDetailsSubtree` | Fetch detailed subtree for a node |
+| `ext.flutter.inspector.getSelectedWidget` | Get currently selected widget |
+| `ext.flutter.inspector.disposeGroup` | Release VM Service object group |
+| `ext.flutter.inspector.getLayoutExplorerNode` | Fetch layout data (constraints, size, flex info) for a node |
+| `ext.flutter.inspector.getProperties` | Fetch widget properties + render-object properties (Phase 2) |
 
 ### Browser DevTools URL (Served Endpoint)
 
@@ -1657,7 +1684,8 @@ All possible events that can affect application state:
 
 The return type from `handler::update()`:
 - **message** — Optional follow-up `Message` to process
-- **action** — Optional `UpdateAction` side effect for the event loop
+- **action** — Optional primary `UpdateAction` side effect for the event loop
+- **extra_actions** — Additional `UpdateAction` side effects (`Vec<UpdateAction>`). Used when a single handler needs to dispatch more than one action in the same TEA cycle. `handle_open_details` uses this to dispatch both `FetchInspectorProperties` and `FetchLayoutData` together. The engine drains `action` and `extra_actions` through the same hydration and dispatch path.
 
 **UpdateAction variants:**
 - `SpawnTask(Task)` — Spawn an async task (reload, restart, etc.)
@@ -1669,6 +1697,8 @@ The return type from `handler::update()`:
 - `WriteClipboard { text }` — Instruct the TUI runner to write `text` to the OS clipboard via the runner-owned `Clipboard` implementation. Fire-and-forget from the TEA perspective; a warning toast is shown on failure. Intercepted by `process.rs` and queued in `AppState::pending_runner_actions` rather than routed through `handle_action`.
 - `AutoSaveConfig { configs }` — Persist an updated `LoadedConfigs` to `.fdemon/launch.toml` on a background task; used when the New Session Dialog mutates FDemon-owned launch configurations.
 - `PersistSettings { settings, project_path }` — Persist the current `Settings` to `.fdemon/config.toml` on a background task. Keeps the TEA event loop unblocked when a settings toggle (e.g. `Shift+H` in the Inspector) flips a persisted boolean. Emits `Message::SettingsPersisted` on success or `Message::SettingsPersistFailed` on failure.
+- `FetchLayoutData { session_id, node_id, vm_handle }` — Fetch layout data (constraints, size, flex info) for a widget via `ext.flutter.inspector.getLayoutExplorerNode`. `vm_handle` is hydrated by `process.rs` before dispatch.
+- `FetchInspectorProperties { session_id, node_id, vm_handle }` — Fetch widget properties and render-object sub-properties via the two-stage `ext.flutter.inspector.getProperties` pipeline. Dispatched alongside `FetchLayoutData` by `handle_open_details` via `UpdateResult::extra_actions`. `vm_handle` is hydrated by `process.rs` before dispatch.
 
 ---
 
@@ -1687,6 +1717,8 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `Error`, `Result<T>` — Error handling types
 - `is_runnable_flutter_project()`, `discover_flutter_projects()` — Project discovery
 - `prelude` module — Common imports
+- `DiagnosticsNode`, `LayoutInfo`, `EdgeInsets`, `WidgetSize`, `BoxConstraints` — Widget tree and layout types (`widget_tree.rs`)
+- `FlexChild`, `FlexFit`, `Axis`, `MainAxisAlignment`, `CrossAxisAlignment`, `MainAxisSize` — Flex layout types for `Row`/`Column`/`Flex` containers; populated from `getLayoutExplorerNode` responses (`widget_tree.rs`)
 
 **Internal** (`pub(crate)`):
 - Protocol parsing helpers
