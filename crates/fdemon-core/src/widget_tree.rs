@@ -91,6 +91,10 @@ pub struct DiagnosticsNode {
     pub value_id: Option<String>,
 
     /// VM Service object ID for the DiagnosticsNode itself
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences (defence-in-depth
+    /// parity with `value_id`, `name`, and other `Option<String>` fields on this struct).
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub object_id: Option<String>,
 
     /// Source code location where the widget was created
@@ -714,7 +718,19 @@ pub(crate) fn count_visible_chain_subordinates(
 ///   to capture during the same DFS.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DetailsContext {
+    /// Whether the selected widget participates in a flex layout.
+    ///
+    /// `true` if the selected widget's `widget_runtime_type` is `Row`,
+    /// `Column`, or `Flex`, OR if its tree parent is one of those.
+    /// Mirrors DevTools' `isFlexLayout` predicate
+    /// (`diagnostics_node.dart:487`). Gates the Flex Explorer tab.
     pub is_flex_layout: bool,
+
+    /// The tree parent's `widget_runtime_type()`, or `None` for the root.
+    ///
+    /// Captured during the same DFS as `is_flex_layout`; not consumed by
+    /// current visibility logic but surfaced for diagnostics and possible
+    /// future use.
     pub parent_type: Option<String>,
 }
 
@@ -723,54 +739,29 @@ pub struct DetailsContext {
 /// Returns `None` if `root` itself matches (root has no parent), if no node in
 /// `root` matches, or if `target_value_id` is empty.
 ///
-/// Performs a single depth-first walk over `root.children` (and recursively).
-/// Complexity: O(N) in tree size. Safe to call on every `handle_open_details`
-/// because the result is cached on `InspectorState::details_context`.
+/// Implemented as a thin shim over [`find_with_parent`]. The walk is bounded by
+/// [`MAX_TREE_WALK_DEPTH`] to prevent stack exhaustion on pathological trees.
 pub fn parent_of<'a>(
     root: &'a DiagnosticsNode,
     target_value_id: &str,
 ) -> Option<&'a DiagnosticsNode> {
-    if target_value_id.is_empty() {
-        return None;
-    }
-    parent_of_recursive(root, target_value_id)
-}
-
-fn parent_of_recursive<'a>(
-    parent: &'a DiagnosticsNode,
-    target_value_id: &str,
-) -> Option<&'a DiagnosticsNode> {
-    for child in &parent.children {
-        if child.value_id.as_deref() == Some(target_value_id) {
-            return Some(parent);
-        }
-        if let Some(found) = parent_of_recursive(child, target_value_id) {
-            return Some(found);
-        }
-    }
-    None
+    find_with_parent(root, target_value_id).1
 }
 
 /// Compute the [`DetailsContext`] for a selected node.
 ///
-/// Walks `root` to find the node with `value_id == target_value_id` and its
-/// parent (if any), then derives the visibility predicates.
+/// Walks `root` in a single depth-first pass to find the node with
+/// `value_id == target_value_id` and its parent (if any), then derives
+/// the visibility predicates.
 ///
-/// Returns `DetailsContext::default()` if `target_value_id` is empty or if no
-/// matching node is found in `root`. (The empty-default case still allows the
-/// renderer to dispatch; the Properties tab is always visible.)
+/// Returns `DetailsContext::default()` if the target is not found or
+/// `target_value_id` is empty. The walk is bounded by
+/// [`MAX_TREE_WALK_DEPTH`].
 pub fn compute_details_context(root: &DiagnosticsNode, target_value_id: &str) -> DetailsContext {
-    if target_value_id.is_empty() {
-        return DetailsContext::default();
-    }
-
-    let parent = parent_of(root, target_value_id);
-    let selected = find_by_value_id(root, target_value_id);
-
+    let (selected, parent) = find_with_parent(root, target_value_id);
     let Some(selected_node) = selected else {
         return DetailsContext::default();
     };
-
     DetailsContext {
         is_flex_layout: selected_node.is_flex_layout(parent),
         parent_type: parent
@@ -779,19 +770,45 @@ pub fn compute_details_context(root: &DiagnosticsNode, target_value_id: &str) ->
     }
 }
 
-fn find_by_value_id<'a>(
+/// Walks the tree rooted at `root` in a single depth-first pass, returning
+/// `(matching_node, parent_of_matching_node)` for the node whose `value_id`
+/// equals `target_value_id`. Returns `(None, None)` if the target is not
+/// found, if `target_value_id` is empty, or if the target is the root itself
+/// (the root has no parent in this tree).
+///
+/// Bounded by [`MAX_TREE_WALK_DEPTH`] to defend against pathological trees.
+fn find_with_parent<'a>(
     root: &'a DiagnosticsNode,
     target_value_id: &str,
-) -> Option<&'a DiagnosticsNode> {
-    if root.value_id.as_deref() == Some(target_value_id) {
-        return Some(root);
+) -> (Option<&'a DiagnosticsNode>, Option<&'a DiagnosticsNode>) {
+    if target_value_id.is_empty() {
+        return (None, None);
     }
-    for child in &root.children {
-        if let Some(found) = find_by_value_id(child, target_value_id) {
-            return Some(found);
+    if root.value_id.as_deref() == Some(target_value_id) {
+        // Root matches — no parent in this tree.
+        return (Some(root), None);
+    }
+    find_with_parent_inner(root, target_value_id, 0)
+}
+
+fn find_with_parent_inner<'a>(
+    parent: &'a DiagnosticsNode,
+    target_value_id: &str,
+    depth: usize,
+) -> (Option<&'a DiagnosticsNode>, Option<&'a DiagnosticsNode>) {
+    if depth > MAX_TREE_WALK_DEPTH {
+        return (None, None);
+    }
+    for child in &parent.children {
+        if child.value_id.as_deref() == Some(target_value_id) {
+            return (Some(child), Some(parent));
+        }
+        let (found, found_parent) = find_with_parent_inner(child, target_value_id, depth + 1);
+        if found.is_some() {
+            return (found, found_parent);
         }
     }
-    None
+    (None, None)
 }
 
 // ============================================================================
@@ -2894,5 +2911,55 @@ mod tests {
         };
         let parent = parent_of(&root, "leaf-id").unwrap();
         assert_eq!(parent.widget_runtime_type(), Some("Middle"));
+    }
+
+    #[test]
+    fn find_with_parent_returns_none_at_max_depth() {
+        // Build a tree exactly MAX_TREE_WALK_DEPTH + 2 levels deep where the
+        // target value_id sits at the bottom. The depth guard should prevent
+        // the walker from reaching it.
+        let mut current = DiagnosticsNode {
+            description: "Leaf".into(),
+            value_id: Some("deep-target".into()),
+            ..Default::default()
+        };
+        for i in 0..(MAX_TREE_WALK_DEPTH + 2) {
+            current = DiagnosticsNode {
+                description: format!("Wrapper{}", i),
+                children: vec![current],
+                ..Default::default()
+            };
+        }
+        let ctx = compute_details_context(&current, "deep-target");
+        // Target unreachable due to depth cap → DetailsContext::default()
+        assert_eq!(ctx, DetailsContext::default());
+    }
+
+    #[test]
+    fn compute_details_context_walks_tree_once() {
+        // Regression test for the fused-walk fix: asserts that the public
+        // behavior of compute_details_context is preserved after the fuse.
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            children: vec![DiagnosticsNode {
+                description: "Container".into(),
+                value_id: Some("child".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "child");
+        assert!(ctx.is_flex_layout, "child of Column should be flex layout");
+        assert_eq!(ctx.parent_type.as_deref(), Some("Column"));
+    }
+
+    #[test]
+    fn diagnostics_node_object_id_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "objectId": "[36mobjects/42[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.object_id.as_deref(), Some("objects/42"));
     }
 }
