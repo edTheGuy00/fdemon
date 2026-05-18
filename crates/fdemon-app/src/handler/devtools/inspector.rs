@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use fdemon_core::RowGroup;
+use fdemon_core::{DetailsContext, RowGroup};
 
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::InspectorNav;
@@ -520,6 +520,12 @@ pub fn handle_inspector_properties_fetch_timeout(
     ));
     inspector.pending_properties_node_id = None;
 
+    // Phase 3 follow-up (m1): the timeout settlement path does not currently
+    // mutate `render_properties`, so visible_tabs() cannot change here today.
+    // We clamp anyway to preserve the "every settlement path clamps"
+    // invariant — see fetched/fetch_failed handlers above.
+    inspector.clamp_details_tab();
+
     UpdateResult::none()
 }
 
@@ -697,7 +703,7 @@ pub fn handle_open_details(state: &mut AppState) -> UpdateResult {
         // Root absent (shouldn't happen if a node is selected, but defensive):
         // default context means only the Properties tab will render until a
         // future open lands.
-        inspector.details_context = fdemon_core::widget_tree::DetailsContext::default();
+        inspector.details_context = DetailsContext::default();
     }
 
     inspector.details_open = true;
@@ -2443,6 +2449,38 @@ mod tests {
         );
     }
 
+    // Phase 3 follow-up (m4): backward cycling in the 2-tab case (Properties +
+    // RenderObject, FlexExplorer hidden) was required by Phase 3 task 03
+    // acceptance criterion #6 but only the forward direction was tested.
+    #[test]
+    fn handle_cycle_tab_two_visible_tabs_backward_wraps_between_properties_and_render_object() {
+        let mut state = AppState::new();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            // details_context default → is_flex_layout = false → FlexExplorer hidden
+        }
+        // Backward from Properties → last visible tab (RenderObject).
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "backward from Properties should wrap to RenderObject (last visible tab)"
+        );
+        // Backward from RenderObject → Properties.
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "backward from RenderObject should wrap to Properties"
+        );
+    }
+
     #[test]
     fn handle_cycle_tab_skips_render_object_when_hidden() {
         let mut state = AppState::new();
@@ -3304,6 +3342,42 @@ mod tests {
             i.pending_properties_node_id.is_none(),
             "pending must be cleared after timeout"
         );
+    }
+
+    // Phase 3 follow-up (m1): timeout clamp must not disturb a still-visible
+    // active tab. RenderObject is visible when render_properties is non-empty,
+    // so a timeout (which does not touch render_properties) must be a no-op for
+    // the active tab.
+    #[test]
+    fn handle_inspector_properties_fetch_timeout_does_not_disturb_visible_active_tab() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::RenderObject;
+            inspector.details_node_id = Some("node-1".into());
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            inspector.pending_properties_node_id = Some("node-1".into());
+            inspector.properties_loading = true;
+        }
+        handle_inspector_properties_fetch_timeout(&mut state, session_id, "node-1".into());
+        // RenderObject is still in visible_tabs (render_properties non-empty),
+        // so the clamp must be a no-op for the active tab.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "timeout clamp must not snap active tab when it's still visible"
+        );
+        assert!(!state.devtools_view_state.inspector.properties_loading);
+        assert!(state
+            .devtools_view_state
+            .inspector
+            .properties_error
+            .is_some());
     }
 
     #[test]
