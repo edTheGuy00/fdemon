@@ -142,7 +142,7 @@ impl WidgetInspector<'_> {
                 self.render_render_object_tab(content_area, buf);
             }
             DetailsTab::FlexExplorer => {
-                flex_explorer_tab::render(content_area, buf);
+                flex_explorer_tab::render(content_area, buf, self.inspector_state);
             }
         }
     }
@@ -369,16 +369,27 @@ mod tests {
     }
 
     #[test]
-    fn details_panel_shows_coming_soon_for_flex_explorer_tab() {
+    fn details_panel_flex_explorer_tab_shows_no_layout_data() {
+        // With no layout data and layout_loading == false, the flex explorer tab
+        // should show the "No layout data — press Enter to fetch." message.
         let state = make_state_with_details_open(DetailsTab::FlexExplorer);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
         widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let text = collect_buf_text(&buf, 80, 20);
+        // The stub "Coming soon" is replaced — the real renderer shows the no-data state.
         assert!(
-            text.contains("Coming") && text.contains("soon"),
-            "Expected 'Coming soon' stub in Flex-explorer tab, got: {text:?}"
+            !text.contains("Coming soon"),
+            "Flex-explorer tab must no longer show 'Coming soon' stub, got: {text:?}"
+        );
+        // It should show the no-data message or be empty (layout not loaded yet).
+        assert!(
+            text.contains("No layout data")
+                || text.contains("press Enter")
+                || text.is_empty()
+                || text.chars().all(|c| c == ' '),
+            "Expected no-data message in Flex-explorer tab, got: {text:?}"
         );
     }
 
