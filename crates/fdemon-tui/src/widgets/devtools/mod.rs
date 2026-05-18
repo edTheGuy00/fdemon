@@ -372,7 +372,7 @@ impl DevToolsView<'_> {
                 }
             }
             DevToolsPanel::Performance => {
-                "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
+                "[Esc] Logs  [←/→] Frames  [j/k] Scroll  [b] Browser  [Ctrl+p] PerfOverlay"
             }
             DevToolsPanel::Memory => {
                 let has_alloc_selection = self

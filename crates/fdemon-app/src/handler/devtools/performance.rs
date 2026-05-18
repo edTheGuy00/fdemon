@@ -1,9 +1,11 @@
 //! Performance panel handlers.
 //!
-//! Handles frame selection, allocation profile updates, and rich memory samples
-//! for the Performance panel's bar chart and time-series views, plus the
-//! Phase 2 keyboard interactivity handlers (section focus, scroll, page, jump,
-//! alloc row selection).
+//! Handles frame selection and keyboard interactivity for the Performance
+//! panel's frame bar chart (section focus, scroll, page, jump).
+//!
+//! Memory and allocation profile handlers moved to [`super::memory`]. See
+//! [`crate::session::performance`] and [`crate::session::memory`] for the
+//! data ownership split.
 
 use crate::handler::UpdateResult;
 use crate::session::performance::PerfSection;

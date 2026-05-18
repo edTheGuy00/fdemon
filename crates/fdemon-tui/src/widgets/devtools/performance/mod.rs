@@ -1,22 +1,16 @@
 //! Performance panel widget for the DevTools TUI mode.
 //!
-//! Displays real-time FPS, memory usage, frame timing, and jank metrics
-//! using data from Phase 3's monitoring pipeline ([`PerformanceState`]).
+//! Renders the Flutter Frames bar chart in the full inner area.
+//!
+//! Memory data and allocation profiling have moved to the dedicated Memory
+//! panel (`DevToolsPanel::Memory`); see [`super::memory`].
 //!
 //! # Layout
 //!
-//! The panel uses a two-section layout:
-//!
 //! ```text
-//! ┌─────────────────────────────────────────┐
+//! ┌─ Frame Timing ──────────────────────────┐
 //! │                                         │
-//! │           Frame Timing (~45%)           │
-//! │  [bar chart + detail panel]             │
-//! │                                         │
-//! ├─────────────────────────────────────────┤
-//! │                                         │
-//! │           Memory (~55%)                 │
-//! │  [time-series chart + alloc table]      │
+//! │  [bar chart fills full inner area]      │
 //! │                                         │
 //! └─────────────────────────────────────────┘
 //! ```

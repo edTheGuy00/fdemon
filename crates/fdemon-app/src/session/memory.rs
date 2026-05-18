@@ -74,6 +74,11 @@ pub struct MemoryState {
     /// Column by which the class allocation table is sorted.
     pub allocation_sort: AllocationSortColumn,
     /// Whether memory monitoring is active.
+    ///
+    /// **Invariant:** flipped in lockstep with [`super::performance::PerformanceState::monitoring_active`].
+    /// Both flags are set true in the `VmServicePerformanceMonitoringStarted` arm
+    /// and reset to false on `VmServiceConnected` (full struct replacement). If a
+    /// future change diverges these lifecycles, document the rationale here.
     pub monitoring_active: bool,
 
     /// Which sub-section of the Memory panel currently has keyboard focus.
@@ -88,13 +93,15 @@ pub struct MemoryState {
     /// Render-hint: visible width (in columns) of the memory chart from the last rendered frame.
     ///
     /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3 and
+    // docs/REVIEW_FOCUS.md "Approved TEA Exception → Current usage".
     pub memory_chart_visible_width: Cell<usize>,
 
     /// Render-hint: visible height (in rows) of the allocation table from the last rendered frame.
     ///
     /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3 and
+    // docs/REVIEW_FOCUS.md "Approved TEA Exception → Current usage".
     pub alloc_table_visible_height: Cell<usize>,
 }
 
