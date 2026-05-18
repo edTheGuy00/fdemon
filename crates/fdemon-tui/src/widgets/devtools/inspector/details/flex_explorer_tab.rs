@@ -37,6 +37,10 @@ const CHILD_BOX_HEIGHT: u16 = 4;
 /// or bottom (horizontal).
 const MAIN_AXIS_STRIP_WIDTH: u16 = 3;
 
+/// Minimum height (rows) required to render a horizontal flex visualization.
+/// Composed of: 1 header row + 1 child row + 1 strip row + 1 footer row.
+const MIN_HORIZONTAL_FLEX_HEIGHT: u16 = 4;
+
 /// Up arrow char used in the vertical main-axis strip.
 const MAIN_AXIS_ARROW_UP: char = '▲';
 
@@ -88,22 +92,17 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, inspector_state: &InspectorSt
 
     // Below minimum dimensions — fallback before allocating any layout
     if area.height < MIN_FLEX_VIZ_HEIGHT || area.width < MIN_FLEX_VIZ_WIDTH {
-        render_muted_centered(buf.area, buf, "Terminal too small for flex visualization.");
+        render_muted_centered(area, buf, "Terminal too small for flex visualization.");
         return;
     }
 
     // Flex container: render the full visualization
-    render_flex_viz(area, buf, inspector_state, layout);
+    render_flex_viz(area, buf, layout);
 }
 
 // ── Flex visualization ────────────────────────────────────────────────────────
 
-fn render_flex_viz(
-    area: Rect,
-    buf: &mut Buffer,
-    inspector_state: &InspectorState,
-    layout: &fdemon_core::widget_tree::LayoutInfo,
-) {
+fn render_flex_viz(area: Rect, buf: &mut Buffer, layout: &fdemon_core::widget_tree::LayoutInfo) {
     let direction = layout.direction.unwrap_or(Axis::Vertical);
     let cross_align = layout
         .cross_axis_alignment
@@ -122,8 +121,8 @@ fn render_flex_viz(
     let children = &layout.children;
     let total_flex = total_flex(children);
 
-    // Outer bordered block with cross-axis label in title
-    let title = format!(" {} ", cross_axis_label(direction, cross_align));
+    // Outer bordered block with combined main-axis + cross-axis label in title
+    let title = flex_axis_title(direction, main_align, cross_align);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::BORDER_DIM))
@@ -146,15 +145,9 @@ fn render_flex_viz(
     }
 
     match direction {
-        Axis::Vertical => render_vertical_flex(
-            inner,
-            buf,
-            widget_name,
-            children,
-            total_flex,
-            main_align,
-            layout,
-        ),
+        Axis::Vertical => {
+            render_vertical_flex(inner, buf, widget_name, children, total_flex, layout)
+        }
         Axis::Horizontal => render_horizontal_flex(
             inner,
             buf,
@@ -165,9 +158,6 @@ fn render_flex_viz(
             layout,
         ),
     }
-
-    // Silence unused variable warning
-    let _ = inspector_state;
 }
 
 // ── Vertical (Column) rendering ───────────────────────────────────────────────
@@ -178,7 +168,6 @@ fn render_vertical_flex(
     widget_name: &str,
     children: &[FlexChild],
     total_flex: u32,
-    main_align: MainAxisAlignment,
     layout: &fdemon_core::widget_tree::LayoutInfo,
 ) {
     // Reserve the right side for the main-axis indicator strip
@@ -225,7 +214,7 @@ fn render_vertical_flex(
         width: MAIN_AXIS_STRIP_WIDTH,
         height: area.height,
     };
-    render_main_axis_strip_vertical(strip_area, buf, main_align);
+    render_main_axis_strip_vertical(strip_area, buf);
 
     // ── Footer row ────────────────────────────────────────────────────────────
     render_footer_row(footer_area, buf, layout, content_width);
@@ -425,15 +414,15 @@ fn pad_to_width(s: &str, width: usize) -> String {
 
 /// Render the vertical main-axis strip on the right side of the content area.
 ///
-/// Structure: `▲ M a i n  A x i s ▼` (letters spaced vertically) with alignment
-/// label text below.
-fn render_main_axis_strip_vertical(area: Rect, buf: &mut Buffer, main_align: MainAxisAlignment) {
+/// Shows only `▲` at the top and `▼` at the bottom. Textual labels (previously
+/// rendered as vertical letter stacks) have been moved to the block title via
+/// [`flex_axis_title`].
+fn render_main_axis_strip_vertical(area: Rect, buf: &mut Buffer) {
     if area.height == 0 || area.width == 0 {
         return;
     }
 
     let style = Style::default().fg(palette::TEXT_MUTED);
-    let style_label = Style::default().fg(palette::TEXT_SECONDARY);
 
     // Arrow at the top
     if area.y < area.bottom() {
@@ -448,27 +437,6 @@ fn render_main_axis_strip_vertical(area: Rect, buf: &mut Buffer, main_align: Mai
             MAIN_AXIS_ARROW_DOWN.to_string(),
             style,
         );
-    }
-
-    // "MainAxis" label vertically in the middle cells
-    let label_chars: Vec<char> = "MainAxis".chars().collect();
-    let available = area.height.saturating_sub(2) as usize;
-    for (i, ch) in label_chars.iter().take(available).enumerate() {
-        let row_y = area.y + 1 + i as u16;
-        if row_y < area.bottom() {
-            buf.set_string(area.x, row_y, ch.to_string(), style);
-        }
-    }
-
-    // Main-axis alignment label in the second column of the strip (if width allows)
-    if area.width >= 2 {
-        let align_label = main_axis_value(main_align);
-        for (i, ch) in align_label.chars().take(available).enumerate() {
-            let row_y = area.y + 1 + i as u16;
-            if row_y < area.bottom() {
-                buf.set_string(area.x + 1, row_y, ch.to_string(), style_label);
-            }
-        }
     }
 }
 
@@ -523,7 +491,7 @@ fn render_horizontal_flex(
     layout: &fdemon_core::widget_tree::LayoutInfo,
 ) {
     // Reserve the bottom row for the main-axis indicator strip
-    if area.height <= MAIN_AXIS_STRIP_WIDTH.min(3) {
+    if area.height < MIN_HORIZONTAL_FLEX_HEIGHT {
         render_muted_centered(area, buf, "Terminal too small for flex visualization.");
         return;
     }
@@ -740,12 +708,26 @@ fn fit_short_label(fit: FlexFit) -> &'static str {
     }
 }
 
-/// Build the cross-axis label for the outer border title.
-fn cross_axis_label(direction: Axis, alignment: CrossAxisAlignment) -> String {
-    let axis_name = match direction {
-        Axis::Vertical | Axis::Horizontal => "Cross Axis",
+/// Build the combined main-axis and cross-axis label for the outer border title.
+///
+/// Produces a string like `" Main ↕ start  │  Cross Axis: stretch "` for a
+/// vertical flex, or `" Main ↔ center  │  Cross Axis: center "` for horizontal.
+/// The leading and trailing spaces preserve the title padding style.
+fn flex_axis_title(
+    direction: Axis,
+    main_align: MainAxisAlignment,
+    cross_align: CrossAxisAlignment,
+) -> String {
+    let arrow = match direction {
+        Axis::Vertical => "↕",
+        Axis::Horizontal => "↔",
     };
-    format!("{}: {}", axis_name, cross_axis_value(alignment))
+    format!(
+        " Main {} {}  │  Cross Axis: {} ",
+        arrow,
+        main_axis_value(main_align),
+        cross_axis_value(cross_align),
+    )
 }
 
 fn cross_axis_value(a: CrossAxisAlignment) -> &'static str {
@@ -786,7 +768,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
-    use super::render;
+    use super::{render, MAIN_AXIS_STRIP_WIDTH};
 
     // Path: tests → super (flex_explorer_tab) → super (details) → super (inspector) → test_helpers
     use super::super::super::test_helpers::collect_buf_text;
@@ -897,7 +879,7 @@ mod tests {
         let s = buffer_to_string(&buf);
         assert!(s.contains("Column"), "Should contain 'Column', got: {s:?}");
         assert!(
-            s.contains("Cross Axis: stretch"),
+            s.contains("Cross Axis") && s.contains("stretch"),
             "Should contain cross-axis label, got: {s:?}"
         );
         assert!(
@@ -982,7 +964,7 @@ mod tests {
         let s = buffer_to_string(&buf);
         assert!(s.contains("Row"), "Should contain 'Row', got: {s:?}");
         assert!(
-            s.contains("Cross Axis: center"),
+            s.contains("Cross Axis") && s.contains("center"),
             "Should contain cross-axis label, got: {s:?}"
         );
         // Row variant may truncate child names — just check at least one is visible
@@ -1071,6 +1053,140 @@ mod tests {
         assert!(
             s.contains("Total Flex: 0"),
             "All fixed children → Total Flex: 0, got: {s:?}"
+        );
+    }
+
+    // ── New tests (C3, C1, C1 strip) ─────────────────────────────────────────
+
+    #[test]
+    fn render_centers_too_small_message_in_panel_not_buffer() {
+        // Buffer is much larger than the tab pane; pane is smaller than min dims
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 50));
+        let area = Rect::new(20, 10, 8, 4); // below MIN_FLEX_VIZ_WIDTH / HEIGHT
+        let state = InspectorState {
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                children: vec![FlexChild {
+                    name: "A".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        render(area, &mut buf, &state);
+
+        // The "Terminal too small" message must land within `area`, not buffer centre
+        let mut found_in_area = false;
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let ch = buf
+                    .cell((x, y))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default();
+                if ch.contains('T') || ch.contains('e') {
+                    found_in_area = true;
+                }
+            }
+        }
+        assert!(
+            found_in_area,
+            "message must render inside `area`, not the full buffer"
+        );
+
+        // And NOT outside area in the buffer centre (where buf.area centre would be ~50,25)
+        let buf_centre_ch = buf
+            .cell((50, 25))
+            .map(|c| c.symbol().to_string())
+            .unwrap_or_default();
+        assert!(
+            buf_centre_ch.trim().is_empty(),
+            "no message should render at the full-buffer centre"
+        );
+    }
+
+    #[test]
+    fn vertical_flex_title_contains_main_and_cross_axis_labels() {
+        let state = InspectorState {
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                main_axis_alignment: Some(MainAxisAlignment::SpaceBetween),
+                cross_axis_alignment: Some(CrossAxisAlignment::Stretch),
+                main_axis_size: Some(MainAxisSize::Max),
+                children: vec![FlexChild {
+                    name: "Child".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
+        let area = Rect::new(0, 0, 80, 20);
+        render(area, &mut buf, &state);
+
+        let text: String = (0..buf.area.width)
+            .filter_map(|x| buf.cell((x, 0)))
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            text.contains("Main") && text.contains("spaceBetween"),
+            "title must include main-axis label: got `{text}`"
+        );
+        assert!(
+            text.contains("Cross") && text.contains("stretch"),
+            "title must include cross-axis label: got `{text}`"
+        );
+    }
+
+    #[test]
+    fn vertical_main_axis_strip_no_longer_renders_letter_stacks() {
+        let state = InspectorState {
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                main_axis_alignment: Some(MainAxisAlignment::Start),
+                cross_axis_alignment: Some(CrossAxisAlignment::Center),
+                children: vec![FlexChild {
+                    name: "Child".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
+        let area = Rect::new(0, 0, 80, 20);
+        render(area, &mut buf, &state);
+
+        // Strip is at right edge (inside the outer block border). The block border
+        // itself is 1 cell, so inner area is (1,1) to (78,18). The strip occupies
+        // the rightmost MAIN_AXIS_STRIP_WIDTH columns of the inner area.
+        // inner_right = 79 (exclusive). strip_x_start = 79 - 3 = 76.
+        // But we need to account for the outer block: inner x goes from 1 to 78,
+        // and strip_x within inner = inner_width - MAIN_AXIS_STRIP_WIDTH.
+        // Let's just check the rightmost non-border columns in rows 1..19.
+        let strip_x_start = area
+            .right()
+            .saturating_sub(1)
+            .saturating_sub(MAIN_AXIS_STRIP_WIDTH);
+        let mut letters_in_strip = 0u32;
+        for y in (area.y + 2)..(area.bottom().saturating_sub(1)) {
+            for x in strip_x_start..(area.right().saturating_sub(1)) {
+                let s = buf
+                    .cell((x, y))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default();
+                if s.chars().any(|c| c.is_ascii_alphabetic()) {
+                    letters_in_strip += 1;
+                }
+            }
+        }
+        assert_eq!(
+            letters_in_strip, 0,
+            "no letters should appear in the side strip"
         );
     }
 }
