@@ -177,6 +177,42 @@ pub enum DetailsTab {
     FlexExplorer,
 }
 
+/// Which tab is active within the Performance panel's Details pane.
+///
+/// Phase 2 populates `FrameAnalysis`; `RebuildStats` and `TimelineEvents`
+/// render "Coming soon" stubs until Phase 3 adds the underlying VM Service
+/// flows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PerfDetailsTab {
+    /// Per-frame phase breakdown + refresh-rate-aware hints. Default.
+    #[default]
+    FrameAnalysis,
+    /// Widget rebuild counts per frame (Phase 3 stub in Phase 2).
+    RebuildStats,
+    /// UI / Raster thread timeline events (Phase 3 stub in Phase 2).
+    TimelineEvents,
+}
+
+impl PerfDetailsTab {
+    /// Next tab in display order (wraps from TimelineEvents → FrameAnalysis).
+    pub fn next(self) -> Self {
+        match self {
+            PerfDetailsTab::FrameAnalysis => PerfDetailsTab::RebuildStats,
+            PerfDetailsTab::RebuildStats => PerfDetailsTab::TimelineEvents,
+            PerfDetailsTab::TimelineEvents => PerfDetailsTab::FrameAnalysis,
+        }
+    }
+
+    /// Previous tab in display order (wraps from FrameAnalysis → TimelineEvents).
+    pub fn prev(self) -> Self {
+        match self {
+            PerfDetailsTab::FrameAnalysis => PerfDetailsTab::TimelineEvents,
+            PerfDetailsTab::RebuildStats => PerfDetailsTab::FrameAnalysis,
+            PerfDetailsTab::TimelineEvents => PerfDetailsTab::RebuildStats,
+        }
+    }
+}
+
 /// State for the widget inspector tree view.
 ///
 /// Also holds layout data for the currently selected widget (merged into this struct
@@ -3239,5 +3275,47 @@ mod tests {
         };
         state.reset_details_and_groups();
         assert_eq!(state.details_context, DetailsContext::default());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // PerfDetailsTab Tests
+    // (devtools-performance-memory-split Phase 2, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn perf_details_tab_default_is_frame_analysis() {
+        assert_eq!(PerfDetailsTab::default(), PerfDetailsTab::FrameAnalysis);
+    }
+
+    #[test]
+    fn perf_details_tab_next_wraps() {
+        assert_eq!(
+            PerfDetailsTab::FrameAnalysis.next(),
+            PerfDetailsTab::RebuildStats
+        );
+        assert_eq!(
+            PerfDetailsTab::RebuildStats.next(),
+            PerfDetailsTab::TimelineEvents
+        );
+        assert_eq!(
+            PerfDetailsTab::TimelineEvents.next(),
+            PerfDetailsTab::FrameAnalysis
+        );
+    }
+
+    #[test]
+    fn perf_details_tab_prev_wraps() {
+        assert_eq!(
+            PerfDetailsTab::FrameAnalysis.prev(),
+            PerfDetailsTab::TimelineEvents
+        );
+        assert_eq!(
+            PerfDetailsTab::TimelineEvents.prev(),
+            PerfDetailsTab::RebuildStats
+        );
+        assert_eq!(
+            PerfDetailsTab::RebuildStats.prev(),
+            PerfDetailsTab::FrameAnalysis
+        );
     }
 }

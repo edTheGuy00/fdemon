@@ -7,7 +7,7 @@ use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::memory::MemorySection;
 use crate::session::performance::PerfSection;
 use crate::session::{NetworkDetailTab, SessionId};
-use crate::state::DevToolsPanel;
+use crate::state::{DevToolsPanel, PerfDetailsTab};
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
@@ -1168,6 +1168,19 @@ pub enum Message {
     PerfJumpToStart,
     /// Jump to the last item in the focused Performance panel section.
     PerfJumpToEnd,
+
+    // --- Performance details pane (Phase 2) ---
+    /// Cycle the active tab in the Performance Details pane.
+    ///
+    /// Emitted by `]` (forward = true) and `[` (forward = false) when
+    /// `PerformanceState::focused_section == PerfSection::Details`.
+    PerfCycleDetailsTab { forward: bool },
+
+    /// Focus a specific tab in the Performance Details pane.
+    ///
+    /// Phase 2 only emits this from tests; Phase 3 wires up mouse-click
+    /// regions on the tab strip that emit this variant.
+    PerfFocusDetailsTab(PerfDetailsTab),
 
     // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)

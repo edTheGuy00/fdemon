@@ -6,6 +6,8 @@ use std::cell::Cell;
 
 use fdemon_core::performance::{FrameTiming, PerformanceStats, RingBuffer};
 
+use crate::state::PerfDetailsTab;
+
 /// 30 seconds at 60 FPS — enables meaningful scroll-back.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 1800;
 
@@ -17,28 +19,25 @@ pub enum PerfSection {
     /// Frame timing bar chart (default section on open).
     #[default]
     FrameChart,
-    /// Phase 2 anchor — the details pane. In Phase 1 Tab does not enter this
-    /// section (`next()` and `prev()` return `FrameChart` unconditionally) so
-    /// the variant is reserved but unreachable via user interaction.
+    /// The details pane (frame analysis, rebuild stats, timeline events).
     Details,
 }
 
 impl PerfSection {
-    /// Return the next section in Tab order.
-    ///
-    /// Phase 1: Tab is a visible no-op — `next()` always returns `FrameChart`
-    /// until Phase 2 introduces real content for `Details`.
+    /// Return the next section in Tab order — wraps `FrameChart → Details → FrameChart`.
     pub fn next(self) -> Self {
-        // Phase 2 will reintroduce cycling when Details has real content.
-        // For Phase 1: Tab is a visible no-op.
-        PerfSection::FrameChart
+        match self {
+            PerfSection::FrameChart => PerfSection::Details,
+            PerfSection::Details => PerfSection::FrameChart,
+        }
     }
 
-    /// Return the previous section in Tab order.
-    ///
-    /// Phase 1: `prev()` always returns `FrameChart` (mirrors `next()`).
+    /// Return the previous section in Tab order — wraps the other way.
     pub fn prev(self) -> Self {
-        self.next()
+        match self {
+            PerfSection::FrameChart => PerfSection::Details,
+            PerfSection::Details => PerfSection::FrameChart,
+        }
     }
 }
 
@@ -83,6 +82,31 @@ pub struct PerformanceState {
     // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3 and
     // docs/REVIEW_FOCUS.md "Approved TEA Exception → Current usage".
     pub frame_chart_visible_width: Cell<usize>,
+
+    /// Which tab is active within the Performance Details pane.
+    ///
+    /// Defaults to `PerfDetailsTab::FrameAnalysis`. Cycled by `]`/`[` when
+    /// `focused_section == PerfSection::Details`. The renderer reads this
+    /// value to dispatch to the correct tab module.
+    pub details_tab: PerfDetailsTab,
+
+    /// Render-hint: visible height (in rows) of the Details pane content area
+    /// from the last rendered frame.
+    ///
+    /// Defaults to `0`, signalling "not yet rendered — use fallback". Phase 3
+    /// consumes this for Rebuild Stats / Timeline Events scrolling; Phase 2 sets
+    /// it but does not read it.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3 and
+    // docs/REVIEW_FOCUS.md "Approved TEA Exception → Current usage".
+    pub details_pane_visible_height: Cell<usize>,
+
+    /// Refresh rate (Hz) used to compute the per-frame budget in
+    /// [`fdemon_core::frame_hints::frame_hints`].
+    ///
+    /// Phase 2 hard-codes `60.0`. Phase 3 may parse the `Display.Refresh`
+    /// Extension event stream to detect 90 / 120 Hz devices. A conservative
+    /// 60 Hz default never reports a non-janky frame as janky.
+    pub display_refresh_rate: f64,
 }
 
 impl Default for PerformanceState {
@@ -95,6 +119,9 @@ impl Default for PerformanceState {
             focused_section: PerfSection::default(),
             frame_chart_scroll_offset: 0,
             frame_chart_visible_width: Cell::new(0),
+            details_tab: PerfDetailsTab::default(),
+            details_pane_visible_height: Cell::new(0),
+            display_refresh_rate: 60.0,
         }
     }
 }
@@ -282,16 +309,14 @@ mod tests {
     // ── PerfSection navigation ───────────────────────────────────────────────
 
     #[test]
-    fn perf_section_next_is_noop_in_phase_1() {
-        // Phase 1: Tab is a visible no-op — next() always returns FrameChart.
-        assert_eq!(PerfSection::FrameChart.next(), PerfSection::FrameChart);
+    fn perf_section_next_cycles_between_frame_chart_and_details() {
+        assert_eq!(PerfSection::FrameChart.next(), PerfSection::Details);
         assert_eq!(PerfSection::Details.next(), PerfSection::FrameChart);
     }
 
     #[test]
-    fn perf_section_prev_is_noop_in_phase_1() {
-        // Phase 1: prev() mirrors next() — always returns FrameChart.
-        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::FrameChart);
+    fn perf_section_prev_cycles_between_frame_chart_and_details() {
+        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::Details);
         assert_eq!(PerfSection::Details.prev(), PerfSection::FrameChart);
     }
 
@@ -308,6 +333,14 @@ mod tests {
         assert_eq!(s.focused_section, PerfSection::FrameChart);
         assert_eq!(s.frame_chart_scroll_offset, 0);
         assert_eq!(s.frame_chart_visible_width.get(), 0);
+    }
+
+    #[test]
+    fn performance_state_defaults_phase_2_fields() {
+        let s = PerformanceState::default();
+        assert_eq!(s.details_tab, PerfDetailsTab::FrameAnalysis);
+        assert_eq!(s.details_pane_visible_height.get(), 0);
+        assert_eq!(s.display_refresh_rate, 60.0);
     }
 
     #[test]

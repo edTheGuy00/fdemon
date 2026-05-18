@@ -560,29 +560,29 @@ mod tests {
     #[test]
     fn perf_focus_section_via_tab_key() {
         let (mut state, _) = make_state_in_performance_panel();
-        // Phase 1: Tab is a visible no-op — next() always returns FrameChart.
+        // Phase 2: Tab cycles FrameChart → Details.
         // The keys.rs Tab handler emits PerfFocusSection(focused_section.next()),
-        // which is PerfFocusSection(FrameChart). Section stays at FrameChart.
+        // which is PerfFocusSection(Details). Section advances to Details.
         dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
         assert_eq!(
             perf_focused_section(&state),
-            PerfSection::FrameChart,
-            "Phase 1: Tab is a no-op, section stays at FrameChart"
+            PerfSection::Details,
+            "Phase 2: Tab advances from FrameChart to Details"
         );
     }
 
     #[test]
     fn perf_focus_section_via_shift_tab_key() {
         let (mut state, _) = make_state_in_performance_panel();
-        // Phase 1: Shift+Tab is a visible no-op — prev() always returns FrameChart.
+        // Phase 2: Shift+Tab cycles FrameChart → Details (same direction as prev()).
         dispatch(
             &mut state,
             Message::Key(crate::input_key::InputKey::BackTab),
         );
         assert_eq!(
             perf_focused_section(&state),
-            PerfSection::FrameChart,
-            "Phase 1: Shift+Tab is a no-op, section stays at FrameChart"
+            PerfSection::Details,
+            "Phase 2: Shift+Tab wraps FrameChart → Details"
         );
     }
 
@@ -995,10 +995,9 @@ mod tests {
     /// Phase 1: Tab is a visible no-op — pressing Tab any number of times
     /// must leave `focused_section` at `FrameChart`.
     ///
-    /// This test replaces the old "2-state cycle" test now that `next()` and
-    /// `prev()` unconditionally return `FrameChart` (Option A — YAGNI).
+    /// This test verifies that Tab cycles between FrameChart and Details in Phase 2.
     #[test]
-    fn tab_is_noop_in_phase_1() {
+    fn tab_cycles_between_frame_chart_and_details() {
         let (mut state, _) = make_state_in_performance_panel();
         // Starting section is FrameChart (the default).
         assert_eq!(perf_focused_section(&state), PerfSection::FrameChart);
@@ -1006,15 +1005,15 @@ mod tests {
         dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
         assert_eq!(
             perf_focused_section(&state),
-            PerfSection::FrameChart,
-            "Phase 1: Tab must be a no-op, section stays FrameChart"
+            PerfSection::Details,
+            "Phase 2: Tab advances from FrameChart to Details"
         );
 
         dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
         assert_eq!(
             perf_focused_section(&state),
             PerfSection::FrameChart,
-            "Phase 1: second Tab still no-op"
+            "Phase 2: second Tab wraps back to FrameChart"
         );
     }
 }

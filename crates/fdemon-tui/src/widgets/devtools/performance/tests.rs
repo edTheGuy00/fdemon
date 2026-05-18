@@ -292,8 +292,8 @@ fn test_performance_panel_zero_area() {
 /// Option A (YAGNI) was chosen: `PerfSection::next()` always returns `FrameChart`
 /// so Tab is a visible no-op and the frame chart remains the active section.
 /// The test asserts:
-/// 1. After calling `next()`, `focused_section` is still `FrameChart`.
-/// 2. The frame-chart scroll offset can be incremented when focused on `FrameChart`,
+/// 1. After calling `next()`, `focused_section` advances to `Details` (Phase 2 cycling).
+/// 2. When the section is switched back to `FrameChart`, scroll offset can be incremented,
 ///    demonstrating that scroll keys remain functional.
 #[test]
 fn performance_tab_after_tab_does_not_break_scroll_keys() {
@@ -306,16 +306,15 @@ fn performance_tab_after_tab_does_not_break_scroll_keys() {
     let after_tab = perf.focused_section.next();
     perf.focused_section = after_tab;
 
-    // Option A: Tab is a visible no-op — focused_section stays at FrameChart.
+    // Phase 2: Tab cycles FrameChart → Details.
     assert_eq!(
         perf.focused_section,
-        PerfSection::FrameChart,
-        "After Tab, focused_section must still be FrameChart (Option A no-op)"
+        PerfSection::Details,
+        "After Tab, focused_section advances to Details (Phase 2 cycling)"
     );
 
-    // Verify scroll still works: simulate a PerfScrollUp by incrementing the offset
-    // directly (the handler just calls clamp_chart_scroll with delta=+1 when focused
-    // on FrameChart).
+    // Switch back to FrameChart and verify scroll still works.
+    perf.focused_section = PerfSection::FrameChart;
     let before_scroll = perf.frame_chart_scroll_offset;
     perf.frame_chart_scroll_offset = before_scroll.saturating_add(1);
 
