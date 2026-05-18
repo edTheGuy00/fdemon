@@ -982,6 +982,10 @@ pub enum Message {
     /// Layout data received from VM Service RPC.
     LayoutDataFetched {
         session_id: SessionId,
+        /// The node id that was fetched. Used by the stale-guard in
+        /// `handle_layout_data_fetched` to cross-check against
+        /// `details_node_id` (Phase 2 follow-up M2).
+        node_id: String,
         layout: Box<LayoutInfo>,
     },
 

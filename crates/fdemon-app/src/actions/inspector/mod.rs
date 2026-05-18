@@ -485,6 +485,7 @@ pub(super) fn spawn_fetch_layout_data(
         if let Err(e) = msg_tx
             .send(Message::LayoutDataFetched {
                 session_id,
+                node_id,
                 layout: Box::new(layout),
             })
             .await

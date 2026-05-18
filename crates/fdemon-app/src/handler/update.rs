@@ -2107,9 +2107,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
         }
 
-        Message::LayoutDataFetched { session_id, layout } => {
-            devtools::handle_layout_data_fetched(state, session_id, *layout)
-        }
+        Message::LayoutDataFetched {
+            session_id,
+            node_id,
+            layout,
+        } => devtools::handle_layout_data_fetched(state, session_id, node_id, *layout),
 
         Message::LayoutDataFetchFailed { session_id, error } => {
             devtools::handle_layout_data_fetch_failed(state, session_id, error)

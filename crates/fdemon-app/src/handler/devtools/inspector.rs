@@ -296,39 +296,42 @@ pub fn handle_widget_tree_fetch_timeout(
 /// Handle layout data fetch completion.
 ///
 /// Updates the inspector state's layout fields with the fetched layout info.
-/// Discards stale responses when the user has navigated away from the node
-/// that this fetch was dispatched for.
+/// Discards stale responses using `details_node_id` as the authoritative
+/// comparison key (Phase 2 follow-up M2). This is a unified stale guard:
+/// an in-flight layout response is accepted only if the Details panel is
+/// still open on the same node that was fetched. Tree navigation that moves
+/// the selection without closing Details does not discard the response.
 pub fn handle_layout_data_fetched(
     state: &mut AppState,
     session_id: SessionId,
+    node_id: String,
     layout: fdemon_core::LayoutInfo,
 ) -> UpdateResult {
     let active_id = state.session_manager.selected().map(|h| h.session.id);
 
     if active_id == Some(session_id) {
-        // Guard against stale responses: if the user navigated away from the
-        // node this fetch was dispatched for, discard the response so the UI
-        // does not show layout data for the wrong node.
-        let selected_id = state.devtools_view_state.inspector.selected_value_id();
-        let pending_id = state
-            .devtools_view_state
-            .inspector
-            .pending_node_id
-            .as_deref();
-        if pending_id != selected_id.as_deref() {
-            state.devtools_view_state.inspector.layout_loading = false;
-            state.devtools_view_state.inspector.pending_node_id = None;
+        let inspector = &mut state.devtools_view_state.inspector;
+
+        // Stale-guard: only apply if the response matches the currently-displayed
+        // details panel node. Discards orphan responses from closed-then-reopened-
+        // on-different-node races (Phase 2 follow-up M2).
+        if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+            // Clear the pending flag if it still points to this stale node so
+            // that a subsequent open on the correct node will dispatch a new fetch.
+            if inspector.pending_node_id.as_deref() == Some(node_id.as_str()) {
+                inspector.pending_node_id = None;
+                inspector.layout_loading = false;
+            }
             return UpdateResult::none();
         }
 
-        state.devtools_view_state.inspector.layout = Some(layout);
-        state.devtools_view_state.inspector.layout_loading = false;
-        state.devtools_view_state.inspector.layout_error = None;
-        state.devtools_view_state.inspector.has_layout_object_group = true;
+        inspector.layout = Some(layout);
+        inspector.layout_loading = false;
+        inspector.layout_error = None;
+        inspector.has_layout_object_group = true;
         // Promote pending node ID to last_fetched so repeated panel switches
         // for the same node skip redundant fetches.
-        state.devtools_view_state.inspector.last_fetched_node_id =
-            state.devtools_view_state.inspector.pending_node_id.take();
+        inspector.last_fetched_node_id = inspector.pending_node_id.take();
     }
 
     UpdateResult::none()
@@ -385,10 +388,16 @@ pub fn handle_layout_data_fetch_timeout(
 
 /// Apply a successful `getProperties` response to [`InspectorState`].
 ///
-/// Stale-guarded: if `pending_properties_node_id` no longer matches `node_id`
-/// (the user closed Details or selected a different widget mid-flight), the
-/// response is discarded silently and `properties_loading` is left untouched
-/// (the newer in-flight fetch will resolve it).
+/// Stale-guarded: the response is accepted only if `details_node_id` still
+/// matches `node_id` — i.e. the Details panel is still open on the same
+/// widget that was fetched (Phase 2 follow-up C2 / M2).  This catches the
+/// close-then-reopen-on-different-node race: even if `pending_properties_node_id`
+/// still points to the old node, a response arriving after the user has
+/// navigated to a different node is discarded.
+///
+/// When the response is discarded and `pending_properties_node_id` still
+/// points to the stale node, both the pending id and the loading flag are
+/// cleared so the user can fetch fresh data for the currently-displayed node.
 pub fn handle_inspector_properties_fetched(
     state: &mut AppState,
     session_id: SessionId,
@@ -403,10 +412,16 @@ pub fn handle_inspector_properties_fetched(
 
     let inspector = &mut state.devtools_view_state.inspector;
 
-    // Stale-guard: if the in-flight node id no longer matches the pending id,
-    // the user has since opened Details for a different widget or closed Details
-    // entirely — discard the response without mutating visible state.
-    if inspector.pending_properties_node_id.as_deref() != Some(node_id.as_str()) {
+    // Stale-guard: only apply if the response matches the currently-displayed
+    // details panel. Discards orphan responses from closed-then-reopened-on-
+    // different-node races (Phase 2 follow-up C2).
+    if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+        // Clear the pending flag if it still points to this stale node so
+        // that a subsequent open on the correct node will dispatch a new fetch.
+        if inspector.pending_properties_node_id.as_deref() == Some(node_id.as_str()) {
+            inspector.pending_properties_node_id = None;
+            inspector.properties_loading = false;
+        }
         return UpdateResult::none();
     }
 
@@ -428,8 +443,9 @@ pub fn handle_inspector_properties_fetched(
 /// deliberately **not** updated on failure so that the next `Enter` on the same
 /// node retries the fetch.
 ///
-/// Stale-guarded: responses for a node other than the current
-/// `pending_properties_node_id` are silently discarded.
+/// Stale-guarded: only applies the error if `details_node_id` still matches
+/// `node_id` (Phase 2 follow-up C2 / M2). When discarding, the pending id
+/// and loading flag are cleared if they still point to the stale node.
 pub fn handle_inspector_properties_fetch_failed(
     state: &mut AppState,
     session_id: SessionId,
@@ -443,7 +459,13 @@ pub fn handle_inspector_properties_fetch_failed(
 
     let inspector = &mut state.devtools_view_state.inspector;
 
-    if inspector.pending_properties_node_id.as_deref() != Some(node_id.as_str()) {
+    // Stale-guard: only apply if the response matches the currently-displayed
+    // details panel (unified key — same as properties_fetched and layout_fetched).
+    if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+        if inspector.pending_properties_node_id.as_deref() == Some(node_id.as_str()) {
+            inspector.pending_properties_node_id = None;
+            inspector.properties_loading = false;
+        }
         return UpdateResult::none();
     }
 
@@ -459,7 +481,8 @@ pub fn handle_inspector_properties_fetch_failed(
 /// Handle a `getProperties` RPC timeout.
 ///
 /// Sets a timeout error on `properties_error` and clears the loading state.
-/// Stale-guarded identically to [`handle_inspector_properties_fetch_failed`].
+/// Stale-guarded identically to [`handle_inspector_properties_fetch_failed`]:
+/// only applies if `details_node_id` still matches `node_id`.
 pub fn handle_inspector_properties_fetch_timeout(
     state: &mut AppState,
     session_id: SessionId,
@@ -472,7 +495,13 @@ pub fn handle_inspector_properties_fetch_timeout(
 
     let inspector = &mut state.devtools_view_state.inspector;
 
-    if inspector.pending_properties_node_id.as_deref() != Some(node_id.as_str()) {
+    // Stale-guard: only apply if the response matches the currently-displayed
+    // details panel (unified key — same as properties_fetched and layout_fetched).
+    if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+        if inspector.pending_properties_node_id.as_deref() == Some(node_id.as_str()) {
+            inspector.pending_properties_node_id = None;
+            inspector.properties_loading = false;
+        }
         return UpdateResult::none();
     }
 
@@ -1149,12 +1178,14 @@ mod tests {
         state.devtools_view_state.inspector.root = Some(node);
         state.devtools_view_state.inspector.selected_index = 0;
 
-        // Simulate a pending fetch for "node-xyz".
+        // Simulate details open for "node-xyz" and a pending fetch for the same node.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("node-xyz".to_string());
         state.devtools_view_state.inspector.pending_node_id = Some("node-xyz".to_string());
         state.devtools_view_state.inspector.layout_loading = true;
 
         let layout = fdemon_core::LayoutInfo::default();
-        handle_layout_data_fetched(&mut state, session_id, layout);
+        handle_layout_data_fetched(&mut state, session_id, "node-xyz".to_string(), layout);
 
         assert_eq!(
             state
@@ -1469,6 +1500,9 @@ mod tests {
 
     #[test]
     fn test_layout_data_fetched_discards_stale_response() {
+        // Under unified stale-guard semantics (M2), the guard compares
+        // response.node_id against details_node_id (not selected_value_id()).
+        // When details is closed, all in-flight layout responses are discarded.
         let mut state = make_state_with_session();
         let session_id = state.session_manager.selected().unwrap().session.id;
 
@@ -1481,21 +1515,20 @@ mod tests {
             .expanded
             .insert("root-id".to_string());
 
-        // Simulate: fetch was dispatched for "root-id" (index 0).
+        // Simulate: fetch was dispatched for "root-id" (index 0), but the
+        // user closed Details before it completed (details_node_id is None).
         state.devtools_view_state.inspector.pending_node_id = Some("root-id".to_string());
         state.devtools_view_state.inspector.layout_loading = true;
-
-        // User navigated to child (index 1) before fetch completed.
-        state.devtools_view_state.inspector.selected_index = 1;
+        // details_node_id is None (default) — Details is closed.
 
         // Now the stale response arrives for "root-id".
         let layout = fdemon_core::LayoutInfo::default();
-        handle_layout_data_fetched(&mut state, session_id, layout);
+        handle_layout_data_fetched(&mut state, session_id, "root-id".to_string(), layout);
 
         // Response should be discarded — layout should remain None.
         assert!(
             state.devtools_view_state.inspector.layout.is_none(),
-            "Stale layout response should be discarded when user navigated away"
+            "Stale layout response should be discarded when details is closed"
         );
         assert!(
             !state.devtools_view_state.inspector.layout_loading,
@@ -1526,12 +1559,14 @@ mod tests {
             .insert("root-id".to_string());
         state.devtools_view_state.inspector.selected_index = 0;
 
-        // Fetch was dispatched for "root-id" — matches current selection.
+        // Details open for "root-id"; fetch was dispatched for the same node.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("root-id".to_string());
         state.devtools_view_state.inspector.pending_node_id = Some("root-id".to_string());
         state.devtools_view_state.inspector.layout_loading = true;
 
         let layout = fdemon_core::LayoutInfo::default();
-        handle_layout_data_fetched(&mut state, session_id, layout);
+        handle_layout_data_fetched(&mut state, session_id, "root-id".to_string(), layout);
 
         assert!(
             state.devtools_view_state.inspector.layout.is_some(),
@@ -3162,5 +3197,139 @@ mod tests {
                 .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
             "FetchInspectorProperties must not be double-dispatched when already loading"
         );
+    }
+
+    // ── Regression tests: stale-guard unification (Phase 2 follow-up C2 / M2) ──
+
+    /// Regression test for C2: open details on A → close → open on B → A's
+    /// fetch completes → B's details must NOT be mutated.
+    ///
+    /// This test reproduces the exact race described in the C2 review finding:
+    /// `pending_properties_node_id` still points to A, but the Details panel is
+    /// now open on B. The stale guard must use `details_node_id` (not the pending
+    /// id) to decide whether to apply the response.
+    #[test]
+    fn properties_response_discarded_when_user_reopened_details_on_different_node() {
+        let mut state = make_state_with_session();
+
+        // Step 1: open details on A. Schedules a fetch, sets pending=A.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("A".into());
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("A".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        // Step 2: user closes details (simulates handle_close_details behavior):
+        // details_open and details_node_id are cleared, but pending and loading
+        // are deliberately left as-is — this is the original close-details
+        // behaviour that opens the race.
+        state.devtools_view_state.inspector.details_open = false;
+        state.devtools_view_state.inspector.details_node_id = None;
+
+        // Step 3: user reopens details on B. Loading is still true so no new
+        // fetch is dispatched; pending stays at A.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("B".into());
+
+        // Step 4: A's response arrives.
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        let widget_props = vec![sample_diagnostic("colorA", "Color(0xff0000ff)", None)];
+        let render_props = vec![];
+        let result = handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "A".into(),
+            widget_props,
+            render_props,
+        );
+
+        // Step 5: verify B's details were NOT mutated.
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            inspector.properties.is_empty(),
+            "properties for B must remain empty; A's response should be discarded"
+        );
+        assert!(
+            inspector.render_properties.is_empty(),
+            "render_properties for B must remain empty"
+        );
+        assert_eq!(
+            inspector.details_node_id.as_deref(),
+            Some("B"),
+            "details_node_id should still point to B"
+        );
+
+        // Step 6: pending should be cleared since A's fetch is now resolved,
+        // and loading cleared so the user can refetch for B.
+        assert!(
+            inspector.pending_properties_node_id.is_none(),
+            "pending should be cleared once A's stale response arrives"
+        );
+        assert!(
+            !inspector.properties_loading,
+            "properties_loading should be cleared so user can refetch for B"
+        );
+
+        assert!(result.action.is_none(), "no action should be returned");
+    }
+
+    /// Companion test for the unified-key layout handler (M2).
+    ///
+    /// Verifies that a layout response for node A is accepted when the Details
+    /// panel is still open on A, even if the tree selection has moved to a
+    /// different node. Under unified semantics the guard checks `details_node_id`,
+    /// not `selected_value_id()`.
+    #[test]
+    fn layout_response_applied_when_details_node_matches_even_if_selection_moved() {
+        let mut state = make_state_with_session();
+
+        // Build a two-node tree (root A + child B) with root expanded.
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "A",
+            "children": [{
+                "description": "Child",
+                "valueId": "B",
+                "children": []
+            }]
+        }))
+        .expect("valid DiagnosticsNode");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("A".to_string());
+
+        // Details open for A; in-flight layout fetch is also for A.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("A".into());
+        state.devtools_view_state.inspector.pending_node_id = Some("A".into());
+        state.devtools_view_state.inspector.layout_loading = true;
+
+        // User navigates tree to B (selection moves to index 1) while keeping
+        // details open on A.
+        state.devtools_view_state.inspector.selected_index = 1;
+
+        // A's layout response arrives.
+        let layout = fdemon_core::LayoutInfo::default();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        let result = handle_layout_data_fetched(&mut state, session_id, "A".into(), layout.clone());
+
+        // Layout for A should be applied because details_node_id is A.
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            inspector.layout.is_some(),
+            "Layout for A must be applied when details_node_id == A"
+        );
+        assert!(!inspector.layout_loading, "layout_loading must be cleared");
+        assert_eq!(
+            inspector.last_fetched_node_id.as_deref(),
+            Some("A"),
+            "last_fetched_node_id should be promoted from pending"
+        );
+        assert!(result.action.is_none(), "no action should be returned");
     }
 }
