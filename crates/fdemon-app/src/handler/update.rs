@@ -2156,6 +2156,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             devtools::handle_layout_data_fetch_timeout(state, session_id)
         }
 
+        // ── Inspector Properties Messages (Phase 2, Task 03 scaffold / Task 06 impl) ──
+        // TODO(phase-2-task-06): replace these stubs with real handlers.
+        Message::DevToolsInspectorPropertiesFetched { .. }
+        | Message::DevToolsInspectorPropertiesFetchFailed { .. }
+        | Message::DevToolsInspectorPropertiesFetchTimeout { .. } => UpdateResult::none(),
+
         // ─────────────────────────────────────────────────────────
         // Entry Point Discovery Messages (Phase 3, Task 09)
         // ─────────────────────────────────────────────────────────

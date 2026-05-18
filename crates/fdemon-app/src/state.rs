@@ -350,6 +350,16 @@ pub struct InspectorState {
 
     /// User-friendly error from the last properties fetch (Phase 2).
     pub properties_error: Option<DevToolsError>,
+
+    /// `value_id` of the last widget whose properties were successfully fetched.
+    /// Used as a cache key by `handle_open_details` to skip re-dispatch when the
+    /// user closes + reopens Details on the same node.
+    pub last_fetched_properties_node_id: Option<String>,
+
+    /// `value_id` of the in-flight properties fetch, if any. Used as a stale
+    /// guard in `handle_properties_fetched`: if the user closes Details or
+    /// switches to a different node mid-flight, the late response is discarded.
+    pub pending_properties_node_id: Option<String>,
 }
 
 impl Default for InspectorState {
@@ -380,6 +390,8 @@ impl Default for InspectorState {
             render_properties: Vec::new(),
             properties_loading: false,
             properties_error: None,
+            last_fetched_properties_node_id: None,
+            pending_properties_node_id: None,
         }
     }
 }
@@ -440,6 +452,8 @@ impl InspectorState {
         self.render_properties.clear();
         self.properties_loading = false;
         self.properties_error = None;
+        self.last_fetched_properties_node_id = None;
+        self.pending_properties_node_id = None;
     }
 
     /// Clears state that does not survive a tree refresh or hot restart.
@@ -464,6 +478,8 @@ impl InspectorState {
         self.render_properties.clear();
         self.properties_loading = false;
         self.properties_error = None;
+        self.last_fetched_properties_node_id = None;
+        self.pending_properties_node_id = None;
     }
 
     /// Returns `true` after the first successful widget tree render.
@@ -3023,6 +3039,44 @@ mod tests {
                 .inspector
                 .hide_implementation_widgets,
             "inspector.hide_implementation_widgets should mirror settings (false) on startup"
+        );
+    }
+
+    // ── Properties cache-field reset tests (phase-2-task-03) ──────────────────
+
+    #[test]
+    fn reset_clears_properties_cache_fields() {
+        let mut state = InspectorState {
+            last_fetched_properties_node_id: Some("objects/42".into()),
+            pending_properties_node_id: Some("objects/43".into()),
+            ..Default::default()
+        };
+        state.reset();
+        assert!(
+            state.last_fetched_properties_node_id.is_none(),
+            "reset() must clear last_fetched_properties_node_id"
+        );
+        assert!(
+            state.pending_properties_node_id.is_none(),
+            "reset() must clear pending_properties_node_id"
+        );
+    }
+
+    #[test]
+    fn reset_details_and_groups_clears_properties_cache_fields() {
+        let mut state = InspectorState {
+            last_fetched_properties_node_id: Some("objects/42".into()),
+            pending_properties_node_id: Some("objects/43".into()),
+            ..Default::default()
+        };
+        state.reset_details_and_groups();
+        assert!(
+            state.last_fetched_properties_node_id.is_none(),
+            "reset_details_and_groups() must clear last_fetched_properties_node_id"
+        );
+        assert!(
+            state.pending_properties_node_id.is_none(),
+            "reset_details_and_groups() must clear pending_properties_node_id"
         );
     }
 }

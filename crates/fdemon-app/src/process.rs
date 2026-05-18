@@ -62,6 +62,7 @@ pub fn process_message(
             let action = hydrate_start_performance_monitoring(action, state);
             let action = action.and_then(|a| hydrate_fetch_widget_tree(a, state));
             let action = action.and_then(|a| hydrate_fetch_layout_data(a, state));
+            let action = action.and_then(|a| hydrate_fetch_inspector_properties(a, state));
             let action = action.and_then(|a| hydrate_toggle_overlay(a, state));
             let action = action.and_then(|a| hydrate_dispose_devtools_groups(a, state));
             let action = action.and_then(|a| hydrate_start_network_monitoring(a, state));
@@ -128,6 +129,29 @@ pub fn process_message(
                                 session_id = %session_id,
                                 error = ?e,
                                 "Inspector: failed to dispatch fallback LayoutDataFetchFailed — layout panel may stay stuck"
+                            ),
+                        }
+                    }
+                    UpdateAction::FetchInspectorProperties {
+                        session_id,
+                        node_id,
+                        ..
+                    } => {
+                        match msg_tx.try_send(Message::DevToolsInspectorPropertiesFetchFailed {
+                            session_id: *session_id,
+                            node_id: node_id.clone(),
+                            error: "no VM Service handle".to_string(),
+                        }) {
+                            Ok(()) => tracing::debug!(
+                                session_id = %session_id,
+                                node_id = %node_id,
+                                "Inspector: dispatched fallback PropertiesFetchFailed after hydration drop"
+                            ),
+                            Err(e) => tracing::error!(
+                                session_id = %session_id,
+                                node_id = %node_id,
+                                error = ?e,
+                                "Inspector: failed to dispatch fallback PropertiesFetchFailed — properties panel may stay stuck"
                             ),
                         }
                     }
@@ -295,6 +319,40 @@ fn hydrate_fetch_layout_data(action: UpdateAction, state: &AppState) -> Option<U
         });
     }
     Some(action)
+}
+
+/// Hydrate `FetchInspectorProperties` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection, since there is nothing to query without one. A `None` return
+/// triggers the fallback `DevToolsInspectorPropertiesFetchFailed` message in
+/// `process_message` so the loading spinner is never left stuck.
+/// All other action variants are returned unchanged.
+fn hydrate_fetch_inspector_properties(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    let UpdateAction::FetchInspectorProperties {
+        session_id,
+        node_id,
+        vm_handle,
+    } = action
+    else {
+        return Some(action);
+    };
+
+    let handle = vm_handle.or_else(|| {
+        state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())
+    });
+
+    Some(UpdateAction::FetchInspectorProperties {
+        session_id,
+        node_id,
+        vm_handle: handle,
+    })
 }
 
 /// Hydrate `ToggleOverlay` with the `VmRequestHandle` from the session.

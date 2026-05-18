@@ -328,6 +328,19 @@ pub fn handle_action(
             }
         }
 
+        // TODO(phase-2-task-05): wire up spawn_fetch_inspector_properties here.
+        UpdateAction::FetchInspectorProperties {
+            session_id,
+            node_id: _,
+            vm_handle: _,
+        } => {
+            warn!(
+                "FetchInspectorProperties reached handle_action for session {} — \
+                 spawn task not yet implemented (phase-2-task-05)",
+                session_id
+            );
+        }
+
         UpdateAction::ToggleOverlay {
             session_id,
             extension,

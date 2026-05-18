@@ -430,6 +430,7 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::StartPerformanceMonitoring { .. }
             | UpdateAction::FetchWidgetTree { .. }
             | UpdateAction::FetchLayoutData { .. }
+            | UpdateAction::FetchInspectorProperties { .. }
             | UpdateAction::ToggleOverlay { .. }
             | UpdateAction::OpenBrowserDevTools { .. }
             | UpdateAction::StartNetworkMonitoring { .. }

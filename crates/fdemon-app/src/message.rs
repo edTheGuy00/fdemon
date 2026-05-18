@@ -998,6 +998,31 @@ pub enum Message {
     /// message with a retry hint.
     LayoutDataFetchTimeout { session_id: SessionId },
 
+    /// `ext.flutter.inspector.getProperties` succeeded.
+    ///
+    /// `widget_properties` is the partition with `propertyType != "RenderObject"`;
+    /// `render_properties` contains the render-object nodes plus (already merged
+    /// in by the spawn task) the sub-properties of each render object.
+    DevToolsInspectorPropertiesFetched {
+        session_id: SessionId,
+        node_id: String,
+        widget_properties: Vec<DiagnosticsNode>,
+        render_properties: Vec<DiagnosticsNode>,
+    },
+
+    /// `getProperties` returned an error or the response failed to parse.
+    DevToolsInspectorPropertiesFetchFailed {
+        session_id: SessionId,
+        node_id: String,
+        error: String,
+    },
+
+    /// `getProperties` exceeded its 10-second timeout.
+    DevToolsInspectorPropertiesFetchTimeout {
+        session_id: SessionId,
+        node_id: String,
+    },
+
     /// Toggle a debug overlay extension (repaint rainbow, debug paint, perf overlay).
     ToggleDebugOverlay { extension: DebugOverlayKind },
 

@@ -305,6 +305,21 @@ pub enum UpdateAction {
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
 
+    /// Fetch widget properties + render-object properties for the given widget.
+    ///
+    /// Dispatched by `handle_open_details` when the selected widget changes.
+    /// The spawn task makes one `ext.flutter.inspector.getProperties` RPC, splits
+    /// the result into widget/render properties, then makes one further
+    /// `getProperties` per render-object property to fetch its sub-properties.
+    ///
+    /// `vm_handle` is `None` when emitted from a handler; the engine hydrates it
+    /// in `process.rs::hydrate_fetch_inspector_properties` before dispatch.
+    FetchInspectorProperties {
+        session_id: SessionId,
+        node_id: String,
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
     /// Toggle a debug overlay via VM Service extension call.
     ///
     /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
