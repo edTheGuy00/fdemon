@@ -36,6 +36,7 @@ pub mod dumps;
 pub mod inspector;
 pub mod layout;
 pub mod overlays;
+pub mod properties;
 
 // Re-export all public items from submodules so the public API is flat.
 pub use dumps::{
@@ -89,6 +90,18 @@ pub mod ext {
 
     /// Dispose a named object group, releasing all its references.
     pub const DISPOSE_GROUP: &str = "ext.flutter.inspector.disposeGroup";
+
+    /// `ext.flutter.inspector.getProperties` — returns a list of `DiagnosticsNode`
+    /// describing each property of the widget identified by `arg = valueId`.
+    ///
+    /// Request: `{ "arg": "<valueId>", "objectGroup": "<groupName>" }`
+    /// Response: `{ "result": [<DiagnosticsNode>, …] }`
+    ///
+    /// Used by Phase 2's `FetchInspectorProperties` action. Properties whose
+    /// `propertyType == "RenderObject"` are recursively expanded by a second
+    /// `getProperties` call on the render object's `valueId` to surface the
+    /// render object's own properties (constraints, size, layer, semantics, etc.).
+    pub const GET_PROPERTIES: &str = "ext.flutter.inspector.getProperties";
 
     // ── Layout explorer ─────────────────────────────────────────────────────
 
@@ -444,6 +457,7 @@ mod tests {
         assert!(ext::DISPOSE_GROUP.starts_with("ext.flutter.inspector."));
         assert!(ext::GET_LAYOUT_EXPLORER_NODE.starts_with("ext.flutter.inspector."));
         assert!(ext::IS_WIDGET_TREE_READY.starts_with("ext.flutter.inspector."));
+        assert!(ext::GET_PROPERTIES.starts_with("ext.flutter.inspector."));
     }
 
     // ── parse_bool_extension_response (task-specified tests) ────────────────
