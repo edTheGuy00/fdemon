@@ -1041,7 +1041,7 @@ Phase 2 introduces a dual-pane layout: the upper area holds the frame timing cha
 
 **Section focus (`PerfSection` enum):**
 
-`PerfSection` has two variants — `FrameChart` and `DetailsTab` — corresponding to the frame timing bar chart and the details pane. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` between them.
+`PerfSection` has two variants — `FrameChart` and `Details` — corresponding to the frame timing bar chart and the details pane. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` between them.
 
 **Details tab (`PerfDetailsTab` enum):**
 
@@ -1088,7 +1088,7 @@ Both default to `0` ("not yet rendered — use fallback"). These are the same ap
 
 | Variant | Condition |
 |---|---|
-| `OverBudget { budget_ms, actual_ms }` | Frame total exceeds `1000 / refresh_rate_hz` ms. Always first when present. |
+| `OverBudget { excess_ms, budget_ms }` | Frame total exceeds `1000 / refresh_rate_hz` ms; `excess_ms` is the overage above budget. Always first when present. |
 | `ShaderCompilation` | Shader compilation detected in the raster phase. |
 | `LongestUiPhase { phase, share }` | One UI phase dominates; only when `phases` is `Some`. |
 | `RasterDominant { ui_ms, raster_ms }` | Raster time materially exceeds UI time. |
