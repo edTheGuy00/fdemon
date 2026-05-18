@@ -48,13 +48,30 @@ pub struct DiagnosticsNode {
     pub description: String,
 
     /// Runtime type as string
-    #[serde(rename = "type")]
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences.
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "deserialize_sanitized_option_string"
+    )]
     pub node_type: Option<String>,
 
     /// Property name (for property nodes)
+    ///
+    /// Rendered directly to the terminal buffer in `properties_tab.rs` and
+    /// `render_object_tab.rs`, so ANSI sequences in this field would corrupt
+    /// terminal state. Sanitized at deserialize time (M4).
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub name: Option<String>,
 
     /// Diagnostic level: "info", "debug", "warning", "error", "hidden", "off"
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences. Sanitizing
+    /// does not break `filter_and_sort_by_level` because that function matches
+    /// against clean literal strings; a clean Flutter response will never
+    /// contain ANSI bytes in this field.
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub level: Option<String>,
 
     /// Whether this node has children
@@ -62,9 +79,15 @@ pub struct DiagnosticsNode {
     pub has_children: bool,
 
     /// Tree display style: "dense", "sparse", etc.
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences.
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub style: Option<String>,
 
     /// VM Service object ID for this node's value — used as `arg` in subsequent calls
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences (defense-in-depth).
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub value_id: Option<String>,
 
     /// VM Service object ID for the DiagnosticsNode itself
@@ -2518,5 +2541,78 @@ mod tests {
         let json = serde_json::json!({ "description": "Text" });
         let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
         assert!(node.property_type.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // name / level / node_type / style / value_id sanitization (M4 + m9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diagnostics_node_name_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "name": "\u{001b}[31mwidget_name\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.name.as_deref(), Some("widget_name"));
+    }
+
+    #[test]
+    fn diagnostics_node_name_passes_clean_strings() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "name": "padding"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.name.as_deref(), Some("padding"));
+    }
+
+    #[test]
+    fn diagnostics_node_level_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "level": "\u{001b}[33mfine\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.level.as_deref(), Some("fine"));
+        // Verify the level filter still works after sanitization
+        assert!(matches!(node.level.as_deref(), Some("fine")));
+    }
+
+    #[test]
+    fn diagnostics_node_value_id_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "valueId": "\u{001b}[36mobjects/42\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.value_id.as_deref(), Some("objects/42"));
+    }
+
+    #[test]
+    fn diagnostics_node_node_type_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "type": "\u{001b}[32mWidgetProperty\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.node_type.as_deref(), Some("WidgetProperty"));
+    }
+
+    #[test]
+    fn diagnostics_node_style_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "style": "\u{001b}[35mdense\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.style.as_deref(), Some("dense"));
+    }
+
+    #[test]
+    fn diagnostics_node_name_absent_is_none() {
+        let json = serde_json::json!({ "description": "Text" });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert!(node.name.is_none());
     }
 }
