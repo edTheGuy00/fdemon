@@ -381,6 +381,111 @@ pub fn handle_layout_data_fetch_timeout(
     UpdateResult::none()
 }
 
+// ── Inspector Properties Handlers (Phase 2, Task 06) ─────────────────────────
+
+/// Apply a successful `getProperties` response to [`InspectorState`].
+///
+/// Stale-guarded: if `pending_properties_node_id` no longer matches `node_id`
+/// (the user closed Details or selected a different widget mid-flight), the
+/// response is discarded silently and `properties_loading` is left untouched
+/// (the newer in-flight fetch will resolve it).
+pub fn handle_inspector_properties_fetched(
+    state: &mut AppState,
+    session_id: SessionId,
+    node_id: String,
+    widget_properties: Vec<fdemon_core::DiagnosticsNode>,
+    render_properties: Vec<fdemon_core::DiagnosticsNode>,
+) -> UpdateResult {
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if active_id != Some(session_id) {
+        return UpdateResult::none();
+    }
+
+    let inspector = &mut state.devtools_view_state.inspector;
+
+    // Stale-guard: if the in-flight node id no longer matches the pending id,
+    // the user has since opened Details for a different widget or closed Details
+    // entirely — discard the response without mutating visible state.
+    if inspector.pending_properties_node_id.as_deref() != Some(node_id.as_str()) {
+        return UpdateResult::none();
+    }
+
+    inspector.properties = widget_properties;
+    inspector.render_properties = render_properties;
+    inspector.properties_loading = false;
+    inspector.properties_error = None;
+    // Promote pending to last-fetched so a subsequent open on the same node
+    // skips the fetch (cache hit).
+    inspector.last_fetched_properties_node_id = inspector.pending_properties_node_id.take();
+
+    UpdateResult::none()
+}
+
+/// Handle a `getProperties` RPC failure.
+///
+/// Maps the raw RPC error string to a user-friendly [`DevToolsError`] and
+/// clears the loading state. The `last_fetched_properties_node_id` cache is
+/// deliberately **not** updated on failure so that the next `Enter` on the same
+/// node retries the fetch.
+///
+/// Stale-guarded: responses for a node other than the current
+/// `pending_properties_node_id` are silently discarded.
+pub fn handle_inspector_properties_fetch_failed(
+    state: &mut AppState,
+    session_id: SessionId,
+    node_id: String,
+    error: String,
+) -> UpdateResult {
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if active_id != Some(session_id) {
+        return UpdateResult::none();
+    }
+
+    let inspector = &mut state.devtools_view_state.inspector;
+
+    if inspector.pending_properties_node_id.as_deref() != Some(node_id.as_str()) {
+        return UpdateResult::none();
+    }
+
+    inspector.properties_loading = false;
+    inspector.properties_error = Some(map_rpc_error(&error));
+    inspector.pending_properties_node_id = None;
+    // last_fetched_properties_node_id deliberately not updated; cache stays
+    // empty so the next Enter retries.
+
+    UpdateResult::none()
+}
+
+/// Handle a `getProperties` RPC timeout.
+///
+/// Sets a timeout error on `properties_error` and clears the loading state.
+/// Stale-guarded identically to [`handle_inspector_properties_fetch_failed`].
+pub fn handle_inspector_properties_fetch_timeout(
+    state: &mut AppState,
+    session_id: SessionId,
+    node_id: String,
+) -> UpdateResult {
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if active_id != Some(session_id) {
+        return UpdateResult::none();
+    }
+
+    let inspector = &mut state.devtools_view_state.inspector;
+
+    if inspector.pending_properties_node_id.as_deref() != Some(node_id.as_str()) {
+        return UpdateResult::none();
+    }
+
+    inspector.properties_loading = false;
+    inspector.properties_error = Some(DevToolsError::new(
+        "Request timed out",
+        "Press [r] to retry",
+    ));
+    inspector.pending_properties_node_id = None;
+
+    UpdateResult::none()
+}
+
 // ── Mouse Click Handlers (Phase 4) ───────────────────────────────────────────
 
 /// Select a visible inspector node by absolute row index.
@@ -519,9 +624,15 @@ pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> Updat
 /// Open the Details panel for the currently selected inspector node.
 ///
 /// Sets `details_open = true`, snaps `details_tab` back to `Properties`, and
-/// records `details_node_id` so the TUI can render the correct content. If
-/// layout data for the node is not yet cached, a `FetchLayoutData` action is
-/// dispatched so the Properties tab has content immediately.
+/// records `details_node_id` so the TUI can render the correct content.
+///
+/// Dispatches up to two fetch actions in one update cycle:
+/// - **`FetchInspectorProperties`** — when the properties cache misses or
+///   there is a prior error on the same node and no fetch is already in flight.
+/// - **`FetchLayoutData`** — when layout cache misses and no fetch is in flight
+///   (existing Phase 1 behaviour).
+///
+/// Multiple actions are returned via [`UpdateResult::actions_vec`].
 ///
 /// No-op when:
 /// - Details is already open.
@@ -538,25 +649,50 @@ pub fn handle_open_details(state: &mut AppState) -> UpdateResult {
     inspector.details_tab = DetailsTab::Properties; // always start on first tab
     inspector.details_node_id = Some(node_id.clone());
 
-    // Layout data is fetched by the existing nav-driven path. If the user
-    // opens Details immediately on initial selection, the data is already
-    // warm. If not, dispatch an extra FetchLayoutData here so the
-    // Properties tab has content.
-    let active_id = state.session_manager.selected().map(|h| h.session.id);
-    if let Some(session_id) = active_id {
+    let session_id = match state.session_manager.selected().map(|h| h.session.id) {
+        Some(id) => id,
+        None => return UpdateResult::none(),
+    };
+
+    let mut actions: Vec<UpdateAction> = Vec::new();
+
+    // (A) Properties fetch — skip when cached for this exact node and no prior
+    //     error, or when a fetch is already in-flight.
+    {
         let inspector = &mut state.devtools_view_state.inspector;
-        if inspector.last_fetched_node_id.as_deref() != Some(&node_id) && !inspector.layout_loading
-        {
+        let need_properties = inspector.last_fetched_properties_node_id.as_deref()
+            != Some(node_id.as_str())
+            || inspector.properties_error.is_some();
+        if need_properties && !inspector.properties_loading {
+            inspector.properties_loading = true;
+            inspector.properties_error = None;
+            inspector.pending_properties_node_id = Some(node_id.clone());
+            actions.push(UpdateAction::FetchInspectorProperties {
+                session_id,
+                node_id: node_id.clone(),
+                vm_handle: None,
+            });
+        }
+    }
+
+    // (B) Layout fetch — existing logic. Skip when already cached or in-flight.
+    {
+        let inspector = &mut state.devtools_view_state.inspector;
+        let need_layout = inspector.last_fetched_node_id.as_deref() != Some(node_id.as_str())
+            && !inspector.layout_loading;
+        if need_layout {
             inspector.layout_loading = true;
             inspector.pending_node_id = Some(node_id.clone());
-            return UpdateResult::action(UpdateAction::FetchLayoutData {
+            inspector.layout_last_fetch_time = Some(Instant::now());
+            actions.push(UpdateAction::FetchLayoutData {
                 session_id,
                 node_id,
                 vm_handle: None,
             });
         }
     }
-    UpdateResult::none()
+
+    UpdateResult::actions_vec(actions)
 }
 
 /// Close the Details panel.
@@ -2015,8 +2151,13 @@ mod tests {
 
         let result = handle_open_details(&mut state);
 
+        // Phase 2: handle_open_details now returns multiple actions.
+        // Check via result.actions() which combines primary + extra actions.
         assert!(
-            matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
+            result
+                .actions()
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchLayoutData { .. })),
             "Should dispatch FetchLayoutData when layout data is stale"
         );
         assert!(state.devtools_view_state.inspector.layout_loading);
@@ -2027,16 +2168,22 @@ mod tests {
         let mut state = make_state_with_tree();
         state.devtools_view_state.inspector.selected_index = 0;
 
-        // Pre-cache the layout data for "node-0-value-id".
+        // Pre-cache both layout and properties data for "node-0-value-id".
         state.devtools_view_state.inspector.last_fetched_node_id =
             Some("node-0-value-id".to_string());
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("node-0-value-id".to_string());
         state.devtools_view_state.inspector.layout_loading = false;
 
         let result = handle_open_details(&mut state);
 
+        // Phase 2: both caches are warm — no action should be dispatched.
         assert!(
-            result.action.is_none(),
-            "Should NOT dispatch FetchLayoutData when layout data is already cached"
+            result.actions().is_empty(),
+            "Should NOT dispatch any fetch when both caches are warm, got {:?}",
+            result.actions()
         );
         assert!(
             !state.devtools_view_state.inspector.layout_loading,
@@ -2688,6 +2835,332 @@ mod tests {
         assert!(
             !inspector.has_ever_rendered_tree,
             "has_ever_rendered_tree must be false after hot restart"
+        );
+    }
+
+    // ── Properties handlers (Phase 2, Task 06) ───────────────────────────────
+
+    /// Build a minimal `DiagnosticsNode` suitable for use as a test property.
+    fn sample_diagnostic(
+        name: &str,
+        description: &str,
+        property_type: Option<&str>,
+    ) -> fdemon_core::DiagnosticsNode {
+        let mut node: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": description
+        }))
+        .expect("valid DiagnosticsNode");
+        node.name = Some(name.to_string());
+        if let Some(pt) = property_type {
+            node.property_type = Some(pt.to_string());
+        }
+        node
+    }
+
+    /// Build a state with a session and the given node selected (value_id =
+    /// `node_id`). The tree contains exactly that one node as the root; the
+    /// root is auto-selected at index 0.
+    fn make_state_with_selected_widget(node_id: &str) -> AppState {
+        let mut state = make_state_with_session();
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "TestWidget",
+            "valueId": node_id
+        }))
+        .expect("valid DiagnosticsNode");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state.devtools_view_state.inspector.selected_index = 0;
+        state
+    }
+
+    /// Build a state with a session, the given node selected, **and** the
+    /// properties fetch already in-flight (`pending_properties_node_id` set,
+    /// `properties_loading = true`).
+    fn make_state_with_inspector_open(node_id: &str) -> AppState {
+        let mut state = make_state_with_selected_widget(node_id);
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some(node_id.to_string());
+        state
+    }
+
+    #[test]
+    fn properties_fetched_stores_into_state() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        let widget_props = vec![sample_diagnostic("name", "value", None)];
+        let render_props = vec![sample_diagnostic(
+            "renderObject",
+            "RenderFlex",
+            Some("RenderObject"),
+        )];
+
+        handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "objects/42".into(),
+            widget_props.clone(),
+            render_props.clone(),
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert_eq!(i.properties.len(), widget_props.len());
+        assert_eq!(i.render_properties.len(), render_props.len());
+        assert!(!i.properties_loading, "properties_loading must be cleared");
+        assert!(
+            i.properties_error.is_none(),
+            "properties_error must be None"
+        );
+        assert_eq!(
+            i.last_fetched_properties_node_id.as_deref(),
+            Some("objects/42"),
+            "last_fetched_properties_node_id should be set"
+        );
+        assert!(
+            i.pending_properties_node_id.is_none(),
+            "pending_properties_node_id must be cleared"
+        );
+    }
+
+    #[test]
+    fn properties_fetched_discards_stale_response() {
+        let mut state = make_state_with_inspector_open("objects/B");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        // B is in-flight.
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/B".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        // A's response arrives late, while B is in-flight.
+        handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "objects/A".into(),
+            vec![sample_diagnostic("stale", "stale", None)],
+            vec![],
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(
+            i.properties.is_empty(),
+            "stale response must not mutate properties"
+        );
+        assert!(
+            i.properties_loading,
+            "loading flag should still be set for in-flight B"
+        );
+        assert!(
+            i.last_fetched_properties_node_id.is_none(),
+            "last_fetched must not be set from a stale response"
+        );
+    }
+
+    #[test]
+    fn properties_fetched_cross_session_guard() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        // Use a session_id that does not match any active session.
+        handle_inspector_properties_fetched(
+            &mut state,
+            9999,
+            "objects/42".into(),
+            vec![sample_diagnostic("name", "value", None)],
+            vec![],
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(
+            i.properties.is_empty(),
+            "cross-session response must not mutate properties"
+        );
+        assert!(
+            i.properties_loading,
+            "loading flag must not change on cross-session response"
+        );
+    }
+
+    #[test]
+    fn properties_fetch_failed_sets_error() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        handle_inspector_properties_fetch_failed(
+            &mut state,
+            session_id,
+            "objects/42".into(),
+            "Isolate not found: 12345".to_string(),
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(!i.properties_loading, "loading must be false after failure");
+        assert!(
+            i.properties_error.is_some(),
+            "error must be set after failure"
+        );
+        assert!(
+            i.pending_properties_node_id.is_none(),
+            "pending must be cleared after failure"
+        );
+        // Cache must NOT be updated on failure — next Enter will retry.
+        assert!(
+            i.last_fetched_properties_node_id.is_none(),
+            "last_fetched must not be updated on failure"
+        );
+    }
+
+    #[test]
+    fn properties_fetch_timeout_sets_error() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        handle_inspector_properties_fetch_timeout(&mut state, session_id, "objects/42".into());
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(!i.properties_loading, "loading must be false after timeout");
+        let err = i
+            .properties_error
+            .as_ref()
+            .expect("error must be set after timeout");
+        assert!(
+            err.message.contains("timed out"),
+            "error message should mention timeout, got: {:?}",
+            err.message
+        );
+        assert!(
+            i.pending_properties_node_id.is_none(),
+            "pending must be cleared after timeout"
+        );
+    }
+
+    #[test]
+    fn open_details_dispatches_properties_fetch_on_cache_miss() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // No cache: last_fetched_properties_node_id is None.
+        let result = handle_open_details(&mut state);
+
+        let actions = result.actions();
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                UpdateAction::FetchInspectorProperties { node_id, .. } if node_id == "objects/42"
+            )),
+            "FetchInspectorProperties must be dispatched on cache miss, got {:?}",
+            actions
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(i.properties_loading, "properties_loading should be true");
+        assert_eq!(i.pending_properties_node_id.as_deref(), Some("objects/42"));
+    }
+
+    #[test]
+    fn open_details_cache_hit_skips_properties_dispatch() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // Both caches warm — no fetch should be dispatched.
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.last_fetched_node_id = Some("objects/42".into());
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            actions.is_empty(),
+            "no fetch should be dispatched on full cache hit, got {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn open_details_cache_hit_on_properties_but_layout_miss_dispatches_only_layout() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // Properties cache warm, layout cache cold.
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.last_fetched_node_id = None;
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
+            "FetchInspectorProperties must not be dispatched on properties cache hit"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchLayoutData { .. })),
+            "FetchLayoutData must be dispatched on layout cache miss"
+        );
+    }
+
+    #[test]
+    fn open_details_retries_properties_when_prior_error() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // Cache appears hot but there was a prior error — must retry.
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_error =
+            Some(DevToolsError::new("prev error", "retry"));
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
+            "FetchInspectorProperties must be dispatched when prior error exists"
+        );
+    }
+
+    #[test]
+    fn open_details_does_not_double_dispatch_when_properties_already_loading() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // A fetch is already in-flight — must not dispatch another.
+        state.devtools_view_state.inspector.properties_loading = true;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
+            "FetchInspectorProperties must not be double-dispatched when already loading"
         );
     }
 }

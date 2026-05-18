@@ -43,8 +43,19 @@ pub fn process_message(
     while let Some(m) = msg {
         let result = handler::update(state, m);
 
-        // Handle any action
-        if let Some(action) = result.action {
+        // Collect all actions: primary `action` first, then any `extra_actions`.
+        // Most handlers return at most one action; `extra_actions` is only non-empty
+        // for handlers that must dispatch multiple side effects in one update cycle
+        // (e.g. `handle_open_details` dispatching both `FetchInspectorProperties`
+        // and `FetchLayoutData` simultaneously).
+        let follow_msg = result.message;
+        let all_actions: Vec<UpdateAction> = result
+            .action
+            .into_iter()
+            .chain(result.extra_actions.into_iter())
+            .collect();
+
+        for action in all_actions {
             // For ReloadAllSessions, collect cmd_senders for all sessions
             let session_senders = get_session_cmd_senders_for_action(&action, state);
             let session_cmd_sender = get_session_cmd_sender(&action, state);
@@ -177,7 +188,7 @@ pub fn process_message(
         }
 
         // Continue with follow-up message
-        msg = result.message;
+        msg = follow_msg;
     }
 }
 

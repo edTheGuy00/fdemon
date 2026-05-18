@@ -15,8 +15,10 @@ pub(crate) mod performance;
 
 pub use inspector::{
     handle_close_details, handle_cycle_tab, handle_inspector_navigate,
-    handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout, handle_layout_data_fetched,
-    handle_open_details, handle_toggle_hide_implementation, handle_widget_tree_fetch_failed,
+    handle_inspector_properties_fetch_failed, handle_inspector_properties_fetch_timeout,
+    handle_inspector_properties_fetched, handle_layout_data_fetch_failed,
+    handle_layout_data_fetch_timeout, handle_layout_data_fetched, handle_open_details,
+    handle_toggle_hide_implementation, handle_widget_tree_fetch_failed,
     handle_widget_tree_fetch_timeout, handle_widget_tree_fetched,
 };
 
@@ -246,6 +248,7 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                 allocation_profile_interval_ms,
                 mode,
             }),
+            extra_actions: Vec::new(),
         };
     }
 

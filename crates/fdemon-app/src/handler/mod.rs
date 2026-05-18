@@ -706,8 +706,18 @@ pub enum Task {
 pub struct UpdateResult {
     /// Optional follow-up message to process
     pub message: Option<Message>,
-    /// Optional action for the event loop to perform
+    /// Optional single action for the event loop to perform.
+    ///
+    /// Kept for backward compatibility. Use [`UpdateResult::actions`] to
+    /// retrieve all actions including any pushed via [`UpdateResult::actions_vec`].
     pub action: Option<UpdateAction>,
+    /// Additional actions to perform after `action`.
+    ///
+    /// Used when a handler must dispatch more than one side-effect action in a
+    /// single TEA update cycle (e.g. `handle_open_details` dispatching both
+    /// `FetchInspectorProperties` and `FetchLayoutData`). The event loop
+    /// processes these after the primary `action`.
+    pub(crate) extra_actions: Vec<UpdateAction>,
 }
 
 impl UpdateResult {
@@ -719,6 +729,7 @@ impl UpdateResult {
         Self {
             message: Some(msg),
             action: None,
+            extra_actions: Vec::new(),
         }
     }
 
@@ -726,6 +737,7 @@ impl UpdateResult {
         Self {
             message: None,
             action: Some(action),
+            extra_actions: Vec::new(),
         }
     }
 
@@ -739,6 +751,42 @@ impl UpdateResult {
         Self {
             message: Some(msg),
             action: Some(action),
+            extra_actions: Vec::new(),
         }
+    }
+
+    /// Construct a result that carries multiple actions and no follow-up message.
+    ///
+    /// Used by handlers that must dispatch more than one side-effect in a single
+    /// TEA update cycle. The caller collects actions into a `Vec<UpdateAction>`
+    /// and passes it here; the event loop will process them in order.
+    ///
+    /// If `actions` is empty, this is equivalent to [`UpdateResult::none()`].
+    pub fn actions_vec(mut actions: Vec<UpdateAction>) -> Self {
+        if actions.is_empty() {
+            return Self::default();
+        }
+        let first = actions.remove(0);
+        Self {
+            message: None,
+            action: Some(first),
+            extra_actions: actions,
+        }
+    }
+
+    /// Return a cloned `Vec` of all actions in this result.
+    ///
+    /// Combines the primary `action` (if any) and any additional
+    /// [`extra_actions`][Self::extra_actions] into a single owned `Vec`.
+    ///
+    /// Used by tests and callers that need to inspect all side effects without
+    /// special-casing `action` vs `extra_actions`.
+    pub fn actions(&self) -> Vec<UpdateAction> {
+        let mut out: Vec<UpdateAction> = Vec::new();
+        if let Some(ref a) = self.action {
+            out.push(a.clone());
+        }
+        out.extend(self.extra_actions.iter().cloned());
+        out
     }
 }
