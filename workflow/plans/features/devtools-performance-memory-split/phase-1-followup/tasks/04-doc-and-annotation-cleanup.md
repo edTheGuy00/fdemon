@@ -212,3 +212,40 @@ All four green.
 ### Module Structure
 
 No new modules. All edits are within existing files. This task introduces no new code — only doc comments, annotation tweaks, and a hint-string adjustment.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/REVIEW_FOCUS.md` | Added two bullets for `MemoryState::memory_chart_visible_width` and `MemoryState::alloc_table_visible_height` under "Current usage" (M3) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Rewrote `//!` header to describe single-section frame-chart-only layout; removed dual-section / memory-chart / (~45%)/(~55%) references (M2) |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Rewrote `//!` header to remove "allocation profile updates" and "rich memory samples"; added cross-link to `super::memory` (M2) |
+| `crates/fdemon-app/src/session/memory.rs` | Fixed both EXCEPTION annotations to reference both `CODE_STANDARDS.md` Principle 3 and `REVIEW_FOCUS.md` (m4); added `monitoring_active` lockstep invariant doc comment (m10) |
+| `crates/fdemon-app/src/session/performance.rs` | Fixed EXCEPTION annotation to remove incorrect "Region Registry Pattern" reference; added `monitoring_active` lockstep invariant doc comment pointing at `MemoryState` (m4, m10) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Updated Performance footer hint to `[Esc] Logs  [←/→] Frames  [j/k] Scroll  [b] Browser  [Ctrl+p] PerfOverlay` — consistent with KEYBINDINGS.md; removed `[i] Inspector` (not panel-specific) and added missing `[j/k] Scroll` (m6) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A footer (m6)**: T03 chose Option A (Tab is a no-op), so `[Tab] Details` was not added. The prior footer was missing `[j/k] Scroll` which KEYBINDINGS.md documents for the Performance Panel. Added it and reordered the hints to match KEYBINDINGS.md's natural grouping (navigation keys first, then control keys).
+
+2. **`[i] Inspector` removed from footer**: The `[i]` key is a global panel-navigation shortcut documented under "Panel Navigation" in KEYBINDINGS.md, not specific to the Performance panel. The Inspector panel footer does not list `[p]` Performance, so symmetry supports removing `[i]` from the Performance footer. Replaced with `[b] Browser` which is listed in the Performance Panel section.
+
+3. **Doc comment length (m10)**: Kept at four lines per field, matching the five-line max guideline. The invariant statement and the two set-points are the essential content.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (5,827+ tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Footer string truncation**: The footer truncates at `area.width - 2` columns. The new string `[Esc] Logs  [←/→] Frames  [j/k] Scroll  [b] Browser  [Ctrl+p] PerfOverlay` is 72 characters — typical terminal widths of 80+ will display it fully.

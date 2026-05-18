@@ -151,3 +151,46 @@ Whichever option is taken, the test asserts the trap is gone: either Tab visibly
 ### Module Structure
 
 No new modules. The chosen option's render path (if Option B) lives inside the existing `widgets/devtools/performance/mod.rs` as a private `render_details_placeholder` method on `PerformancePanel`. Option A adds no new code.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Option Chosen
+
+**Option A — YAGNI.** `PerfSection::next()` and `prev()` both return `FrameChart` unconditionally, making Tab a visible no-op; the `Details` variant is reserved for Phase 2 but unreachable via keyboard navigation. This is the smallest possible diff and avoids a render-path that exists only to show a placeholder.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Renamed `DetailsTab` → `Details`; updated `next()` and `prev()` to always return `FrameChart` (Option A); updated tests to match new no-op semantics |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Renamed all four `PerfSection::DetailsTab` match arms to `PerfSection::Details`; updated doc comments; rewrote Tab/Shift+Tab tests to assert no-op; updated integration tests referencing the variant |
+| `crates/fdemon-tui/src/widgets/devtools/performance/tests.rs` | Added `performance_tab_after_tab_does_not_break_scroll_keys` regression test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A over Option B**: The three reviewers who flagged this and the "risks reviewer" explicitly recommended YAGNI. Option B would add a render path purely for a placeholder — overhead with no real user value until Phase 2 content arrives. Phase 2 simply re-introduces the cycle in `next()`/`prev()` when real content lands.
+
+2. **`Details` match arms kept for exhaustiveness**: Even though `PerfSection::Details` is unreachable via Tab (Option A), the match arms in the four scroll/page/jump handlers are kept so the compiler continues to enforce exhaustiveness — any future direct assignment to `Details` (e.g., from a mouse click or message) will be handled gracefully (no-op) rather than panicking.
+
+3. **Regression test placement**: The regression test (`performance_tab_after_tab_does_not_break_scroll_keys`) is placed in `fdemon-tui/src/widgets/devtools/performance/tests.rs` as the task requires. It tests at the state level (calling `next()` directly and simulating a scroll offset increment) since the TUI test file does not have full message dispatch infrastructure. The handler-level equivalent (`tab_is_noop_in_phase_1`) is in `fdemon-app`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all 5,800+ tests, zero failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-tui performance_tab_after_tab_does_not_break_scroll_keys` — Passed (new test)
+- `cargo test -p fdemon-app tab_is_noop_in_phase_1` — Passed
+- `cargo test -p fdemon-app perf_section` — Passed (3 tests: `next_is_noop_in_phase_1`, `prev_is_noop_in_phase_1`, `default_is_frame_chart`)
+
+### Risks/Limitations
+
+1. **Dead variant**: `PerfSection::Details` cannot be reached via Tab in Phase 1. Code that directly assigns `focused_section = PerfSection::Details` (e.g. a future mouse handler or test setup) would enter the no-op match arms silently. This is the intended behavior — consistent with Option A's contract — and is documented in the variant's doc comment.
+
+2. **T04 coordination**: Task T04 (doc and annotation cleanup) may update footer hint strings. No footer was changed in this task (Option A required no footer update), so there is no conflict with T04.

@@ -215,3 +215,36 @@ All four must pass.
 ### Module Structure
 
 No new modules. All changes land in pre-existing files. `handle_memory_scroll` is a new module-private function alongside the existing `handle_inspector_scroll` / `handle_performance_scroll` / `handle_network_scroll` siblings.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a98e237b761c667e9
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | C1 fix: extended alloc-unpause guard from `DevToolsPanel::Performance` to `DevToolsPanel::Performance \| DevToolsPanel::Memory` in the `VmServicePerformanceMonitoringStarted` handler. C3 was already present (both monitoring_active flags). |
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | C2 fix: added `handle_memory_scroll` function emitting `MemScroll*`/`MemPage*` messages; updated `handle_scroll` to route `DevToolsPanel::Memory` to the new function; removed the "until T03" placeholder comment; updated module-level docstring to include Memory routing. Added 7 regression tests for C2 in the `tests` module. |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | m7 fix: added `entering_from_non_alloc` guard to both `Performance` and `Memory` arms of `handle_switch_panel` to avoid sending a spurious `alloc_pause_tx` value when switching between the two alloc-enabled panels. |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 regression tests: `test_lazy_start_memory_default_unpauses_alloc` (C1/m8), `test_switch_performance_to_memory_does_not_retoggle_alloc` (m7), `test_switch_memory_to_performance_does_not_retoggle_alloc` (m7 symmetric). |
+
+### Notable Decisions/Tradeoffs
+
+1. **handle_switch_panel m7 fix**: The m7 tests required that switching between Performance and Memory does not re-send on `alloc_pause_tx`. The existing code sent `false` unconditionally in each arm. The fix adds an `entering_from_non_alloc` guard — only send `false` when entering from a non-alloc panel. This is semantically correct: if alloc was already unpaused, there is no need to send again, and doing so triggers a spurious change notification on the watch channel. The `leaving_alloc_panel` guard already handled the pause side correctly.
+
+2. **C3 verification**: The C3 fix (both `performance.monitoring_active = true` and `memory.monitoring_active = true`) was already present from the in-flight patch. The existing test `test_performance_monitoring_started_stores_shutdown_tx` already asserts both flags, so no additional C3-specific test was needed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS (0 warnings)
+- `cargo test --workspace` - PASS (2379 fdemon-app unit tests, all others pass; 0 failures across workspace)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS (0 warnings)
+
+### Risks/Limitations
+
+1. **m7 guard semantics**: The `entering_from_non_alloc` guard assumes that if you come from a Memory or Performance panel, `alloc_pause_tx` is already `false`. This invariant holds because (a) the `leaving_alloc_panel` guard only sends `true` when leaving to a non-alloc panel, and (b) the `VmServicePerformanceMonitoringStarted` handler now unpauses alloc for both panels. If a future code path leaves `alloc_pause_tx = true` while on an alloc panel, the guard would incorrectly skip the unpause. No such path currently exists.

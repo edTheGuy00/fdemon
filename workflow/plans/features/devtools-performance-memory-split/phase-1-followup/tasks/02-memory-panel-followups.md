@@ -235,3 +235,39 @@ Run the verification suite. See `docs/DEVELOPMENT.md`. All four steps must pass.
 ### Module Structure
 
 No new modules. All edits within existing files. If `format_count_with_commas` ends up shared with other widgets later, consider promoting it to `widgets/devtools/format.rs` in a future cleanup — out of scope for this task.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/memory/mod.rs` | Added `vm_connected` and `connection_status` fields; widened `new()` constructor; added `render_disconnected()` helper mirroring Performance panel; replaced manual `Rect` arithmetic with `Layout::vertical`; renamed `format_number` to `format_count_with_commas` with proper doc comment; added Phase-2 rationale comments to `#[allow(dead_code)]` fields; updated imports |
+| `crates/fdemon-tui/src/widgets/devtools/memory/table.rs` | Updated call site from `format_number` to `format_count_with_commas` |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Updated `DevToolsPanel::Memory` arm to capture and pass `vm_connected` and `connection_status` to `MemoryPanel::new`; expanded `test_tab_bar_shows_all_panels` to assert all four panel labels (Memory, Network) and removed obsolete negative "Layout" check |
+| `crates/fdemon-tui/src/widgets/devtools/memory/tests.rs` | Added `VmConnectionStatus` import; updated all existing `MemoryPanel::new` calls to widened 4-arg signature; set `monitoring_active = true` on states that test connected-path rendering; added `memory_panel_renders_disconnected_state_when_vm_unavailable` test; added `format_count_with_commas_produces_comma_separated_output` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Disconnected guard before compact summary**: The `render_disconnected` guard fires before the height-based compact summary path (`area.height < MIN_CHART_HEIGHT`). This matches the Performance panel behavior exactly — a disconnected state is shown regardless of terminal size.
+
+2. **Existing tests updated with `monitoring_active = true`**: Tests that previously rendered chart/table content relied on the panel proceeding without checking `monitoring_active`. Those tests now explicitly set the flag to maintain test intent (connected + monitoring active = chart renders).
+
+3. **Clippy `is_multiple_of` suggestion applied**: The `(bytes.len() - i) % 3 == 0` pattern was replaced with `(bytes.len() - i).is_multiple_of(3)` per clippy's suggestion, keeping the implementation idiomatic.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-tui` - Passed (1113 tests)
+- `cargo test --workspace` - Passed (all suites)
+- `cargo clippy --workspace` - Passed (no warnings)
+- `cargo fmt --all` - Applied and verified clean
+
+### Risks/Limitations
+
+1. **No risks identified**: All changes are contained within the memory widget tree and devtools mod with no impact on other subsystems.

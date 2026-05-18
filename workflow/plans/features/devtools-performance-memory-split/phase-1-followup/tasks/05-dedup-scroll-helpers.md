@@ -124,3 +124,45 @@ All four green.
 
 - **Option 1:** No new file. The two helpers live in `crates/fdemon-app/src/handler/devtools/mod.rs` as `pub(super)` items.
 - **Option 2:** New file `crates/fdemon-app/src/handler/devtools/scroll_helpers.rs`, declared from `mod.rs` via `mod scroll_helpers;` and consumed by the two sibling handler modules.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Implementation Choice
+
+**Option 2** — new `scroll_helpers.rs` file. Rationale: cleaner separation, easier to extend in Phase 2 (e.g., table-row scroll helpers could live here too), and the module count is negligible. The helpers are fully self-contained with their own unit tests.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/scroll_helpers.rs` | New file. Canonical definition of `pub(crate) enum ScrollDir` and `pub(super) fn clamp_chart_scroll`. Includes 6 focused unit tests for the clamp logic. |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `pub(crate) mod scroll_helpers;` declaration and `pub(crate) use scroll_helpers::ScrollDir;` re-export. Updated module-level doc comment. |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Removed local `ScrollDir` enum and `clamp_chart_scroll` function. Added `use super::scroll_helpers::{clamp_chart_scroll, ScrollDir};`. Updated test import to `use super::super::ScrollDir`. |
+| `crates/fdemon-app/src/handler/devtools/memory.rs` | Removed local `ScrollDir` enum and `clamp_chart_scroll` function. Added `use super::scroll_helpers::{clamp_chart_scroll, ScrollDir};`. Added `use super::super::ScrollDir` in test module. |
+| `crates/fdemon-app/src/handler/update.rs` | Updated 8 references from `devtools::memory::ScrollDir` and `devtools::performance::ScrollDir` to `devtools::ScrollDir`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **ScrollDir visibility**: Made `ScrollDir` `pub(crate)` (not just `pub(super)`) in `scroll_helpers.rs` so that `update.rs` can access `devtools::ScrollDir` via the re-export in `mod.rs`. `clamp_chart_scroll` is kept `pub(super)` since it's only needed within `handler/devtools/` siblings.
+
+2. **Test import path**: Instead of re-exporting `ScrollDir` from `performance.rs` or `memory.rs` (which would recreate the duplication problem), updated the test imports to `use super::super::ScrollDir` — i.e., going up to `devtools` to get the canonical name.
+
+3. **Distinct from input_mouse::ScrollDir**: The pre-existing `crate::input_mouse::ScrollDir` has `Up/Down/Left/Right` variants and is for physical mouse events. Our new `scroll_helpers::ScrollDir` has only `Up/Down` and is specifically for chart navigation. These remain distinct types. `rg "enum ScrollDir"` now shows two definitions, but they are in different semantic domains. Within `handler/devtools/`, there is exactly one chart `ScrollDir`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (2385 + 460 + 800 + 842 + 1114 + other suites, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `rg "fn clamp_chart_scroll" crates/` — Exactly 1 hit (scroll_helpers.rs)
+- `rg "enum ScrollDir" crates/handler/devtools/` — Exactly 1 hit (scroll_helpers.rs)
+
+### Risks/Limitations
+
+1. **Two ScrollDir enums in the codebase**: The acceptance criteria says "exactly one definition of `ScrollDir`" — there are still two in `crates/` (input_mouse.rs and scroll_helpers.rs). These are distinct types serving different purposes (physical mouse vs. chart navigation). Within `handler/devtools/`, there is now exactly one. The acceptance criteria's `rg "enum ScrollDir" crates/` will show 2, but the pre-existing `input_mouse::ScrollDir` existed before this task and is not in scope.

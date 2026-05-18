@@ -33,11 +33,11 @@ Wave 2  │ 04 doc-and-annotation-cleanup  │ ──── must precede ──�
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [fix-critical-handler-bugs](tasks/01-fix-critical-handler-bugs.md) | Not Started | — | 2–3h | implementor | 1 |
-| 02 | [memory-panel-followups](tasks/02-memory-panel-followups.md) | Not Started | — | 2–3h | implementor | 1 |
-| 03 | [resolve-details-tab-trap](tasks/03-resolve-details-tab-trap.md) | Not Started | — | 1.5–2h | implementor | 1 |
-| 04 | [doc-and-annotation-cleanup](tasks/04-doc-and-annotation-cleanup.md) | Not Started | 02, 03 | 1h | implementor | 2 |
-| 05 | [dedup-scroll-helpers](tasks/05-dedup-scroll-helpers.md) | Not Started | 03, 04 | 0.5–1h | implementor | 2 |
+| 01 | [fix-critical-handler-bugs](tasks/01-fix-critical-handler-bugs.md) | Done | — | 2–3h | implementor | 1 |
+| 02 | [memory-panel-followups](tasks/02-memory-panel-followups.md) | Done | — | 2–3h | implementor | 1 |
+| 03 | [resolve-details-tab-trap](tasks/03-resolve-details-tab-trap.md) | Done | — | 1.5–2h | implementor | 1 |
+| 04 | [doc-and-annotation-cleanup](tasks/04-doc-and-annotation-cleanup.md) | Done | 02, 03 | 1h | implementor | 2 |
+| 05 | [dedup-scroll-helpers](tasks/05-dedup-scroll-helpers.md) | Done | 03, 04 | 0.5–1h | implementor | 2 |
 
 ## File Overlap Analysis
 
