@@ -146,6 +146,34 @@ fn properties_tab_keeps_layout_preview() {
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` | Replaced Phase 1 placeholder with full property list renderer (loading / error / empty / populated states); added 7 new Phase 2 tests; kept layout preview unchanged |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Added `filter_and_sort_by_level` shared helper (pub(super)); added `DiagnosticsNode` import |
+
+### Notable Decisions/Tradeoffs
+
+1. **Shared helper in `details/mod.rs`**: Added `filter_and_sort_by_level` as `pub(super)` to `details/mod.rs` as the task specified. Task 07 (`render_object_tab`) is still a stub — when it gets populated in Phase 2 it can import and use this helper instead of duplicating the logic.
+
+2. **Layout split change**: Renamed `PROPERTY_LIST_HEIGHT` (fixed `Length(3)`) to `MIN_PROPERTY_LIST_HEIGHT: u16 = 3` (minimum) and changed the constraint from `Constraint::Length` to `Constraint::Min`. The property list now grows proportionally with available space — important for widgets with many properties.
+
+3. **`render_muted_centered` fallback**: The empty-state message distinguishes between "has a node selected" (→ "No properties for this widget.") and "no node selected" (→ "Select a widget to see properties.") using `details_node_id.is_some()`.
+
+4. **Struct literal syntax in tests**: All Phase 2 tests use `InspectorState { field: val, ..Default::default() }` to satisfy the `clippy::field_reassign_with_default` lint (-D warnings).
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib -- devtools::inspector::details::properties_tab` — PASS (11 tests)
+- `cargo test --workspace --lib` — PASS (1097 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+- `cargo fmt --all -- --check` — PASS
+
+### Risks/Limitations
+
+1. **Scroll not implemented**: The property list does not scroll — rows beyond `area.height` are simply clipped. Phase 3 polish can add a `ListState`-driven scroll if needed.
+2. **Task 07 coordination**: `render_object_tab.rs` is still a stub ("Coming soon — Phase 2"). When task 09 (flex explorer) or a future task populates the Render Object tab, the implementor should import `filter_and_sort_by_level` from `super` rather than inlining a duplicate.

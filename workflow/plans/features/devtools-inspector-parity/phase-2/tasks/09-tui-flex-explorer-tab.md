@@ -256,6 +256,40 @@ fn flex_explorer_too_small_fallback() {
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` | Full replacement: removed "Coming soon" stub and `render_centered_text` helper; implemented real ASCII flex visualization consuming `LayoutInfo` fields. Added 11 unit tests. |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Updated `flex_explorer_tab::render` call to pass `self.inspector_state`; updated outdated `details_panel_shows_coming_soon_for_flex_explorer_tab` test to reflect the new no-data state. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Function signature**: Changed `render(area, buf)` → `render(area, buf, inspector_state)` as required to access layout/loading/error state. Updated the caller in `details/mod.rs` accordingly.
+
+2. **Equal-height stacked boxes (vertical Column)**: Per constraint §7.1, each child box is exactly `CHILD_BOX_HEIGHT=4` cells tall regardless of flex factor. Labels carry all semantic information.
+
+3. **Row (Horizontal) layout**: Implemented with equal-width columns, horizontal `◀ Main Axis (align) ▶` strip on the bottom, truncating child names if needed. The horizontal case is complete but labels are shorter to fit narrower box widths.
+
+4. **`#[allow(clippy::too_many_arguments)]` on `draw_box_line`**: The function takes 8 args (x, y, width, 3 border chars, style). Refactoring to a struct would add unnecessary complexity for a purely internal drawing primitive.
+
+5. **Cross-axis label in outer border title**: The bordered block uses `" Cross Axis: <alignment> "` as the title, meeting acceptance criterion #3 without modifying the outer block border structure.
+
+6. **Footer reuses `format_constraint_value`** from `layout_panel.rs` via the existing `pub(in crate::widgets::devtools::inspector)` visibility.
+
+### Testing Performed
+
+- `cargo clippy -p fdemon-tui` — 0 warnings, 0 errors (after fixes)
+- `cargo fmt --all -- --check` — clean
+- `cargo test -p fdemon-tui --lib` — 1098 passed, 0 failed
+- `cargo test --workspace --lib` — 5545 passed across all crates, 0 failed
+- `cargo check -p fdemon-tui` — clean
+
+### Risks/Limitations
+
+1. **Horizontal (Row) truncation**: At narrow widths, child names in Row layout are truncated to fit equal-width columns. This is acceptable per the task note ("accept that wider terminals are needed for legibility").
+2. **`parent_offset` not visualized**: Per task note, `parent_offset` from `FlexChild` is intentionally not rendered. Phase 3 polish can add explicit offset labels.
+3. **`inspector_state` parameter is unused** (only `layout` fields are consumed): The parameter is accepted to allow future expansion (e.g., selected child highlighting), and the `let _ = inspector_state;` is used to avoid unused-variable lint.

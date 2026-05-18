@@ -346,6 +346,37 @@ The helpers `make_state_with_inspector_open`, `make_state_with_selected_widget`,
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `extra_actions: Vec<UpdateAction>` to `UpdateResult`; added `UpdateResult::actions_vec(Vec<UpdateAction>)` constructor; added `actions() -> Vec<UpdateAction>` accessor; updated all direct struct literal initializers |
+| `crates/fdemon-app/src/process.rs` | Updated message processing loop to drain both `action` and `extra_actions` via a combined iterator; all actions share the same hydration + dispatch path |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Added three handler functions (`handle_inspector_properties_fetched`, `handle_inspector_properties_fetch_failed`, `handle_inspector_properties_fetch_timeout`); extended `handle_open_details` to dispatch both `FetchInspectorProperties` and `FetchLayoutData` via `UpdateResult::actions_vec`; updated two existing Phase 1 tests to use `result.actions()` instead of `result.action`; added 8 new tests for the properties handlers |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Re-exported the three new handler functions; added `extra_actions: Vec::new()` to one direct struct literal in `handle_enter_devtools_mode` |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced stub match arms for the three `DevToolsInspectorProperties*` messages with real handler dispatch; added `extra_actions: Vec::new()` to two direct struct literal sites |
+| `crates/fdemon-app/src/handler/flutter_version/navigation.rs` | Added `extra_actions: Vec::new()` to one direct struct literal site |
+
+### Notable Decisions/Tradeoffs
+
+1. **Multi-action approach — `extra_actions: Vec<UpdateAction>` on `UpdateResult`**: The task noted two options: extend `UpdateResult` to support multiple actions, or use a chain message. Chose option (a) — extend `UpdateResult` — because it keeps the dispatch co-located with the state mutations in `handle_open_details` (no split across two TEA cycles), is easier to test (one `result.actions()` call), and avoids the nuance that a `RequestLayoutData` chain message goes through the `vm_connected` check in `update.rs` which would bypass the state-setting done inside `handle_open_details`. The `extra_actions` field is `pub(crate)` so it doesn't escape to external consumers. The existing `action: Option<UpdateAction>` field is preserved for full backward compatibility; `actions_vec()` packs the first element into `action` so all existing `result.action.is_some()` / `result.action.is_none()` tests on paths that return single-action results continue to work unchanged.
+
+2. **Stale-response guard — `pending_properties_node_id` vs `selected_value_id()`**: The layout handler uses a two-part check comparing `pending_node_id` against `selected_value_id()`. For properties the guard compares `pending_properties_node_id` against the `node_id` argument of the incoming response. This is the pattern described in the task. The semantic is: "is the incoming response for the same widget we last asked for?" — if not, discard. This is correct for properties because unlike layout (which auto-fetches on navigation), properties are only fetched when Details opens, so the pending ID is the authoritative source of truth.
+
+3. **`handle_open_details` borrow splitting**: The new implementation uses two explicit `{}` blocks to scope the mutable borrows of `inspector` (first for properties fetch decision, then for layout fetch decision). This is necessary because `state.session_manager.selected()` must be called between them, and Rust's borrow checker requires the `inspector` borrow to end before accessing other fields of `state`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2362 fdemon-app lib tests + all other crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`UpdateResult` struct literal sites**: Four places across the codebase directly construct `UpdateResult { message, action }` by name. All four were updated to include `extra_actions: Vec::new()`. If new code is added in future that constructs `UpdateResult` by struct literal it must include the new field — but the compiler will catch this at compile time (the struct is non-exhaustive from a literal perspective since `extra_actions` has no default via `..Default::default()` unless `Default` is derived). Since `#[derive(Default)]` is present and `Vec::new()` is the default, callers could use `UpdateResult { ..Default::default() }` for partial construction.
+
+2. **Two existing `handle_open_details` tests updated**: `handle_open_details_dispatches_fetch_layout_when_data_stale` and `handle_open_details_skips_fetch_when_data_already_cached` were updated to use `result.actions()` since the function now potentially returns two actions. The Phase 1 contract is preserved: layout IS dispatched when stale, and is NOT dispatched when cached — the assertions were rewritten to check the actions collection rather than the single `result.action`.

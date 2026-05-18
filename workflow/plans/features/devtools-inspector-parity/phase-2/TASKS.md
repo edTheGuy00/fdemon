@@ -63,16 +63,16 @@ Cf. parent plan at `workflow/plans/features/devtools-inspector-parity/PLAN.md` �
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-core-flex-and-property-types](tasks/01-core-flex-and-property-types.md) | Not Started | — | 3–4h | `crates/fdemon-core/src/widget_tree.rs` |
-| 02 | [02-daemon-properties-rpc-primitives](tasks/02-daemon-properties-rpc-primitives.md) | Not Started | — | 2–3h | `crates/fdemon-daemon/src/vm_service/extensions/mod.rs`, `crates/fdemon-daemon/src/vm_service/extensions/properties.rs` **NEW** |
-| 03 | [03-app-properties-action-and-state](tasks/03-app-properties-action-and-state.md) | Not Started | — | 3–4h | `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/message.rs`, `crates/fdemon-app/src/process.rs`, `crates/fdemon-app/src/state.rs` |
-| 04 | [04-daemon-flex-extraction](tasks/04-daemon-flex-extraction.md) | Not Started | 01 | 3–5h | `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` |
-| 05 | [05-app-spawn-properties-task](tasks/05-app-spawn-properties-task.md) | Not Started | 02, 03 | 3–4h | `crates/fdemon-app/src/actions/mod.rs`, `crates/fdemon-app/src/actions/inspector/mod.rs` |
-| 06 | [06-app-handlers-and-open-details](tasks/06-app-handlers-and-open-details.md) | Not Started | 03 | 3–4h | `crates/fdemon-app/src/handler/update.rs`, `crates/fdemon-app/src/handler/devtools/inspector.rs` |
-| 07 | [07-tui-render-object-tab](tasks/07-tui-render-object-tab.md) | Not Started | 06 | 3–4h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/render_object_tab.rs` |
-| 08 | [08-tui-properties-tab-population](tasks/08-tui-properties-tab-population.md) | Not Started | 06 | 2–3h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` |
-| 09 | [09-tui-flex-explorer-tab](tasks/09-tui-flex-explorer-tab.md) | Not Started | 04 | 3–5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` |
-| 10 | [10-docs-update](tasks/10-docs-update.md) | Not Started | 01–09 | 1–2h | `docs/ARCHITECTURE.md` |
+| 01 | [01-core-flex-and-property-types](tasks/01-core-flex-and-property-types.md) | Done ✅ | — | 3–4h | `crates/fdemon-core/src/widget_tree.rs` |
+| 02 | [02-daemon-properties-rpc-primitives](tasks/02-daemon-properties-rpc-primitives.md) | Done ✅ | — | 2–3h | `crates/fdemon-daemon/src/vm_service/extensions/mod.rs`, `crates/fdemon-daemon/src/vm_service/extensions/properties.rs` **NEW** |
+| 03 | [03-app-properties-action-and-state](tasks/03-app-properties-action-and-state.md) | Done ⚠️ | — | 3–4h | `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/message.rs`, `crates/fdemon-app/src/process.rs`, `crates/fdemon-app/src/state.rs` |
+| 04 | [04-daemon-flex-extraction](tasks/04-daemon-flex-extraction.md) | Done ✅ | 01 | 3–5h | `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` |
+| 05 | [05-app-spawn-properties-task](tasks/05-app-spawn-properties-task.md) | Done ⚠️ | 02, 03 | 3–4h | `crates/fdemon-app/src/actions/mod.rs`, `crates/fdemon-app/src/actions/inspector/mod.rs` |
+| 06 | [06-app-handlers-and-open-details](tasks/06-app-handlers-and-open-details.md) | Done ✅ | 03 | 3–4h | `crates/fdemon-app/src/handler/update.rs`, `crates/fdemon-app/src/handler/devtools/inspector.rs` |
+| 07 | [07-tui-render-object-tab](tasks/07-tui-render-object-tab.md) | Done ⚠️ | 06 | 3–4h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/render_object_tab.rs` |
+| 08 | [08-tui-properties-tab-population](tasks/08-tui-properties-tab-population.md) | Done ✅ | 06 | 2–3h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` |
+| 09 | [09-tui-flex-explorer-tab](tasks/09-tui-flex-explorer-tab.md) | Done ⚠️ | 04 | 3–5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` |
+| 10 | [10-docs-update](tasks/10-docs-update.md) | Done ✅ | 01–09 | 1–2h | `docs/ARCHITECTURE.md` |
 
 ## Wave Schedule
 
@@ -115,6 +115,25 @@ Cf. parent plan at `workflow/plans/features/devtools-inspector-parity/PLAN.md` �
 | W3 | 08 + 09 | None | Parallel (worktree) |
 
 No write-file collisions detected within any wave. All wave-peer tasks can be dispatched concurrently in isolated worktrees.
+
+### Wave 1 Validation Notes
+
+- **Task 03 CONCERN (resolved in task 05):** `hydrate_fetch_inspector_properties` originally always returned `Some(FetchInspectorProperties { vm_handle: handle, .. })` even when `handle` was `None`, making the no-handle fallback unreachable. Task 05 fixed this by switching to the `?` operator so the function returns `None` when the handle is missing, routing through `process_message`'s existing failure-emit branch.
+
+### Wave 2 Validation Notes
+
+- **Task 05 CONCERN (accepted as test-infra debt):** 3 of 5 named tests in the task spec (`spawn_properties_sends_fetched_message_on_success`, `spawn_properties_recurses_into_render_object_property`, `spawn_properties_skips_sub_fetch_on_error_but_completes_widget_call`) cannot be implemented because `VmRequestHandle::new_for_test` drops the receiver, making `call_extension` always return `Err`. The 2 implemented tests cover the error and timeout paths. The happy-path tests would require either a mock WebSocket server or a trait-based abstraction over `VmRequestHandle` — same limitation already accepted for `spawn_fetch_layout_data`. Future test-infra work could backfill these.
+- **Task 06 scope expansion (accepted as sound design):** The implementor extended `UpdateResult` with `extra_actions: Vec<UpdateAction>` (constructors `actions_vec`, accessor `actions()`) to support multi-action dispatch from `handle_open_details`, which now dispatches both `FetchLayoutData` and `FetchInspectorProperties` in one call. Touches `handler/mod.rs`, `process.rs`, and the four direct struct-literal sites in `handler/flutter_version/navigation.rs` etc. Backward-compatible — `result.action` still works for all single-action callers. `extra_actions` is `pub(crate)`, preventing leakage.
+
+### Wave 3 Validation Notes
+
+- **Tasks 07 + 08 + 09 all modified `details/mod.rs` (not in declared write scope).** Task 07 changed the render-object dispatch from `render_object_tab::render(...)` to `self.render_render_object_tab(...)`. Task 08 added the `pub(super) fn filter_and_sort_by_level` shared helper (explicitly mandated by the task plan text). Task 09 updated the flex_explorer dispatch + stale test. All three changes merged cleanly via git auto-merge with no manual conflict resolution; 1,112 workspace unit tests pass on the merged state.
+- **Task 09 CONCERN (residual minor bug):** In `flex_explorer_tab.rs`'s top-level `render()`, the "Terminal too small" fallback passes `buf.area` instead of `area` to `render_muted_centered`. This mis-positions the message into the full buffer center rather than the content pane when the terminal is resized below `MIN_FLEX_VIZ_HEIGHT` / `MIN_FLEX_VIZ_WIDTH`. Tests pass because the test harness sets `buf.area == area`. One-character fix: replace `buf.area` with `area`. Tracked as a follow-up; does not block Phase 2 completion.
+- **Task 09 minor cleanup item:** `render_flex_viz` takes an `inspector_state: &InspectorState` parameter that is silenced with `let _ = inspector_state;`. Cosmetic cleanup item — either remove the parameter or restructure to use it.
+
+### Post-merge Clippy Fix
+
+The full quality gate run after merging task 10 surfaced 26 `field_reassign_with_default` clippy violations in `render_object_tab.rs` (18 sites) and `flex_explorer_tab.rs` (8 sites) test modules — Wave 3 implementors used `let mut state = InspectorState::default(); state.x = ...;` instead of struct-literal `InspectorState { x: ..., ..Default::default() }`. Validators did not catch this because they read code, not run clippy. A follow-up implementor mechanically refactored all 26 sites to struct-literal init; quality gate now passes clean (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy --workspace --all-targets -- -D warnings`).
 
 ## Cross-Cutting Constraints
 

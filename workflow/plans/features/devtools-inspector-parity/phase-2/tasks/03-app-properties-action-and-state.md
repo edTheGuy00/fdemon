@@ -215,6 +215,37 @@ For the hydration: add an integration-style test (or a `process.rs`-local test i
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `FetchInspectorProperties` variant after `FetchLayoutData` |
+| `crates/fdemon-app/src/message.rs` | Added three new variants: `DevToolsInspectorPropertiesFetched`, `DevToolsInspectorPropertiesFetchFailed`, `DevToolsInspectorPropertiesFetchTimeout` |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub match arm for the three new Message variants (returns `UpdateResult::none()`) |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_fetch_inspector_properties` function + wired into hydration chain + fallback dispatch for no-handle case |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `FetchInspectorProperties` match arm (stub warning log; task 05 will implement spawn) |
+| `crates/fdemon-app/src/state.rs` | Added `last_fetched_properties_node_id` and `pending_properties_node_id` fields, initialized in `Default`, cleared in `reset()` and `reset_details_and_groups()`, plus two unit tests |
+| `crates/fdemon-tui/src/runner.rs` | Added `FetchInspectorProperties` to non-runner variants list in `handle_runner_actions` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`hydrate_fetch_inspector_properties` returns `Some` even when `vm_handle` is still `None`**: Unlike `hydrate_fetch_widget_tree` which returns `None` (discards) when no handle is available, the properties hydration follows the lighter `hydrate_fetch_layout_data` pattern — it returns `Some` with `vm_handle: None`. The fallback dispatch in `process_message`'s no-handle branch then emits `DevToolsInspectorPropertiesFetchFailed`. This ensures the loading spinner is never stuck because the `handle_action` side already logs a warning for the no-handle case. The task spec requested this specific pattern.
+
+2. **Stub in `actions/mod.rs`**: Added a warn-log stub arm for `FetchInspectorProperties` in `handle_action` so the compiler is satisfied. Task 05 will replace this with the actual `spawn_fetch_inspector_properties` call.
+
+3. **Clippy field_reassign_with_default**: Test initialization was refactored to use struct initializer syntax (`InspectorState { field: val, ..Default::default() }`) to satisfy the `-D warnings` clippy gate.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites green, including new `reset_clears_properties_cache_fields` and `reset_details_and_groups_clears_properties_cache_fields` tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Stub arms**: `update.rs` has a TODO stub returning `UpdateResult::none()` for the three new Message variants. Task 06 must replace this. Until then, received properties responses are silently dropped (properties tab will show empty).
+2. **`actions/mod.rs` stub**: `FetchInspectorProperties` in `handle_action` logs a warning and does nothing. Task 05 implements the spawn task.

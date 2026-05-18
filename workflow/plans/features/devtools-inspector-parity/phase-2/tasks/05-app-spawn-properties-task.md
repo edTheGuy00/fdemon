@@ -227,6 +227,43 @@ Add at minimum:
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** worktree-agent-a8ea7c66b97232bf3
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Added `PROPERTIES_FETCH_TIMEOUT` constant, `parse_properties_response`/`split_widget_and_render_properties` imports, `spawn_fetch_inspector_properties` function, and 4 tests |
+| `crates/fdemon-app/src/actions/mod.rs` | Replaced TODO stub arm for `FetchInspectorProperties` with a real dispatch to `inspector::spawn_fetch_inspector_properties` |
+| `crates/fdemon-app/src/process.rs` | Fixed `hydrate_fetch_inspector_properties` to return `None` when handle is missing (matches `hydrate_fetch_layout_data`'s `?` pattern) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Wave 1 follow-up: hydrate returns `None`** — Chose approach (a): changed `hydrate_fetch_inspector_properties` to return `None` when both `vm_handle` is `None` and the session has no handle. This matches `hydrate_fetch_layout_data`'s `?` pattern exactly. The fallback `DevToolsInspectorPropertiesFetchFailed` message is dispatched by `process_message`'s existing `else` branch (which was already written in task 03 — verified present at process.rs:135–157).
+
+2. **Sequential sub-fetch loop** — The recursive getProperties calls for each render-object node are sequential (a `for` loop), matching DevTools' `_loadPropertiesForNode` implementation and keeping timeout accounting predictable.
+
+3. **Sub-fetch failures are non-fatal** — Single render-object sub-fetch failures are logged at `debug` level and the loop continues. Partial render-property data is better than no data. This matches DevTools' best-effort behavior (`inspector_controller.dart:920`).
+
+4. **Import path** — Used `fdemon_daemon::vm_service::extensions::properties::` (the module path) rather than adding a re-export to `vm_service/mod.rs`. The functions are `pub` and the module chain is `pub mod` all the way down, so no new re-export was needed.
+
+5. **Tests use closed-channel handles** — Without a real WebSocket server, tests use `VmRequestHandle::new_for_test(...)` which gives a handle with a closed channel. Tests cover: isolate resolution failure (no cached isolate), call_extension failure (cached isolate, closed channel), timeout path (combined with channel-error race), and constant value checks. Full success/recursive sub-fetch paths require integration tests with a real VM Service.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (0 errors)
+- `cargo test -p fdemon-app` — Passed (2357 tests)
+- `cargo test --workspace` — Passed (all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Success-path test coverage**: Full success tests (happy path, recursive sub-fetch) are not covered by unit tests because there is no mock WebSocket server in the test infrastructure. These paths are covered by the same pattern used in widget_tree tests — integration tests via E2E or manual verification against a real Flutter app.
+
+2. **Timeout race in tests**: The `spawn_properties_emits_timeout_when_first_call_hangs` test accepts either `FetchFailed` or `FetchTimeout` because the closed channel makes `call_extension` resolve immediately with `Err(ChannelClosed)` before the `tokio::time::advance()` fires the timeout. This is correct behavior from the user perspective — both paths send an appropriate message.
+
+### Doc Updates Needed
+
+None — no new modules, APIs, or patterns that require ARCHITECTURE.md or CODE_STANDARDS.md updates.

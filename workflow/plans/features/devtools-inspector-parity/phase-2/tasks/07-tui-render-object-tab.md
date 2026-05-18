@@ -217,6 +217,37 @@ fn render_object_tab_filters_hidden_level() {
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** worktree-agent-a24489ac62fd04712
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/render_object_tab.rs` | Full rewrite: replaced Phase 1 stub with `impl WidgetInspector` method `render_render_object_tab`. Implements all 5 render states (no node, loading, error, empty, table). Added `filtered_and_sorted`, `truncate_to`, `render_property_table`, `render_property_row`, `render_muted_text`, `render_error` helpers. Added 12 unit tests covering all acceptance criteria. |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Updated `render_details_panel` dispatch to call `self.render_render_object_tab(...)` instead of the old free function. Updated the now-stale "Coming soon" test to reflect Phase 2 behavior. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Method vs free function**: Implemented as `impl WidgetInspector` method (mirroring `properties_tab.rs`) so the renderer has access to `self.inspector_state` without an extra parameter. The call site in `details/mod.rs` is clean: `self.render_render_object_tab(content_area, buf)`.
+
+2. **`palette::TEXT` → `palette::TEXT_PRIMARY`**: The task description mentions `palette::TEXT` but the actual palette only defines `TEXT_PRIMARY`, `TEXT_SECONDARY`, `TEXT_MUTED`, and `TEXT_BRIGHT`. Used `TEXT_PRIMARY` for normal rows.
+
+3. **`render_centered_text` helper removed**: The Phase 1 stub's `render_centered_text` helper (acceptance criterion #7) is gone from `render_object_tab.rs`. Replaced by `render_muted_text` (centred) for loading/empty states.
+
+4. **Overflow indicator**: Rather than silently clipping, the last visible row shows `"... +N more (resize window or expand details to see)"` when properties exceed the available height (Phase 3 scroll is out of scope).
+
+5. **Divider only when default section exists**: The muted `─` divider row is drawn only when there is at least one `level == "fine"` property, matching DevTools visual convention.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed (no errors)
+- `cargo clippy -p fdemon-tui` — Passed (no warnings)
+- `cargo fmt --all` — Applied (minor formatting adjustments)
+- `cargo test -p fdemon-tui --lib render_object` — Passed (12 tests)
+- `cargo test --workspace --lib` — Passed (5,546 tests total, 0 failures)
+
+### Risks/Limitations
+
+1. **Phase 3 scrolling**: When property count exceeds visible height, only the first N rows are shown plus an overflow indicator. Phase 3 will add proper scroll state.
+2. **Name column from `description` fallback**: When `node.name` is `None`, the name column falls back to `node.description`. This can produce awkward display for nodes where description is already the full value (rare for render-object property nodes).

@@ -290,6 +290,33 @@ fn property_type_passes_through_clean_strings() {
 
 ## Completion Summary
 
-**Status:** Pending
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
-(To be filled in by the implementor.)
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added `FlexFit`, `Axis`, `MainAxisAlignment`, `CrossAxisAlignment`, `MainAxisSize` enums; added `FlexChild` struct; extended `LayoutInfo` with 5 new fields; wired ANSI sanitization for `property_type`; added 15 new unit tests |
+| `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` | Extended `extract_layout_info` struct literal to include the 5 new `LayoutInfo` fields (all `None`/empty pending task 04) |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/properties_tab.rs` | Extended `LayoutInfo` struct literal in test helper to include new fields |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/layout_panel_tests.rs` | Extended `LayoutInfo` struct literal in test helper to include new fields |
+
+### Notable Decisions/Tradeoffs
+
+1. **`children: Vec<FlexChild>` uses `#[serde(skip)]` on `LayoutInfo`**: `FlexChild` intentionally has no `Serialize`/`Deserialize` derives (per task note), so the `children` field would prevent `LayoutInfo` from auto-deriving `Deserialize`. Using `#[serde(skip)]` keeps `LayoutInfo`'s existing serde derives intact while allowing task 04 to populate `children` manually.
+2. **Propagated `None`/empty to existing callers**: Two `LayoutInfo` struct literals in daemon and two in tui tests needed new fields added. All set to `None`/empty since task 04 handles real population.
+3. **Rust unicode escape in test**: The `serde_json::json!` macro uses Rust string syntax, so `` must be written as `\u{001b}` — matched the pattern used in task specification but corrected to valid Rust syntax.
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-core` - Passed (438 tests, 15 new)
+- `cargo test --workspace --lib` - Passed (1091 tests)
+- `cargo clippy --workspace` - Passed (no errors)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Task 04 dependency**: The four flex alignment/direction fields on `LayoutInfo` and `FlexChild` population are left `None`/empty until task 04 (daemon flex extraction) wires the real parsing from the `getLayoutExplorerNode` response.
