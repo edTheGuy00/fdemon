@@ -114,23 +114,29 @@ Choose Option A. Update the test docstring/comment to explain the change, and re
 
 ## Completion Summary
 
-**Status:** Pending
-**Branch:** _to be filled_
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | _to be filled_ |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Added `debug_assert!` before dispatch_tab calculation; replaced `details_panel_falls_back_to_properties_when_active_tab_hidden` test with `details_panel_renders_active_tab_when_visible` (happy-path test, Option A). |
 
 ### Notable Decisions/Tradeoffs
 
-1. _to be filled_
+1. **Option A (test replacement)**: The old fallback test explicitly set `details_tab = RenderObject` with no `render_properties`, which is exactly the bug class the `debug_assert!` is designed to catch. Keeping the old test would cause it to panic in debug builds, defeating the purpose of the assert. Replaced with a happy-path test that validates the invariant-compliant path — `details_tab` in `visible_tabs()` — while the comment documents why the old scenario is now treated as a handler bug, not a renderer concern.
+
+2. **Assert placement**: The `debug_assert!` is placed after `visible_tabs` is computed (since both the assert and the dispatch logic need it) and before the `dispatch_tab` calculation. The existing fallback logic below is kept unchanged so release builds degrade gracefully even if the invariant is somehow violated.
 
 ### Testing Performed
 
-- _to be filled_
+- `cargo test -p fdemon-tui -- widgets::devtools::inspector::details::tests` — Passed (15 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all test suites clean, no failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 
-1. _to be filled_
+1. **No known risks**: The `debug_assert!` is compiled out in release builds, so there is zero runtime cost in production. The renderer fallback remains for end-user resilience. The assert will catch any future handler that fails to call `clamp_details_tab()` before the renderer runs.

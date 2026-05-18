@@ -276,23 +276,32 @@ fn diagnostics_node_object_id_strips_ansi_codes() {
 
 ## Completion Summary
 
-**Status:** Pending
-**Branch:** _to be filled_
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-core/src/widget_tree.rs` | _to be filled_ |
+| `crates/fdemon-core/src/widget_tree.rs` | (1) Replaced `parent_of_recursive` + `find_by_value_id` with fused `find_with_parent` / `find_with_parent_inner` DFS (M1+M2); (2) Rewrote `parent_of` as a thin shim over `find_with_parent`; (3) Rewrote `compute_details_context` to use single-pass fused walker; (4) Added per-field `///` doc comments to `DetailsContext` fields (m3); (5) Added `deserialize_with = "deserialize_sanitized_option_string"` to `object_id` field (s3); (6) Added 3 new tests |
 
 ### Notable Decisions/Tradeoffs
 
-1. _to be filled_
+1. **`find_by_value_id` deleted**: Confirmed via grep that it had no external callers (it was introduced as a private helper exclusively for `compute_details_context`). Deleted rather than kept as a shim to avoid dead-code noise.
+2. **`parent_of_recursive` deleted**: Its logic is fully subsumed by `find_with_parent_inner`. No external callers existed (it was always private).
+3. **`parent_of` public API preserved**: Reimplemented as `find_with_parent(root, target_value_id).1` — same signature, same behavior, including `None` for root match. Existing tests (`parent_of_returns_none_for_root_match`, etc.) pass unchanged.
+4. **`object_id` rename**: The `#[serde(rename_all = "camelCase")]` attribute on `DiagnosticsNode` already maps `object_id` → `objectId`, so no explicit `rename` attribute was needed in the new `#[serde(default, deserialize_with = ...)]` annotation.
+5. **Depth parameter in `find_with_parent_inner` starts at 0**: Consistent with the pattern used in every other bounded walker in this file (`visible_node_count_inner`, `walk_node`). The root's direct children are visited at `depth == 0`, so a tree with `MAX_TREE_WALK_DEPTH + 2` wrapper layers has the target just out of reach.
 
 ### Testing Performed
 
-- _to be filled_
+- `cargo check -p fdemon-core` - Passed
+- `cargo test -p fdemon-core` - Passed (460 tests)
+- `cargo test --workspace` - Passed (all crates, no failures)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- New tests: `find_with_parent_returns_none_at_max_depth`, `compute_details_context_walks_tree_once`, `diagnostics_node_object_id_strips_ansi_codes` — all pass
 
 ### Risks/Limitations
 
-1. _to be filled_
+1. **Depth-cap behavior at exactly `MAX_TREE_WALK_DEPTH`**: A child at depth exactly `MAX_TREE_WALK_DEPTH` (not `> MAX_TREE_WALK_DEPTH`) is still found. This matches the inclusive-at-cap behavior of other walkers in the file and is intentional.

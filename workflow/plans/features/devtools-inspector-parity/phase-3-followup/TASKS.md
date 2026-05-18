@@ -47,11 +47,11 @@ Covers the **2 MAJOR + 4 MINOR + 2 NIT review findings** that need addressing be
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-core-depth-and-fuse](tasks/01-core-depth-and-fuse.md) | Pending | — | 2–3h | `crates/fdemon-core/src/widget_tree.rs` |
-| 02 | [02-handler-clamp-and-tests](tasks/02-handler-clamp-and-tests.md) | Pending | — | 2–3h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
-| 03 | [03-tui-render-assert](tasks/03-tui-render-assert.md) | Pending | — | 1h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` |
-| 04 | [04-state-cleanup-dead-code](tasks/04-state-cleanup-dead-code.md) | Pending | — | 1h | `crates/fdemon-app/src/state.rs` |
-| 05 | [05-docs-update](tasks/05-docs-update.md) | Pending | 01–04 | 1–2h | `docs/ARCHITECTURE.md` |
+| 01 | [01-core-depth-and-fuse](tasks/01-core-depth-and-fuse.md) | Done ✅ | — | 2–3h | `crates/fdemon-core/src/widget_tree.rs` |
+| 02 | [02-handler-clamp-and-tests](tasks/02-handler-clamp-and-tests.md) | Done ✅ | — | 2–3h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
+| 03 | [03-tui-render-assert](tasks/03-tui-render-assert.md) | Done ✅ | — | 1h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` |
+| 04 | [04-state-cleanup-dead-code](tasks/04-state-cleanup-dead-code.md) | Done ✅ | — | 1h | `crates/fdemon-app/src/state.rs` |
+| 05 | [05-docs-update](tasks/05-docs-update.md) | Done ✅ | 01–04 | 1–2h | `docs/ARCHITECTURE.md` |
 
 ## Wave Schedule
 

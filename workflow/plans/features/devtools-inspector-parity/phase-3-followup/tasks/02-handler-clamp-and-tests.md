@@ -161,23 +161,28 @@ Two new tests as shown above. Add them in the existing `#[cfg(test)] mod tests` 
 
 ## Completion Summary
 
-**Status:** Pending
-**Branch:** _to be filled_
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/handler/devtools/inspector.rs` | _to be filled_ |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | (s1) Added `DetailsContext` to `fdemon_core` import, removed sub-module path at line ~706; (m1) Added `inspector.clamp_details_tab()` with invariant comment before `UpdateResult::none()` in `handle_inspector_properties_fetch_timeout`; (m4) Added `handle_cycle_tab_two_visible_tabs_backward_wraps_between_properties_and_render_object` test; Added `handle_inspector_properties_fetch_timeout_does_not_disturb_visible_active_tab` test |
 
 ### Notable Decisions/Tradeoffs
 
-1. _to be filled_
+1. **Import normalization (s1)**: Added `DetailsContext` to the existing `use fdemon_core::{..., RowGroup}` import and removed the fully-qualified `fdemon_core::widget_tree::DetailsContext::default()` call. This is a pure style change with no behavioral difference.
+2. **Clamp placement (m1)**: The `clamp_details_tab()` call is placed after clearing `properties_loading` / `properties_error` / `pending_properties_node_id`, identical to the position in `fetch_failed`. Today the clamp is a no-op for timeouts because `render_properties` is not cleared by a timeout — but it locks in the invariant that every settlement path clamps.
+3. **Tests use `AppState::new()`**: The 2-tab backward cycle test and the timeout-clamp test both follow the pattern of adjacent Phase 3 tests (`handle_cycle_tab_skips_flex_explorer_when_hidden` and `properties_fetch_timeout_sets_error`) — no session is needed because these handlers operate on `devtools_view_state.inspector` fields that don't require an active session for the tested paths.
 
 ### Testing Performed
 
-- _to be filled_
+- `cargo test -p fdemon-app -- handler::devtools::inspector::tests` — PASS (102 tests, 3 new)
+- `cargo check --workspace --all-targets` — PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+- `cargo fmt --all -- --check` — PASS
 
 ### Risks/Limitations
 
-1. _to be filled_
+1. **No behavioral change**: All three changes are either invariant-preserving no-ops (m1), pure style (s1), or test additions (m4). There is no risk of behavioral regression.

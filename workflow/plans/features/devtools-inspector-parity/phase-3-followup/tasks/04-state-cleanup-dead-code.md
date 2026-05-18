@@ -98,23 +98,27 @@ If the `impl DetailsTab` block becomes empty after the deletion, remove the now-
 
 ## Completion Summary
 
-**Status:** Pending
-**Branch:** _to be filled_
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/state.rs` | _to be filled_ |
+| `crates/fdemon-app/src/state.rs` | Removed `impl DetailsTab { next, prev }` block (19 lines) and two unit tests `details_tab_next_wraps_through_three_variants` / `details_tab_prev_wraps_through_three_variants` (14 lines) |
 
 ### Notable Decisions/Tradeoffs
 
-1. _to be filled_
+1. **Grep verification first**: Confirmed zero callers of `DetailsTab::next` / `DetailsTab::prev` outside the two deleted tests before making any changes. The `.next()` / `.prev()` calls found in handler modules are on unrelated types (`PerfFocusSection`, launch dialog fields, URL split iterators).
+2. **No orphan `impl` block**: The `impl DetailsTab` block contained only `next` and `prev`, so the entire block was removed cleanly.
 
 ### Testing Performed
 
-- _to be filled_
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test result lines show 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
 
 ### Risks/Limitations
 
-1. _to be filled_
+1. **None**: Pure dead-code deletion with confirmed zero callers. Low risk as described in the task.
