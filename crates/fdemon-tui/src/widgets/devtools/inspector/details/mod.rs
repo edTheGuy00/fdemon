@@ -112,7 +112,7 @@ impl WidgetInspector<'_> {
                 self.render_properties_tab(content_area, buf, &visible, selected);
             }
             DetailsTab::RenderObject => {
-                render_object_tab::render(content_area, buf);
+                self.render_render_object_tab(content_area, buf);
             }
             DetailsTab::FlexExplorer => {
                 flex_explorer_tab::render(content_area, buf);
@@ -317,16 +317,27 @@ mod tests {
     // ── Content dispatch tests ────────────────────────────────────────────────
 
     #[test]
-    fn details_panel_shows_coming_soon_for_render_object_tab() {
+    fn details_panel_shows_render_object_content_for_render_object_tab() {
+        // Phase 2: the Render-object tab now shows a populated property table
+        // (or an appropriate state message) instead of the Phase 1 "Coming soon" stub.
         let state = make_state_with_details_open(DetailsTab::RenderObject);
         let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
         widget.render_details_panel(buf.area, &mut buf, &[]);
 
         let text = collect_buf_text(&buf, 80, 20);
+        // Should NOT show "Coming soon" any more (Phase 1 stub removed).
         assert!(
-            text.contains("Coming") && text.contains("soon"),
-            "Expected 'Coming soon' stub in Render-object tab, got: {text:?}"
+            !text.contains("Coming soon"),
+            "Phase 2 Render-object tab must not show 'Coming soon' stub, got: {text:?}"
+        );
+        // Should show the Render Object block title or a state message.
+        assert!(
+            text.contains("Render Object")
+                || text.contains("No render object")
+                || text.contains("Loading")
+                || text.contains("widget"),
+            "Expected Render-object tab content in buffer, got: {text:?}"
         );
     }
 
