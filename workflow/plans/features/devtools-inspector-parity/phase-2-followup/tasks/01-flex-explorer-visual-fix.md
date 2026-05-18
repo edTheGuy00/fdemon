@@ -235,4 +235,33 @@ Also update the existing tests that assert on `" Cross Axis: stretch "` literal 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` | All five fixes applied; three new tests added; eleven existing tests updated |
+
+### Notable Decisions/Tradeoffs
+
+1. **`render_vertical_flex` lost `main_align` parameter**: After removing the text rendering from `render_main_axis_strip_vertical`, the `main_align` argument to `render_vertical_flex` became dead — clippy would have caught it. Removed it from the signature and call site. `render_horizontal_flex` still receives and uses `main_align` (passed to `render_main_axis_strip_horizontal`).
+
+2. **`flex_axis_title` returns `String` (not `&str`)**: As specified. No match on axis name needed — always "Cross Axis", consistent with the original `cross_axis_label` post-fix.
+
+3. **New test for strip no-letters** uses the inner-area strip coordinates: the outer block border at position 0 is followed by 78 cols of inner content; the strip is the rightmost `MAIN_AXIS_STRIP_WIDTH` columns of inner. The test reads those columns from rows 2..18 (skipping border rows and header) and asserts zero ASCII letters.
+
+4. **C3 regression test** uses `LayoutInfo` embedded in `InspectorState` (not a separate param) to match the actual `render` signature; `LayoutInfo::default()` has no direction/children, so triggers the too-small fallback before the non-flex guard.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS (0 warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+- `cargo test --lib --workspace` — PASS (5,571 unit tests across 5 crates, 0 failures)
+- `cargo test --workspace` — PASS
+
+### Risks/Limitations
+
+1. **Title length**: The combined title `" Main ↕ spaceBetween  │  Cross Axis: baseline "` is ~46 chars. At very narrow terminals (<48 cols) the title will be truncated by ratatui. This is acceptable — the fallback message already activates at `MIN_FLEX_VIZ_WIDTH = 40` for the inner content, so a narrow terminal would show "too small" before the truncated title causes confusion.

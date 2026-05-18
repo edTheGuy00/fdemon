@@ -48,11 +48,13 @@ Covers the **3 critical + 5 major findings** that were flagged as blocking the P
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-flex-explorer-visual-fix](tasks/01-flex-explorer-visual-fix.md) | Not Started | — | 3–4h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` |
-| 02 | [02-handler-stale-guard-unification](tasks/02-handler-stale-guard-unification.md) | Not Started | — | 2–3h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
-| 03 | [03-actions-inspector-hardening](tasks/03-actions-inspector-hardening.md) | Not Started | — | 2–3h | `crates/fdemon-app/src/actions/inspector/mod.rs` |
-| 04 | [04-core-diagnostics-name-sanitize](tasks/04-core-diagnostics-name-sanitize.md) | Not Started | — | 1–2h | `crates/fdemon-core/src/widget_tree.rs` |
-| 05 | [05-docs-update](tasks/05-docs-update.md) | Not Started | 01–04 | 1–2h | `docs/ARCHITECTURE.md` |
+| 01 | [01-flex-explorer-visual-fix](tasks/01-flex-explorer-visual-fix.md) | Done | — | 3–4h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/flex_explorer_tab.rs` |
+| 02 | [02-handler-stale-guard-unification](tasks/02-handler-stale-guard-unification.md) | Done | — | 2–3h | `crates/fdemon-app/src/handler/devtools/inspector.rs` (+ `message.rs`, `actions/inspector/mod.rs`, `handler/update.rs` — scope expanded to thread `node_id` through `LayoutDataFetched`) |
+| 03 | [03-actions-inspector-hardening](tasks/03-actions-inspector-hardening.md) | Done | — | 2–3h | `crates/fdemon-app/src/actions/inspector/mod.rs` |
+| 04 | [04-core-diagnostics-name-sanitize](tasks/04-core-diagnostics-name-sanitize.md) | Done | — | 1–2h | `crates/fdemon-core/src/widget_tree.rs` |
+| 05 | [05-docs-update](tasks/05-docs-update.md) | Done (CONCERN) | 01–04 | 1–2h | `docs/ARCHITECTURE.md` |
+
+**Task 05 concern (logged, non-blocking):** Validator flagged that the new "Inspector Properties Fetch" prose includes a Rust call expression `tokio::time::timeout(PROPERTIES_FETCH_TIMEOUT, do_fetch_properties(...))`. This is stylistically consistent with the pre-existing paragraph (which already names internal helpers and field types), not a regression. Future doc-standards cleanup could rewrite the section to a more interface-level style, but it does not block this follow-up's completion.
 
 ## Wave Schedule
 

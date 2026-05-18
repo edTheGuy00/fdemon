@@ -261,4 +261,30 @@ If the test infrastructure cannot inject a controlled-latency mock (the same lim
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Replaced 5 `let _ = msg_tx.send(...)` sites with `if let Err(send_err) = ... { tracing::error!(...) }`; extracted `do_fetch_properties` async helper; replaced per-RPC `tokio::time::timeout` calls with single outer wrapper in `spawn_fetch_inspector_properties`; updated `PROPERTIES_FETCH_TIMEOUT` doc comment; added `spawn_properties_total_budget_is_bounded` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single outer timeout**: The `spawn_fetch_inspector_properties` function now has exactly one `tokio::time::timeout(PROPERTIES_FETCH_TIMEOUT, do_fetch_properties(...))` call. All async work (isolate resolution, initial getProperties, sub-fetch loop) runs inside `do_fetch_properties` with no internal timeouts. Worst-case wall-clock is bounded by `PROPERTIES_FETCH_TIMEOUT` (10s) regardless of sub-fetch count — matches the documented contract.
+2. **Extracted `do_fetch_properties`**: The inner logic is a private `async fn` returning `Result<(Vec<DiagnosticsNode>, Vec<DiagnosticsNode>), String>`. The outer `spawn_fetch_inspector_properties` maps the three outcome arms (ok, err, timeout) to the corresponding message variants, each with proper `tracing::error!` on send failure.
+3. **Error logging consolidation**: The original 5 `let _ = msg_tx` sites mapped to: 1 isolate resolution failure, 1 initial RPC error, 1 initial RPC timeout, 1 parse failure, and 1 sub-fetch timeout. After the refactor these are consolidated into 3 arms (success, error, timeout) in the outer spawn function. Sub-fetch errors inside `do_fetch_properties` are non-fatal and logged at `debug!` level per the original behavior.
+4. **Test infra limitation**: The `spawn_properties_total_budget_is_bounded` test documents the contract with a `TODO(test-infra)` comment, since `VmRequestHandle` does not support controlled-latency mocks. The same limitation was documented for the original phase-2 tests.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (5,792 tests total, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Test coverage gap**: The total-budget contract (one outer timeout bounding N sub-fetches) cannot be fully exercised without a slow-mock `VmRequestHandle`. A `TODO(test-infra)` comment is left in the test to track this debt.
+2. **Sub-fetch timeout behavior change**: Previously, a timeout in the sub-fetch loop was observable as a per-iteration 10s wait. Now all sub-fetches share the same 10s total budget. If the initial getProperties call takes 9s, sub-fetches get only 1s total. This is the intended behavior per the task spec ("tighten code to match doc").

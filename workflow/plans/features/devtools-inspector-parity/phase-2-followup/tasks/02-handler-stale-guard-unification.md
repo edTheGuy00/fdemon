@@ -237,4 +237,37 @@ In addition to the two new tests above:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `node_id: String` field to `LayoutDataFetched` variant |
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Updated `spawn_fetch_layout_data` to include `node_id` in `LayoutDataFetched` message |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `Message::LayoutDataFetched` destructuring to extract `node_id` and pass it to handler |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Unified stale guards for layout + properties handlers; added two regression tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added `node_id` to `LayoutDataFetched` message**: The `handle_layout_data_fetched` function needed a `node_id` parameter to cross-check against `details_node_id`. Since the message is the carrier, the field was added there. This is a minor API expansion but required for correctness.
+
+2. **Discard semantics for `pending_*` fields on stale guard hit**: When a stale response arrives and `pending_*_node_id` still points to the same stale node, both `pending_*_node_id` and `*_loading` are cleared. This ensures the next `handle_open_details` for the correct node will dispatch a new fetch (otherwise `properties_loading = true` would suppress it). This was explicitly specified in the task.
+
+3. **Existing `test_layout_data_fetched_discards_stale_response` updated**: Under the new semantics the guard is keyed on `details_node_id` (not `selected_value_id()`). The existing test was adapted to represent a "details closed" scenario (where `details_node_id = None`) which also results in discard. This preserves the intent of the test.
+
+4. **`properties_fetched_discards_stale_response` passes without change**: This test uses `make_state_with_inspector_open("objects/B")` which already sets `details_node_id = "objects/B"`. When A's response arrives, `details_node_id ("B") != "A"` → guard triggers; `pending_properties_node_id ("B") != "A"` → loading/pending not cleared. Test assertions remain valid.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all test result lines show 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- New test `properties_response_discarded_when_user_reopened_details_on_different_node` — Passed
+- New test `layout_response_applied_when_details_node_matches_even_if_selection_moved` — Passed
+
+### Risks/Limitations
+
+1. **Layout handler behavior change**: Previously, a layout response was discarded when `pending_node_id != selected_value_id()` (tree selection moved). Now it is discarded when `details_node_id != response.node_id`. This means: if the user navigates the tree while details is open on A, and A's layout fetch completes, it is now accepted (not discarded). This is the intended new behavior per the task spec — `details_node_id` is the canonical source of truth for what is displayed.

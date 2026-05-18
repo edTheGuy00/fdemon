@@ -145,4 +145,29 @@ fn diagnostics_node_value_id_strips_ansi_codes() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added `deserialize_sanitized_option_string` to `name`, `level`, `node_type`, `style`, `value_id` fields; added 6 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`node_type` already had `rename = "type"`**: Added `default` alongside `deserialize_with` to keep the multi-attribute serde block consistent with the pattern used by `property_type`. The JSON key `"type"` is preserved via the explicit rename.
+2. **`level`, `name`, `style`, `value_id` had no serde attributes**: Each got `#[serde(default, deserialize_with = "deserialize_sanitized_option_string")]`. The `rename_all = "camelCase"` at the struct level still handles `valueId` mapping automatically — no explicit `rename` needed.
+3. **`object_id` and `location_id` excluded intentionally**: As specified — internal opaque tokens that are never rendered.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2367 + 445 + 800 + 842 + 1112 + others; 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`level` sanitization is safe**: `filter_and_sort_by_level` compares against clean literals like `"hidden"`, `"fine"`, `"off"`. Sanitized ANSI-free strings still match correctly. Adversarial inputs with ANSI sequences would have failed those matches anyway.
+2. **Defense-in-depth only for non-rendered fields**: `node_type`, `style`, `value_id` are not currently rendered to the terminal, but sanitizing them now prevents future regressions if rendering is added.
