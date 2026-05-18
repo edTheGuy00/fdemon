@@ -174,26 +174,6 @@ pub enum DetailsTab {
     FlexExplorer,
 }
 
-impl DetailsTab {
-    /// Cycle to the next tab in the strip (wraps).
-    pub fn next(self) -> Self {
-        match self {
-            DetailsTab::Properties => DetailsTab::RenderObject,
-            DetailsTab::RenderObject => DetailsTab::FlexExplorer,
-            DetailsTab::FlexExplorer => DetailsTab::Properties,
-        }
-    }
-
-    /// Cycle to the previous tab (wraps).
-    pub fn prev(self) -> Self {
-        match self {
-            DetailsTab::Properties => DetailsTab::FlexExplorer,
-            DetailsTab::RenderObject => DetailsTab::Properties,
-            DetailsTab::FlexExplorer => DetailsTab::RenderObject,
-        }
-    }
-}
-
 /// State for the widget inspector tree view.
 ///
 /// Also holds layout data for the currently selected widget (merged into this struct
@@ -2349,20 +2329,6 @@ mod tests {
             fdemon_core::RowGroup::None,
             "standalone widget should have RowGroup::None"
         );
-    }
-
-    #[test]
-    fn details_tab_next_wraps_through_three_variants() {
-        assert_eq!(DetailsTab::Properties.next(), DetailsTab::RenderObject);
-        assert_eq!(DetailsTab::RenderObject.next(), DetailsTab::FlexExplorer);
-        assert_eq!(DetailsTab::FlexExplorer.next(), DetailsTab::Properties);
-    }
-
-    #[test]
-    fn details_tab_prev_wraps_through_three_variants() {
-        assert_eq!(DetailsTab::Properties.prev(), DetailsTab::FlexExplorer);
-        assert_eq!(DetailsTab::RenderObject.prev(), DetailsTab::Properties);
-        assert_eq!(DetailsTab::FlexExplorer.prev(), DetailsTab::RenderObject);
     }
 
     #[test]
