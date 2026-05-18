@@ -107,6 +107,28 @@ fn render_phase_bar(area: Rect, buf: &mut Buffer, frame: &FrameTiming) {
     }
 }
 
+/// Allocate the rounding remainder (target_width − sum of all four cells) to the
+/// segment with the largest cell count.  Ties are broken by taking the highest
+/// index so that raster (index 3) absorbs the remainder when counts are equal,
+/// preserving the previous behaviour.
+fn distribute_remainder(cells: &mut [u16; 4], target_width: u16) {
+    let sum: u32 = cells.iter().map(|&c| c as u32).sum();
+    let target = target_width as u32;
+    if sum == target {
+        return;
+    }
+    let diff = target as i32 - sum as i32;
+    // Pick the index with the largest value; ties → highest index (= raster).
+    let max_idx = cells
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, &c)| c)
+        .map(|(i, _)| i)
+        .unwrap_or(3);
+    let new_val = cells[max_idx] as i32 + diff;
+    cells[max_idx] = new_val.max(0) as u16;
+}
+
 /// Proportional 4-segment bar: each phase's width = (phase / total) * available_cols.
 ///
 /// Renders 3 rows:
@@ -118,17 +140,19 @@ fn render_proportional_phase_bar(area: Rect, buf: &mut Buffer, phases: &FramePha
         return;
     }
 
-    let total = phases.total_micros().max(1);
-    let cols = area.width as u64;
+    let total = phases.total_micros().max(1) as f64;
+    let w = area.width as f64;
 
-    // Compute cell counts; ensure they sum to area.width (handle rounding by giving
-    // the remainder to raster — the longest segment in practice).
-    let build_cells = (phases.build_micros * cols / total) as u16;
-    let layout_cells = (phases.layout_micros * cols / total) as u16;
-    let paint_cells = (phases.paint_micros * cols / total) as u16;
-    let raster_cells = area
-        .width
-        .saturating_sub(build_cells + layout_cells + paint_cells);
+    // Compute all four cells via round(), then redistribute the rounding remainder
+    // to the largest segment so that the sum always equals area.width.
+    let mut cells: [u16; 4] = [
+        (phases.build_micros as f64 / total * w).round() as u16,
+        (phases.layout_micros as f64 / total * w).round() as u16,
+        (phases.paint_micros as f64 / total * w).round() as u16,
+        (phases.raster_micros as f64 / total * w).round() as u16,
+    ];
+    distribute_remainder(&mut cells, area.width);
+    let [build_cells, layout_cells, paint_cells, raster_cells] = cells;
 
     let segments: &[(u16, Color, &str, u64)] = &[
         (build_cells, COLOR_BUILD, "Build", phases.build_micros),
@@ -138,6 +162,8 @@ fn render_proportional_phase_bar(area: Rect, buf: &mut Buffer, phases: &FramePha
     ];
 
     // ── Row 0: label line ─────────────────────────────────────────────────────
+    // Label is chosen so that `label.len() <= width as usize` — the fallback
+    // chain below guarantees this invariant; no further clipping is needed.
     if area.height >= 1 {
         let label_y = area.y;
         let mut x = area.x;
@@ -146,43 +172,46 @@ fn render_proportional_phase_bar(area: Rect, buf: &mut Buffer, phases: &FramePha
                 continue;
             }
             let ms = micros as f64 / 1000.0;
-            // Full label e.g. "Build 6.1ms"; short label "B"; min label single char.
+            // m4: use chars().next() instead of byte-slice &name[..1].
+            let first_char = name.chars().next().unwrap_or(' ');
+            // Full label e.g. "Build 6.1ms"; short label "B 6.1ms"; min label single char.
             let full_label = format!("{} {:.1}ms", name, ms);
-            let short_label = format!("{} {:.1}ms", &name[..1], ms);
-            let min_label = &name[..1];
+            let short_label = format!("{} {:.1}ms", first_char, ms);
+            let min_label_owned = first_char.to_string();
 
             let label: &str = if full_label.len() as u16 <= width {
                 &full_label
             } else if short_label.len() as u16 <= width {
                 &short_label
             } else {
-                min_label
+                &min_label_owned
             };
 
             let avail = width.saturating_sub(label.len() as u16);
             let pad = avail / 2;
-            let label_x = x + pad;
-            let render_width = label.len().min(width as usize) as u16;
+            // m11: use saturating_add for u16 coordinate arithmetic.
+            let label_x = x.saturating_add(pad);
             buf.set_string(label_x, label_y, label, Style::default().fg(color));
-            let _ = render_width; // used implicitly by ratatui set_string
-            x += width;
+            x = x.saturating_add(width);
         }
     }
 
     // ── Row 1: █ bar ──────────────────────────────────────────────────────────
     if area.height >= 2 {
-        let bar_y = area.y + 1;
+        // m11: use saturating_add for u16 coordinate arithmetic.
+        let bar_y = area.y.saturating_add(1);
         let mut x = area.x;
         for &(width, color, _, _) in segments {
             let style = Style::default().bg(color).fg(color);
             for dx in 0..width {
-                if x + dx < area.x + area.width {
-                    if let Some(cell) = buf.cell_mut((x + dx, bar_y)) {
+                let col = x.saturating_add(dx);
+                if col < area.x.saturating_add(area.width) {
+                    if let Some(cell) = buf.cell_mut((col, bar_y)) {
                         cell.set_style(style).set_char('\u{2588}'); // █
                     }
                 }
             }
-            x += width;
+            x = x.saturating_add(width);
         }
     }
 
@@ -324,8 +353,9 @@ fn render_hints(area: Rect, buf: &mut Buffer, frame: &FrameTiming, refresh_rate_
         .min(MAX_HINT_LINES)
         .min(hints.len());
     for (i, hint) in hints.iter().take(max).enumerate() {
-        let y = area.y + 1 + i as u16;
-        if y >= area.y + area.height {
+        // m11: saturating_add for u16 coordinate arithmetic.
+        let y = area.y.saturating_add(1).saturating_add(i as u16);
+        if y >= area.y.saturating_add(area.height) {
             break;
         }
         let line = Line::from(vec![
@@ -473,6 +503,130 @@ mod tests {
         assert!(text.contains("Layout"), "missing Layout label: {text}");
         assert!(text.contains("Paint"), "missing Paint label: {text}");
         assert!(text.contains("Raster"), "missing Raster label: {text}");
+    }
+
+    // ── Proportional bar segment widths ─────────────────────────────────────
+
+    /// Count how many cells on the bar row (y=1) have each phase's background
+    /// colour.  Segments are adjacent blocks of █ sharing the same bg colour;
+    /// the bar has no gaps between segments.
+    fn count_bar_segments_by_color(buf: &Buffer, width: u16) -> [usize; 4] {
+        let phase_colors = [COLOR_BUILD, COLOR_LAYOUT, COLOR_PAINT, COLOR_RASTER];
+        let mut counts = [0usize; 4];
+        for x in 0..width {
+            if let Some(cell) = buf.cell((x, 1)) {
+                let ch = cell.symbol().chars().next().unwrap_or(' ');
+                if ch != '\u{2588}' {
+                    continue; // not a bar cell
+                }
+                let bg = cell.style().bg;
+                for (i, &color) in phase_colors.iter().enumerate() {
+                    if bg == Some(color) {
+                        counts[i] = counts[i].saturating_add(1);
+                        break;
+                    }
+                }
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn proportional_bar_segment_widths_match_phase_proportions() {
+        // Build=2ms, Layout=4ms, Paint=6ms, Raster=8ms — total=20ms.
+        // At width=80: expected cells (via round()) are:
+        //   build  = round(2/20 * 80) =  8
+        //   layout = round(4/20 * 80) = 16
+        //   paint  = round(6/20 * 80) = 24
+        //   raster = round(8/20 * 80) = 32  → sum = 80 exactly, no remainder.
+        let phases = FramePhases {
+            build_micros: 2_000,
+            layout_micros: 4_000,
+            paint_micros: 6_000,
+            raster_micros: 8_000,
+            shader_compilation: false,
+        };
+        // Use height=3 to give the bar its 3 rows (label + bar + spacer).
+        let area = Rect::new(0, 0, 80, 3);
+        let mut buf = Buffer::empty(area);
+        render_proportional_phase_bar(area, &mut buf, &phases);
+
+        // Verify that █ characters are actually present on bar row (y=1).
+        let bar_chars: Vec<char> = (0..80u16)
+            .filter_map(|x| buf.cell((x, 1)))
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            bar_chars.contains(&'\u{2588}'),
+            "bar row (y=1) contains no █ characters"
+        );
+
+        // Count cells by background colour to determine segment widths.
+        let counts = count_bar_segments_by_color(&buf, 80);
+        let [build_count, layout_count, paint_count, raster_count] = counts;
+
+        // Verify total coverage equals full width (sum of all four segments = 80).
+        let total: usize = build_count + layout_count + paint_count + raster_count;
+        assert_eq!(total, 80, "bar segments must sum to 80, got {total}");
+
+        // Each segment should be within ±1 of the expected proportion.
+        let expected = [
+            (build_count, 8usize),
+            (layout_count, 16),
+            (paint_count, 24),
+            (raster_count, 32),
+        ];
+        let names = ["build", "layout", "paint", "raster"];
+        for (i, &(actual, exp)) in expected.iter().enumerate() {
+            let diff = (actual as i32 - exp as i32).unsigned_abs() as usize;
+            assert!(
+                diff <= 1,
+                "segment '{}' width {} differs from expected {} by more than ±1",
+                names[i],
+                actual,
+                exp
+            );
+        }
+
+        // Verify the remainder-redistribution works with asymmetric phases where
+        // rounding would otherwise give raster a non-zero cell when raster_micros=0.
+        // Phases: build=6ms, layout=6ms, paint=6ms, raster=0ms → total=18ms → width=81.
+        //   build  = round(6/18 * 81) = round(27.0) = 27
+        //   layout = round(6/18 * 81) = round(27.0) = 27
+        //   paint  = round(6/18 * 81) = round(27.0) = 27
+        //   raster = round(0/18 * 81) = round( 0.0) =  0   → sum=81, no remainder.
+        // But if raster_micros=0 and the three others sum to less than area.width due
+        // to rounding, the remainder must go to the largest non-zero segment (not raster).
+        // Use width=80 with build=1ms, layout=1ms, paint=1ms, raster=0ms to force it:
+        //   total = 3ms, width = 80
+        //   build  = round(1/3 * 80) = round(26.67) = 27
+        //   layout = round(1/3 * 80) = round(26.67) = 27
+        //   paint  = round(1/3 * 80) = round(26.67) = 27  → sum=81, diff=-1.
+        //   raster = round(0/3 * 80) = 0
+        //   Remainder = 80 - 81 = -1 → subtract 1 from largest (any of build/layout/paint).
+        let raster_zero_phases = FramePhases {
+            build_micros: 1_000,
+            layout_micros: 1_000,
+            paint_micros: 1_000,
+            raster_micros: 0,
+            shader_compilation: false,
+        };
+        let area2 = Rect::new(0, 0, 80, 3);
+        let mut buf2 = Buffer::empty(area2);
+        render_proportional_phase_bar(area2, &mut buf2, &raster_zero_phases);
+
+        let counts2 = count_bar_segments_by_color(&buf2, 80);
+        let total2: usize = counts2.iter().sum();
+        assert_eq!(
+            total2, 80,
+            "bar with raster=0 must fill exactly 80 cols, got {total2}"
+        );
+        // Raster (green) must have 0 cells — remainder goes to another segment.
+        assert_eq!(
+            counts2[3], 0,
+            "raster_micros=0 must render 0 raster cells, got {}",
+            counts2[3]
+        );
     }
 
     // ── Inline phase summary (narrow terminal) ───────────────────────────────
