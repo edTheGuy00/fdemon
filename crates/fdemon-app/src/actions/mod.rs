@@ -328,17 +328,21 @@ pub fn handle_action(
             }
         }
 
-        // TODO(phase-2-task-05): wire up spawn_fetch_inspector_properties here.
         UpdateAction::FetchInspectorProperties {
             session_id,
-            node_id: _,
-            vm_handle: _,
+            node_id,
+            vm_handle,
         } => {
-            warn!(
-                "FetchInspectorProperties reached handle_action for session {} — \
-                 spawn task not yet implemented (phase-2-task-05)",
-                session_id
-            );
+            if let Some(handle) = vm_handle {
+                inspector::spawn_fetch_inspector_properties(session_id, node_id, handle, msg_tx);
+            } else {
+                warn!(
+                    session_id = %session_id,
+                    node_id = %node_id,
+                    "FetchInspectorProperties dispatched without VM handle \
+                     (no active VM Service) — skipping"
+                );
+            }
         }
 
         UpdateAction::ToggleOverlay {

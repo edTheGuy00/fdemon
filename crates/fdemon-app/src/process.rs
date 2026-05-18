@@ -326,7 +326,7 @@ fn hydrate_fetch_layout_data(action: UpdateAction, state: &AppState) -> Option<U
 /// Returns `None` (discards the action) if the session has no active VM
 /// connection, since there is nothing to query without one. A `None` return
 /// triggers the fallback `DevToolsInspectorPropertiesFetchFailed` message in
-/// `process_message` so the loading spinner is never left stuck.
+/// `process_message`'s `else` branch so the loading spinner is never left stuck.
 /// All other action variants are returned unchanged.
 fn hydrate_fetch_inspector_properties(
     action: UpdateAction,
@@ -341,17 +341,28 @@ fn hydrate_fetch_inspector_properties(
         return Some(action);
     };
 
-    let handle = vm_handle.or_else(|| {
-        state
-            .session_manager
-            .get(session_id)
-            .and_then(|h| h.vm_request_handle.clone())
-    });
+    if vm_handle.is_some() {
+        // Already hydrated (e.g. called from a test or re-dispatched).
+        return Some(UpdateAction::FetchInspectorProperties {
+            session_id,
+            node_id,
+            vm_handle,
+        });
+    }
+
+    // Extract the VM request handle from the session; if unavailable (VM
+    // disconnected or not yet connected) return None so that
+    // `process_message`'s else-branch can dispatch the fallback
+    // `DevToolsInspectorPropertiesFetchFailed` message.
+    let handle = state
+        .session_manager
+        .get(session_id)
+        .and_then(|h| h.vm_request_handle.clone())?;
 
     Some(UpdateAction::FetchInspectorProperties {
         session_id,
         node_id,
-        vm_handle: handle,
+        vm_handle: Some(handle),
     })
 }
 
