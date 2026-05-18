@@ -159,7 +159,7 @@ impl DevToolsView<'_> {
                 // Safety fallback: MemoryState contains Cell<usize> render-hint fields (!Sync),
                 // so stack-local defaults are used instead of LazyLock statics.
                 let default_memory;
-                let (mem, _vm_connected) = match self.session {
+                let (mem, vm_connected) = match self.session {
                     Some(s) => (&s.session.memory, s.session.vm_connected),
                     None => {
                         default_memory = MemoryState::default();
@@ -167,7 +167,8 @@ impl DevToolsView<'_> {
                     }
                 };
 
-                let widget = MemoryPanel::new(mem, true);
+                let widget =
+                    MemoryPanel::new(mem, true, vm_connected, &self.state.connection_status);
                 memory::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Network => {
@@ -518,11 +519,21 @@ mod tests {
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
-        assert!(text.contains("Inspector"), "Expected Inspector tab");
-        assert!(text.contains("Performance"), "Expected Performance tab");
         assert!(
-            !text.contains("Layout"),
-            "Layout tab should not appear; got: {text:?}"
+            text.contains("Inspector"),
+            "Expected Inspector tab; got: {text:?}"
+        );
+        assert!(
+            text.contains("Performance"),
+            "Expected Performance tab; got: {text:?}"
+        );
+        assert!(
+            text.contains("Memory"),
+            "Expected Memory tab; got: {text:?}"
+        );
+        assert!(
+            text.contains("Network"),
+            "Expected Network tab; got: {text:?}"
         );
     }
 

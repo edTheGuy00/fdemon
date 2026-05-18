@@ -16,12 +16,13 @@ use chart::{render_history_chart, render_legend, render_sample_chart, render_x_a
 use table::{render_allocation_table, AllocationTable};
 
 use fdemon_app::session::memory::{MemorySection, MemoryState};
+use fdemon_app::state::VmConnectionStatus;
 use fdemon_core::performance::{AllocationProfile, GcEvent, MemorySample, MemoryUsage, RingBuffer};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::widgets::MouseCtx;
 
@@ -51,18 +52,24 @@ pub(super) const COLOR_ALLOCATED: Color = Color::Yellow;
 pub(super) const COLOR_RSS: Color = Color::Gray;
 pub(super) const COLOR_GC_MARKER: Color = Color::Yellow;
 
-// ── Helpers used by performance/mod.rs (no longer needed here, but kept for format_number) ──
+// ── Number formatting helpers ─────────────────────────────────────────────────
 
-fn format_number(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.1}G", n as f64 / 1_000_000_000.0)
-    } else if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        format!("{n}")
+/// Format a count with comma separators for the thousands group.
+///
+/// Used by the allocation table's instances column where exact counts
+/// matter — small leak deltas (12,345 → 12,398) are lost under K/M/G.
+/// Byte-size columns continue to use [`MemoryUsage::format_bytes`].
+pub(super) fn format_count_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, &b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(b as char);
     }
+    out
 }
 
 // ── MemoryPanel widget ────────────────────────────────────────────────────────
@@ -93,12 +100,18 @@ fn format_number(n: u64) -> String {
 /// ```
 pub struct MemoryPanel<'a> {
     memory: &'a MemoryState,
+    /// Whether the underlying Dart VM Service is connected. Drives the
+    /// disconnected-state render path (mirrors `PerformancePanel`).
+    vm_connected: bool,
+    /// Connection status string used in the disconnected-state body.
+    connection_status: &'a VmConnectionStatus,
     /// Whether the entire memory panel has focus (for outer border colour).
     #[allow(dead_code)]
+    // Phase 2: drives the outer panel border colour when focus tracking lands.
     focused: bool,
     // ── Time-series chart scroll / focus ──────────────────────────────────────
     chart_scroll_offset: usize,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Phase 2: drives the chart-section border colour.
     chart_focused: bool,
     chart_visible_width_cell: Option<&'a Cell<usize>>,
     // ── Alloc table interactivity ──────────────────────────────────────────────
@@ -110,9 +123,16 @@ pub struct MemoryPanel<'a> {
 
 impl<'a> MemoryPanel<'a> {
     /// Create a new memory panel widget from `MemoryState`.
-    pub fn new(memory: &'a MemoryState, focused: bool) -> Self {
+    pub fn new(
+        memory: &'a MemoryState,
+        focused: bool,
+        vm_connected: bool,
+        connection_status: &'a VmConnectionStatus,
+    ) -> Self {
         Self {
             memory,
+            vm_connected,
+            connection_status,
             focused,
             chart_scroll_offset: memory.memory_chart_scroll_offset,
             chart_focused: memory.focused_section == MemorySection::Chart,
@@ -129,6 +149,12 @@ impl<'a> MemoryPanel<'a> {
     /// Core render logic shared by [`Widget::render`] and [`render_with_regions`].
     fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
         if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        // Show disconnected/no-data state if VM is not connected or monitoring not started.
+        if !self.vm_connected || !self.memory.monitoring_active {
+            self.render_disconnected(area, buf);
             return;
         }
 
@@ -149,20 +175,11 @@ impl<'a> MemoryPanel<'a> {
         if show_table {
             let chart_height =
                 ((area.height as f64 * CHART_PROPORTION) as u16).max(MIN_CHART_HEIGHT);
-            let table_height = area.height.saturating_sub(chart_height);
 
-            let chart_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: chart_height,
-            };
-            let table_area = Rect {
-                x: area.x,
-                y: area.y + chart_height,
-                width: area.width,
-                height: table_height,
-            };
+            let chunks = Layout::vertical([Constraint::Length(chart_height), Constraint::Min(0)])
+                .split(area);
+            let chart_area = chunks[0];
+            let table_area = chunks[1];
 
             render_chart_area(
                 &self.memory.memory_samples,
@@ -205,6 +222,43 @@ impl<'a> MemoryPanel<'a> {
                 buf,
             );
         }
+    }
+
+    // ── Disconnected / no-data state ─────────────────────────────────────────
+
+    fn render_disconnected(&self, area: Rect, buf: &mut Buffer) {
+        let error_owned: String;
+        let message: &str = if !self.vm_connected {
+            match self.connection_status {
+                VmConnectionStatus::Reconnecting {
+                    attempt,
+                    max_attempts,
+                } => {
+                    error_owned = format!(
+                        "Reconnecting to VM Service... ({attempt}/{max_attempts})\n\
+                         Memory monitoring will resume when connected."
+                    );
+                    &error_owned
+                }
+                _ => "VM Service not connected. Memory monitoring requires a debug connection.",
+            }
+        } else {
+            "Memory monitoring starting..."
+        };
+
+        let paragraph = Paragraph::new(message)
+            .style(Style::default().fg(palette::TEXT_MUTED))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+
+        // Centre vertically within the area
+        let y_offset = area.height.saturating_sub(1) / 2;
+        let centered = Rect {
+            y: area.y + y_offset,
+            height: 1,
+            ..area
+        };
+        paragraph.render(centered, buf);
     }
 }
 

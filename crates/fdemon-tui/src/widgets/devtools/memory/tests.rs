@@ -2,6 +2,7 @@
 
 use super::*;
 use fdemon_app::session::memory::{AllocationSortColumn, MemorySection, MemoryState};
+use fdemon_app::state::VmConnectionStatus;
 use fdemon_core::performance::{AllocationProfile, ClassHeapStats, GcEvent, MemoryUsage};
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -243,7 +244,7 @@ fn test_braille_canvas_empty_cells_not_rendered() {
 #[test]
 fn test_renders_empty_state_without_panic() {
     let mem = make_memory_state();
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -252,7 +253,7 @@ fn test_renders_empty_state_without_panic() {
 #[test]
 fn test_renders_with_memory_usage_fallback() {
     let mem = make_memory_state_with_history(10);
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -260,8 +261,9 @@ fn test_renders_with_memory_usage_fallback() {
 
 #[test]
 fn test_renders_single_sample_without_panic() {
-    let mem = make_memory_state_with_samples(1);
-    let widget = MemoryPanel::new(&mem, false);
+    let mut mem = make_memory_state_with_samples(1);
+    mem.monitoring_active = true;
+    let widget = MemoryPanel::new(&mem, false, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -269,8 +271,9 @@ fn test_renders_single_sample_without_panic() {
 
 #[test]
 fn test_renders_full_buffer_without_panic() {
-    let mem = make_memory_state_with_samples(120);
-    let widget = MemoryPanel::new(&mem, true);
+    let mut mem = make_memory_state_with_samples(120);
+    mem.monitoring_active = true;
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -278,8 +281,9 @@ fn test_renders_full_buffer_without_panic() {
 
 #[test]
 fn test_compact_mode_small_height() {
-    let mem = make_memory_state();
-    let widget = MemoryPanel::new(&mem, false);
+    let mut mem = make_memory_state();
+    mem.monitoring_active = true;
+    let widget = MemoryPanel::new(&mem, false, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 5);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -288,7 +292,7 @@ fn test_compact_mode_small_height() {
 #[test]
 fn test_very_small_area_no_panic() {
     let mem = make_memory_state();
-    let widget = MemoryPanel::new(&mem, false);
+    let widget = MemoryPanel::new(&mem, false, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 10, 3);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -297,7 +301,7 @@ fn test_very_small_area_no_panic() {
 #[test]
 fn test_zero_area_no_panic() {
     let mem = make_memory_state();
-    let widget = MemoryPanel::new(&mem, false);
+    let widget = MemoryPanel::new(&mem, false, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 0, 0);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -305,8 +309,9 @@ fn test_zero_area_no_panic() {
 
 #[test]
 fn test_chart_only_mode_no_table() {
-    let mem = make_memory_state_with_samples(1);
-    let widget = MemoryPanel::new(&mem, false);
+    let mut mem = make_memory_state_with_samples(1);
+    mem.monitoring_active = true;
+    let widget = MemoryPanel::new(&mem, false, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 7);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -314,8 +319,9 @@ fn test_chart_only_mode_no_table() {
 
 #[test]
 fn test_allocation_table_visible_at_threshold() {
-    let mem = make_memory_state_with_samples(1);
-    let widget = MemoryPanel::new(&mem, false);
+    let mut mem = make_memory_state_with_samples(1);
+    mem.monitoring_active = true;
+    let widget = MemoryPanel::new(&mem, false, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 8);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -408,8 +414,9 @@ fn test_gc_event_marker_renders_without_panic() {
         isolate_id: None,
         timestamp: old_ts + chrono::Duration::seconds(15),
     });
+    state.monitoring_active = true;
 
-    let widget = MemoryPanel::new(&state, true);
+    let widget = MemoryPanel::new(&state, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -874,11 +881,12 @@ fn test_memory_panel_allocation_table_full_height_at_20_rows() {
     let mem = MemoryState {
         allocation_profile: Some(mock_profile_with_n_classes(30)),
         allocation_sort: AllocationSortColumn::BySize,
+        monitoring_active: true,
         ..MemoryState::default()
     };
 
     // Render into a 200×20 terminal (mimicking the bug-report scenario).
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let mut buf = Buffer::empty(Rect::new(0, 0, 200, 20));
     widget.render(Rect::new(0, 0, 200, 20), &mut buf);
 
@@ -921,7 +929,7 @@ fn test_memory_panel_renders_allocation_profile() {
         ..MemoryState::default()
     };
 
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -941,7 +949,7 @@ fn test_memory_panel_no_stats_section() {
         monitoring_active: true,
         ..MemoryState::default()
     };
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 30);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -958,7 +966,7 @@ fn test_memory_panel_allocation_table_visible_on_24_row_terminal() {
         monitoring_active: true,
         ..MemoryState::default()
     };
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 18);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -978,7 +986,7 @@ fn test_memory_panel_allocation_table_visible_on_30_row_terminal() {
         monitoring_active: true,
         ..MemoryState::default()
     };
-    let widget = MemoryPanel::new(&mem, true);
+    let widget = MemoryPanel::new(&mem, true, true, &VmConnectionStatus::Connected);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -989,5 +997,39 @@ fn test_memory_panel_allocation_table_visible_on_30_row_terminal() {
             || content.contains("Instances")
             || content.contains("Waiting"),
         "Allocation table should be visible at 24 rows; content: {content:?}"
+    );
+}
+
+// ── Disconnected-state and comma-formatter regression tests ──────────────────
+
+#[test]
+fn memory_panel_renders_disconnected_state_when_vm_unavailable() {
+    let state = MemoryState::default();
+    let widget = MemoryPanel::new(&state, true, false, &VmConnectionStatus::Disconnected);
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    widget.render(area, &mut buf);
+
+    let content = buffer_content(&buf, area);
+    assert!(
+        content.contains("VM Service not connected") || content.contains("not connected"),
+        "Disconnected state should mention VM Service not connected; content: {content:?}"
+    );
+    assert!(
+        !content.contains("Allocations by class") && !content.contains("Instances"),
+        "Disconnected state must not render allocation table; content: {content:?}"
+    );
+}
+
+#[test]
+fn format_count_with_commas_produces_comma_separated_output() {
+    assert_eq!(format_count_with_commas(0), "0");
+    assert_eq!(format_count_with_commas(999), "999");
+    assert_eq!(format_count_with_commas(1_000), "1,000");
+    assert_eq!(format_count_with_commas(12_345), "12,345");
+    assert_eq!(format_count_with_commas(1_234_567), "1,234,567");
+    assert_eq!(
+        format_count_with_commas(u64::MAX),
+        "18,446,744,073,709,551,615"
     );
 }

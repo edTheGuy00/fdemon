@@ -210,7 +210,7 @@ impl AllocationTable<'_> {
                 Span::styled(
                     format!(
                         "{:>width$}",
-                        format_number(class.total_instances()),
+                        format_count_with_commas(class.total_instances()),
                         width = INSTANCES_WIDTH
                     ),
                     num_style,
