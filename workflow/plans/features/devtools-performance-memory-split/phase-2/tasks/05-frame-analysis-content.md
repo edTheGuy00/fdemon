@@ -411,4 +411,33 @@ mod tests {
 
 ## Completion Summary
 
-(Filled in by implementor after work completes.)
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/frame_analysis_tab.rs` | Replaced T04 stub with full Frame Analysis renderer: header, verdict, phase bar (proportional + inline + aggregate fallbacks), hints, no-selection prompt. Added 13 unit tests. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/mod.rs` | Updated `render_dispatches_frame_analysis_stub` test to expect the T05 no-selection prompt instead of the old stub text. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/detail.rs` | Added doc-comment cross-reference on `render_detail_panel` pointing to `frame_analysis_tab` as the dual-pane path. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Removed `#[allow(dead_code)]` on `MIN_PHASE_BAR_WIDTH` sentinel — the constant is now consumed by `frame_analysis_tab`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test data for proportional bar test**: The task spec test used `build=6000, layout=2000, paint=3000, raster=7000` but layout's segment (≈9 cols at 80-wide) was too narrow for the "Layout" full label. Adjusted to `build=8000, layout=6000, paint=5000, raster=9000` so all four segments are wide enough to show full labels — matches the spec intent while producing correct assertions.
+2. **Inline phase summary buffer width**: The task spec used a 36-wide buffer for the inline test, but "B 6.0ms | L 2.0ms | P 3.0ms | R 7.0ms" is 37 chars (R segment starts at col 30, ends at 37), so "R 7.0ms" was truncated. Changed to 39-wide (still < MIN_PHASE_BAR_WIDTH=40) so all 4 segments fit.
+3. **`FrameHint` import removed**: The `FrameHint` type was listed in the task spec imports but is not directly used in the renderer (we call `hint.message()` which is object-safe). Clippy would have flagged it.
+4. **Label centering**: The proportional bar label is left-offset by `pad = avail / 2` so text is visually centred within each segment. Segments narrower than the full label use progressively shorter forms.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed, no warnings
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed, clean
+- `cargo test --workspace` — Passed (all 5,895 unit tests + 80 integration tests)
+- `cargo test -p fdemon-tui -- "frame_analysis_tab"` — 13/13 tests pass
+
+### Risks/Limitations
+
+1. **Phase bar label centering is approximate**: Integer division can shift labels left by 1 col in odd-width segments — acceptable at TUI resolution.
+2. **No memoization of `frame_hints()`**: Per the task notes, this is O(1) per frame and deferred to Phase 3 if needed.

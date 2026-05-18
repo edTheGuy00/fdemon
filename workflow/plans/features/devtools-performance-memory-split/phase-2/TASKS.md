@@ -49,13 +49,13 @@ Wave 2  │ 04 perf-details-widget-shell     │   │ 03 perf-handler-split-and
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [add-frame-hints-core](tasks/01-add-frame-hints-core.md) | Not Started | — | 2–3h | implementor | 1 |
-| 02 | [perf-details-state-foundation](tasks/02-perf-details-state-foundation.md) | Not Started | — | 2–3h | implementor | 1 |
-| 03 | [perf-handler-split-and-keys](tasks/03-perf-handler-split-and-keys.md) | Not Started | 02 | 3–5h | implementor | 2 |
-| 04 | [perf-details-widget-shell](tasks/04-perf-details-widget-shell.md) | Not Started | 02 | 4–6h | implementor | 2 |
-| 05 | [frame-analysis-content](tasks/05-frame-analysis-content.md) | Not Started | 01, 04 | 3–4h | implementor | 3 |
-| 06 | [keybindings-and-footer](tasks/06-keybindings-and-footer.md) | Not Started | 03 | 0.5–1h | implementor | 3 |
-| 07 | [update-architecture-doc](tasks/07-update-architecture-doc.md) | Not Started | 03, 04 | 1–1.5h | doc_maintainer | 3 |
+| 01 | [add-frame-hints-core](tasks/01-add-frame-hints-core.md) | Done ✅ | — | 2–3h | implementor | 1 |
+| 02 | [perf-details-state-foundation](tasks/02-perf-details-state-foundation.md) | Done ✅ | — | 2–3h | implementor | 1 |
+| 03 | [perf-handler-split-and-keys](tasks/03-perf-handler-split-and-keys.md) | Done ✅ | 02 | 3–5h | implementor | 2 |
+| 04 | [perf-details-widget-shell](tasks/04-perf-details-widget-shell.md) | Done ✅ | 02 | 4–6h | implementor | 2 |
+| 05 | [frame-analysis-content](tasks/05-frame-analysis-content.md) | Done ✅ | 01, 04 | 3–4h | implementor | 3 |
+| 06 | [keybindings-and-footer](tasks/06-keybindings-and-footer.md) | Done ✅ | 03 | 0.5–1h | implementor | 3 |
+| 07 | [update-architecture-doc](tasks/07-update-architecture-doc.md) | Done ✅ | 03, 04 | 1–1.5h | doc_maintainer | 3 |
 
 ## File Overlap Analysis
 

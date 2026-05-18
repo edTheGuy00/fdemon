@@ -73,4 +73,22 @@ Summarize what implementation changes require doc updates:
 
 ## Completion Summary
 
-(Filled in by doc_maintainer after work completes.)
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | 1. Added `frame_hints.rs` entry to `fdemon-core` module listing. 2. Replaced `performance.rs` in `handler/devtools/` with `performance/` directory subtree (mod, frame, details). 3. Added `details/` subtree under `fdemon-tui/widgets/devtools/performance/` with all four files. 4. Updated DevTools ASCII diagram: added `details/` label in Performance column and updated handler row to `performance/{mod,frame,details}.rs`. 5. Expanded "Performance Panel Interactivity" section: dual-pane layout constants table, `PerfDetailsTab` enum + cycling, updated Cell table to include `details_pane_visible_height`, `display_refresh_rate` field, `fdemon-core::frame_hints` module and `FrameHint` enum. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: NO (none present)
+
+### Notable Decisions/Tradeoffs
+
+1. **`details_pane_visible_height` in same table as `frame_chart_visible_width`**: The task called for adding it alongside existing render-hint cells. Rather than keeping the old single-field prose paragraph, the section was upgraded to a two-row table matching the Memory Panel's table format — more scannable and consistent.
+2. **`frame_hints` module in `fdemon-core` listing**: Inserted between `performance.rs` and `widget_tree.rs` to maintain alphabetical proximity without disrupting the existing structure.
+3. **Performance diagram update**: The ASCII box for Performance now shows `details/` on the second row alongside `frame_chart/`, mirroring how Inspector shows `details/`.

@@ -403,4 +403,39 @@ fn details_pane_visible_height_is_written_to_render_hint() {
 
 ## Completion Summary
 
-(Filled in by implementor after work completes.)
+**Status:** Done
+**Branch:** worktree-agent-ac4304da20a4e15c5
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Restructured with dual-pane layout: added `MIN_DUAL_PANE_HEIGHT`, `MIN_DETAILS_HEIGHT`, `MIN_PHASE_BAR_WIDTH`, `FRAME_CHART_PCT` constants; split render path into `render_chart_only` + `render_details_pane`; added `details` module; updated module docstring |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/mod.rs` | NEW — tab strip + dispatch, `render_tab_strip`, `label_for`, inline tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/frame_analysis_tab.rs` | NEW — T04 stub placeholder |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/rebuild_stats_tab.rs` | NEW — "Coming soon" stub |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events_tab.rs` | NEW — "Coming soon" stub |
+| `crates/fdemon-tui/src/widgets/devtools/performance/tests.rs` | Added 6 new dual-pane tests; updated `test_performance_panel_no_stats_section` to handle "Rebuild Stats" tab label |
+
+### Notable Decisions/Tradeoffs
+
+1. **`test_performance_panel_no_stats_section` update**: The test previously checked for `" Stats "` substring to assert the old Stats block was removed. The new "Rebuild Stats" tab label contains the substring `" Stats "` (space before Stats from "Rebuild", then stats, then gap spaces), so the assertion was updated to check for the old block-title pattern `"─ Stats"` or `"Memory Stats"` instead. This preserves the original intent.
+
+2. **`MIN_PHASE_BAR_WIDTH` dead-code suppression**: Defined in this module as specified, with a `const _ = MIN_PHASE_BAR_WIDTH;` dummy reference to prevent dead-code lint. This keeps all responsive layout thresholds co-located as the task plan specifies.
+
+3. **Clippy struct-init pattern**: New tests use `PerformanceState { field: val, ..Default::default() }` initializer syntax to satisfy `field_reassign_with_default` lint.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test --workspace` - Passed (5,756+ tests, 0 failed)
+  - New tests in `performance::tests` — 6 tests added, all passed
+  - New tests in `performance::details::tests` — 14 tests added, all passed
+
+### Risks/Limitations
+
+1. **T05 stub**: `frame_analysis_tab.rs` renders a single placeholder line. T05 must replace this with real content.
+2. **Mouse click regions on tabs**: Not implemented per task scope. Phase 3 can add click regions.
+3. **`render_with_regions` parity**: The `render_with_regions` parity test now renders at 80×24 which falls below `MIN_DUAL_PANE_HEIGHT` (18) + compact threshold — the buffers remain identical since both paths go through `render_chart_only`.

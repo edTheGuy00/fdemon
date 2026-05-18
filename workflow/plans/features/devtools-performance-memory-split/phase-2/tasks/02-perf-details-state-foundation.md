@@ -250,4 +250,32 @@ fn perf_details_tab_prev_wraps() {
 
 ## Completion Summary
 
-(Filled in by implementor after work completes.)
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `PerfDetailsTab` enum (3 variants + `next`/`prev` impl) and 3 new tests |
+| `crates/fdemon-app/src/session/performance.rs` | Added `use crate::state::PerfDetailsTab` import; fixed `PerfSection::next/prev` to cycle properly; added 3 new fields to `PerformanceState` + `Default`; renamed Phase 1 noop tests; added `performance_state_defaults_phase_2_fields` test |
+| `crates/fdemon-app/src/message.rs` | Added `PerfDetailsTab` to import; added `PerfCycleDetailsTab { forward: bool }` and `PerfFocusDetailsTab(PerfDetailsTab)` variants |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub dispatch arms for both new message variants (T03 replaces with real handlers) |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Updated 3 tests that encoded Phase 1 no-op behavior to reflect Phase 2 cycling |
+| `crates/fdemon-tui/src/widgets/devtools/performance/tests.rs` | Updated 1 test asserting Phase 1 no-op behavior to reflect Phase 2 cycling |
+
+### Notable Decisions/Tradeoffs
+
+1. **Stub arms in update.rs**: The match in `update.rs` has no catch-all wildcard, so both new `Message` variants required stub `=> UpdateResult::none()` arms. These are annotated with a comment that T03 will replace them with real handlers.
+2. **Phase 1 test migration**: Six tests across three files (performance.rs handler, performance.rs session, performance/tests.rs TUI) encoded the Phase 1 no-op behavior. All were updated to assert the new Phase 2 cycling semantics rather than deleted, preserving test intent.
+3. **`PerfDetailsTab` in `state::` only**: Confirmed that `DetailsTab` (inspector) is not re-exported through `session::`, so `PerfDetailsTab` stays in `state::` alone — not added to session/mod.rs re-exports.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed (green)
+- `cargo test --workspace` - Passed (all test suites pass, zero failures)
+- `cargo fmt --all` - Applied, no compilation regressions
+
+### Risks/Limitations
+
+1. **Stub handlers**: `PerfCycleDetailsTab` and `PerfFocusDetailsTab` dispatch to `UpdateResult::none()` until T03 lands. Any test that emits these messages will see no state change — acceptable since no tests emit them yet except the new ones defined by this task.

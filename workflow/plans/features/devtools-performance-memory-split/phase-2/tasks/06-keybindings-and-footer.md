@@ -109,4 +109,30 @@ fn performance_footer_mentions_details_tab_cycling() {
 
 ## Completion Summary
 
-(Filled in by implementor after work completes.)
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Added `]` and `[` rows to Performance Panel section; added note that cycling requires Details pane focus and two tabs are Phase 3 stubs |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Updated Performance arm of `render_footer` to `[Esc] Logs  [←/→] Frames  [Tab] Section  []/[] Tabs  [j/k] Scroll  [b] Browser`; added two new tests: `performance_footer_mentions_details_tab_cycling` and `performance_footer_mentions_tab_section_cycling` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Ctrl+p` PerfOverlay dropped from footer**: Per the task's recommendation, removed `[Ctrl+p] PerfOverlay` from the Performance footer to make room for `[Tab] Section` and `[]/[] Tabs`. The `PerfOverlay` indicator still appears in the tab bar when the overlay is active, and `Ctrl+p` is documented in KEYBINDINGS.md under the Performance panel table — it's not lost, just deprioritised in the narrow footer hint line.
+2. **KEYBINDINGS.md `]`/`[` placement**: Added as new rows in the existing Performance Panel table between `Tab`/`Shift+Tab` and `↑`/`k`, matching the doc's existing pattern (per-panel table with no context column).
+3. **Two tests added**: `performance_footer_mentions_details_tab_cycling` (checks `]/[` and `Tabs`) and `performance_footer_mentions_tab_section_cycling` (checks `Section`) — both reuse the existing `footer_string` helper.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui` - Passed (1134 tests)
+- `cargo test --workspace` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Footer truncation on narrow terminals**: The new string is ~83 chars; terminals narrower than ~85 columns will see it truncated by the existing `chars().take(max_width)` path. This is acceptable per the task notes — narrower truncation is expected behaviour.

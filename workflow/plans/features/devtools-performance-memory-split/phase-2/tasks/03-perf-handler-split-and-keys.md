@@ -311,4 +311,34 @@ fn bracket_close_when_frame_chart_focused_is_noop() {
 
 ## Completion Summary
 
-(Filled in by implementor after work completes.)
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | DELETED — replaced by directory module |
+| `crates/fdemon-app/src/handler/devtools/performance/mod.rs` | NEW — module decls + re-exports for both frame and details submodules |
+| `crates/fdemon-app/src/handler/devtools/performance/frame.rs` | NEW — all existing frame handlers moved verbatim; Phase 1 no-op comments updated to Phase 2; T03 integration test added |
+| `crates/fdemon-app/src/handler/devtools/performance/details.rs` | NEW — `handle_perf_cycle_details_tab` and `handle_perf_focus_details_tab` with inline test module |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `PerfSection` import; added `]`/`[` routing inside `if in_performance` block; added 4 bracket-key tests to `performance_sort_key_tests` |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced T02 no-op stubs for `PerfCycleDetailsTab` and `PerfFocusDetailsTab` with real dispatch arms |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import path for `ScrollDir` in frame.rs tests**: The original `performance.rs` used `super::super::ScrollDir`, which worked one level of nesting ago. After the move to `performance/frame.rs`, that path was wrong. Used the absolute `crate::handler::devtools::ScrollDir` path instead for clarity.
+2. **`use super::*` removed from details.rs tests**: The tests dispatch via `update()` rather than calling handler functions directly, so `super::*` was unused and removed to keep clippy clean.
+3. **`tab_cycles_between_frame_chart_and_details` test preserved**: The original test existed in `performance.rs`; the renamed `tab_now_cycles_to_details_in_phase_2` integration test was added alongside it rather than replacing it, giving both a concise and a verbose form of the same invariant.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo test --workspace` — PASS (all test results: ok, zero failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+
+### Risks/Limitations
+
+1. **Phase 3 scroll**: The `PerfSection::Details` arms in scroll/page/jump handlers remain no-ops as specified. Phase 3 will add per-tab scroll dispatch.
+2. **Mouse click on tab strip**: Not wired up in Phase 2 as per spec. Phase 3 will emit `PerfFocusDetailsTab` from mouse-click regions.

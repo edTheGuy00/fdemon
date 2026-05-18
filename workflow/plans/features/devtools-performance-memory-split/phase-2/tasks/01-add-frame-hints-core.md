@@ -223,4 +223,35 @@ mod tests {
 
 ## Completion Summary
 
-(Filled in by implementor after work completes.)
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/frame_hints.rs` | **NEW** — `FramePhaseKind` enum, `FrameHint` enum with `message()`, `frame_hints()` builder, constants, 15 inline unit tests |
+| `crates/fdemon-core/src/lib.rs` | Added `pub mod frame_hints;` declaration and `pub use frame_hints::{frame_hints, FrameHint, FramePhaseKind, MAX_HINTS_PER_FRAME};` re-export at crate root |
+
+### Notable Decisions/Tradeoffs
+
+1. **`FramePhaseKind::Raster` variant included**: The enum includes a `Raster` variant for completeness and future use, even though `LongestUiPhase` only ever uses `Build`/`Layout`/`Paint` (raster is a separate thread). This makes the type exhaustive and avoids a future breaking change.
+
+2. **`display_name()` helper on `FramePhaseKind`**: Added to encapsulate the phase label string close to the type, keeping rendering code simple and free of pattern-matching on `FramePhaseKind`.
+
+3. **`MAX_HINTS_PER_FRAME` exported from crate root**: The constant is useful to renderers that need to pre-allocate or cap display lists, so it is re-exported alongside the enum and function.
+
+4. **No `chrono` import in production code**: The test helper uses `chrono::Local::now()` to construct `FrameTiming` values, but the `frame_hints()` function itself is timestamp-agnostic per the task instructions.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-core` — Passed (475 tests, 15 new frame_hints tests all green)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`phases.raster_micros` excluded from `LongestUiPhase` candidates**: The raster phase runs on a separate thread so it should not be compared against UI phases. This matches DevTools semantics but is a semantic subtlety worth noting for future maintainers.
+
+2. **Doctest ignored**: The `//! ## Usage` code block uses `rust,ignore` because `FrameTiming` construction requires a `chrono::DateTime` which makes doctests awkward at the crate level. The inline `#[cfg(test)]` suite provides full coverage instead.
