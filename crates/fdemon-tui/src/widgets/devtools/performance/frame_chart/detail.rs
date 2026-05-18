@@ -17,6 +17,11 @@ use super::super::styles::{fps_style, jank_style};
 
 impl FrameChart<'_> {
     /// Render the 3-line detail panel below the chart.
+    ///
+    /// **Used only in the chart-only fallback** (`area.height < MIN_DUAL_PANE_HEIGHT`).
+    /// The dual-pane Performance layout renders frame details inside the Details
+    /// pane via [`super::super::details::frame_analysis_tab`] — that path supersedes
+    /// this one when the terminal is tall enough.
     pub(super) fn render_detail_panel(&self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
             return;

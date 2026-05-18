@@ -355,9 +355,9 @@ pub fn render_with_regions(
     widget.render_impl(area, buf, ctx);
 }
 
-// Suppress the dead-code warning for MIN_PHASE_BAR_WIDTH, which is defined here
-// for co-location of thresholds but consumed by T05.
-#[allow(dead_code)]
+// MIN_PHASE_BAR_WIDTH is consumed by `details::frame_analysis_tab` (T05).
+// The child module can access this private constant because child modules
+// may access private items of their ancestor modules in Rust.
 const _: u16 = MIN_PHASE_BAR_WIDTH;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

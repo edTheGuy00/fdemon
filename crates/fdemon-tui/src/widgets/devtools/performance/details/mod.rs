@@ -260,15 +260,15 @@ mod tests {
     // ── Dispatch: frame_analysis tab ─────────────────────────────────────────
 
     #[test]
-    fn render_dispatches_frame_analysis_stub() {
+    fn render_dispatches_frame_analysis_content() {
         let perf = make_perf_with_tab(PerfDetailsTab::FrameAnalysis);
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
         render(buf.area, &mut buf, &perf);
         let text = collect_text(&buf);
-        // Should show the stub placeholder.
+        // No frame selected → shows the no-selection prompt (T05 content).
         assert!(
-            text.contains("Frame Analysis") || text.contains("stub") || text.contains("T05"),
-            "expected frame analysis stub content, got:\n{text}"
+            text.contains("Select a frame above"),
+            "expected frame analysis no-selection prompt, got:\n{text}"
         );
     }
 
