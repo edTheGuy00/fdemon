@@ -2302,11 +2302,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::NetworkFilterBackspace => devtools::network::handle_filter_backspace(state),
 
-        // ── Performance Panel UI Messages ─────────────────────────────────────
-        Message::ToggleAllocationSort => {
-            devtools::performance::handle_toggle_allocation_sort(state)
+        // ── Memory Panel UI Messages ──────────────────────────────────────────
+        Message::MemToggleSort => devtools::memory::handle_toggle_allocation_sort(state),
+        Message::MemFocusSection(section) => {
+            devtools::memory::handle_mem_focus_section(state, section)
+        }
+        Message::MemScrollUp => {
+            devtools::memory::handle_mem_scroll(state, devtools::memory::ScrollDir::Up)
+        }
+        Message::MemScrollDown => {
+            devtools::memory::handle_mem_scroll(state, devtools::memory::ScrollDir::Down)
+        }
+        Message::MemPageUp => {
+            devtools::memory::handle_mem_page(state, devtools::memory::ScrollDir::Up)
+        }
+        Message::MemPageDown => {
+            devtools::memory::handle_mem_page(state, devtools::memory::ScrollDir::Down)
+        }
+        Message::MemJumpToStart => devtools::memory::handle_mem_jump_to_start(state),
+        Message::MemJumpToEnd => devtools::memory::handle_mem_jump_to_end(state),
+        Message::MemSelectAllocRow { index } => {
+            devtools::memory::handle_mem_select_alloc_row(state, index)
         }
 
+        // ── Performance Panel UI Messages ─────────────────────────────────────
         // ── Performance panel interactivity (Phase 2 handlers) ───────────────
         Message::PerfFocusSection(section) => {
             devtools::performance::handle_perf_focus_section(state, section)
@@ -2325,9 +2344,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
         Message::PerfJumpToStart => devtools::performance::handle_perf_jump_to_start(state),
         Message::PerfJumpToEnd => devtools::performance::handle_perf_jump_to_end(state),
-        Message::PerfSelectAllocRow { index } => {
-            devtools::performance::handle_perf_select_alloc_row(state, index)
-        }
 
         // ─────────────────────────────────────────────────────────────────────
         // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 03)

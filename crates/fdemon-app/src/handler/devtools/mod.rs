@@ -10,6 +10,7 @@
 
 pub(crate) mod debug;
 pub mod inspector;
+pub(crate) mod memory;
 pub(crate) mod network;
 pub(crate) mod performance;
 
@@ -22,10 +23,8 @@ pub use inspector::{
     handle_widget_tree_fetch_timeout, handle_widget_tree_fetched,
 };
 
-pub(crate) use performance::{
-    handle_allocation_profile_received, handle_memory_sample_received,
-    handle_select_performance_frame,
-};
+pub(crate) use memory::{handle_allocation_profile_received, handle_memory_sample_received};
+pub(crate) use performance::handle_select_performance_frame;
 
 use crate::config::DevToolsSettings;
 use crate::handler::{FetchTrigger, UpdateAction, UpdateResult};
@@ -395,10 +394,11 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
     // from both. The `watch` channel coalesces rapid toggles so burst panel
     // switches do not create burst fetches.
     let old_panel = state.devtools_view_state.active_panel;
-    let leaving_alloc_panel = matches!(
-        old_panel,
-        DevToolsPanel::Performance | DevToolsPanel::Memory
-    ) && !matches!(panel, DevToolsPanel::Performance | DevToolsPanel::Memory);
+    let leaving_alloc_panel =
+        matches!(
+            old_panel,
+            DevToolsPanel::Performance | DevToolsPanel::Memory
+        ) && !matches!(panel, DevToolsPanel::Performance | DevToolsPanel::Memory);
     if leaving_alloc_panel {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {

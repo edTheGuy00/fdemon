@@ -6,9 +6,7 @@
 
 use std::cell::Cell;
 
-use fdemon_core::performance::{
-    AllocationProfile, GcEvent, MemorySample, MemoryUsage, RingBuffer,
-};
+use fdemon_core::performance::{AllocationProfile, GcEvent, MemorySample, MemoryUsage, RingBuffer};
 
 /// Default number of memory snapshots to keep (at 2s interval = 2 minutes).
 pub(crate) const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;

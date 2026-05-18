@@ -4,6 +4,7 @@ use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
+use crate::session::memory::MemorySection;
 use crate::session::performance::PerfSection;
 use crate::session::{NetworkDetailTab, SessionId};
 use crate::state::DevToolsPanel;
@@ -1131,10 +1132,27 @@ pub enum Message {
     /// Delete last character from filter input buffer.
     NetworkFilterBackspace,
 
-    // ── Performance Panel UI Messages ─────────────────────────────────────────
-    /// Toggle the allocation table sort column (Size ↔ Instances).
-    ToggleAllocationSort,
+    // ── Memory Panel UI Messages ──────────────────────────────────────────────
+    /// Cycle focus within the Memory panel sections (Chart ↔ AllocationList).
+    MemFocusSection(MemorySection),
+    /// Scroll the focused Memory section up by one unit (one row / one sample).
+    MemScrollUp,
+    /// Scroll the focused Memory section down by one unit.
+    MemScrollDown,
+    /// Page the focused Memory section up by a viewport-height unit.
+    MemPageUp,
+    /// Page the focused Memory section down by a viewport-height unit.
+    MemPageDown,
+    /// Jump to the oldest / first item in the focused Memory section.
+    MemJumpToStart,
+    /// Jump to the live edge / last item in the focused Memory section.
+    MemJumpToEnd,
+    /// Select an allocation table row (or deselect with `None`).
+    MemSelectAllocRow { index: Option<usize> },
+    /// Toggle the allocation table sort column (BySize ↔ ByInstances).
+    MemToggleSort,
 
+    // ── Performance Panel UI Messages ─────────────────────────────────────────
     // --- Performance panel interactivity ---
     /// Move keyboard focus to the given sub-section within the Performance panel.
     PerfFocusSection(PerfSection),
@@ -1150,8 +1168,6 @@ pub enum Message {
     PerfJumpToStart,
     /// Jump to the last item in the focused Performance panel section.
     PerfJumpToEnd,
-    /// Select a row in the allocation table, or clear selection when `index` is `None`.
-    PerfSelectAllocRow { index: Option<usize> },
 
     // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)

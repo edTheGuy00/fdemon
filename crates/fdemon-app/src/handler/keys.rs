@@ -449,9 +449,7 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
     let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
-    // in_memory is intentionally unused here; T03 will add Memory-specific key bindings.
     let in_memory = state.devtools_view_state.active_panel == DevToolsPanel::Memory;
-    let _ = in_memory;
     let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
     let details_open = in_inspector && state.devtools_view_state.inspector.details_open;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
@@ -525,6 +523,39 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         }
     }
 
+    // ── Memory panel — section navigation and scroll ─────────────────────────
+    //
+    // These bindings MUST be evaluated before the generic `match key` block so
+    // that Tab/Shift+Tab, j/k, Up/Down, PageUp/Down, Home/End are intercepted
+    // when the Memory panel is active.
+    if in_memory {
+        match key {
+            InputKey::Tab => {
+                let next = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.memory.focused_section.next())
+                    .unwrap_or_default();
+                return Some(Message::MemFocusSection(next));
+            }
+            InputKey::BackTab => {
+                let prev = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.memory.focused_section.prev())
+                    .unwrap_or_default();
+                return Some(Message::MemFocusSection(prev));
+            }
+            InputKey::Up | InputKey::Char('k') => return Some(Message::MemScrollUp),
+            InputKey::Down | InputKey::Char('j') => return Some(Message::MemScrollDown),
+            InputKey::PageUp => return Some(Message::MemPageUp),
+            InputKey::PageDown => return Some(Message::MemPageDown),
+            InputKey::Home => return Some(Message::MemJumpToStart),
+            InputKey::End => return Some(Message::MemJumpToEnd),
+            _ => {}
+        }
+    }
+
     match key {
         // ── Exit DevTools / deselect frame ────────────────────────────────────
         //
@@ -543,6 +574,16 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     .unwrap_or(false);
                 if frame_selected {
                     return Some(Message::SelectPerformanceFrame { index: None });
+                }
+            }
+            if in_memory {
+                let row_selected = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.memory.alloc_table_selected_row.is_some())
+                    .unwrap_or(false);
+                if row_selected {
+                    return Some(Message::MemSelectAllocRow { index: None });
                 }
             }
             if in_network {
@@ -693,13 +734,13 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             active_id.map(|session_id| Message::RequestWidgetTree { session_id })
         }
 
-        // ── Performance panel — allocation table sort ─────────────────────────
+        // ── Memory panel — allocation table sort ──────────────────────────────
         //
         // 's' toggles the allocation table sort column between BySize and
-        // ByInstances. This binding is only active in the Performance panel;
+        // ByInstances. This binding is only active in the Memory panel;
         // in the Network panel 's' switches to the ResponseBody sub-tab (handled
         // above with the `in_network` guard), so there is no conflict.
-        InputKey::Char('s') if in_performance => Some(Message::ToggleAllocationSort),
+        InputKey::Char('s') if in_memory => Some(Message::MemToggleSort),
 
         // ── Performance panel frame navigation ────────────────────────────────
         //
@@ -1799,6 +1840,16 @@ mod performance_sort_key_tests {
         state
     }
 
+    /// Create a state with one session in DevTools / Memory panel.
+    fn make_state_in_memory_panel() -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Memory;
+        state
+    }
+
     /// Create a state with one session in DevTools / Network panel.
     fn make_state_in_network_panel() -> AppState {
         let mut state = AppState::new();
@@ -1810,12 +1861,23 @@ mod performance_sort_key_tests {
     }
 
     #[test]
-    fn test_s_in_performance_panel_emits_toggle_allocation_sort() {
-        let state = make_state_in_performance_panel();
+    fn test_s_in_memory_panel_emits_mem_toggle_sort() {
+        let state = make_state_in_memory_panel();
         let msg = handle_key_devtools(&state, InputKey::Char('s'));
         assert!(
-            matches!(msg, Some(Message::ToggleAllocationSort)),
-            "'s' in Performance panel should emit ToggleAllocationSort"
+            matches!(msg, Some(Message::MemToggleSort)),
+            "'s' in Memory panel should emit MemToggleSort"
+        );
+    }
+
+    #[test]
+    fn test_s_in_performance_panel_does_not_emit_sort() {
+        let state = make_state_in_performance_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('s'));
+        // 's' is no longer bound in the Performance panel.
+        assert!(
+            !matches!(msg, Some(Message::MemToggleSort)),
+            "'s' in Performance panel should NOT emit MemToggleSort"
         );
     }
 
@@ -1823,7 +1885,7 @@ mod performance_sort_key_tests {
     fn test_s_in_network_panel_emits_response_body_tab() {
         let state = make_state_in_network_panel();
         let msg = handle_key_devtools(&state, InputKey::Char('s'));
-        // In the Network panel 's' maps to NetworkSwitchDetailTab(ResponseBody), not ToggleAllocationSort.
+        // In the Network panel 's' maps to NetworkSwitchDetailTab(ResponseBody), not MemToggleSort.
         assert!(
             matches!(
                 msg,
@@ -1846,6 +1908,53 @@ mod performance_sort_key_tests {
         let msg = handle_key_devtools(&state, InputKey::Char('s'));
         // 's' has no binding in the Inspector panel.
         assert!(msg.is_none(), "'s' in Inspector panel should return None");
+    }
+
+    #[test]
+    fn memory_panel_tab_cycles_memory_section() {
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            matches!(msg, Some(Message::MemFocusSection(_))),
+            "Tab in Memory panel should emit MemFocusSection"
+        );
+    }
+
+    #[test]
+    fn memory_panel_j_emits_mem_scroll_down() {
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('j'));
+        assert!(
+            matches!(msg, Some(Message::MemScrollDown)),
+            "'j' in Memory panel should emit MemScrollDown"
+        );
+    }
+
+    #[test]
+    fn memory_panel_esc_without_selection_exits() {
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::DevToolsEscape)),
+            "Esc in Memory panel without selection should emit DevToolsEscape"
+        );
+    }
+
+    #[test]
+    fn memory_panel_esc_with_selection_deselects_first() {
+        let mut state = make_state_in_memory_panel();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .memory
+            .alloc_table_selected_row = Some(3);
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::MemSelectAllocRow { index: None })),
+            "Esc in Memory panel with row selected should emit MemSelectAllocRow{{index: None}}"
+        );
     }
 }
 

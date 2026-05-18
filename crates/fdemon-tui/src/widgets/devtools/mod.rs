@@ -5,10 +5,12 @@
 //! dispatches to the active panel below it.
 
 pub mod inspector;
+pub mod memory;
 pub mod network;
 pub mod performance;
 
 pub use inspector::WidgetInspector;
+pub use memory::MemoryPanel;
 pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
@@ -133,27 +135,19 @@ impl DevToolsView<'_> {
             DevToolsPanel::Performance => {
                 // Safety fallback for when no session is active.
                 // In practice DevTools mode is only reachable when a session exists.
-                // Note: PerformanceState and MemoryState contain Cell<usize> render-hint
-                // fields, which are !Sync, so stack-local defaults are used instead of
-                // LazyLock statics.
+                // Note: PerformanceState contains Cell<usize> render-hint fields,
+                // which are !Sync, so a stack-local default is used instead of a LazyLock static.
                 let default_perf;
-                let default_memory;
-                let (perf, memory, vm_connected) = match self.session {
-                    Some(s) => (
-                        &s.session.performance,
-                        &s.session.memory,
-                        s.session.vm_connected,
-                    ),
+                let (perf, vm_connected) = match self.session {
+                    Some(s) => (&s.session.performance, s.session.vm_connected),
                     None => {
                         default_perf = PerformanceState::default();
-                        default_memory = MemoryState::default();
-                        (&default_perf, &default_memory, false)
+                        (&default_perf, false)
                     }
                 };
 
                 let widget = PerformancePanel::new(
                     perf,
-                    memory,
                     vm_connected,
                     self.icons,
                     &self.state.connection_status,
@@ -162,14 +156,19 @@ impl DevToolsView<'_> {
                 performance::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Memory => {
-                // Placeholder body — T03 replaces with the real MemoryPanel widget.
-                let msg = Line::from(Span::styled(
-                    "Memory panel — coming next step.",
-                    Style::default().fg(palette::TEXT_MUTED),
-                ));
-                let y = chunks[1].y + chunks[1].height.saturating_sub(1) / 2;
-                let x = chunks[1].x + chunks[1].width.saturating_sub(msg.width() as u16) / 2;
-                buf.set_line(x, y, &msg, chunks[1].width);
+                // Safety fallback: MemoryState contains Cell<usize> render-hint fields (!Sync),
+                // so stack-local defaults are used instead of LazyLock statics.
+                let default_memory;
+                let (mem, _vm_connected) = match self.session {
+                    Some(s) => (&s.session.memory, s.session.vm_connected),
+                    None => {
+                        default_memory = MemoryState::default();
+                        (&default_memory, false)
+                    }
+                };
+
+                let widget = MemoryPanel::new(mem, true);
+                memory::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Network => {
                 // Safety fallback: DevTools mode is only reachable when a session
@@ -375,7 +374,14 @@ impl DevToolsView<'_> {
                 "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
             }
             DevToolsPanel::Memory => {
-                "[Esc] Logs  [i] Inspector  [p] Performance  [b] Browser"
+                let has_alloc_selection = self
+                    .session
+                    .is_some_and(|s| s.session.memory.alloc_table_selected_row.is_some());
+                if has_alloc_selection {
+                    "[Esc] Deselect  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser"
+                } else {
+                    "[Esc] Logs  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser"
+                }
             }
             DevToolsPanel::Network => {
                 let has_selection = self
@@ -1082,10 +1088,10 @@ mod tests {
         assert!(s.contains("[Shift+Tab] Prev Tab"), "footer was: {s}");
     }
 
-    // ── Memory panel placeholder tests ────────────────────────────────────────
+    // ── Memory panel tests ────────────────────────────────────────────────────
 
     #[test]
-    fn test_devtools_view_renders_memory_panel_placeholder() {
+    fn test_devtools_view_renders_memory_panel_without_panic() {
         let state = DevToolsViewState {
             active_panel: DevToolsPanel::Memory,
             ..Default::default()
@@ -1093,12 +1099,7 @@ mod tests {
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
-
-        let text = collect_buf_text(&buf, 80, 24);
-        assert!(
-            text.contains("Memory panel"),
-            "expected Memory placeholder text, got: {text:?}"
-        );
+        // Should not panic — Memory panel renders real widget
     }
 
     #[test]
@@ -1109,6 +1110,9 @@ mod tests {
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
-        assert!(text.contains("Memory"), "expected Memory tab, got: {text:?}");
+        assert!(
+            text.contains("Memory"),
+            "expected Memory tab, got: {text:?}"
+        );
     }
 }

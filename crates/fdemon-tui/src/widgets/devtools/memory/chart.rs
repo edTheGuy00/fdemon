@@ -1,4 +1,4 @@
-//! Chart rendering helpers for the memory chart.
+//! Chart rendering helpers for the memory panel.
 //!
 //! Contains the braille-based sample chart, the history fallback chart,
 //! the legend, and the y/x-axis label renderers.

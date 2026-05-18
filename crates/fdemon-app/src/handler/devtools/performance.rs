@@ -6,12 +6,8 @@
 //! alloc row selection).
 
 use crate::handler::UpdateResult;
-use crate::session::memory::{MemorySection, MemoryState};
 use crate::session::performance::PerfSection;
-use crate::session::AllocationSortColumn;
-use crate::session::SessionId;
 use crate::state::AppState;
-use fdemon_core::performance::{AllocationProfile, MemorySample};
 
 // ── Phase 2 scroll helpers ────────────────────────────────────────────────────
 
@@ -68,58 +64,6 @@ pub(crate) fn handle_select_performance_frame(
     UpdateResult::none()
 }
 
-/// Handle rich memory sample received from the VM service.
-///
-/// Pushes the sample into `MemoryState::memory_samples` for the session
-/// identified by `session_id`. No-op if the session does not exist.
-pub(crate) fn handle_memory_sample_received(
-    state: &mut AppState,
-    session_id: SessionId,
-    sample: MemorySample,
-) -> UpdateResult {
-    if let Some(handle) = state.session_manager.get_mut(session_id) {
-        handle.session.memory.memory_samples.push(sample);
-        handle.session.memory.monitoring_active = true;
-    }
-    UpdateResult::none()
-}
-
-/// Handle allocation profile snapshot received from the VM service.
-///
-/// Replaces `MemoryState::allocation_profile` with the new snapshot for
-/// the session identified by `session_id`. Only the most recent profile is
-/// retained in state. No-op if the session does not exist.
-pub(crate) fn handle_allocation_profile_received(
-    state: &mut AppState,
-    session_id: SessionId,
-    profile: AllocationProfile,
-) -> UpdateResult {
-    if let Some(handle) = state.session_manager.get_mut(session_id) {
-        tracing::debug!(
-            "Allocation profile received for session {}: {} classes",
-            session_id,
-            profile.members.len(),
-        );
-        handle.session.memory.allocation_profile = Some(profile);
-    }
-    UpdateResult::none()
-}
-
-/// Toggle the allocation table sort between [`AllocationSortColumn::BySize`]
-/// and [`AllocationSortColumn::ByInstances`].
-///
-/// No-op when no session is selected.
-pub(crate) fn handle_toggle_allocation_sort(state: &mut AppState) -> UpdateResult {
-    if let Some(handle) = state.session_manager.selected_mut() {
-        handle.session.memory.allocation_sort =
-            match handle.session.memory.allocation_sort {
-                AllocationSortColumn::BySize => AllocationSortColumn::ByInstances,
-                AllocationSortColumn::ByInstances => AllocationSortColumn::BySize,
-            };
-    }
-    UpdateResult::none()
-}
-
 // ── Phase 2 keyboard interactivity handlers ───────────────────────────────────
 
 /// Move keyboard focus to the given sub-section within the Performance panel.
@@ -142,15 +86,12 @@ pub(crate) fn handle_perf_focus_section(
 /// - `FrameChart` — adjusts `frame_chart_scroll_offset`, clamped to the frame history.
 /// - `DetailsTab` — no-op in Phase 1 (no content yet).
 ///
-/// Memory scrolling is also handled here (T02 transitional — T03 splits this).
-///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_scroll(state: &mut AppState, direction: ScrollDir) -> UpdateResult {
     let Some(handle) = state.session_manager.selected_mut() else {
         return UpdateResult::none();
     };
 
-    // Frame chart / details section (perf-owned).
     match handle.session.performance.focused_section {
         PerfSection::FrameChart => {
             let buf_len = handle.session.performance.frame_history.len();
@@ -172,37 +113,13 @@ pub(crate) fn handle_perf_scroll(state: &mut AppState, direction: ScrollDir) -> 
         }
     }
 
-    // Memory chart / alloc list section (memory-owned).
-    // T02 transitional: both sections still receive scroll from this handler.
-    // T03 will split into handle_mem_scroll.
-    match handle.session.memory.focused_section {
-        MemorySection::Chart => {
-            let buf_len = handle.session.memory.memory_samples.len();
-            let visible = handle.session.memory.memory_chart_visible_width.get();
-            let delta: i64 = match direction {
-                ScrollDir::Up => 1,
-                ScrollDir::Down => -1,
-            };
-            handle.session.memory.memory_chart_scroll_offset = clamp_chart_scroll(
-                buf_len,
-                visible,
-                handle.session.memory.memory_chart_scroll_offset,
-                delta,
-            );
-        }
-        MemorySection::AllocationList => {
-            scroll_alloc_table(&mut handle.session.memory, direction, 1);
-        }
-    }
-
     UpdateResult::none()
 }
 
 /// Scroll the focused Performance panel section by one page in `direction`.
 ///
-/// Page size is taken from the appropriate render hint (`frame_chart_visible_width`,
-/// `memory_chart_visible_width`, or `alloc_table_visible_height`); falls back to
-/// [`DEFAULT_PERF_PAGE_SIZE`] when the hint is 0 (not yet rendered).
+/// Page size is taken from the appropriate render hint (`frame_chart_visible_width`);
+/// falls back to [`DEFAULT_PERF_PAGE_SIZE`] when the hint is 0 (not yet rendered).
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> UpdateResult {
@@ -210,7 +127,6 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
         return UpdateResult::none();
     };
 
-    // Frame chart / details section (perf-owned).
     match handle.session.performance.focused_section {
         PerfSection::FrameChart => {
             let visible = handle.session.performance.frame_chart_visible_width.get();
@@ -236,42 +152,6 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
         }
     }
 
-    // Memory chart / alloc list section (memory-owned).
-    // T02 transitional: both sections still receive page from this handler.
-    // T03 will split into handle_mem_page.
-    match handle.session.memory.focused_section {
-        MemorySection::Chart => {
-            let visible = handle.session.memory.memory_chart_visible_width.get();
-            let page = if visible == 0 {
-                DEFAULT_PERF_PAGE_SIZE
-            } else {
-                visible
-            } as i64;
-            let buf_len = handle.session.memory.memory_samples.len();
-            let delta: i64 = match direction {
-                ScrollDir::Up => page,
-                ScrollDir::Down => -page,
-            };
-            handle.session.memory.memory_chart_scroll_offset = clamp_chart_scroll(
-                buf_len,
-                visible,
-                handle.session.memory.memory_chart_scroll_offset,
-                delta,
-            );
-        }
-        MemorySection::AllocationList => {
-            let page = {
-                let h = handle.session.memory.alloc_table_visible_height.get();
-                if h == 0 {
-                    DEFAULT_PERF_PAGE_SIZE
-                } else {
-                    h
-                }
-            };
-            scroll_alloc_table(&mut handle.session.memory, direction, page);
-        }
-    }
-
     UpdateResult::none()
 }
 
@@ -280,44 +160,25 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
 /// - `FrameChart`: set scroll offset to `max_back` (oldest data visible).
 /// - `DetailsTab`: no-op in Phase 1.
 ///
-/// Memory sections are also handled here (T02 transitional).
-///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
     let Some(handle) = state.session_manager.selected_mut() else {
         return UpdateResult::none();
     };
 
-    // Frame chart / details section (perf-owned).
     match handle.session.performance.focused_section {
         PerfSection::FrameChart => {
             let buf_len = handle.session.performance.frame_history.len();
-            let visible = handle.session.performance.frame_chart_visible_width.get().max(1);
-            handle.session.performance.frame_chart_scroll_offset =
-                buf_len.saturating_sub(visible);
+            let visible = handle
+                .session
+                .performance
+                .frame_chart_visible_width
+                .get()
+                .max(1);
+            handle.session.performance.frame_chart_scroll_offset = buf_len.saturating_sub(visible);
         }
         PerfSection::DetailsTab => {
             // No-op in Phase 1.
-        }
-    }
-
-    // Memory chart / alloc list section (memory-owned).
-    // T02 transitional: both sections still receive jump from this handler.
-    match handle.session.memory.focused_section {
-        MemorySection::Chart => {
-            let buf_len = handle.session.memory.memory_samples.len();
-            let visible = handle.session.memory.memory_chart_visible_width.get().max(1);
-            handle.session.memory.memory_chart_scroll_offset = buf_len.saturating_sub(visible);
-        }
-        MemorySection::AllocationList => {
-            // "Start" for a list means the first row (index 0).
-            let row_count = alloc_row_count_mem(&handle.session.memory);
-            if row_count > 0 {
-                handle.session.memory.alloc_table_selected_row = Some(0);
-            } else {
-                handle.session.memory.alloc_table_selected_row = None;
-            }
-            handle.session.memory.alloc_table_scroll_offset = 0;
         }
     }
 
@@ -329,15 +190,12 @@ pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
 /// - `FrameChart`: set scroll offset to 0 (live edge).
 /// - `DetailsTab`: no-op in Phase 1.
 ///
-/// Memory sections are also handled here (T02 transitional).
-///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
     let Some(handle) = state.session_manager.selected_mut() else {
         return UpdateResult::none();
     };
 
-    // Frame chart / details section (perf-owned).
     match handle.session.performance.focused_section {
         PerfSection::FrameChart => {
             handle.session.performance.frame_chart_scroll_offset = 0;
@@ -347,125 +205,18 @@ pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
         }
     }
 
-    // Memory chart / alloc list section (memory-owned).
-    // T02 transitional: both sections still receive jump from this handler.
-    match handle.session.memory.focused_section {
-        MemorySection::Chart => {
-            handle.session.memory.memory_chart_scroll_offset = 0;
-        }
-        MemorySection::AllocationList => {
-            let row_count = alloc_row_count_mem(&handle.session.memory);
-            if row_count > 0 {
-                handle.session.memory.alloc_table_selected_row = Some(row_count - 1);
-                // Scroll to show the last row.
-                let visible = {
-                    let h = handle.session.memory.alloc_table_visible_height.get();
-                    if h == 0 {
-                        DEFAULT_PERF_PAGE_SIZE
-                    } else {
-                        h
-                    }
-                };
-                handle.session.memory.alloc_table_scroll_offset =
-                    row_count.saturating_sub(visible);
-            } else {
-                handle.session.memory.alloc_table_selected_row = None;
-            }
-        }
-    }
-
     UpdateResult::none()
-}
-
-/// Select a row in the allocation table by index, or clear the selection when `index` is `None`.
-///
-/// When `index` is `Some(_)`, also sets `memory.focused_section = AllocationList` so the
-/// panel focus follows the selection (used for both keyboard Enter and mouse click on a row).
-///
-/// When `index` is `None` (click outside a row, or explicit clear), only clears the
-/// selection; focus is intentionally left unchanged so the user's current section
-/// focus is not disturbed.
-///
-/// No-op when no session is selected.
-pub(crate) fn handle_perf_select_alloc_row(
-    state: &mut AppState,
-    index: Option<usize>,
-) -> UpdateResult {
-    if let Some(handle) = state.session_manager.selected_mut() {
-        handle.session.memory.alloc_table_selected_row = index;
-        // Only pull focus to AllocationList when a concrete row is selected.
-        // Clearing the selection (index = None) must not disturb the current
-        // focused_section — a mouse click outside any row should not jump focus.
-        if index.is_some() {
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-        }
-    }
-    UpdateResult::none()
-}
-
-// ── Private helpers ───────────────────────────────────────────────────────────
-
-/// Return the number of rows in the allocation table for the given `MemoryState`.
-///
-/// Returns `profile.members.len()` when an allocation profile is available,
-/// otherwise 0.
-fn alloc_row_count_mem(mem: &MemoryState) -> usize {
-    mem.allocation_profile
-        .as_ref()
-        .map(|p| p.members.len())
-        .unwrap_or(0)
-}
-
-/// Scroll the allocation table selection by `steps` rows in `direction`,
-/// adjusting the scroll offset to keep the selection visible.
-///
-/// Used by both `handle_perf_scroll` (steps = 1) and `handle_perf_page` (steps = page_size).
-fn scroll_alloc_table(mem: &mut MemoryState, direction: ScrollDir, steps: usize) {
-    let row_count = alloc_row_count_mem(mem);
-    if row_count == 0 {
-        return;
-    }
-
-    let current_row = mem.alloc_table_selected_row.unwrap_or(0);
-
-    let new_row = match direction {
-        ScrollDir::Up => current_row.saturating_sub(steps),
-        ScrollDir::Down => (current_row + steps).min(row_count.saturating_sub(1)),
-    };
-
-    mem.alloc_table_selected_row = Some(new_row);
-
-    // Nudge scroll offset to keep new_row within the visible window.
-    let visible_height = {
-        let h = mem.alloc_table_visible_height.get();
-        if h == 0 {
-            DEFAULT_PERF_PAGE_SIZE
-        } else {
-            h
-        }
-    };
-
-    // Scroll forward if selection moved past the bottom of the visible window.
-    if new_row >= mem.alloc_table_scroll_offset + visible_height {
-        mem.alloc_table_scroll_offset = new_row.saturating_sub(visible_height - 1);
-    }
-    // Scroll back if selection moved above the top of the visible window.
-    if new_row < mem.alloc_table_scroll_offset {
-        mem.alloc_table_scroll_offset = new_row;
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::handle_toggle_allocation_sort;
     use crate::handler::update::update;
     use crate::message::Message;
-    use crate::session::AllocationSortColumn;
     use crate::session::SessionId;
     use crate::state::{AppState, DevToolsPanel, UiMode};
-    use fdemon_core::performance::{AllocationProfile, FrameTiming, MemorySample};
+    use fdemon_core::performance::FrameTiming;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -533,24 +284,6 @@ mod tests {
             .session_manager
             .selected()
             .and_then(|h| h.session.performance.selected_frame)
-    }
-
-    fn make_memory_sample() -> MemorySample {
-        MemorySample {
-            dart_heap: 10_000_000,
-            dart_native: 2_000_000,
-            raster_cache: 1_000_000,
-            allocated: 20_000_000,
-            rss: 50_000_000,
-            timestamp: chrono::Local::now(),
-        }
-    }
-
-    fn make_allocation_profile() -> AllocationProfile {
-        AllocationProfile {
-            members: vec![],
-            timestamp: chrono::Local::now(),
-        }
     }
 
     // ── Left arrow: frame navigation ─────────────────────────────────────────
@@ -797,303 +530,13 @@ mod tests {
         );
     }
 
-    // ── VmServiceMemorySample message ─────────────────────────────────────────
-
-    #[test]
-    fn test_memory_sample_received_pushes_to_buffer() {
-        let (mut state, session_id) = make_state_in_performance_panel();
-        let sample = make_memory_sample();
-
-        update(
-            &mut state,
-            Message::VmServiceMemorySample { session_id, sample },
-        );
-
-        let count = state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
-            .memory_samples
-            .len();
-        assert_eq!(count, 1, "One sample should be in the ring buffer");
-    }
-
-    #[test]
-    fn test_memory_sample_received_multiple_samples_accumulate() {
-        let (mut state, session_id) = make_state_in_performance_panel();
-
-        for _ in 0..3 {
-            update(
-                &mut state,
-                Message::VmServiceMemorySample {
-                    session_id,
-                    sample: make_memory_sample(),
-                },
-            );
-        }
-
-        let count = state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
-            .memory_samples
-            .len();
-        assert_eq!(
-            count, 3,
-            "Three samples should accumulate in the ring buffer"
-        );
-    }
-
-    #[test]
-    fn test_memory_sample_unknown_session_is_noop() {
-        let (mut state, _) = make_state_in_performance_panel();
-        let unknown_session_id: SessionId = 999_999;
-        let sample = make_memory_sample();
-
-        // Should not panic or change any state.
-        update(
-            &mut state,
-            Message::VmServiceMemorySample {
-                session_id: unknown_session_id,
-                sample,
-            },
-        );
-        // No assertions needed beyond "did not panic".
-    }
-
-    // ── VmServiceAllocationProfileReceived message ────────────────────────────
-
-    #[test]
-    fn test_allocation_profile_received_stores_profile() {
-        let (mut state, session_id) = make_state_in_performance_panel();
-        let profile = make_allocation_profile();
-
-        update(
-            &mut state,
-            Message::VmServiceAllocationProfileReceived {
-                session_id,
-                profile,
-            },
-        );
-
-        assert!(
-            state
-                .session_manager
-                .selected()
-                .unwrap()
-                .session
-                .memory
-                .allocation_profile
-                .is_some(),
-            "allocation_profile should be set after receiving profile"
-        );
-    }
-
-    #[test]
-    fn test_allocation_profile_replaces_previous() {
-        use fdemon_core::performance::ClassHeapStats;
-
-        let (mut state, session_id) = make_state_in_performance_panel();
-
-        // Store first profile.
-        let profile1 = AllocationProfile {
-            members: vec![ClassHeapStats {
-                class_name: "String".to_string(),
-                library_uri: None,
-                new_space_instances: 10,
-                new_space_size: 100,
-                old_space_instances: 5,
-                old_space_size: 50,
-            }],
-            timestamp: chrono::Local::now(),
-        };
-        update(
-            &mut state,
-            Message::VmServiceAllocationProfileReceived {
-                session_id,
-                profile: profile1,
-            },
-        );
-
-        // Store second profile (empty members).
-        let profile2 = AllocationProfile {
-            members: vec![],
-            timestamp: chrono::Local::now(),
-        };
-        update(
-            &mut state,
-            Message::VmServiceAllocationProfileReceived {
-                session_id,
-                profile: profile2,
-            },
-        );
-
-        let stored = state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
-            .allocation_profile
-            .as_ref()
-            .unwrap();
-        assert!(
-            stored.members.is_empty(),
-            "Second profile should replace the first; members should be empty"
-        );
-    }
-
-    #[test]
-    fn test_allocation_profile_unknown_session_is_noop() {
-        let (mut state, _) = make_state_in_performance_panel();
-        let unknown_session_id: SessionId = 999_999;
-        let profile = make_allocation_profile();
-
-        // Should not panic or change any state.
-        update(
-            &mut state,
-            Message::VmServiceAllocationProfileReceived {
-                session_id: unknown_session_id,
-                profile,
-            },
-        );
-    }
-
-    // ── ToggleAllocationSort handler ──────────────────────────────────────────
-
-    #[test]
-    fn test_toggle_allocation_sort_size_to_instances() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Default is BySize.
-        assert_eq!(
-            state
-                .session_manager
-                .selected()
-                .unwrap()
-                .session
-                .memory
-                .allocation_sort,
-            AllocationSortColumn::BySize
-        );
-
-        handle_toggle_allocation_sort(&mut state);
-
-        assert_eq!(
-            state
-                .session_manager
-                .selected()
-                .unwrap()
-                .session
-                .memory
-                .allocation_sort,
-            AllocationSortColumn::ByInstances,
-            "Toggle from BySize should produce ByInstances"
-        );
-    }
-
-    #[test]
-    fn test_toggle_allocation_sort_instances_to_size() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Set to ByInstances first.
-        state
-            .session_manager
-            .selected_mut()
-            .unwrap()
-            .session
-            .memory
-            .allocation_sort = AllocationSortColumn::ByInstances;
-
-        handle_toggle_allocation_sort(&mut state);
-
-        assert_eq!(
-            state
-                .session_manager
-                .selected()
-                .unwrap()
-                .session
-                .memory
-                .allocation_sort,
-            AllocationSortColumn::BySize,
-            "Toggle from ByInstances should produce BySize"
-        );
-    }
-
-    #[test]
-    fn test_toggle_allocation_sort_no_session_is_noop() {
-        // State with no sessions: toggle should not panic.
-        let mut state = AppState::new();
-        // Should not panic.
-        handle_toggle_allocation_sort(&mut state);
-    }
-
-    #[test]
-    fn test_toggle_allocation_sort_via_message() {
-        let (mut state, _) = make_state_in_performance_panel();
-
-        update(&mut state, Message::ToggleAllocationSort);
-
-        assert_eq!(
-            state
-                .session_manager
-                .selected()
-                .unwrap()
-                .session
-                .memory
-                .allocation_sort,
-            AllocationSortColumn::ByInstances,
-            "ToggleAllocationSort message should toggle from BySize to ByInstances"
-        );
-    }
-
     // ── Phase 2 keyboard interactivity tests ─────────────────────────────────
 
     use super::{
         handle_perf_focus_section, handle_perf_jump_to_end, handle_perf_jump_to_start,
-        handle_perf_page, handle_perf_scroll, handle_perf_select_alloc_row, ScrollDir,
+        handle_perf_page, handle_perf_scroll, ScrollDir,
     };
-    use crate::session::memory::MemorySection;
     use crate::session::performance::PerfSection;
-    use fdemon_core::performance::ClassHeapStats;
-
-    /// Push `count` synthetic memory samples into the current session.
-    fn push_memory_samples(state: &mut AppState, count: usize) {
-        if let Some(handle) = state.session_manager.selected_mut() {
-            for _ in 0..count {
-                handle.session.memory.memory_samples.push(MemorySample {
-                    dart_heap: 1_000_000,
-                    dart_native: 100_000,
-                    raster_cache: 50_000,
-                    allocated: 2_000_000,
-                    rss: 5_000_000,
-                    timestamp: chrono::Local::now(),
-                });
-            }
-        }
-    }
-
-    /// Install an allocation profile with `count` dummy class rows.
-    fn push_alloc_rows(state: &mut AppState, count: usize) {
-        if let Some(handle) = state.session_manager.selected_mut() {
-            let members = (0..count)
-                .map(|i| ClassHeapStats {
-                    class_name: format!("Class{}", i),
-                    library_uri: None,
-                    new_space_instances: i as u64,
-                    new_space_size: i as u64 * 100,
-                    old_space_instances: 0,
-                    old_space_size: 0,
-                })
-                .collect();
-            handle.session.memory.allocation_profile = Some(AllocationProfile {
-                members,
-                timestamp: chrono::Local::now(),
-            });
-        }
-    }
 
     fn perf_frame_scroll(state: &AppState) -> usize {
         state
@@ -1105,36 +548,6 @@ mod tests {
             .frame_chart_scroll_offset
     }
 
-    fn mem_memory_scroll(state: &AppState) -> usize {
-        state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
-            .memory_chart_scroll_offset
-    }
-
-    fn mem_alloc_row(state: &AppState) -> Option<usize> {
-        state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
-            .alloc_table_selected_row
-    }
-
-    fn mem_alloc_scroll(state: &AppState) -> usize {
-        state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
-            .alloc_table_scroll_offset
-    }
-
     fn perf_focused_section(state: &AppState) -> PerfSection {
         state
             .session_manager
@@ -1142,16 +555,6 @@ mod tests {
             .unwrap()
             .session
             .performance
-            .focused_section
-    }
-
-    fn mem_focused_section(state: &AppState) -> MemorySection {
-        state
-            .session_manager
-            .selected()
-            .unwrap()
-            .session
-            .memory
             .focused_section
     }
 
@@ -1276,72 +679,6 @@ mod tests {
         );
     }
 
-    // ── handle_perf_scroll — MemoryChart (now memory.memory_chart_scroll_offset) ─
-
-    #[test]
-    fn perf_scroll_up_in_memory_chart_increments_offset() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.memory_chart_visible_width.set(10);
-            handle.session.memory.focused_section = MemorySection::Chart;
-        }
-        push_memory_samples(&mut state, 100);
-
-        handle_perf_scroll(&mut state, ScrollDir::Up);
-
-        assert_eq!(mem_memory_scroll(&state), 1);
-    }
-
-    #[test]
-    fn perf_scroll_memory_chart_clamps_at_zero() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.memory_chart_visible_width.set(10);
-            handle.session.memory.focused_section = MemorySection::Chart;
-        }
-        push_memory_samples(&mut state, 100);
-
-        handle_perf_scroll(&mut state, ScrollDir::Down);
-
-        assert_eq!(mem_memory_scroll(&state), 0, "Down at 0 must clamp");
-    }
-
-    // ── handle_perf_scroll — AllocationList (memory.focused_section) ─────────
-
-    #[test]
-    fn perf_scroll_down_in_alloc_list_moves_selection() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-        }
-        push_alloc_rows(&mut state, 20);
-
-        handle_perf_scroll(&mut state, ScrollDir::Down);
-
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(1),
-            "Scrolling Down from row 0 should select row 1"
-        );
-    }
-
-    #[test]
-    fn perf_scroll_up_in_alloc_list_clamps_at_zero() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-        }
-        push_alloc_rows(&mut state, 20);
-
-        handle_perf_scroll(&mut state, ScrollDir::Up);
-
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(0),
-            "Scrolling Up from row 0 should stay at 0"
-        );
-    }
-
     // ── handle_perf_page ─────────────────────────────────────────────────────
 
     #[test]
@@ -1377,52 +714,6 @@ mod tests {
             perf_frame_scroll(&state),
             super::DEFAULT_PERF_PAGE_SIZE,
             "Page Up with hint=0 should use DEFAULT_PERF_PAGE_SIZE"
-        );
-    }
-
-    #[test]
-    fn perf_page_down_moves_alloc_list_by_visible_height() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_visible_height.set(5);
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-        }
-        push_alloc_rows(&mut state, 50);
-        // Set initial selection to row 10.
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_selected_row = Some(10);
-        }
-
-        handle_perf_page(&mut state, ScrollDir::Down);
-
-        // Down in a list moves toward higher indices: 10 + 5 = 15.
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(15),
-            "Page Down on AllocationList from row 10 with page=5 should land on row 15"
-        );
-    }
-
-    #[test]
-    fn perf_page_up_moves_alloc_list_back_by_visible_height() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_visible_height.set(5);
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-        }
-        push_alloc_rows(&mut state, 50);
-        // Set initial selection to row 10.
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_selected_row = Some(10);
-        }
-
-        handle_perf_page(&mut state, ScrollDir::Up);
-
-        // Up in a list moves toward lower indices: 10 - 5 = 5.
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(5),
-            "Page Up on AllocationList from row 10 with page=5 should land on row 5"
         );
     }
 
@@ -1462,93 +753,6 @@ mod tests {
             perf_frame_scroll(&state),
             1000 - 50,
             "Jump to start should set offset to buffer_len - visible_width"
-        );
-    }
-
-    #[test]
-    fn perf_jump_to_start_in_alloc_list_selects_row_zero() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-            handle.session.memory.alloc_table_selected_row = Some(19);
-            handle.session.memory.alloc_table_scroll_offset = 10;
-        }
-        push_alloc_rows(&mut state, 20);
-
-        handle_perf_jump_to_start(&mut state);
-
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(0),
-            "Jump to start in AllocationList should select row 0"
-        );
-        assert_eq!(
-            mem_alloc_scroll(&state),
-            0,
-            "Jump to start in AllocationList should reset scroll offset to 0"
-        );
-    }
-
-    #[test]
-    fn perf_jump_to_end_in_alloc_list_selects_last_row() {
-        let (mut state, _) = make_state_in_performance_panel();
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_visible_height.set(5);
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-        }
-        push_alloc_rows(&mut state, 20);
-
-        handle_perf_jump_to_end(&mut state);
-
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(19),
-            "Jump to end in AllocationList should select last row (index 19)"
-        );
-    }
-
-    // ── handle_perf_select_alloc_row ─────────────────────────────────────────
-
-    #[test]
-    fn perf_select_alloc_row_focuses_memory_list() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Start with memory focus on Chart.
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.focused_section = MemorySection::Chart;
-        }
-
-        handle_perf_select_alloc_row(&mut state, Some(3));
-
-        assert_eq!(mem_alloc_row(&state), Some(3));
-        assert_eq!(
-            mem_focused_section(&state),
-            MemorySection::AllocationList,
-            "Selecting an alloc row should move memory focus to AllocationList"
-        );
-    }
-
-    #[test]
-    fn perf_select_alloc_row_none_clears_selection_without_changing_focus() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Start with memory focus on Chart (not AllocationList).
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_selected_row = Some(5);
-            handle.session.memory.focused_section = MemorySection::Chart;
-        }
-
-        handle_perf_select_alloc_row(&mut state, None);
-
-        assert_eq!(
-            mem_alloc_row(&state),
-            None,
-            "index=None should clear the alloc row selection"
-        );
-        // Focus must NOT have jumped to AllocationList — clearing a selection from
-        // outside a row (mouse click on empty space) should leave focus alone.
-        assert_eq!(
-            mem_focused_section(&state),
-            MemorySection::Chart,
-            "index=None must not change memory.focused_section"
         );
     }
 
@@ -1618,16 +822,6 @@ mod tests {
         assert_eq!(perf_frame_scroll(&state), 0);
     }
 
-    #[test]
-    fn perf_select_alloc_row_message_routes_correctly() {
-        let (mut state, _) = make_state_in_performance_panel();
-
-        update(&mut state, Message::PerfSelectAllocRow { index: Some(7) });
-
-        assert_eq!(mem_alloc_row(&state), Some(7));
-        assert_eq!(mem_focused_section(&state), MemorySection::AllocationList);
-    }
-
     // ── Task 04: mouse/keyboard equivalence tests ─────────────────────────────
     //
     // The Phase 3 widget layer will register MouseRegions that emit the same
@@ -1664,57 +858,6 @@ mod tests {
         assert_eq!(
             perf_focused_section(&state_keyboard),
             PerfSection::DetailsTab,
-        );
-    }
-
-    /// `PerfSelectAllocRow { index: Some(_) }` sets both the selected row AND
-    /// moves memory.focused_section to AllocationList — whether triggered by keyboard or mouse.
-    #[test]
-    fn perf_select_alloc_row_with_some_focuses_memory_list() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Start with memory focus on Chart so the focus change is detectable.
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.focused_section = MemorySection::Chart;
-        }
-
-        update(&mut state, Message::PerfSelectAllocRow { index: Some(2) });
-
-        let handle = state.session_manager.selected().unwrap();
-        assert_eq!(
-            handle.session.memory.alloc_table_selected_row,
-            Some(2),
-            "PerfSelectAllocRow {{ index: Some(2) }} must set alloc_table_selected_row = Some(2)"
-        );
-        assert_eq!(
-            handle.session.memory.focused_section,
-            MemorySection::AllocationList,
-            "PerfSelectAllocRow {{ index: Some(_) }} must focus AllocationList"
-        );
-    }
-
-    /// `PerfSelectAllocRow { index: None }` clears the row selection but must
-    /// not change `memory.focused_section`. A mouse click outside any row should not
-    /// hijack the user's current section focus.
-    #[test]
-    fn perf_select_alloc_row_with_none_does_not_change_focus() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Park memory focus on Chart; this is the focus that must survive.
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_selected_row = Some(3);
-            handle.session.memory.focused_section = MemorySection::Chart;
-        }
-
-        update(&mut state, Message::PerfSelectAllocRow { index: None });
-
-        let handle = state.session_manager.selected().unwrap();
-        assert_eq!(
-            handle.session.memory.alloc_table_selected_row, None,
-            "PerfSelectAllocRow {{ index: None }} must clear alloc_table_selected_row"
-        );
-        assert_eq!(
-            handle.session.memory.focused_section,
-            MemorySection::Chart,
-            "PerfSelectAllocRow {{ index: None }} must NOT change memory.focused_section"
         );
     }
 
@@ -1887,67 +1030,6 @@ mod tests {
             perf_focused_section(&state),
             PerfSection::FrameChart,
             "Tab 2: DetailsTab → FrameChart (wraps around)"
-        );
-    }
-
-    /// Dispatching `PerfSelectAllocRow { index: Some(0) }` sets
-    /// `memory.focused_section = AllocationList` and `alloc_table_selected_row = Some(0)`.
-    #[test]
-    fn mouse_click_on_alloc_row_focuses_section() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // Start with memory focus on Chart.
-        assert_eq!(mem_focused_section(&state), MemorySection::Chart);
-        assert_eq!(mem_alloc_row(&state), None);
-
-        update(&mut state, Message::PerfSelectAllocRow { index: Some(0) });
-
-        assert_eq!(
-            mem_alloc_row(&state),
-            Some(0),
-            "PerfSelectAllocRow {{ index: Some(0) }} must set alloc_table_selected_row = Some(0)"
-        );
-        assert_eq!(
-            mem_focused_section(&state),
-            MemorySection::AllocationList,
-            "PerfSelectAllocRow {{ index: Some(0) }} must focus AllocationList"
-        );
-    }
-
-    /// When `alloc_table_selected_row = Some(20)` and `alloc_table_visible_height = 10`,
-    /// scrolling down adjusts `alloc_table_scroll_offset` so the selected row stays
-    /// within the visible window.
-    #[test]
-    fn alloc_table_scroll_keeps_selection_visible() {
-        let (mut state, _) = make_state_in_performance_panel();
-        // 50 rows, visible height = 10; selection starts at row 20.
-        if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.memory.alloc_table_visible_height.set(10);
-            handle.session.memory.focused_section = MemorySection::AllocationList;
-            handle.session.memory.alloc_table_selected_row = Some(20);
-            // Scroll offset is positioned so row 20 is just visible at the bottom
-            // of the current window: offset = 20 - (10 - 1) = 11.
-            handle.session.memory.alloc_table_scroll_offset = 11;
-        }
-        push_alloc_rows(&mut state, 50);
-
-        // Scroll Down one row — selection moves to row 21.
-        update(&mut state, Message::PerfScrollDown);
-
-        let new_row = mem_alloc_row(&state);
-        let new_scroll = mem_alloc_scroll(&state);
-
-        assert_eq!(
-            new_row,
-            Some(21),
-            "Scroll Down from row 20 must move selection to row 21"
-        );
-
-        // Row 21 must remain within the visible window [scroll, scroll + height).
-        assert!(
-            new_row.unwrap() >= new_scroll && new_row.unwrap() < new_scroll + 10,
-            "Selected row {new_row:?} must be within visible window \
-             [{new_scroll}, {})",
-            new_scroll + 10
         );
     }
 }

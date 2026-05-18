@@ -1,4 +1,4 @@
-//! Allocation table renderer for the memory chart.
+//! Allocation table renderer for the memory panel.
 //!
 //! Renders the class allocation table below the chart, showing
 //! the top classes sorted by either total size or total instance count.
@@ -12,7 +12,7 @@ use std::cell::Cell;
 use std::cmp::Reverse;
 
 use fdemon_app::session::AllocationSortColumn;
-use fdemon_app::session::PerfSection;
+use fdemon_app::session::MemorySection;
 use fdemon_app::MouseRect;
 use fdemon_app::{Message, MouseAction};
 use fdemon_core::performance::ClassHeapStats;
@@ -231,7 +231,7 @@ impl AllocationTable<'_> {
                 let row_rect = MouseRect::new(area.x, row_y, area.width, 1);
                 ctx.click(
                     row_rect,
-                    MouseAction::emit(Message::PerfSelectAllocRow {
+                    MouseAction::emit(Message::MemSelectAllocRow {
                         index: Some(global_idx),
                     }),
                 );
@@ -239,7 +239,7 @@ impl AllocationTable<'_> {
         }
 
         // ── Empty-area focus region ───────────────────────────────────────────
-        // Any click below the last visible row focuses the MemoryList section
+        // Any click below the last visible row focuses the AllocationList section
         // (but does not select a specific row).
 
         let used_rows = visible_slice.len() as u16;
@@ -251,11 +251,9 @@ impl AllocationTable<'_> {
         if remaining_height > 0 {
             if let Some(ctx) = mouse {
                 let remaining = MouseRect::new(area.x, remaining_y, area.width, remaining_height);
-                // T02 transitional: row click emits a no-op message because PerfSection no longer
-                // has MemoryList. T03 will replace this with Message::MemFocusSection(MemorySection::AllocationList).
                 ctx.click(
                     remaining,
-                    MouseAction::emit(Message::PerfFocusSection(PerfSection::FrameChart)),
+                    MouseAction::emit(Message::MemFocusSection(MemorySection::AllocationList)),
                 );
             }
         }
