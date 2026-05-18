@@ -94,6 +94,9 @@ pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -
     match state.devtools_view_state.active_panel {
         DevToolsPanel::Inspector => handle_inspector_scroll(dir, mods),
         DevToolsPanel::Performance => handle_performance_scroll(dir, mods),
+        // Memory panel uses the same scroll behaviour as Performance (row scroll,
+        // Shift for page step) until T03 introduces dedicated memory scroll logic.
+        DevToolsPanel::Memory => handle_performance_scroll(dir, mods),
         DevToolsPanel::Network => handle_network_scroll(state, dir, mods),
     }
 }
@@ -368,6 +371,7 @@ mod tests {
         for panel in [
             DevToolsPanel::Inspector,
             DevToolsPanel::Performance,
+            DevToolsPanel::Memory,
             DevToolsPanel::Network,
         ] {
             let s = state_with_panel(panel);

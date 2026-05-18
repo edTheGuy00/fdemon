@@ -153,6 +153,16 @@ impl DevToolsView<'_> {
                 .with_connection_error(self.state.vm_connection_error.as_deref());
                 performance::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
+            DevToolsPanel::Memory => {
+                // Placeholder body — T03 replaces with the real MemoryPanel widget.
+                let msg = Line::from(Span::styled(
+                    "Memory panel — coming next step.",
+                    Style::default().fg(palette::TEXT_MUTED),
+                ));
+                let y = chunks[1].y + chunks[1].height.saturating_sub(1) / 2;
+                let x = chunks[1].x + chunks[1].width.saturating_sub(msg.width() as u16) / 2;
+                buf.set_line(x, y, &msg, chunks[1].width);
+            }
             DevToolsPanel::Network => {
                 // Safety fallback: DevTools mode is only reachable when a session
                 // exists, but guard defensively.
@@ -203,6 +213,7 @@ impl DevToolsView<'_> {
         let tabs = [
             (DevToolsPanel::Inspector, "[i] Inspector"),
             (DevToolsPanel::Performance, "[p] Performance"),
+            (DevToolsPanel::Memory, "[m] Memory"),
             (DevToolsPanel::Network, "[n] Network"),
         ];
 
@@ -354,6 +365,9 @@ impl DevToolsView<'_> {
             }
             DevToolsPanel::Performance => {
                 "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
+            }
+            DevToolsPanel::Memory => {
+                "[Esc] Logs  [i] Inspector  [p] Performance  [b] Browser"
             }
             DevToolsPanel::Network => {
                 let has_selection = self
@@ -880,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn devtools_tab_bar_registers_three_click_regions() {
+    fn devtools_tab_bar_registers_four_click_regions() {
         use crate::render::MouseCtx;
         use fdemon_app::message::Message;
         use fdemon_app::{MouseAction, MouseRegions};
@@ -913,8 +927,8 @@ mod tests {
             .count();
 
         assert_eq!(
-            switch_panel_count, 3,
-            "expected 3 sub-tab SwitchDevToolsPanel regions, got {switch_panel_count}"
+            switch_panel_count, 4,
+            "expected 4 sub-tab SwitchDevToolsPanel regions, got {switch_panel_count}"
         );
     }
 
@@ -940,10 +954,15 @@ mod tests {
         }
 
         // Each tab region must be exactly 1 row tall and have width = len(" {label} ").
-        let expected_widths: Vec<u16> = [" [i] Inspector ", " [p] Performance ", " [n] Network "]
-            .iter()
-            .map(|s| s.len() as u16)
-            .collect();
+        let expected_widths: Vec<u16> = [
+            " [i] Inspector ",
+            " [p] Performance ",
+            " [m] Memory ",
+            " [n] Network ",
+        ]
+        .iter()
+        .map(|s| s.len() as u16)
+        .collect();
 
         let actual_widths: Vec<u16> = regions
             .iter()
@@ -1053,5 +1072,35 @@ mod tests {
             "navigate hint must not appear in details mode; footer was: {s}"
         );
         assert!(s.contains("[Shift+Tab] Prev Tab"), "footer was: {s}");
+    }
+
+    // ── Memory panel placeholder tests ────────────────────────────────────────
+
+    #[test]
+    fn test_devtools_view_renders_memory_panel_placeholder() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Memory,
+            ..Default::default()
+        };
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 24);
+        assert!(
+            text.contains("Memory panel"),
+            "expected Memory placeholder text, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_includes_memory_tab() {
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(text.contains("Memory"), "expected Memory tab, got: {text:?}");
     }
 }

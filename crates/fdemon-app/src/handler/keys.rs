@@ -449,6 +449,9 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
     let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
+    // in_memory is intentionally unused here; T03 will add Memory-specific key bindings.
+    let in_memory = state.devtools_view_state.active_panel == DevToolsPanel::Memory;
+    let _ = in_memory;
     let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
     let details_open = in_inspector && state.devtools_view_state.inspector.details_open;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
@@ -560,6 +563,9 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // 'p' always switches to Performance panel.
         InputKey::Char('p') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+
+        // 'm' always switches to Memory panel.
+        InputKey::Char('m') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory)),
 
         // 'n' always switches to Network panel.
         InputKey::Char('n') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network)),
@@ -2412,6 +2418,42 @@ mod inspector_phase1_key_tests {
                 Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
             ),
             "Right arrow in tree mode should still emit Expand"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_panel_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    #[test]
+    fn key_m_switches_to_memory_panel() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+
+        let msg = handle_key_devtools(&state, InputKey::Char('m'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory))
+            ),
+            "'m' in DevTools mode should emit SwitchDevToolsPanel(Memory), got: {msg:?}"
         );
     }
 }

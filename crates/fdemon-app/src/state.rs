@@ -136,6 +136,9 @@ pub enum DevToolsPanel {
     /// FPS, memory usage, and frame timing display.
     Performance,
 
+    /// Heap memory usage chart and allocation breakdown.
+    Memory,
+
     /// HTTP/WebSocket network request monitor.
     Network,
 }

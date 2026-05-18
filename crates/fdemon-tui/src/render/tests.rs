@@ -410,11 +410,11 @@ fn view_renders_expected_devtools_tab_regions_at_80x24() {
         })
         .collect();
 
-    // Inspector / Performance / Network — exactly 3 sub-tab click regions.
+    // Inspector / Performance / Memory / Network — exactly 4 sub-tab click regions.
     assert_eq!(
         tab_regions.len(),
-        3,
-        "expected 3 SwitchDevToolsPanel regions for the DevTools sub-tab bar, got {}",
+        4,
+        "expected 4 SwitchDevToolsPanel regions for the DevTools sub-tab bar, got {}",
         tab_regions.len()
     );
 }

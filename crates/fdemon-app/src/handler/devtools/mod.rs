@@ -163,6 +163,7 @@ pub fn map_rpc_error(raw: &str) -> DevToolsError {
 pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
     match panel {
         "performance" => DevToolsPanel::Performance,
+        "memory" | "mem" => DevToolsPanel::Memory,
         "network" | "net" => DevToolsPanel::Network,
         _ => DevToolsPanel::Inspector, // "layout" falls through to Inspector
     }
@@ -262,9 +263,13 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
-    // Unpause allocation polling when entering DevTools with Performance as the
-    // default panel so the user sees fresh allocation data immediately.
-    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+    // Unpause allocation polling when entering DevTools with Performance or
+    // Memory as the default panel so the user sees fresh allocation data
+    // immediately.
+    if matches!(
+        state.devtools_view_state.active_panel,
+        DevToolsPanel::Performance | DevToolsPanel::Memory
+    ) {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {
                 let _ = tx.send(false); // unpause
@@ -385,11 +390,16 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
 /// Inspector (widget tree). Pauses/unpauses allocation polling based on whether
 /// the Performance panel is becoming visible or hidden.
 pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> UpdateResult {
-    // Before switching, check if we are leaving the Performance panel — if so,
-    // pause allocation polling. The `watch` channel coalesces rapid toggles so
-    // burst panel switches do not create burst fetches.
+    // Before switching, check if we are leaving a panel that uses allocation
+    // polling (Performance or Memory). Pause alloc polling when navigating away
+    // from both. The `watch` channel coalesces rapid toggles so burst panel
+    // switches do not create burst fetches.
     let old_panel = state.devtools_view_state.active_panel;
-    if old_panel == DevToolsPanel::Performance && panel != DevToolsPanel::Performance {
+    let leaving_alloc_panel = matches!(
+        old_panel,
+        DevToolsPanel::Performance | DevToolsPanel::Memory
+    ) && !matches!(panel, DevToolsPanel::Performance | DevToolsPanel::Memory);
+    if leaving_alloc_panel {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {
                 let _ = tx.send(true); // pause
@@ -446,6 +456,16 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
             // The background task will fire one immediate fetch (via the
             // `alloc_pause_rx.changed()` arm) so the allocation table is
             // populated without waiting for the next scheduled tick.
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(ref tx) = handle.alloc_pause_tx {
+                    let _ = tx.send(false); // unpause
+                }
+            }
+        }
+        DevToolsPanel::Memory => {
+            // Unpause allocation polling when entering the Memory panel so the
+            // background task fires an immediate fetch. T03 will add real memory
+            // state and widget rendering; this arm keeps allocation data flowing.
             if let Some(handle) = state.session_manager.selected() {
                 if let Some(ref tx) = handle.alloc_pause_tx {
                     let _ = tx.send(false); // unpause
