@@ -1,13 +1,12 @@
-//! Performance panel handlers.
+//! Performance panel — frame selection and chart scroll/page/jump handlers.
 //!
-//! Handles frame selection and keyboard interactivity for the Performance
-//! panel's frame bar chart (section focus, scroll, page, jump).
+//! Contains all frame-chart interactivity: frame selection by index, section
+//! focus cycling, bar-chart scroll, page navigation, and jump-to-start/end.
 //!
-//! Memory and allocation profile handlers moved to [`super::memory`]. See
-//! [`crate::session::performance`] and [`crate::session::memory`] for the
-//! data ownership split.
+//! Phase 2 details-pane tab cycling lives in [`super::details`].
+//! Memory and allocation profile handlers live in [`super::super::memory`].
 
-use super::scroll_helpers::{clamp_chart_scroll, ScrollDir};
+use super::super::scroll_helpers::{clamp_chart_scroll, ScrollDir};
 use crate::handler::UpdateResult;
 use crate::session::performance::PerfSection;
 use crate::state::AppState;
@@ -62,7 +61,9 @@ pub(crate) fn handle_perf_focus_section(
 /// Dispatch table:
 ///
 /// - `FrameChart` — adjusts `frame_chart_scroll_offset`, clamped to the frame history.
-/// - `Details` — no-op in Phase 1 (no content yet; unreachable via Tab).
+/// - `Details` — no-op in Phase 2 — Frame Analysis tab content fits on screen with no
+///   scrolling. Phase 3's Rebuild Stats / Timeline Events tabs will use
+///   `details_pane_visible_height` to scroll.
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_scroll(state: &mut AppState, direction: ScrollDir) -> UpdateResult {
@@ -87,9 +88,9 @@ pub(crate) fn handle_perf_scroll(state: &mut AppState, direction: ScrollDir) -> 
             );
         }
         PerfSection::Details => {
-            // No-op in Phase 1 — details pane content arrives in Phase 2.
-            // This arm is unreachable via Tab (next()/prev() always return FrameChart)
-            // but kept for exhaustiveness against direct assignment.
+            // No-op in Phase 2 — Frame Analysis tab content fits on screen with no scrolling.
+            // Phase 3's Rebuild Stats / Timeline Events tabs will use
+            // `details_pane_visible_height` to scroll.
         }
     }
 
@@ -128,9 +129,9 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
             );
         }
         PerfSection::Details => {
-            // No-op in Phase 1 — details pane content arrives in Phase 2.
-            // This arm is unreachable via Tab (next()/prev() always return FrameChart)
-            // but kept for exhaustiveness against direct assignment.
+            // No-op in Phase 2 — Frame Analysis tab content fits on screen with no scrolling.
+            // Phase 3's Rebuild Stats / Timeline Events tabs will use
+            // `details_pane_visible_height` to scroll.
         }
     }
 
@@ -140,7 +141,7 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
 /// Jump to the furthest-back position in the focused section (oldest data / first row).
 ///
 /// - `FrameChart`: set scroll offset to `max_back` (oldest data visible).
-/// - `Details`: no-op in Phase 1.
+/// - `Details`: no-op in Phase 2.
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
@@ -160,7 +161,7 @@ pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
             handle.session.performance.frame_chart_scroll_offset = buf_len.saturating_sub(visible);
         }
         PerfSection::Details => {
-            // No-op in Phase 1. Unreachable via Tab; kept for exhaustiveness.
+            // No-op in Phase 2. Unreachable via Tab; kept for exhaustiveness.
         }
     }
 
@@ -170,7 +171,7 @@ pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
 /// Jump to the live edge in the focused section (newest data / last row).
 ///
 /// - `FrameChart`: set scroll offset to 0 (live edge).
-/// - `Details`: no-op in Phase 1.
+/// - `Details`: no-op in Phase 2.
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
@@ -183,7 +184,7 @@ pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
             handle.session.performance.frame_chart_scroll_offset = 0;
         }
         PerfSection::Details => {
-            // No-op in Phase 1. Unreachable via Tab; kept for exhaustiveness.
+            // No-op in Phase 2. Unreachable via Tab; kept for exhaustiveness.
         }
     }
 
@@ -514,11 +515,11 @@ mod tests {
 
     // ── Phase 2 keyboard interactivity tests ─────────────────────────────────
 
-    use super::super::ScrollDir;
     use super::{
         handle_perf_focus_section, handle_perf_jump_to_end, handle_perf_jump_to_start,
         handle_perf_page, handle_perf_scroll,
     };
+    use crate::handler::devtools::ScrollDir;
     use crate::session::performance::PerfSection;
 
     fn perf_frame_scroll(state: &AppState) -> usize {
@@ -992,10 +993,7 @@ mod tests {
         );
     }
 
-    /// Phase 1: Tab is a visible no-op — pressing Tab any number of times
-    /// must leave `focused_section` at `FrameChart`.
-    ///
-    /// This test verifies that Tab cycles between FrameChart and Details in Phase 2.
+    /// Phase 2: Tab cycles between FrameChart and Details.
     #[test]
     fn tab_cycles_between_frame_chart_and_details() {
         let (mut state, _) = make_state_in_performance_panel();
@@ -1014,6 +1012,47 @@ mod tests {
             perf_focused_section(&state),
             PerfSection::FrameChart,
             "Phase 2: second Tab wraps back to FrameChart"
+        );
+    }
+
+    /// T03 integration test: Tab cycles FrameChart → Details in Phase 2.
+    #[test]
+    fn tab_now_cycles_to_details_in_phase_2() {
+        let (mut state, _) = make_state_in_performance_panel();
+        // Initial state: focused_section == FrameChart (default)
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .focused_section,
+            PerfSection::FrameChart,
+        );
+        // Tab should now flip to Details (Phase 1 was a no-op).
+        dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .focused_section,
+            PerfSection::Details,
+        );
+        // Tab again returns to FrameChart.
+        dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .focused_section,
+            PerfSection::FrameChart,
         );
     }
 }

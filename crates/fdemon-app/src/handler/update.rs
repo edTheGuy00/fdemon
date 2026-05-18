@@ -2351,10 +2351,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::PerfJumpToStart => devtools::performance::handle_perf_jump_to_start(state),
         Message::PerfJumpToEnd => devtools::performance::handle_perf_jump_to_end(state),
 
-        // Performance details pane (Phase 2) — T03 replaces these stubs with
-        // real handlers.
-        Message::PerfCycleDetailsTab { .. } => UpdateResult::none(),
-        Message::PerfFocusDetailsTab(_) => UpdateResult::none(),
+        // Performance details pane (Phase 2).
+        Message::PerfCycleDetailsTab { forward } => {
+            devtools::performance::handle_perf_cycle_details_tab(state, forward)
+        }
+        Message::PerfFocusDetailsTab(tab) => {
+            devtools::performance::handle_perf_focus_details_tab(state, tab)
+        }
 
         // ─────────────────────────────────────────────────────────────────────
         // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 03)

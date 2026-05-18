@@ -2,6 +2,7 @@
 
 use crate::input_key::InputKey;
 use crate::message::{InspectorNav, Message, NetworkNav};
+use crate::session::performance::PerfSection;
 use crate::session::NetworkDetailTab;
 use crate::state::{AppState, DevToolsPanel, UiMode};
 
@@ -517,6 +518,27 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             // ── Jump to oldest / live edge ────────────────────────────────────
             InputKey::Home => return Some(Message::PerfJumpToStart),
             InputKey::End => return Some(Message::PerfJumpToEnd),
+
+            // ── Details tab cycling (Phase 2) ─────────────────────────────────
+            // Only active when the Details section is focused.
+            InputKey::Char(']') => {
+                let in_details = state
+                    .session_manager
+                    .selected()
+                    .is_some_and(|h| h.session.performance.focused_section == PerfSection::Details);
+                if in_details {
+                    return Some(Message::PerfCycleDetailsTab { forward: true });
+                }
+            }
+            InputKey::Char('[') => {
+                let in_details = state
+                    .session_manager
+                    .selected()
+                    .is_some_and(|h| h.session.performance.focused_section == PerfSection::Details);
+                if in_details {
+                    return Some(Message::PerfCycleDetailsTab { forward: false });
+                }
+            }
 
             // All other keys fall through to the main match.
             _ => {}
@@ -1954,6 +1976,57 @@ mod performance_sort_key_tests {
         assert!(
             matches!(msg, Some(Message::MemSelectAllocRow { index: None })),
             "Esc in Memory panel with row selected should emit MemSelectAllocRow{{index: None}}"
+        );
+    }
+
+    #[test]
+    fn bracket_close_when_details_focused_emits_cycle_forward() {
+        let mut state = make_state_in_performance_panel();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+        }
+        let msg = handle_key_devtools(&state, InputKey::Char(']'));
+        assert!(
+            matches!(msg, Some(Message::PerfCycleDetailsTab { forward: true })),
+            "']' when Details focused should emit PerfCycleDetailsTab{{forward: true}}"
+        );
+    }
+
+    #[test]
+    fn bracket_open_when_details_focused_emits_cycle_backward() {
+        let mut state = make_state_in_performance_panel();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+        }
+        let msg = handle_key_devtools(&state, InputKey::Char('['));
+        assert!(
+            matches!(msg, Some(Message::PerfCycleDetailsTab { forward: false })),
+            "'[' when Details focused should emit PerfCycleDetailsTab{{forward: false}}"
+        );
+    }
+
+    #[test]
+    fn bracket_close_when_frame_chart_focused_is_noop() {
+        let state = make_state_in_performance_panel();
+        // focused_section defaults to FrameChart
+        let msg = handle_key_devtools(&state, InputKey::Char(']'));
+        // Falls through to the outer match, which has no binding for ']' — None.
+        assert!(
+            msg.is_none(),
+            "']' when FrameChart focused should produce no message"
+        );
+    }
+
+    #[test]
+    fn bracket_open_when_frame_chart_focused_is_noop() {
+        let state = make_state_in_performance_panel();
+        // focused_section defaults to FrameChart
+        let msg = handle_key_devtools(&state, InputKey::Char('['));
+        assert!(
+            msg.is_none(),
+            "'[' when FrameChart focused should produce no message"
         );
     }
 }
