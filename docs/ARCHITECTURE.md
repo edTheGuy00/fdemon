@@ -241,6 +241,7 @@ flutter-demon/
 │   │       ├── prelude.rs        # Common imports
 │   │       ├── network.rs        # Network domain types (HttpProfileEntry, NetworkTiming, etc.)
 │   │       ├── performance.rs    # Performance domain types (FrameTiming, MemorySample, RingBuffer, etc.)
+│   │       ├── frame_hints.rs    # Refresh-rate-aware frame analysis hints (Phase 2 helper)
 │   │       └── widget_tree.rs    # Widget tree types (DiagnosticsNode, LayoutInfo, EdgeInsets, FlexChild, FlexFit, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize)
 │   │
 │   ├── fdemon-daemon/            # Flutter process management
@@ -301,7 +302,10 @@ flutter-demon/
 │   │       │   └── devtools/     # DevTools mode handlers
 │   │       │       ├── mod.rs    # Panel switching, enter/exit, overlays
 │   │       │       ├── inspector.rs  # Widget tree fetch, layout data fetch
-│   │       │       ├── performance.rs # Frame selection and chart navigation
+│   │       │       ├── performance/  # Performance handlers (split from performance.rs in Phase 2)
+│   │       │       │   ├── mod.rs    # Re-exports; panel entry/exit
+│   │       │       │   ├── frame.rs  # Frame chart navigation and selection
+│   │       │       │   └── details.rs # Details pane tab cycling and section focus
 │   │       │       ├── memory.rs     # Memory samples, allocation profile, memory chart/table nav
 │   │       │       └── network.rs    # Network navigation, recording, filter, polling
 │   │       ├── session/          # Per-device session state
@@ -376,12 +380,19 @@ flutter-demon/
 │                   │       ├── properties_tab.rs
 │                   │       ├── render_object_tab.rs
 │                   │       └── flex_explorer_tab.rs
-│                   ├── performance/  # Performance monitoring (frame chart only)
-│                   │   ├── mod.rs
-│                   │   └── frame_chart/  # Frame timing bar chart
-│                   │       ├── mod.rs
-│                   │       ├── bars.rs
-│                   │       └── detail.rs
+│                   ├── performance/  # Performance monitoring (dual-pane: chart + details)
+│                   │   ├── mod.rs    # PerformancePanel; dual-pane layout + responsive thresholds
+│                   │   ├── styles.rs
+│                   │   ├── tests.rs
+│                   │   ├── frame_chart/  # Frame timing bar chart
+│                   │   │   ├── mod.rs
+│                   │   │   ├── bars.rs
+│                   │   │   └── detail.rs
+│                   │   └── details/  # Details pane (Phase 2+)
+│                   │       ├── mod.rs               # DetailsPane dispatcher + tab bar
+│                   │       ├── frame_analysis_tab.rs # Frame Analysis tab (populated in Phase 2)
+│                   │       ├── rebuild_stats_tab.rs  # Rebuild Stats stub (populated in Phase 3)
+│                   │       └── timeline_events_tab.rs # Timeline Events stub (populated in Phase 3)
 │                   ├── memory/       # Memory monitoring (MemoryPanel widget)
 │                   │   ├── mod.rs    # MemoryPanel — top-level memory widget
 │                   │   ├── chart.rs  # Memory time-series chart
@@ -859,7 +870,7 @@ The DevTools mode provides four inspection panels — Inspector, Performance, Me
 │  ┌────────────┐  ┌───────────────┐  ┌─────────────┐  ┌─────────────┐  │
 │  │ Inspector  │  │  Performance  │  │   Memory    │  │   Network   │  │
 │  │ tree_panel │  │  frame_chart/ │  │MemoryPanel  │  │request_table│  │
-│  │layout_panel│  │               │  │ (memory/)   │  │req_details  │  │
+│  │layout_panel│  │  details/     │  │ (memory/)   │  │req_details  │  │
 │  │  details/  │  │               │  │             │  │             │  │
 │  └──────┬─────┘  └──────┬────────┘  └──────┬──────┘  └──────┬──────┘  │
 └─────────┼───────────────┼─────────────────┼──────────────────┼────────┘
@@ -868,7 +879,7 @@ The DevTools mode provides four inspection panels — Inspector, Performance, Me
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        DevTools Handlers                                │
 │                  (fdemon-app/handler/devtools/)                         │
-│  inspector.rs   performance.rs   memory.rs   network.rs   mod.rs       │
+│  inspector.rs  performance/{mod,frame,details}.rs  memory.rs  network.rs │
 └─────────┬───────────────┬─────────────────┬──────────────────┬────────┘
           │               │                 │                  │
           ▼               ▼                 ▼                  ▼
@@ -1015,11 +1026,34 @@ The `devtools.serve` method is available on Flutter SDK ≥ 1.22 (October 2020).
 
 ### Performance Panel Interactivity
 
-The Performance panel shows the frame timing chart. Focus, scrolling, and selection state are tracked on `PerformanceState` (in `fdemon-app/src/session/performance.rs`).
+The Performance panel shows the frame timing chart and a details pane. Focus, scrolling, selection, and details tab state are tracked on `PerformanceState` (in `fdemon-app/src/session/performance.rs`).
+
+**Dual-pane layout (Phase 2):**
+
+Phase 2 introduces a dual-pane layout: the upper area holds the frame timing chart; the lower area holds the details pane. Layout decisions use four constants in `fdemon-tui/src/widgets/devtools/performance/mod.rs`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `MIN_DUAL_PANE_HEIGHT` | 18 rows | Minimum terminal height for the dual-pane layout. Below this the panel falls back to chart-only, hiding the details pane entirely. |
+| `MIN_DETAILS_HEIGHT` | 8 rows | Minimum row allocation for the details pane within the dual-pane area. |
+| `MIN_PHASE_BAR_WIDTH` | 40 columns | Minimum width for proportional phase bars in the Frame Analysis tab. Below this the phase bar degrades to an inline `B/L/P/R` summary. |
+| `FRAME_CHART_PCT` | 55 % | Fraction of the dual-pane usable height allocated to the frame chart; the remaining ~45 % goes to the details pane. |
 
 **Section focus (`PerfSection` enum):**
 
-`PerfSection` has two variants — `FrameChart` and `DetailsTab` — corresponding to the frame timing bar chart and a details pane placeholder for future phases. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` between them.
+`PerfSection` has two variants — `FrameChart` and `DetailsTab` — corresponding to the frame timing bar chart and the details pane. `PerfSection::FrameChart` is the default on panel open. `Tab` and `Shift+Tab` cycle `focused_section` between them.
+
+**Details tab (`PerfDetailsTab` enum):**
+
+`PerfDetailsTab` (defined in `fdemon-app/src/state.rs`) has three variants, all unconditionally visible (unlike `InspectorState::visible_tabs()` which conditionally hides some tabs):
+
+| Variant | Phase 2 status |
+|---|---|
+| `FrameAnalysis` | Fully populated — hints derived from `fdemon-core::frame_hints` |
+| `RebuildStats` | Stub — populated in Phase 3 (requires dedicated RPC) |
+| `TimelineEvents` | Stub — populated in Phase 3 (requires timeline stream) |
+
+`PerfDetailsTab::FrameAnalysis` is the default. Pressing `]` emits `Message::PerfCycleDetailsTab { forward: true }`, pressing `[` emits `Message::PerfCycleDetailsTab { forward: false }`. Cycling wraps around all three tabs regardless of stub status. Mouse clicks on tab labels are Phase 3.
 
 **Scroll-offset model (live-edge drift):**
 
@@ -1029,13 +1063,38 @@ The frame chart uses "frames back from live edge" scroll semantics:
 
 Pressing `End` (or the equivalent mouse click on the live-edge indicator) resets the offset to `0`, snapping the view back to the live edge.
 
-**Render-hint `Cell<usize>` field:**
+**Render-hint `Cell<usize>` fields:**
 
-`frame_chart_visible_width` uses `Cell<usize>` interior mutability to feed the chart width back from the renderer to the scroll handler without violating the TEA immutability contract. It defaults to `0` ("not yet rendered — use fallback"). This is the same approved TEA exception class as the `MouseRegions` cell and the tag-filter render-hint cell. See `docs/CODE_STANDARDS.md` Principle 3 for the canonical definition of this pattern.
+Two fields on `PerformanceState` use `Cell<usize>` interior mutability:
+
+| Field | Purpose |
+|---|---|
+| `frame_chart_visible_width` | Columns available in the frame chart area; used by the scroll handler to clamp the scroll offset. |
+| `details_pane_visible_height` | Rows available in the details pane; used by `PgUp`/`PgDn` to page by the correct amount. |
+
+Both default to `0` ("not yet rendered — use fallback"). These are the same approved TEA exception class as `alloc_table_visible_height` on `MemoryState`, `MouseRegions`, and `TagFilterUiState`. See `docs/CODE_STANDARDS.md` Principle 3 for the canonical definition of this pattern.
+
+**Display refresh rate (`display_refresh_rate: f64`):**
+
+`PerformanceState` carries a `display_refresh_rate` field (default `60.0` Hz, hard-coded in Phase 2). This value is passed to `fdemon-core::frame_hints::frame_hints()` when computing per-frame analysis hints. Phase 3 may parse `Display.Refresh` VM Service events to support 90/120 Hz devices; 60 Hz is a conservative default that is never wrong for the `is_janky` predicate.
 
 **Frame history capacity:**
 
 `DEFAULT_FRAME_HISTORY_SIZE` is 1800 frames (30 seconds at 60 FPS), up from the previous 300-frame default. This provides enough scroll-back history for meaningful post-hoc analysis of jank events.
+
+**`fdemon-core::frame_hints` module:**
+
+`crates/fdemon-core/src/frame_hints.rs` provides `frame_hints(frame: &FrameTiming, refresh_rate_hz: f64) -> Vec<FrameHint>`. The `FrameHint` enum has five variants:
+
+| Variant | Condition |
+|---|---|
+| `OverBudget { budget_ms, actual_ms }` | Frame total exceeds `1000 / refresh_rate_hz` ms. Always first when present. |
+| `ShaderCompilation` | Shader compilation detected in the raster phase. |
+| `LongestUiPhase { phase, share }` | One UI phase dominates; only when `phases` is `Some`. |
+| `RasterDominant { ui_ms, raster_ms }` | Raster time materially exceeds UI time. |
+| `BuildDominant { ui_ms, raster_ms }` | Build time materially exceeds raster time. |
+
+This is a pure helper module with no I/O; the Frame Analysis TUI tab consumes it directly from `frame_analysis_tab.rs`. No new VM Service RPCs are needed — Phase 2 is data-complete with the existing `FrameTiming.phases` field. Phase 3 will add Rebuild Stats and Timeline Events via dedicated RPCs.
 
 ### Memory Panel Interactivity
 
