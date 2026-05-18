@@ -39,11 +39,11 @@ Wave 3  │ 04-update-keybindings-doc        │   │ 05-update-architecture-do
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [add-memory-panel-placeholder](tasks/01-add-memory-panel-placeholder.md) | Not Started | — | 2–3h | implementor | 1 |
-| 02 | [extract-memory-state](tasks/02-extract-memory-state.md) | Not Started | — | 4–6h | implementor | 1 |
-| 03 | [extract-memory-handlers-and-widgets](tasks/03-extract-memory-handlers-and-widgets.md) | Not Started | 01, 02 | 6–8h | implementor | 2 |
-| 04 | [update-keybindings-doc](tasks/04-update-keybindings-doc.md) | Not Started | 03 | 0.5h | implementor | 3 |
-| 05 | [update-architecture-doc](tasks/05-update-architecture-doc.md) | Not Started | 03 | 1–1.5h | doc_maintainer | 3 |
+| 01 | [add-memory-panel-placeholder](tasks/01-add-memory-panel-placeholder.md) | Done | — | 2–3h | implementor | 1 |
+| 02 | [extract-memory-state](tasks/02-extract-memory-state.md) | Done | — | 4–6h | implementor | 1 |
+| 03 | [extract-memory-handlers-and-widgets](tasks/03-extract-memory-handlers-and-widgets.md) | Done | 01, 02 | 6–8h | implementor | 2 |
+| 04 | [update-keybindings-doc](tasks/04-update-keybindings-doc.md) | Done | 03 | 0.5h | implementor | 3 |
+| 05 | [update-architecture-doc](tasks/05-update-architecture-doc.md) | Done | 03 | 1–1.5h | doc_maintainer | 3 |
 
 ## File Overlap Analysis
 

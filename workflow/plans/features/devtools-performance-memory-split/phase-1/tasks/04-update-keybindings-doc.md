@@ -110,23 +110,25 @@ grep -n "Memory Panel\|Performance Panel\|^####\|^### " docs/KEYBINDINGS.md
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** TBD
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/KEYBINDINGS.md` | Added `m` to Panel Navigation table; added migration note at top of DevTools section; replaced Performance Panel with slim frame-only keymap; added new Memory Panel subsection with 8-row table; updated Table of Contents to include Memory Panel anchor |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale and implications>
+1. **`Esc` description updated in Panel Navigation**: The Panel Navigation `Esc` row was extended to also mention "In Memory panel, deselects alloc row first" alongside the existing Performance and Network descriptions, keeping all deselect-precedence behaviour documented in one place.
+2. **Kept `Ctrl+p` in Performance Panel**: The task spec includes `Ctrl+p` in the Performance Panel keymap; this is consistent with the Debug Overlays section which also lists it globally. Kept both for discoverability.
 
 ### Testing Performed
 
-- Markdown spot-check — TBD
+- `grep -n "Memory Panel\|Performance Panel\|^####\|^### " docs/KEYBINDINGS.md` — structure correct, Memory Panel section present after Performance Panel, no memory references in Performance Panel
+- No automated tests for a documentation-only task
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description and mitigation if any>
+1. **Keymap divergence**: The Performance Panel keymap in KEYBINDINGS.md now reflects the intended post-split state. If the actual key handler implementation deviates (e.g. `Tab` cycles more than two sections), the doc will be stale — but this matches the task spec exactly.

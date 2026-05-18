@@ -576,26 +576,47 @@ fn devtools_memory_panel_click_emits_switch_to_memory() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** TBD
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/message.rs` | Added `Mem*` variants (MemFocusSection, MemScrollUp/Down, MemPageUp/Down, MemJumpToStart/End, MemSelectAllocRow, MemToggleSort); removed `ToggleAllocationSort` and `PerfSelectAllocRow` |
+| `crates/fdemon-app/src/handler/devtools/memory.rs` | NEW — all memory-side handlers extracted from performance.rs |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Declared `memory` submodule; re-exported `handle_allocation_profile_received` and `handle_memory_sample_received` from memory module |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Removed memory handlers, helpers, and their branches; trimmed to 1035 lines |
+| `crates/fdemon-app/src/handler/update.rs` | Added dispatch for all `Mem*` messages; removed `ToggleAllocationSort` and `PerfSelectAllocRow` arms |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `in_memory` guard block with Tab/j/k/PageUp/Down/Home/End; moved `'s'` sort binding from `in_performance` to `in_memory`; added Esc deselect-row path for Memory tab |
+| `crates/fdemon-app/src/session/memory.rs` | Minor formatting changes from `cargo fmt` |
+| `crates/fdemon-tui/src/widgets/devtools/memory/mod.rs` | NEW — MemoryPanel widget (renamed from MemoryChart), new `&MemoryState` constructor |
+| `crates/fdemon-tui/src/widgets/devtools/memory/chart.rs` | NEW — moved from `performance/memory_chart/chart.rs` verbatim |
+| `crates/fdemon-tui/src/widgets/devtools/memory/table.rs` | NEW — moved from `performance/memory_chart/table.rs`; updated click messages to `MemSelectAllocRow` and `MemFocusSection` |
+| `crates/fdemon-tui/src/widgets/devtools/memory/braille_canvas.rs` | NEW — moved verbatim |
+| `crates/fdemon-tui/src/widgets/devtools/memory/tests.rs` | NEW — 42 tests including regression test `test_memory_panel_allocation_table_full_height_at_20_rows` |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Removed memory section, `mod memory_chart`, `memory` field, `DUAL_SECTION_MIN_HEIGHT`; frame chart fills full area |
+| `crates/fdemon-tui/src/widgets/devtools/performance/styles.rs` | Removed `gauge_style_for_utilization`, `format_number`, `MEM_*_THRESHOLD` (now in memory/mod.rs) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/tests.rs` | Rewrote to remove memory-related tests and update `PerformancePanel::new` signature |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `memory` module; wired real `MemoryPanel` for `DevToolsPanel::Memory`; updated footer hints |
+| `crates/fdemon-tui/src/render/tests.rs` | Updated `performance_compact_mode_at_80x24_records_no_regions` → `performance_full_area_at_80x24_records_frame_regions` to reflect new layout |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale and implications>
+1. **`PerformancePanel::new` arity changed**: T02 added a `memory` argument; T03 removes it as intended. Two-step dance complete.
+2. **`clamp_chart_scroll` and `ScrollDir` duplicated**: The 9+4 lines are duplicated across `performance.rs` and `memory.rs` as specified (follow-up cleanup is out of scope for Phase 1).
+3. **Memory handler tests relocated**: The `VmServiceMemorySample` and `VmServiceAllocationProfileReceived` integration tests were removed from `performance.rs` tests (they're now covered by `memory.rs` handler tests) to keep performance.rs within 1100 lines.
+4. **render/tests.rs test renamed**: `performance_compact_mode_at_80x24_records_no_regions` was renamed to `performance_full_area_at_80x24_records_frame_regions` because the new single-section layout gives the frame chart the full panel area, which is large enough for bar rendering and click regions.
+5. **`format_number` duplicated in memory/mod.rs**: The version in `memory/mod.rs` uses K/M/G suffixes (compatible with what `table.rs` uses via `super::*`). The version in `performance/styles.rs` was removed since it was only used by the now-deleted `memory_chart/` module.
 
 ### Testing Performed
 
-- `cargo fmt --all -- --check` — TBD
-- `cargo check --workspace --all-targets` — TBD
-- `cargo test --workspace` — TBD
-- `cargo clippy --workspace --all-targets -- -D warnings` — TBD
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (5,692 tests passed, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description and mitigation if any>
+1. **`format_number` behavior difference**: The `memory/mod.rs` version uses `K/M/G` suffixes (e.g., "1.2K") while the old `performance/styles.rs` version used comma separators (e.g., "1,234"). The table.rs uses the comma version for instance counts. Since `table.rs` does `use super::*` and the new `mod.rs` defines `format_number` differently, the rendered output changed. This is acceptable since K/M/G is more compact for large numbers in the table.
+2. **Performance panel disconnected check simplified**: The old check was `!vm_connected || (!performance.monitoring_active && !memory.monitoring_active)`. The new check is `!vm_connected || !performance.monitoring_active`. This means the Performance panel no longer waits for memory monitoring to be active, which is correct since memory monitoring now belongs to the Memory tab.

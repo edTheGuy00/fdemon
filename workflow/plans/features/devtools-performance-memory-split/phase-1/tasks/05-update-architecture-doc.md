@@ -76,23 +76,27 @@ The exact section names depend on the current document structure. Target updates
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** TBD
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/ARCHITECTURE.md` | Added `DevToolsPanel::Memory` to panel enumeration and `DevToolsViewState` description; added `MemoryState` and `MemorySection` documentation in Panel State Model and new Memory Panel Interactivity section; added `handler/devtools/memory.rs` to project tree and DevTools handler diagram; added `widgets/devtools/memory/` subtree to project structure; removed `performance/memory_chart/` from tree; updated `performance/` to frame-chart-only; updated `PerfSection` to 2 variants; added `alloc_pause_tx` to `SessionHandle` schema; updated session/ module reference table; updated module listing for `session/memory.rs`. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A — N/A (no cross-contamination)
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale and implications>
+1. **Memory Panel Interactivity section is new**: Added alongside the existing "Performance Panel Interactivity" section to document `MemoryState`, `MemorySection`, render-hint cells, buffer size constants, and `AllocationSortColumn`. This is structural/data-flow documentation (not coding conventions), so it belongs in ARCHITECTURE.md.
+2. **`AllocationSortColumn` relocation noted**: The doc notes that this enum moved from `session/performance.rs` to `session/memory.rs` as part of Phase 1. This is factual structural context, not a style guideline.
+3. **No new TEA exception class**: Explicitly noted that `MemoryState.memory_chart_visible_width` and `MemoryState.alloc_table_visible_height` are renames of fields that previously lived on `PerformanceState` — same approved exception class, no new entry required.
 
 ### Testing Performed
 
-- `/doc-validate` — TBD
-
-### Risks/Limitations
-
-1. **<Risk>**: <Description and mitigation if any>
+- All acceptance criteria verified via grep checks
+- No content boundary violations detected
