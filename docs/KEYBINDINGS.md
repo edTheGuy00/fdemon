@@ -466,12 +466,17 @@ modes.
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Right` / `l` | Cycle to next tab (Widget properties → Render object → Flex explorer → wrap) |
-| `Shift+Tab` / `Left` / `h` | Cycle to previous tab |
+| `Tab` / `Right` / `l` | Cycle to next visible tab (wraps; skips hidden tabs; no-op when only one tab is visible) |
+| `Shift+Tab` / `Left` / `h` | Cycle to previous visible tab |
 | `Esc` | Close Details (return to tree mode) |
 | `r` | Refresh details |
 | `b` | Open Flutter DevTools in browser |
 | `Up` / `Down` / `j` / `k` | **No-op** — selection frozen while details is open |
+
+**Details tab visibility:**
+- Widget properties: always shown.
+- Render object: shown when the selected widget has a render object (e.g. `Padding`, `Column`, `Stack` — not `Container`).
+- Flex explorer: shown when the selected widget or its parent is `Row`, `Column`, or `Flex`.
 
 Press `Esc` from Details to return to tree mode; press `Esc` again to exit
 DevTools to the log view.
