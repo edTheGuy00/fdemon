@@ -809,10 +809,12 @@ mod tests {
 
     #[test]
     fn flex_explorer_loading_state() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::FlexExplorer;
-        state.layout_loading = true;
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::FlexExplorer,
+            layout_loading: true,
+            ..Default::default()
+        };
         let buf = render_flex_explorer_tab(&state, (60, 12));
         assert!(
             buffer_to_string(&buf).contains("Loading"),
@@ -822,10 +824,12 @@ mod tests {
 
     #[test]
     fn flex_explorer_no_layout_data() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::FlexExplorer;
-        // layout is None and layout_loading is false
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::FlexExplorer,
+            // layout is None and layout_loading is false
+            ..Default::default()
+        };
         let buf = render_flex_explorer_tab(&state, (60, 12));
         let text = buffer_to_string(&buf);
         assert!(
@@ -836,14 +840,16 @@ mod tests {
 
     #[test]
     fn flex_explorer_non_flex_widget_shows_explanation() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::FlexExplorer;
-        state.layout = Some(LayoutInfo {
-            description: Some("Container".into()),
-            // direction == None; children == empty.
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::FlexExplorer,
+            layout: Some(LayoutInfo {
+                description: Some("Container".into()),
+                // direction == None; children == empty.
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let buf = render_flex_explorer_tab(&state, (60, 12));
         assert!(
             buffer_to_string(&buf).contains("not a Row, Column, or Flex"),
@@ -853,38 +859,40 @@ mod tests {
 
     #[test]
     fn flex_explorer_renders_column_with_two_children() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::FlexExplorer;
-        state.layout = Some(LayoutInfo {
-            description: Some("Column".into()),
-            direction: Some(Axis::Vertical),
-            main_axis_alignment: Some(MainAxisAlignment::Start),
-            cross_axis_alignment: Some(CrossAxisAlignment::Stretch),
-            main_axis_size: Some(MainAxisSize::Max),
-            children: vec![
-                FlexChild {
-                    name: "Container".into(),
-                    size: Some(WidgetSize {
-                        width: 180.0,
-                        height: 341.0,
-                    }),
-                    flex_factor: None,
-                    ..Default::default()
-                },
-                FlexChild {
-                    name: "Expanded".into(),
-                    size: Some(WidgetSize {
-                        width: 180.0,
-                        height: 189.0,
-                    }),
-                    flex_factor: Some(1),
-                    flex_fit: Some(FlexFit::Tight),
-                    ..Default::default()
-                },
-            ],
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::FlexExplorer,
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                main_axis_alignment: Some(MainAxisAlignment::Start),
+                cross_axis_alignment: Some(CrossAxisAlignment::Stretch),
+                main_axis_size: Some(MainAxisSize::Max),
+                children: vec![
+                    FlexChild {
+                        name: "Container".into(),
+                        size: Some(WidgetSize {
+                            width: 180.0,
+                            height: 341.0,
+                        }),
+                        flex_factor: None,
+                        ..Default::default()
+                    },
+                    FlexChild {
+                        name: "Expanded".into(),
+                        size: Some(WidgetSize {
+                            width: 180.0,
+                            height: 189.0,
+                        }),
+                        flex_factor: Some(1),
+                        flex_fit: Some(FlexFit::Tight),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let buf = render_flex_explorer_tab(&state, (80, 24));
         let s = buffer_to_string(&buf);
         assert!(s.contains("Column"), "Should contain 'Column', got: {s:?}");
@@ -913,18 +921,20 @@ mod tests {
 
     #[test]
     fn flex_explorer_too_small_fallback() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::FlexExplorer;
-        state.layout = Some(LayoutInfo {
-            description: Some("Column".into()),
-            direction: Some(Axis::Vertical),
-            children: vec![FlexChild {
-                name: "A".into(),
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::FlexExplorer,
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                children: vec![FlexChild {
+                    name: "A".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            }),
             ..Default::default()
-        });
+        };
         // Below MIN_FLEX_VIZ_HEIGHT (12).
         let buf = render_flex_explorer_tab(&state, (60, 5));
         assert!(
@@ -935,37 +945,39 @@ mod tests {
 
     #[test]
     fn flex_explorer_renders_row_with_children() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::FlexExplorer;
-        state.layout = Some(LayoutInfo {
-            description: Some("Row".into()),
-            direction: Some(Axis::Horizontal),
-            main_axis_alignment: Some(MainAxisAlignment::Center),
-            cross_axis_alignment: Some(CrossAxisAlignment::Center),
-            children: vec![
-                FlexChild {
-                    name: "Text".into(),
-                    size: Some(WidgetSize {
-                        width: 80.0,
-                        height: 20.0,
-                    }),
-                    flex_factor: None,
-                    ..Default::default()
-                },
-                FlexChild {
-                    name: "Icon".into(),
-                    size: Some(WidgetSize {
-                        width: 24.0,
-                        height: 24.0,
-                    }),
-                    flex_factor: None,
-                    flex_fit: Some(FlexFit::Loose),
-                    ..Default::default()
-                },
-            ],
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::FlexExplorer,
+            layout: Some(LayoutInfo {
+                description: Some("Row".into()),
+                direction: Some(Axis::Horizontal),
+                main_axis_alignment: Some(MainAxisAlignment::Center),
+                cross_axis_alignment: Some(CrossAxisAlignment::Center),
+                children: vec![
+                    FlexChild {
+                        name: "Text".into(),
+                        size: Some(WidgetSize {
+                            width: 80.0,
+                            height: 20.0,
+                        }),
+                        flex_factor: None,
+                        ..Default::default()
+                    },
+                    FlexChild {
+                        name: "Icon".into(),
+                        size: Some(WidgetSize {
+                            width: 24.0,
+                            height: 24.0,
+                        }),
+                        flex_factor: None,
+                        flex_fit: Some(FlexFit::Loose),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let buf = render_flex_explorer_tab(&state, (80, 24));
         let s = buffer_to_string(&buf);
         assert!(s.contains("Row"), "Should contain 'Row', got: {s:?}");
@@ -982,28 +994,30 @@ mod tests {
 
     #[test]
     fn flex_explorer_constraints_in_footer() {
-        let mut state = InspectorState::default();
-        state.details_tab = DetailsTab::FlexExplorer;
-        state.layout = Some(LayoutInfo {
-            description: Some("Column".into()),
-            direction: Some(Axis::Vertical),
-            cross_axis_alignment: Some(CrossAxisAlignment::Start),
-            constraints: Some(BoxConstraints {
-                min_width: 0.0,
-                max_width: 392.0,
-                min_height: 0.0,
-                max_height: 872.0,
-            }),
-            size: Some(WidgetSize {
-                width: 180.0,
-                height: 872.0,
-            }),
-            children: vec![FlexChild {
-                name: "Child".into(),
+        let state = InspectorState {
+            details_tab: DetailsTab::FlexExplorer,
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                cross_axis_alignment: Some(CrossAxisAlignment::Start),
+                constraints: Some(BoxConstraints {
+                    min_width: 0.0,
+                    max_width: 392.0,
+                    min_height: 0.0,
+                    max_height: 872.0,
+                }),
+                size: Some(WidgetSize {
+                    width: 180.0,
+                    height: 872.0,
+                }),
+                children: vec![FlexChild {
+                    name: "Child".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            }),
             ..Default::default()
-        });
+        };
         let buf = render_flex_explorer_tab(&state, (80, 24));
         let s = buffer_to_string(&buf);
         // Footer should contain constraint or size info
@@ -1031,25 +1045,27 @@ mod tests {
 
     #[test]
     fn flex_explorer_total_flex_zero_when_no_flex_children() {
-        let mut state = InspectorState::default();
-        state.layout = Some(LayoutInfo {
-            description: Some("Column".into()),
-            direction: Some(Axis::Vertical),
-            cross_axis_alignment: Some(CrossAxisAlignment::Stretch),
-            children: vec![
-                FlexChild {
-                    name: "A".into(),
-                    flex_factor: None,
-                    ..Default::default()
-                },
-                FlexChild {
-                    name: "B".into(),
-                    flex_factor: None,
-                    ..Default::default()
-                },
-            ],
+        let state = InspectorState {
+            layout: Some(LayoutInfo {
+                description: Some("Column".into()),
+                direction: Some(Axis::Vertical),
+                cross_axis_alignment: Some(CrossAxisAlignment::Stretch),
+                children: vec![
+                    FlexChild {
+                        name: "A".into(),
+                        flex_factor: None,
+                        ..Default::default()
+                    },
+                    FlexChild {
+                        name: "B".into(),
+                        flex_factor: None,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let buf = render_flex_explorer_tab(&state, (80, 24));
         let s = buffer_to_string(&buf);
         assert!(

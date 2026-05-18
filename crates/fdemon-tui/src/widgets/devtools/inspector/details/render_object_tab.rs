@@ -331,23 +331,27 @@ mod tests {
 
     #[test]
     fn render_object_tab_shows_loading_state() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::RenderObject;
-        state.details_node_id = Some("objects/42".into());
-        state.properties_loading = true;
-        // render_properties empty
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("objects/42".into()),
+            properties_loading: true,
+            // render_properties empty
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (60, 10));
         assert!(buffer_to_string(&buf).contains("Loading"));
     }
 
     #[test]
     fn render_object_tab_shows_error_state() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::RenderObject;
-        state.details_node_id = Some("objects/42".into());
-        state.properties_error = Some(DevToolsError::new("Fetch failed", "Press [r] to retry"));
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("objects/42".into()),
+            properties_error: Some(DevToolsError::new("Fetch failed", "Press [r] to retry")),
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (60, 10));
         let s = buffer_to_string(&buf);
         assert!(s.contains("Fetch failed"));
@@ -356,26 +360,30 @@ mod tests {
 
     #[test]
     fn render_object_tab_shows_no_render_object_message() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::RenderObject;
-        state.details_node_id = Some("objects/42".into());
-        // properties_loading == false, error == None, render_properties empty.
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("objects/42".into()),
+            // properties_loading == false, error == None, render_properties empty.
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (60, 10));
         assert!(buffer_to_string(&buf).contains("No render object"));
     }
 
     #[test]
     fn render_object_tab_renders_property_rows() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::RenderObject;
-        state.details_node_id = Some("objects/42".into());
-        state.render_properties = vec![
-            sample_node("needsCompositing", "false", None),
-            sample_node("creator", "Padding \u{2190} Container", None),
-            sample_node("size", "Size(414.0, 600.0)", None),
-        ];
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("objects/42".into()),
+            render_properties: vec![
+                sample_node("needsCompositing", "false", None),
+                sample_node("creator", "Padding \u{2190} Container", None),
+                sample_node("size", "Size(414.0, 600.0)", None),
+            ],
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (60, 10));
         let s = buffer_to_string(&buf);
         assert!(s.contains("needsCompositing"));
@@ -386,15 +394,17 @@ mod tests {
 
     #[test]
     fn render_object_tab_sorts_default_level_to_end() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::RenderObject;
-        state.details_node_id = Some("objects/42".into());
-        state.render_properties = vec![
-            sample_node_with_level("layer", "null", "fine"),
-            sample_node("needsCompositing", "false", None),
-            sample_node_with_level("semantics", "null", "fine"),
-        ];
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("objects/42".into()),
+            render_properties: vec![
+                sample_node_with_level("layer", "null", "fine"),
+                sample_node("needsCompositing", "false", None),
+                sample_node_with_level("semantics", "null", "fine"),
+            ],
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (80, 10));
         let s = buffer_to_string(&buf);
         let pos_compositing = s.find("needsCompositing").unwrap();
@@ -409,14 +419,16 @@ mod tests {
 
     #[test]
     fn render_object_tab_filters_hidden_level() {
-        let mut state = InspectorState::default();
-        state.details_open = true;
-        state.details_tab = DetailsTab::RenderObject;
-        state.details_node_id = Some("objects/42".into());
-        state.render_properties = vec![
-            sample_node("visible", "yes", None),
-            sample_node_with_level("hiddenProp", "secret", "hidden"),
-        ];
+        let state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("objects/42".into()),
+            render_properties: vec![
+                sample_node("visible", "yes", None),
+                sample_node_with_level("hiddenProp", "secret", "hidden"),
+            ],
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (60, 10));
         let s = buffer_to_string(&buf);
         assert!(s.contains("visible"));
@@ -427,18 +439,22 @@ mod tests {
 
     #[test]
     fn render_object_tab_no_panic_zero_area() {
-        let mut state = InspectorState::default();
-        state.details_node_id = Some("objects/42".into());
-        state.render_properties = vec![sample_node("prop", "val", None)];
+        let state = InspectorState {
+            details_node_id: Some("objects/42".into()),
+            render_properties: vec![sample_node("prop", "val", None)],
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (0, 0));
         let _ = buf; // should not panic
     }
 
     #[test]
     fn render_object_tab_no_panic_single_row() {
-        let mut state = InspectorState::default();
-        state.details_node_id = Some("objects/42".into());
-        state.render_properties = vec![sample_node("prop", "val", None)];
+        let state = InspectorState {
+            details_node_id: Some("objects/42".into()),
+            render_properties: vec![sample_node("prop", "val", None)],
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (40, 1));
         let _ = buf;
     }
@@ -457,13 +473,15 @@ mod tests {
 
     #[test]
     fn render_object_tab_overflow_indicator_appears_when_many_rows() {
-        let mut state = InspectorState::default();
-        state.details_node_id = Some("objects/42".into());
-        // Create more properties than can fit in a 10-row buffer (border = 2,
-        // so inner height = 8 rows).
-        state.render_properties = (0..20)
-            .map(|i| sample_node(&format!("prop{i}"), &format!("val{i}"), None))
-            .collect();
+        let state = InspectorState {
+            details_node_id: Some("objects/42".into()),
+            // Create more properties than can fit in a 10-row buffer (border = 2,
+            // so inner height = 8 rows).
+            render_properties: (0..20)
+                .map(|i| sample_node(&format!("prop{i}"), &format!("val{i}"), None))
+                .collect(),
+            ..Default::default()
+        };
         let buf = render_render_object_tab(&state, (60, 10));
         let s = buffer_to_string(&buf);
         // Should show an overflow indicator.
@@ -475,12 +493,14 @@ mod tests {
 
     #[test]
     fn render_object_tab_divider_between_non_default_and_default() {
-        let mut state = InspectorState::default();
-        state.details_node_id = Some("objects/42".into());
-        state.render_properties = vec![
-            sample_node("normalProp", "value1", None),
-            sample_node_with_level("fineProp", "value2", "fine"),
-        ];
+        let state = InspectorState {
+            details_node_id: Some("objects/42".into()),
+            render_properties: vec![
+                sample_node("normalProp", "value1", None),
+                sample_node_with_level("fineProp", "value2", "fine"),
+            ],
+            ..Default::default()
+        };
         // Use a tall area to avoid overflow clipping.
         let buf = render_render_object_tab(&state, (60, 20));
         let s = buffer_to_string(&buf);
