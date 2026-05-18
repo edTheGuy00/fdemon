@@ -33,6 +33,11 @@ fn make_layout_with_all() -> LayoutInfo {
             left: 16.0,
         }),
         margin: None,
+        direction: None,
+        main_axis_alignment: None,
+        cross_axis_alignment: None,
+        main_axis_size: None,
+        children: Vec::new(),
     }
 }
 

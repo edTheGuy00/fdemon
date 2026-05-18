@@ -87,6 +87,13 @@ pub fn extract_layout_info(node: &DiagnosticsNode, raw_json: &serde_json::Value)
             .map(|s| s.to_string()),
         padding: extract_edge_insets(raw_json, "padding"),
         margin: extract_edge_insets(raw_json, "margin"),
+        // Flex container fields — populated by task 04 (daemon flex extraction).
+        // Until that task lands, these remain None/empty at runtime.
+        direction: None,
+        main_axis_alignment: None,
+        cross_axis_alignment: None,
+        main_axis_size: None,
+        children: Vec::new(),
     }
 }
 

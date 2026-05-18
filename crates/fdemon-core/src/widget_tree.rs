@@ -98,7 +98,14 @@ pub struct DiagnosticsNode {
     /// Flutter serializes this as `"propertyType"` in the diagnostic JSON.
     /// Used to distinguish render-object property nodes (e.g. `propertyType ==
     /// "RenderObject"`) from regular widget property nodes.
-    #[serde(default, rename = "propertyType")]
+    ///
+    /// Sanitized at deserialize time via [`deserialize_sanitized_option_string`] to
+    /// strip any ANSI escape sequences that may appear in VM Service output.
+    #[serde(
+        default,
+        rename = "propertyType",
+        deserialize_with = "deserialize_sanitized_option_string"
+    )]
     pub property_type: Option<String>,
 }
 
@@ -785,6 +792,142 @@ impl EdgeInsets {
 }
 
 // ============================================================================
+// Flex layout enums
+// ============================================================================
+
+/// `FlexFit` for a `Flexible`/`Expanded` child.
+///
+/// Mirrors Flutter's `FlexFit` enum:
+/// - `Tight` — the child is forced to fill the available main-axis space.
+/// - `Loose` — the child takes its intrinsic main-axis size up to the available space.
+///
+/// Source: `tmp/devtools/.../diagnostics_node.dart:78–81`. The JSON field is a
+/// string (`"tight"` / `"loose"`). Default per DevTools when missing or
+/// unrecognized is `Loose`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlexFit {
+    /// The child is forced to fill the available main-axis space.
+    Tight,
+    /// The child takes its intrinsic main-axis size up to the available space.
+    #[default]
+    Loose,
+}
+
+/// Flex container's primary direction.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:466`. Parsed from the
+/// `direction` property in `renderObject.properties` (`"horizontal"` /
+/// `"vertical"`). Default per DevTools: `Vertical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Axis {
+    /// Layout children along the horizontal axis (e.g., `Row`).
+    Horizontal,
+    /// Layout children along the vertical axis (e.g., `Column`).
+    #[default]
+    Vertical,
+}
+
+/// Flex container's main-axis alignment.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:467–469`.
+/// Field name in `renderObject.properties`: `mainAxisAlignment`. Default: `Start`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MainAxisAlignment {
+    /// Place children at the start of the main axis.
+    #[default]
+    Start,
+    /// Place children at the end of the main axis.
+    End,
+    /// Center children along the main axis.
+    Center,
+    /// Distribute children evenly, with the first at start and last at end.
+    SpaceBetween,
+    /// Distribute children evenly, with half-interval gaps at start and end.
+    SpaceAround,
+    /// Distribute children evenly, with equal gaps everywhere.
+    SpaceEvenly,
+}
+
+/// Flex container's cross-axis alignment.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:470–472`.
+/// Field name in `renderObject.properties`: `crossAxisAlignment`. Default: `Center`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CrossAxisAlignment {
+    /// Align children at the start of the cross axis.
+    Start,
+    /// Align children at the end of the cross axis.
+    End,
+    /// Center children along the cross axis.
+    #[default]
+    Center,
+    /// Stretch children to fill the cross axis.
+    Stretch,
+    /// Align children along their text baseline.
+    Baseline,
+}
+
+/// Flex container's main-axis size policy.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:473`.
+/// Field name in `renderObject.properties`: `mainAxisSize`. Default: `Max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MainAxisSize {
+    /// The container shrinks to fit its children along the main axis.
+    Min,
+    /// The container expands to fill the available space along the main axis.
+    #[default]
+    Max,
+}
+
+// ============================================================================
+// FlexChild
+// ============================================================================
+
+/// One child of a `Row`/`Column`/`Flex` container, as surfaced by
+/// `ext.flutter.inspector.getLayoutExplorerNode`.
+///
+/// Source: `tmp/devtools/.../diagnostics_node.dart:139–154` describes the
+/// per-child JSON shape:
+/// - `size: { width, height }`
+/// - `constraints: { minWidth, maxWidth, minHeight, maxHeight }`
+/// - `parentData: { offsetX, offsetY }`
+/// - `flexFactor: int | null`
+/// - `flexFit: "tight" | "loose" | null`
+///
+/// Phase 2's `extract_layout_info` (task 04) walks `node.children` and emits
+/// one `FlexChild` per child (whether or not it has flex; a child with
+/// `flex_factor: None` is a fixed-size child).
+///
+/// Note: This struct is populated manually by `extract_layout_info` from raw JSON,
+/// not via serde derive on the whole struct.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FlexChild {
+    /// `valueId` of the child node (for cross-reference back into the widget
+    /// tree). Optional because some children may not carry a valueId.
+    pub id: Option<String>,
+    /// Description string (widget runtime type, e.g. `"Container"`,
+    /// `"Padding"`). Sanitized at extract time.
+    pub name: String,
+    /// Child's measured size, if available.
+    pub size: Option<WidgetSize>,
+    /// Constraints the parent passed to this child.
+    pub constraints: Option<BoxConstraints>,
+    /// `flexFactor` from `parentData`. `None` means non-flex (fixed-size).
+    pub flex_factor: Option<u32>,
+    /// `flexFit`. `None` when the child is not a `Flexible`/`Expanded`.
+    pub flex_fit: Option<FlexFit>,
+    /// Pixel offset of the child within the parent (from `parentData`).
+    /// Stored as `(offset_x, offset_y)` in logical pixels.
+    pub parent_offset: Option<(f64, f64)>,
+}
+
+// ============================================================================
 // LayoutInfo
 // ============================================================================
 
@@ -815,6 +958,24 @@ pub struct LayoutInfo {
 
     /// Margin applied outside this widget's box
     pub margin: Option<EdgeInsets>,
+
+    /// Flex container's primary axis (only meaningful for `Row`/`Column`/`Flex`).
+    /// `None` for non-flex widgets.
+    pub direction: Option<Axis>,
+
+    /// Main-axis alignment (only meaningful for flex containers).
+    pub main_axis_alignment: Option<MainAxisAlignment>,
+
+    /// Cross-axis alignment (only meaningful for flex containers).
+    pub cross_axis_alignment: Option<CrossAxisAlignment>,
+
+    /// Main-axis size policy (only meaningful for flex containers).
+    pub main_axis_size: Option<MainAxisSize>,
+
+    /// Children of the flex container, in render order. Empty for non-flex
+    /// widgets or when the layout response did not include children.
+    #[serde(skip)]
+    pub children: Vec<FlexChild>,
 }
 
 // ============================================================================
@@ -2224,5 +2385,138 @@ mod tests {
         let json = r#"{"flex_fit": "\u001b[32mtight\u001b[0m"}"#;
         let info: LayoutInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.flex_fit.as_deref(), Some("tight"));
+    }
+    // -----------------------------------------------------------------------
+    // Flex enums
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn flex_fit_deserializes_tight_and_loose() {
+        let tight: FlexFit = serde_json::from_str("\"tight\"").unwrap();
+        let loose: FlexFit = serde_json::from_str("\"loose\"").unwrap();
+        assert_eq!(tight, FlexFit::Tight);
+        assert_eq!(loose, FlexFit::Loose);
+    }
+
+    #[test]
+    fn flex_fit_default_is_loose() {
+        assert_eq!(FlexFit::default(), FlexFit::Loose);
+    }
+
+    #[test]
+    fn main_axis_alignment_deserializes_space_between() {
+        let v: MainAxisAlignment = serde_json::from_str("\"spaceBetween\"").unwrap();
+        assert_eq!(v, MainAxisAlignment::SpaceBetween);
+    }
+
+    #[test]
+    fn cross_axis_alignment_deserializes_stretch_and_baseline() {
+        let stretch: CrossAxisAlignment = serde_json::from_str("\"stretch\"").unwrap();
+        let baseline: CrossAxisAlignment = serde_json::from_str("\"baseline\"").unwrap();
+        assert_eq!(stretch, CrossAxisAlignment::Stretch);
+        assert_eq!(baseline, CrossAxisAlignment::Baseline);
+    }
+
+    #[test]
+    fn axis_default_is_vertical() {
+        assert_eq!(Axis::default(), Axis::Vertical);
+    }
+
+    #[test]
+    fn axis_horizontal_deserializes() {
+        let v: Axis = serde_json::from_str("\"horizontal\"").unwrap();
+        assert_eq!(v, Axis::Horizontal);
+    }
+
+    #[test]
+    fn cross_axis_alignment_default_is_center() {
+        assert_eq!(CrossAxisAlignment::default(), CrossAxisAlignment::Center);
+    }
+
+    #[test]
+    fn main_axis_size_default_is_max() {
+        assert_eq!(MainAxisSize::default(), MainAxisSize::Max);
+    }
+
+    // -----------------------------------------------------------------------
+    // FlexChild struct
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn flex_child_default_is_empty() {
+        let c = FlexChild::default();
+        assert!(c.id.is_none());
+        assert_eq!(c.name, "");
+        assert!(c.flex_factor.is_none());
+    }
+
+    #[test]
+    fn flex_child_clone_and_eq() {
+        let c = FlexChild {
+            id: Some("id-1".to_string()),
+            name: "Container".to_string(),
+            size: Some(WidgetSize {
+                width: 100.0,
+                height: 50.0,
+            }),
+            constraints: None,
+            flex_factor: Some(2),
+            flex_fit: Some(FlexFit::Tight),
+            parent_offset: Some((10.0, 20.0)),
+        };
+        let c2 = c.clone();
+        assert_eq!(c, c2);
+    }
+
+    #[test]
+    fn layout_info_new_fields_default_to_none() {
+        // Existing LayoutInfo tests remain valid: new fields default to None/empty.
+        let info = LayoutInfo::default();
+        assert!(info.direction.is_none());
+        assert!(info.main_axis_alignment.is_none());
+        assert!(info.cross_axis_alignment.is_none());
+        assert!(info.main_axis_size.is_none());
+        assert!(info.children.is_empty());
+    }
+
+    #[test]
+    fn layout_info_deserializes_without_new_fields() {
+        // A JSON blob that lacks the new flex fields must still deserialize cleanly.
+        let json = r#"{"description": "Column"}"#;
+        let info: LayoutInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.description.as_deref(), Some("Column"));
+        assert!(info.direction.is_none());
+        assert!(info.children.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // property_type sanitization (Phase 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn property_type_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Color",
+            "propertyType": "\u{001b}[31mRenderObject\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.property_type.as_deref(), Some("RenderObject"));
+    }
+
+    #[test]
+    fn property_type_passes_through_clean_strings() {
+        let json = serde_json::json!({
+            "description": "Color",
+            "propertyType": "RenderObject"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.property_type.as_deref(), Some("RenderObject"));
+    }
+
+    #[test]
+    fn property_type_absent_is_none() {
+        let json = serde_json::json!({ "description": "Text" });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert!(node.property_type.is_none());
     }
 }

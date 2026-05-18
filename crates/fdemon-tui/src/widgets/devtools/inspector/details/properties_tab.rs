@@ -148,6 +148,11 @@ mod tests {
             flex_fit: None,
             description: None,
             margin: None,
+            direction: None,
+            main_axis_alignment: None,
+            cross_axis_alignment: None,
+            main_axis_size: None,
+            children: Vec::new(),
         });
         state
     }
