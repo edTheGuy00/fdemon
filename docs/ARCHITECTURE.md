@@ -972,8 +972,9 @@ On success, `Message::DevToolsInspectorPropertiesFetched` carries `widget_proper
 - `node_type` — defense-in-depth
 - `style` — defense-in-depth
 - `value_id` — defense-in-depth (IDs used as internal keys; sanitized to prevent future rendering bugs)
+- `object_id` — defense-in-depth parity with `value_id` and other `Option<String>` fields on the struct
 
-The fields `object_id` and `location_id` are intentionally excluded — they are opaque internal tokens that are never rendered.
+The field `location_id` is intentionally excluded — it is an opaque integer-valued token serialized as a string and never rendered.
 
 ### Inspector Details Tab Visibility
 

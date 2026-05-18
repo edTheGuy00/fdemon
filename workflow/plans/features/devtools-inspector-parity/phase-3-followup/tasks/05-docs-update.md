@@ -51,23 +51,33 @@
 
 ## Completion Summary
 
-**Status:** Pending
-**Branch:** _to be filled_
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `docs/ARCHITECTURE.md` | _to be filled_ |
+| `docs/ARCHITECTURE.md` | Added `object_id` to the sanitized fields list; updated the excluded-fields sentence to name only `location_id` |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
 
 ### Notable Decisions/Tradeoffs
 
-1. _to be filled_
+1. **Inspector Details Tab Visibility section unchanged**: The section already accurately stated "performs a single depth-first walk over the widget tree" — no edit was needed there. Only the sanitization field list required correction.
+2. **`object_id` description**: Described as "defense-in-depth parity with `value_id` and other `Option<String>` fields on the struct", matching the rationale in the source code doc comment added by Task 01.
+3. **`location_id` exclusion note refined**: Updated from "The fields `object_id` and `location_id` are intentionally excluded" to note only `location_id`, and clarified that it is an integer-valued token to explain why it is handled differently.
 
 ### Testing Performed
 
-- _to be filled_
+- `cargo fmt --all -- --check` — passed
+- `cargo check --workspace --all-targets` — passed
+- `cargo test --workspace` — passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed
 
 ### Risks/Limitations
 
-1. _to be filled_
+1. None — docs-only change with no code impact.
