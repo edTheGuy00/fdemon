@@ -1133,12 +1133,14 @@ fn alloc_table_empty_space_emits_focus_section() {
     let msg = hit
         .and_then(|e| e.on_left.as_ref())
         .and_then(|a| a.as_emit());
+    // T02 transitional: PerfSection::MemoryList removed; empty-area click now
+    // emits a no-op PerfFocusSection(FrameChart). T03 replaces with MemFocusSection.
     assert!(
         matches!(
             msg,
-            Some(Message::PerfFocusSection(PerfSection::MemoryList))
+            Some(Message::PerfFocusSection(PerfSection::FrameChart))
         ),
-        "Clicking empty space below rows should emit PerfFocusSection(MemoryList); got {msg:?}"
+        "Clicking empty space below rows should emit PerfFocusSection(FrameChart) (T02 transitional); got {msg:?}"
     );
 }
 

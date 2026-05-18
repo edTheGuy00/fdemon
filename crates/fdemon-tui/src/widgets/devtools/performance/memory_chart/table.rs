@@ -251,9 +251,11 @@ impl AllocationTable<'_> {
         if remaining_height > 0 {
             if let Some(ctx) = mouse {
                 let remaining = MouseRect::new(area.x, remaining_y, area.width, remaining_height);
+                // T02 transitional: row click emits a no-op message because PerfSection no longer
+                // has MemoryList. T03 will replace this with Message::MemFocusSection(MemorySection::AllocationList).
                 ctx.click(
                     remaining,
-                    MouseAction::emit(Message::PerfFocusSection(PerfSection::MemoryList)),
+                    MouseAction::emit(Message::PerfFocusSection(PerfSection::FrameChart)),
                 );
             }
         }

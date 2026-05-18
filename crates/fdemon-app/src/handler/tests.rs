@@ -4271,17 +4271,17 @@ fn test_memory_snapshot_handler() {
         "VmServiceMemorySnapshot should have no action"
     );
 
-    let perf = &state
+    let mem = &state
         .session_manager
         .get(session_id)
         .unwrap()
         .session
-        .performance;
-    assert_eq!(perf.memory_history.len(), 1);
-    assert_eq!(perf.memory_history.latest().unwrap().heap_usage, 50_000_000);
+        .memory;
+    assert_eq!(mem.memory_history.len(), 1);
+    assert_eq!(mem.memory_history.latest().unwrap().heap_usage, 50_000_000);
     assert!(
-        perf.monitoring_active,
-        "monitoring_active should be set to true"
+        mem.monitoring_active,
+        "memory.monitoring_active should be set to true"
     );
 }
 
@@ -4312,14 +4312,14 @@ fn test_gc_event_handler() {
         "VmServiceGcEvent should have no action"
     );
 
-    let perf = &state
+    let mem = &state
         .session_manager
         .get(session_id)
         .unwrap()
         .session
-        .performance;
-    assert_eq!(perf.gc_history.len(), 1);
-    assert_eq!(perf.gc_history.latest().unwrap().gc_type, "MarkSweep");
+        .memory;
+    assert_eq!(mem.gc_history.len(), 1);
+    assert_eq!(mem.gc_history.latest().unwrap().gc_type, "MarkSweep");
 }
 
 #[test]
@@ -4347,14 +4347,14 @@ fn test_scavenge_gc_events_filtered() {
         "VmServiceGcEvent should have no action"
     );
 
-    let perf = &state
+    let mem = &state
         .session_manager
         .get(session_id)
         .unwrap()
         .session
-        .performance;
+        .memory;
     assert_eq!(
-        perf.gc_history.len(),
+        mem.gc_history.len(),
         0,
         "Scavenge events should be filtered out of gc_history"
     );
@@ -4382,14 +4382,14 @@ fn test_major_gc_events_stored() {
         update(&mut state, msg);
     }
 
-    let perf = &state
+    let mem = &state
         .session_manager
         .get(session_id)
         .unwrap()
         .session
-        .performance;
+        .memory;
     assert_eq!(
-        perf.gc_history.len(),
+        mem.gc_history.len(),
         2,
         "Both MarkSweep and MarkCompact events should be stored in gc_history"
     );
@@ -4435,34 +4435,34 @@ fn test_vm_connected_resets_performance_state() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
-    // Add some performance data to simulate stale data from previous connection
+    // Add some performance/memory data to simulate stale data from previous connection
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
-        handle.session.performance.memory_history.push(MemoryUsage {
+        handle.session.memory.memory_history.push(MemoryUsage {
             heap_usage: 1_000_000,
             heap_capacity: 2_000_000,
             external_usage: 0,
             timestamp: chrono::Local::now(),
         });
         handle.session.performance.monitoring_active = true;
+        handle.session.memory.monitoring_active = true;
     }
 
-    // Reconnect — should reset performance state
+    // Reconnect — should reset performance and memory state
     update(&mut state, Message::VmServiceConnected { session_id });
 
-    let perf = &state
-        .session_manager
-        .get(session_id)
-        .unwrap()
-        .session
-        .performance;
+    let handle = state.session_manager.get(session_id).unwrap();
     assert!(
-        perf.memory_history.is_empty(),
+        handle.session.memory.memory_history.is_empty(),
         "memory_history should be cleared on reconnect"
     );
     assert!(
-        !perf.monitoring_active,
-        "monitoring_active should be reset on reconnect"
+        !handle.session.performance.monitoring_active,
+        "performance.monitoring_active should be reset on reconnect"
+    );
+    assert!(
+        !handle.session.memory.monitoring_active,
+        "memory.monitoring_active should be reset on reconnect"
     );
 }
 
@@ -5904,23 +5904,23 @@ fn test_memory_snapshot_still_works_alongside_sample() {
         Message::VmServiceMemorySnapshot { session_id, memory },
     );
 
-    let perf = &state
+    let mem = &state
         .session_manager
         .get(session_id)
         .unwrap()
         .session
-        .performance;
+        .memory;
     assert_eq!(
-        perf.memory_history.len(),
+        mem.memory_history.len(),
         1,
-        "VmServiceMemorySnapshot should populate memory_history"
+        "VmServiceMemorySnapshot should populate memory.memory_history"
     );
-    assert_eq!(perf.memory_history.latest().unwrap().heap_usage, 10_000_000);
+    assert_eq!(mem.memory_history.latest().unwrap().heap_usage, 10_000_000);
 }
 
 #[test]
 fn test_disconnect_clears_allocation_profile() {
-    // After VmServiceDisconnected, the performance state is reset on reconnect.
+    // After VmServiceDisconnected, the memory state is reset on reconnect.
     // Verify that allocation_profile is None after a fresh VmServiceConnected.
     use fdemon_core::performance::AllocationProfile;
 
@@ -5928,27 +5928,27 @@ fn test_disconnect_clears_allocation_profile() {
     let device = test_device("dev-1", "Device 1");
     let session_id = state.session_manager.create_session(&device).unwrap();
 
-    // Populate allocation_profile with synthetic data.
+    // Populate allocation_profile with synthetic data (now on session.memory).
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
-        handle.session.performance.allocation_profile = Some(AllocationProfile {
+        handle.session.memory.allocation_profile = Some(AllocationProfile {
             members: vec![],
             timestamp: chrono::Local::now(),
         });
     }
 
-    // Simulate reconnect — VmServiceConnected resets PerformanceState.
+    // Simulate reconnect — VmServiceConnected resets MemoryState.
     update(&mut state, Message::VmServiceConnected { session_id });
 
-    let perf = &state
+    let mem = &state
         .session_manager
         .get(session_id)
         .unwrap()
         .session
-        .performance;
+        .memory;
     assert!(
-        perf.allocation_profile.is_none(),
-        "allocation_profile should be None after VmServiceConnected resets PerformanceState"
+        mem.allocation_profile.is_none(),
+        "allocation_profile should be None after VmServiceConnected resets MemoryState"
     );
 }
 
@@ -6240,10 +6240,10 @@ fn test_vm_service_reconnected_preserves_performance_state() {
     let session_id = state.session_manager.create_session(&device).unwrap();
     state.session_manager.select_by_id(session_id);
 
-    // Populate performance state with some data to confirm it is NOT wiped.
+    // Populate memory state with some data to confirm it is NOT wiped on reconnect.
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
-        handle.session.performance.memory_history.push(MemoryUsage {
+        handle.session.memory.memory_history.push(MemoryUsage {
             heap_usage: 42_000_000,
             heap_capacity: 100_000_000,
             external_usage: 5_000_000,
@@ -6252,21 +6252,21 @@ fn test_vm_service_reconnected_preserves_performance_state() {
         handle.session.performance.monitoring_active = true;
     }
 
-    // Send VmServiceReconnected — must NOT clear perf history.
+    // Send VmServiceReconnected — must NOT clear memory history.
     update(&mut state, Message::VmServiceReconnected { session_id });
 
     let handle = state.session_manager.get(session_id).unwrap();
 
-    // Performance data must still be present (not wiped on reconnect).
+    // Memory data must still be present (not wiped on VmServiceReconnected).
     assert_eq!(
-        handle.session.performance.memory_history.len(),
+        handle.session.memory.memory_history.len(),
         1,
         "memory_history must be preserved across reconnect"
     );
     assert_eq!(
         handle
             .session
-            .performance
+            .memory
             .memory_history
             .latest()
             .unwrap()
@@ -6340,34 +6340,34 @@ fn test_vm_service_connected_still_resets_performance() {
     let session_id = state.session_manager.create_session(&device).unwrap();
     state.session_manager.select_by_id(session_id);
 
-    // Pre-populate performance state.
+    // Pre-populate memory state.
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
-        handle.session.performance.memory_history.push(MemoryUsage {
+        handle.session.memory.memory_history.push(MemoryUsage {
             heap_usage: 99_000_000,
             heap_capacity: 200_000_000,
             external_usage: 1_000_000,
             timestamp: chrono::Local::now(),
         });
         handle.session.performance.monitoring_active = true;
+        handle.session.memory.monitoring_active = true;
     }
 
-    // Send VmServiceConnected — must reset perf state.
+    // Send VmServiceConnected — must reset perf and memory state.
     update(&mut state, Message::VmServiceConnected { session_id });
 
-    let perf = &state
-        .session_manager
-        .get(session_id)
-        .unwrap()
-        .session
-        .performance;
+    let handle = state.session_manager.get(session_id).unwrap();
     assert!(
-        perf.memory_history.is_empty(),
+        handle.session.memory.memory_history.is_empty(),
         "memory_history must be cleared by VmServiceConnected (initial connection / hot-restart)"
     );
     assert!(
-        !perf.monitoring_active,
-        "monitoring_active must be reset by VmServiceConnected"
+        !handle.session.performance.monitoring_active,
+        "performance.monitoring_active must be reset by VmServiceConnected"
+    );
+    assert!(
+        !handle.session.memory.monitoring_active,
+        "memory.monitoring_active must be reset by VmServiceConnected"
     );
 }
 

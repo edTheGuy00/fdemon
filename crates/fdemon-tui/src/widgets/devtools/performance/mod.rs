@@ -25,6 +25,7 @@ mod frame_chart;
 mod memory_chart;
 pub(super) mod styles;
 
+use fdemon_app::session::memory::{MemorySection, MemoryState};
 use fdemon_app::session::{PerfSection, PerformanceState};
 use fdemon_app::state::VmConnectionStatus;
 use fdemon_app::{MouseAction, MouseRect};
@@ -68,6 +69,9 @@ const COLOR_UNFOCUSED_BORDER: Color = Color::DarkGray;
 /// using data from Phase 3's monitoring pipeline.
 pub struct PerformancePanel<'a> {
     performance: &'a PerformanceState,
+    /// Memory monitoring state — heap snapshots, GC events, allocation profile.
+    /// Moved out of `PerformanceState` in T02.
+    memory: &'a MemoryState,
     vm_connected: bool,
     /// Optional connection error from `DevToolsViewState::vm_connection_error`.
     /// When `Some`, the disconnected state shows the specific failure reason instead
@@ -83,12 +87,14 @@ impl<'a> PerformancePanel<'a> {
     /// Create a new performance panel widget.
     pub fn new(
         performance: &'a PerformanceState,
+        memory: &'a MemoryState,
         vm_connected: bool,
         icons: IconSet,
         connection_status: &'a VmConnectionStatus,
     ) -> Self {
         Self {
             performance,
+            memory,
             vm_connected,
             vm_connection_error: None,
             connection_status,
@@ -133,8 +139,11 @@ impl PerformancePanel<'_> {
             }
         }
 
-        // Show disconnected/no-data state if VM is not connected
-        if !self.vm_connected || !self.performance.monitoring_active {
+        // Show disconnected/no-data state if VM is not connected.
+        // Check both performance and memory monitoring states.
+        if !self.vm_connected
+            || (!self.performance.monitoring_active && !self.memory.monitoring_active)
+        {
             self.render_disconnected(area, buf);
             return;
         }
@@ -252,7 +261,8 @@ impl PerformancePanel<'_> {
         // Memory section — Use Borders::TOP only to maximise inner height.
         // The top border carries the title; no bottom/side borders are needed
         // because the footer hint line occupies the row below.
-        let memory_focused = self.performance.focused_section == PerfSection::MemoryChart;
+        // Data now reads from `self.memory` (moved from `self.performance` in T02).
+        let memory_focused = self.memory.focused_section == MemorySection::Chart;
         let memory_border_color = if memory_focused {
             COLOR_FOCUSED_BORDER
         } else {
@@ -269,6 +279,8 @@ impl PerformancePanel<'_> {
 
         // Section-level focus region for the memory chart area.
         // Clicking anywhere in the memory section focuses it (z=0).
+        // T02 transitional: still emits PerfFocusSection(MemoryChart) surrogate.
+        // T03 will replace with MemFocusSection(MemorySection::Chart).
         if let Some(c) = ctx.as_deref_mut() {
             // EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
             // "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
@@ -277,29 +289,29 @@ impl PerformancePanel<'_> {
             c.click(
                 section_rect,
                 MouseAction::emit(fdemon_app::Message::PerfFocusSection(
-                    PerfSection::MemoryChart,
+                    PerfSection::FrameChart,
                 )),
             );
         }
 
         MemoryChart::new(
-            &self.performance.memory_samples,
-            &self.performance.memory_history,
-            &self.performance.gc_history,
-            self.performance.allocation_profile.as_ref(),
-            self.performance.allocation_sort,
+            &self.memory.memory_samples,
+            &self.memory.memory_history,
+            &self.memory.gc_history,
+            self.memory.allocation_profile.as_ref(),
+            self.memory.allocation_sort,
             false,
         )
         .with_chart_state(
-            self.performance.memory_chart_scroll_offset,
+            self.memory.memory_chart_scroll_offset,
             memory_focused,
-            &self.performance.memory_chart_visible_width,
+            &self.memory.memory_chart_visible_width,
         )
         .with_alloc_state(
-            self.performance.alloc_table_scroll_offset,
-            self.performance.alloc_table_selected_row,
-            self.performance.focused_section == PerfSection::MemoryList,
-            &self.performance.alloc_table_visible_height,
+            self.memory.alloc_table_scroll_offset,
+            self.memory.alloc_table_selected_row,
+            self.memory.focused_section == MemorySection::AllocationList,
+            &self.memory.alloc_table_visible_height,
         )
         .render_with_regions(memory_inner, buf, ctx);
     }
@@ -331,7 +343,7 @@ impl PerformancePanel<'_> {
                     }
                 }
             }
-        } else if !self.performance.monitoring_active {
+        } else if !self.performance.monitoring_active && !self.memory.monitoring_active {
             "Performance monitoring starting..."
         } else {
             "Waiting for data..."

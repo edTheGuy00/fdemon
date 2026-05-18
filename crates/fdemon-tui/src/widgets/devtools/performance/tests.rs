@@ -1,16 +1,21 @@
 //! Tests for the [`PerformancePanel`] widget.
 
 use super::*;
+use fdemon_app::session::memory::MemoryState;
 use fdemon_app::session::PerformanceState;
 use fdemon_app::state::VmConnectionStatus;
 use fdemon_core::performance::{FrameTiming, MemoryUsage};
 
-fn make_test_performance() -> PerformanceState {
+fn make_test_performance() -> (PerformanceState, MemoryState) {
     let mut perf = PerformanceState {
         monitoring_active: true,
         ..Default::default()
     };
-    perf.memory_history.push(MemoryUsage {
+    let mut mem = MemoryState {
+        monitoring_active: true,
+        ..Default::default()
+    };
+    mem.memory_history.push(MemoryUsage {
         heap_usage: 50_000_000,
         heap_capacity: 128_000_000,
         external_usage: 12_000_000,
@@ -31,7 +36,7 @@ fn make_test_performance() -> PerformanceState {
     perf.stats.jank_count = 2;
     perf.stats.avg_frame_ms = Some(8.5);
     perf.stats.buffered_frames = 30;
-    perf
+    (perf, mem)
 }
 
 fn render_to_buf(widget: PerformancePanel<'_>, width: u16, height: u16) -> Buffer {
@@ -60,9 +65,10 @@ fn buf_contains_text(buf: &Buffer, width: u16, height: u16, text: &str) -> bool 
 
 #[test]
 fn test_performance_panel_renders_without_panic() {
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -74,9 +80,10 @@ fn test_performance_panel_renders_without_panic() {
 #[test]
 fn test_performance_panel_renders_two_sections() {
     // Normal size terminal should show both Frame Timing and Memory sections
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -94,9 +101,10 @@ fn test_performance_panel_renders_two_sections() {
 
 #[test]
 fn test_performance_panel_no_stats_section() {
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -111,9 +119,10 @@ fn test_performance_panel_no_stats_section() {
 
 #[test]
 fn test_performance_panel_shows_fps() {
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -127,9 +136,10 @@ fn test_performance_panel_shows_fps() {
 #[test]
 fn test_performance_panel_compact_mode() {
     // Height < COMPACT_THRESHOLD (7) → compact single-line summary, no panic
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -141,9 +151,10 @@ fn test_performance_panel_compact_mode() {
 #[test]
 fn test_performance_panel_compact_mode_shows_fps() {
     // Height < COMPACT_THRESHOLD should show FPS in summary line
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -160,9 +171,10 @@ fn test_performance_panel_compact_mode_shows_fps() {
 fn test_performance_panel_frame_only_mode() {
     // Height between COMPACT_THRESHOLD (7) and DUAL_SECTION_MIN_HEIGHT (16)
     // should show frame chart only, no memory section
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -180,9 +192,10 @@ fn test_performance_panel_frame_only_mode() {
 #[test]
 fn test_performance_panel_dual_section_at_min_height() {
     // At exactly DUAL_SECTION_MIN_HEIGHT (16), both sections should appear
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -205,9 +218,10 @@ fn test_performance_panel_allocation_table_visible_on_24_row_terminal() {
     // (24 - 3 header - 3 tab bar = 18).
     // With 50/50 split and Borders::TOP, memory inner should be >= 8 rows
     // (MIN_CHART_HEIGHT=6 + MIN_TABLE_HEIGHT=2), making show_table = true.
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -231,9 +245,10 @@ fn test_performance_panel_allocation_table_visible_on_24_row_terminal() {
 fn test_performance_panel_allocation_table_visible_on_30_row_terminal() {
     // Simulate a 30-row terminal: DevTools panel receives ~24 rows
     // Allocation table should have more rows available
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -255,9 +270,10 @@ fn test_footer_does_not_overlap_memory_border() {
     // The performance panel reserves 1 row for the parent's footer.
     // Verify the memory block renders within [0, height-2] rows,
     // leaving row height-1 clear for the footer.
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -281,8 +297,10 @@ fn test_footer_does_not_overlap_memory_border() {
 #[test]
 fn test_performance_panel_disconnected_state() {
     let perf = PerformanceState::default(); // Empty, no data, monitoring_active = false
+    let mem = MemoryState::default();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         false,
         IconSet::default(),
         &VmConnectionStatus::Disconnected,
@@ -301,8 +319,10 @@ fn test_performance_panel_disconnected_state() {
 fn test_performance_panel_disconnected_still_works() {
     // Verify disconnected state renders a text message, not chart widgets
     let perf = PerformanceState::default();
+    let mem = MemoryState::default();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         false,
         IconSet::default(),
         &VmConnectionStatus::Disconnected,
@@ -317,38 +337,14 @@ fn test_performance_panel_disconnected_still_works() {
 }
 
 #[test]
-fn test_performance_panel_small_terminal() {
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    render_to_buf(widget, 40, 10);
-    // Should not panic even in small terminal
-}
-
-#[test]
-fn test_performance_panel_zero_area() {
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    render_to_buf(widget, 10, 1);
-    // Extremely small area — should not panic
-}
-
-#[test]
 fn test_performance_panel_shows_connection_error() {
     // When vm_connection_error is set, render_disconnected should show the
     // specific error message rather than the generic "not connected" text.
     let perf = PerformanceState::default();
+    let mem = MemoryState::default();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         false,
         IconSet::default(),
         &VmConnectionStatus::Disconnected,
@@ -371,8 +367,10 @@ fn test_performance_panel_no_error_shows_generic_disconnected() {
     // When vm_connection_error is None and vm_connected is false, the generic
     // message should be shown.
     let perf = PerformanceState::default();
+    let mem = MemoryState::default();
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         false,
         IconSet::default(),
         &VmConnectionStatus::Disconnected,
@@ -387,14 +385,16 @@ fn test_performance_panel_no_error_shows_generic_disconnected() {
 
 #[test]
 fn test_monitoring_inactive_shows_disconnected() {
-    // When monitoring_active is false and vm_connected is true,
+    // When monitoring_active is false on both perf and memory, and vm_connected is true,
     // we should see the "starting..." message
     let perf = PerformanceState {
         monitoring_active: false,
         ..Default::default()
     };
+    let mem = MemoryState::default(); // monitoring_active = false
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -411,11 +411,12 @@ fn test_performance_panel_reconnecting_shows_attempt_count() {
     // When connection_status is Reconnecting, the disconnected view should
     // show the attempt counter rather than the generic "not connected" text.
     let perf = PerformanceState::default();
+    let mem = MemoryState::default();
     let status = VmConnectionStatus::Reconnecting {
         attempt: 3,
         max_attempts: 10,
     };
-    let widget = PerformancePanel::new(&perf, false, IconSet::default(), &status);
+    let widget = PerformancePanel::new(&perf, &mem, false, IconSet::default(), &status);
     let full = collect_buf_text(&render_to_buf(widget, 80, 24), 80, 24);
     assert!(
         full.contains("Reconnecting") || full.contains("3/10"),
@@ -426,16 +427,45 @@ fn test_performance_panel_reconnecting_shows_attempt_count() {
 #[test]
 fn test_performance_panel_with_selected_frame() {
     // Verify frame chart shows selection without panic
-    let mut perf = make_test_performance();
+    let (mut perf, mem) = make_test_performance();
     perf.selected_frame = Some(5);
     let widget = PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
     );
     render_to_buf(widget, 80, 30);
     // Should not panic with selected frame
+}
+
+#[test]
+fn test_performance_panel_small_terminal() {
+    let (perf, mem) = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        &mem,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    render_to_buf(widget, 40, 10);
+    // Should not panic even in small terminal
+}
+
+#[test]
+fn test_performance_panel_zero_area() {
+    let (perf, mem) = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        &mem,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    render_to_buf(widget, 10, 1);
+    // Extremely small area — should not panic
 }
 
 // ── Phase 4.5 Task 03: render_with_regions parity test ───────────────────────
@@ -447,12 +477,13 @@ fn render_with_regions_matches_widget_render_buffer() {
     use ratatui::layout::Rect;
 
     // At least one frame in the buffer with vm_connected = true — non-trivial path.
-    let perf = make_test_performance();
+    let (perf, mem) = make_test_performance();
     let area = Rect::new(0, 0, 80, 24);
 
     let mut buf_a = Buffer::empty(area);
     PerformancePanel::new(
         &perf,
+        &mem,
         true,
         IconSet::default(),
         &VmConnectionStatus::Connected,
@@ -469,6 +500,7 @@ fn render_with_regions_matches_widget_render_buffer() {
             &mut buf_b,
             PerformancePanel::new(
                 &perf,
+                &mem,
                 true,
                 IconSet::default(),
                 &VmConnectionStatus::Connected,

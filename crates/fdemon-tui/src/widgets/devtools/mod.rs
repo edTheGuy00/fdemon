@@ -13,7 +13,7 @@ pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
 use fdemon_app::message::Message;
-use fdemon_app::session::{PerformanceState, SessionHandle};
+use fdemon_app::session::{MemoryState, PerformanceState, SessionHandle};
 use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
 use fdemon_app::{MouseAction, MouseRect};
 use ratatui::{
@@ -133,19 +133,27 @@ impl DevToolsView<'_> {
             DevToolsPanel::Performance => {
                 // Safety fallback for when no session is active.
                 // In practice DevTools mode is only reachable when a session exists.
-                // Note: PerformanceState contains Cell<usize> render-hint fields, which are
-                // !Sync, so a stack-local default is used instead of a LazyLock static.
+                // Note: PerformanceState and MemoryState contain Cell<usize> render-hint
+                // fields, which are !Sync, so stack-local defaults are used instead of
+                // LazyLock statics.
                 let default_perf;
-                let (perf, vm_connected) = match self.session {
-                    Some(s) => (&s.session.performance, s.session.vm_connected),
+                let default_memory;
+                let (perf, memory, vm_connected) = match self.session {
+                    Some(s) => (
+                        &s.session.performance,
+                        &s.session.memory,
+                        s.session.vm_connected,
+                    ),
                     None => {
                         default_perf = PerformanceState::default();
-                        (&default_perf, false)
+                        default_memory = MemoryState::default();
+                        (&default_perf, &default_memory, false)
                     }
                 };
 
                 let widget = PerformancePanel::new(
                     perf,
+                    memory,
                     vm_connected,
                     self.icons,
                     &self.state.connection_status,

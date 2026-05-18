@@ -3,7 +3,7 @@
 #[allow(clippy::module_inception)]
 #[cfg(test)]
 mod tests {
-    use fdemon_core::{performance::MemoryUsage, AppPhase, LogEntry, LogLevel, LogSource};
+    use fdemon_core::{AppPhase, LogEntry, LogLevel, LogSource};
 
     use crate::config::LaunchConfig;
     use crate::session::{
@@ -1594,8 +1594,7 @@ mod tests {
     fn test_performance_state_default() {
         let state = PerformanceState::default();
         assert!(!state.monitoring_active);
-        assert!(state.memory_history.is_empty());
-        assert!(state.gc_history.is_empty());
+        // memory_history and gc_history have moved to MemoryState
         assert!(state.frame_history.is_empty());
     }
 
@@ -1603,16 +1602,22 @@ mod tests {
     fn test_session_has_performance_field() {
         let session = Session::new("d".into(), "Device".into(), "android".into(), false);
         assert!(!session.performance.monitoring_active);
-        assert!(session.performance.memory_history.is_empty());
+        // Memory fields have moved to session.memory
+        assert!(session.memory.memory_history.is_empty());
     }
 
     #[test]
     fn test_performance_state_memory_ring_buffer_capacity() {
-        use crate::session::performance::{DEFAULT_GC_HISTORY_SIZE, DEFAULT_MEMORY_HISTORY_SIZE};
-        let state = PerformanceState::default();
-        assert_eq!(state.memory_history.capacity(), DEFAULT_MEMORY_HISTORY_SIZE);
-        assert_eq!(state.gc_history.capacity(), DEFAULT_GC_HISTORY_SIZE);
-        assert_eq!(state.frame_history.capacity(), DEFAULT_FRAME_HISTORY_SIZE);
+        use crate::session::memory::{
+            DEFAULT_GC_HISTORY_SIZE, DEFAULT_MEMORY_HISTORY_SIZE, DEFAULT_MEMORY_SAMPLE_SIZE,
+        };
+        use crate::session::performance::DEFAULT_FRAME_HISTORY_SIZE;
+        let perf = PerformanceState::default();
+        assert_eq!(perf.frame_history.capacity(), DEFAULT_FRAME_HISTORY_SIZE);
+        let mem = crate::session::MemoryState::default();
+        assert_eq!(mem.memory_history.capacity(), DEFAULT_MEMORY_HISTORY_SIZE);
+        assert_eq!(mem.gc_history.capacity(), DEFAULT_GC_HISTORY_SIZE);
+        assert_eq!(mem.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1686,19 +1691,16 @@ mod tests {
 
     #[test]
     fn test_performance_state_reset_on_reconnect() {
-        let mut perf = PerformanceState::default();
-        perf.memory_history.push(MemoryUsage {
-            heap_usage: 100,
-            heap_capacity: 200,
-            external_usage: 0,
-            timestamp: chrono::Local::now(),
-        });
-        perf.monitoring_active = true;
+        let perf1 = PerformanceState {
+            monitoring_active: true,
+            ..Default::default()
+        };
+        assert!(perf1.monitoring_active);
 
-        // Simulate reset
-        perf = PerformanceState::default();
-        assert!(perf.memory_history.is_empty());
-        assert!(!perf.monitoring_active);
+        // memory_history is now on MemoryState — test the perf reset only
+        let perf2 = PerformanceState::default();
+        assert!(!perf2.monitoring_active);
+        assert!(perf2.frame_history.is_empty());
     }
 
     #[test]

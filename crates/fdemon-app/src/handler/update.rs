@@ -1499,11 +1499,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     LogSource::App,
                     "VM Service connected — enhanced logging active",
                 ));
-                // Reset performance state on (re)connection so stale data from
-                // a previous session or hot-restart is not shown in the new one.
-                // Use configurable memory history size from settings.
-                handle.session.performance =
-                    crate::session::PerformanceState::with_memory_history_size(memory_history_size);
+                // Reset performance and memory state on (re)connection so stale
+                // data from a previous session or hot-restart is not shown.
+                // Use configurable memory history size from settings for MemoryState.
+                handle.session.performance = crate::session::PerformanceState::default();
+                handle.session.memory =
+                    crate::session::MemoryState::with_history_size(memory_history_size);
             }
             // Clear any previous connection error and update status to Connected,
             // but only when this session is currently active in the UI.
@@ -1740,6 +1741,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // will see the sender drop; the shutdown arm handles clean exit.
                 handle.perf_pause_tx = None;
                 handle.session.performance.monitoring_active = false;
+                handle.session.memory.monitoring_active = false;
                 // Abort the network monitoring polling task and signal it to stop.
                 if let Some(h) = handle.network_task_handle.take() {
                     h.abort();
@@ -1795,8 +1797,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::VmServiceMemorySnapshot { session_id, memory } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                handle.session.performance.memory_history.push(memory);
-                handle.session.performance.monitoring_active = true;
+                handle.session.memory.memory_history.push(memory);
+                handle.session.memory.monitoring_active = true;
                 // Recompute stats on every memory poll cycle (2-second backstop
                 // for when frame events are sparse — e.g. idle or backgrounded).
                 handle.session.performance.recompute_stats();
@@ -1813,7 +1815,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // frequent Scavenge events from filling the ring buffer and pushing
                 // out the more informative major GC entries.
                 if gc_event.is_major_gc() {
-                    handle.session.performance.gc_history.push(gc_event);
+                    handle.session.memory.gc_history.push(gc_event);
                 } else {
                     tracing::trace!(
                         "Filtered Scavenge GC event for session {} (minor GC)",

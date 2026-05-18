@@ -1,93 +1,55 @@
-//! Performance monitoring state — memory, GC, and frame timing.
+//! Performance monitoring state — frame timing and aggregated statistics.
+//!
+//! Memory monitoring state has moved to [`super::memory`].
 
 use std::cell::Cell;
 
-use fdemon_core::performance::{
-    AllocationProfile, FrameTiming, GcEvent, MemorySample, MemoryUsage, PerformanceStats,
-    RingBuffer,
-};
+use fdemon_core::performance::{FrameTiming, PerformanceStats, RingBuffer};
 
-/// Default number of memory snapshots to keep (at 2s interval = 2 minutes).
-pub(crate) const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
-/// Default number of major GC events to keep.
-///
-/// Only major GC events (MarkSweep, MarkCompact) are stored — Scavenge events
-/// are filtered out in the handler. Major GCs are rare, so 50 slots provides
-/// ample history without wasting memory.
-pub(crate) const DEFAULT_GC_HISTORY_SIZE: usize = 50;
 /// 30 seconds at 60 FPS — enables meaningful scroll-back.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 1800;
-/// Memory sample buffer size: 120 samples at 500ms polling = 60 seconds of history.
-pub(crate) const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
-
-/// Column by which the class allocation table is sorted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AllocationSortColumn {
-    /// Sort by total allocated bytes (descending).
-    #[default]
-    BySize,
-    /// Sort by total instance count (descending).
-    ByInstances,
-}
 
 /// Active section within the Performance DevTools panel.
 ///
-/// Used for `Tab`/`Shift+Tab` navigation between the three sub-sections.
+/// Used for `Tab`/`Shift+Tab` navigation between the two sub-sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PerfSection {
     /// Frame timing bar chart (default section on open).
     #[default]
     FrameChart,
-    /// Memory usage time-series chart.
-    MemoryChart,
-    /// Class allocation table (from `getAllocationProfile`).
-    MemoryList,
+    /// Phase 2 anchor — the tabbed details pane. In Phase 1 cycling Tab to
+    /// this section is a no-op (no content yet).
+    DetailsTab,
 }
 
 impl PerfSection {
     /// Return the next section in Tab order (wraps around).
     pub fn next(self) -> Self {
         match self {
-            PerfSection::FrameChart => PerfSection::MemoryChart,
-            PerfSection::MemoryChart => PerfSection::MemoryList,
-            PerfSection::MemoryList => PerfSection::FrameChart,
+            PerfSection::FrameChart => PerfSection::DetailsTab,
+            PerfSection::DetailsTab => PerfSection::FrameChart,
         }
     }
 
     /// Return the previous section in Tab order (wraps around).
     pub fn prev(self) -> Self {
-        match self {
-            PerfSection::FrameChart => PerfSection::MemoryList,
-            PerfSection::MemoryChart => PerfSection::FrameChart,
-            PerfSection::MemoryList => PerfSection::MemoryChart,
-        }
+        self.next() // 2-state cycle: next == prev
     }
 }
 
 /// Performance monitoring state for a session.
 ///
-/// Holds rolling ring-buffer history for memory snapshots, GC events, and
-/// frame timings, plus aggregated statistics for display.
+/// Holds frame timing history and aggregated statistics for the frame chart.
+/// Memory monitoring state (heap snapshots, GC events, allocation profile) has
+/// moved to [`super::memory::MemoryState`].
 #[derive(Debug, Clone)]
 pub struct PerformanceState {
-    /// Rolling history of memory snapshots.
-    pub memory_history: RingBuffer<MemoryUsage>,
-    /// Rolling history of GC events.
-    pub gc_history: RingBuffer<GcEvent>,
-    /// Rolling history of frame timings (populated by Task 06).
+    /// Rolling history of frame timings.
     pub frame_history: RingBuffer<FrameTiming>,
     /// Aggregated performance statistics (updated periodically).
     pub stats: PerformanceStats,
     /// Whether performance monitoring is active.
     pub monitoring_active: bool,
-
-    /// Rich memory samples for time-series chart (populated by VM service polling).
-    ///
-    /// Each entry contains a full breakdown (Dart heap, native, raster cache, RSS)
-    /// at 500ms polling. The buffer holds 120 samples = 60 seconds of history.
-    /// Runs in parallel with `memory_history` — the older `memory_history` is kept
-    /// as a fallback when rich sample data is unavailable.
-    pub memory_samples: RingBuffer<MemorySample>,
 
     /// Index of the currently selected frame in `frame_history`.
     ///
@@ -96,16 +58,7 @@ pub struct PerformanceState {
     /// the detail panel shows per-phase breakdown if available.
     pub selected_frame: Option<usize>,
 
-    /// Latest allocation profile snapshot from `getAllocationProfile`.
-    ///
-    /// `None` until the first profile is fetched or when monitoring is inactive.
-    /// Replaced on each fetch — only the most recent snapshot is retained.
-    pub allocation_profile: Option<AllocationProfile>,
-
-    /// Column by which the class allocation table is sorted.
-    pub allocation_sort: AllocationSortColumn,
-
-    // ── Navigation / scroll state (Phase 2 interactivity) ────────────────────
+    // ── Navigation / scroll state ─────────────────────────────────────────────
     /// Which sub-section of the Performance panel currently has keyboard focus.
     pub focused_section: PerfSection,
 
@@ -114,87 +67,23 @@ pub struct PerformanceState {
     /// `0` means the chart is at the live edge (newest frames visible).
     pub frame_chart_scroll_offset: usize,
 
-    /// How many samples the memory chart has been scrolled back from the live edge.
-    pub memory_chart_scroll_offset: usize,
-
-    /// Row index of the selected row in the allocation table, if any.
-    pub alloc_table_selected_row: Option<usize>,
-
-    /// Scroll offset for the allocation table (number of rows scrolled past the top).
-    pub alloc_table_scroll_offset: usize,
-
     /// Render-hint: visible width (in columns) of the frame chart from the last rendered frame.
     ///
     /// Defaults to `0`, signalling "not yet rendered — use fallback".
     // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
     pub frame_chart_visible_width: Cell<usize>,
-
-    /// Render-hint: visible width (in columns) of the memory chart from the last rendered frame.
-    ///
-    /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
-    pub memory_chart_visible_width: Cell<usize>,
-
-    /// Render-hint: visible height (in rows) of the allocation table from the last rendered frame.
-    ///
-    /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
-    pub alloc_table_visible_height: Cell<usize>,
 }
 
 impl Default for PerformanceState {
     fn default() -> Self {
         Self {
-            memory_history: RingBuffer::new(DEFAULT_MEMORY_HISTORY_SIZE),
-            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
             frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
             stats: PerformanceStats::default(),
             monitoring_active: false,
-            memory_samples: RingBuffer::new(DEFAULT_MEMORY_SAMPLE_SIZE),
             selected_frame: None,
-            allocation_profile: None,
-            allocation_sort: AllocationSortColumn::default(),
             focused_section: PerfSection::default(),
             frame_chart_scroll_offset: 0,
-            memory_chart_scroll_offset: 0,
-            alloc_table_selected_row: None,
-            alloc_table_scroll_offset: 0,
             frame_chart_visible_width: Cell::new(0),
-            memory_chart_visible_width: Cell::new(0),
-            alloc_table_visible_height: Cell::new(0),
-        }
-    }
-}
-
-impl PerformanceState {
-    /// Create a new [`PerformanceState`] with a configurable memory history size.
-    ///
-    /// The `memory_history_size` parameter controls how many memory snapshots to
-    /// retain (ring buffer capacity). At the default 2-second poll interval,
-    /// `60` snapshots covers 2 minutes of history.
-    ///
-    /// GC and frame history sizes use fixed defaults — only memory is configurable
-    /// for now (see `DEFAULT_GC_HISTORY_SIZE` and `DEFAULT_FRAME_HISTORY_SIZE`).
-    /// The `memory_samples` buffer always uses [`DEFAULT_MEMORY_SAMPLE_SIZE`].
-    pub fn with_memory_history_size(memory_history_size: usize) -> Self {
-        Self {
-            memory_history: RingBuffer::new(memory_history_size),
-            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
-            frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
-            stats: PerformanceStats::default(),
-            monitoring_active: false,
-            memory_samples: RingBuffer::new(DEFAULT_MEMORY_SAMPLE_SIZE),
-            selected_frame: None,
-            allocation_profile: None,
-            allocation_sort: AllocationSortColumn::default(),
-            focused_section: PerfSection::default(),
-            frame_chart_scroll_offset: 0,
-            memory_chart_scroll_offset: 0,
-            alloc_table_selected_row: None,
-            alloc_table_scroll_offset: 0,
-            frame_chart_visible_width: Cell::new(0),
-            memory_chart_visible_width: Cell::new(0),
-            alloc_table_visible_height: Cell::new(0),
         }
     }
 }
@@ -383,16 +272,15 @@ mod tests {
 
     #[test]
     fn perf_section_next_cycles_forward() {
-        assert_eq!(PerfSection::FrameChart.next(), PerfSection::MemoryChart);
-        assert_eq!(PerfSection::MemoryChart.next(), PerfSection::MemoryList);
-        assert_eq!(PerfSection::MemoryList.next(), PerfSection::FrameChart);
+        assert_eq!(PerfSection::FrameChart.next(), PerfSection::DetailsTab);
+        assert_eq!(PerfSection::DetailsTab.next(), PerfSection::FrameChart);
     }
 
     #[test]
     fn perf_section_prev_cycles_backward() {
-        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::MemoryList);
-        assert_eq!(PerfSection::MemoryList.prev(), PerfSection::MemoryChart);
-        assert_eq!(PerfSection::MemoryChart.prev(), PerfSection::FrameChart);
+        // 2-state cycle: prev == next
+        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::DetailsTab);
+        assert_eq!(PerfSection::DetailsTab.prev(), PerfSection::FrameChart);
     }
 
     #[test]
@@ -407,12 +295,7 @@ mod tests {
         let s = PerformanceState::default();
         assert_eq!(s.focused_section, PerfSection::FrameChart);
         assert_eq!(s.frame_chart_scroll_offset, 0);
-        assert_eq!(s.memory_chart_scroll_offset, 0);
-        assert_eq!(s.alloc_table_selected_row, None);
-        assert_eq!(s.alloc_table_scroll_offset, 0);
         assert_eq!(s.frame_chart_visible_width.get(), 0);
-        assert_eq!(s.memory_chart_visible_width.get(), 0);
-        assert_eq!(s.alloc_table_visible_height.get(), 0);
     }
 
     #[test]
@@ -420,15 +303,6 @@ mod tests {
         let s = PerformanceState::default();
         assert_eq!(s.frame_history.capacity(), DEFAULT_FRAME_HISTORY_SIZE);
         assert_eq!(DEFAULT_FRAME_HISTORY_SIZE, 1800);
-    }
-
-    #[test]
-    fn with_memory_history_size_initializes_new_fields() {
-        let s = PerformanceState::with_memory_history_size(30);
-        assert_eq!(s.focused_section, PerfSection::FrameChart);
-        assert_eq!(s.frame_chart_scroll_offset, 0);
-        assert_eq!(s.alloc_table_selected_row, None);
-        assert_eq!(s.frame_chart_visible_width.get(), 0);
     }
 
     // ── Test helper ─────────────────────────────────────────────────────────
@@ -628,67 +502,6 @@ mod tests {
         assert!(state.selected_frame_timing().is_none());
     }
 
-    // ── Memory samples ring buffer ──────────────────────────────────────────
-
-    #[test]
-    fn test_memory_samples_ring_buffer_default_capacity() {
-        let state = PerformanceState::default();
-        assert_eq!(state.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
-    }
-
-    #[test]
-    fn test_memory_samples_ring_buffer_default_capacity_is_120() {
-        assert_eq!(DEFAULT_MEMORY_SAMPLE_SIZE, 120);
-    }
-
-    // ── AllocationSortColumn defaults ──────────────────────────────────────
-
-    #[test]
-    fn test_allocation_sort_default_is_by_size() {
-        let state = PerformanceState::default();
-        assert_eq!(state.allocation_sort, AllocationSortColumn::BySize);
-    }
-
-    #[test]
-    fn test_allocation_sort_column_default_trait() {
-        assert_eq!(
-            AllocationSortColumn::default(),
-            AllocationSortColumn::BySize
-        );
-    }
-
-    // ── Constructor: with_memory_history_size ──────────────────────────────
-
-    #[test]
-    fn test_with_memory_history_size_sets_memory_history_capacity() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert_eq!(state.memory_history.capacity(), 30);
-    }
-
-    #[test]
-    fn test_with_memory_history_size_memory_samples_uses_default() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert_eq!(state.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
-    }
-
-    #[test]
-    fn test_with_memory_history_size_selected_frame_is_none() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert!(state.selected_frame.is_none());
-    }
-
-    #[test]
-    fn test_with_memory_history_size_allocation_profile_is_none() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert!(state.allocation_profile.is_none());
-    }
-
-    #[test]
-    fn test_with_memory_history_size_allocation_sort_is_by_size() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert_eq!(state.allocation_sort, AllocationSortColumn::BySize);
-    }
-
     // ── Default constructor ──────────────────────────────────────────────────
 
     #[test]
@@ -698,8 +511,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_allocation_profile_is_none() {
+    fn test_default_monitoring_active_is_false() {
         let state = PerformanceState::default();
-        assert!(state.allocation_profile.is_none());
+        assert!(!state.monitoring_active);
     }
 }
