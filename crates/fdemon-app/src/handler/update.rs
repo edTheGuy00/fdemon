@@ -1898,6 +1898,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // handlers can gate the entire polling loop (memory + alloc).
                 handle.perf_pause_tx = Some(perf_pause_tx);
 
+                // The polling task is live. Flip both monitoring flags so the
+                // Performance and Memory panels stop rendering "starting..."
+                // placeholders and switch to live data views. Both share the
+                // same polling task, so they become active together.
+                handle.session.performance.monitoring_active = true;
+                handle.session.memory.monitoring_active = true;
+
                 // Adjust initial pause values based on current UI state.
                 // The polling task always starts with perf_pause = true (paused).
                 // If monitoring was lazy-started because the user entered DevTools,

@@ -4538,6 +4538,17 @@ fn test_performance_monitoring_started_stores_shutdown_tx() {
             .is_some(),
         "perf_shutdown_tx should be stored after VmServicePerformanceMonitoringStarted"
     );
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.session.performance.monitoring_active,
+        "performance.monitoring_active must flip true so the Performance panel \
+         stops rendering 'starting...' once the polling task is registered"
+    );
+    assert!(
+        handle.session.memory.monitoring_active,
+        "memory.monitoring_active must flip true so the Memory panel stops \
+         rendering 'starting...' once the polling task is registered"
+    );
 }
 
 #[test]
