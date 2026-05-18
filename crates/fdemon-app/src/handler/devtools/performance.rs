@@ -84,7 +84,7 @@ pub(crate) fn handle_perf_focus_section(
 /// Dispatch table:
 ///
 /// - `FrameChart` — adjusts `frame_chart_scroll_offset`, clamped to the frame history.
-/// - `DetailsTab` — no-op in Phase 1 (no content yet).
+/// - `Details` — no-op in Phase 1 (no content yet; unreachable via Tab).
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_scroll(state: &mut AppState, direction: ScrollDir) -> UpdateResult {
@@ -108,8 +108,10 @@ pub(crate) fn handle_perf_scroll(state: &mut AppState, direction: ScrollDir) -> 
                 delta,
             );
         }
-        PerfSection::DetailsTab => {
+        PerfSection::Details => {
             // No-op in Phase 1 — details pane content arrives in Phase 2.
+            // This arm is unreachable via Tab (next()/prev() always return FrameChart)
+            // but kept for exhaustiveness against direct assignment.
         }
     }
 
@@ -147,8 +149,10 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
                 delta,
             );
         }
-        PerfSection::DetailsTab => {
+        PerfSection::Details => {
             // No-op in Phase 1 — details pane content arrives in Phase 2.
+            // This arm is unreachable via Tab (next()/prev() always return FrameChart)
+            // but kept for exhaustiveness against direct assignment.
         }
     }
 
@@ -158,7 +162,7 @@ pub(crate) fn handle_perf_page(state: &mut AppState, direction: ScrollDir) -> Up
 /// Jump to the furthest-back position in the focused section (oldest data / first row).
 ///
 /// - `FrameChart`: set scroll offset to `max_back` (oldest data visible).
-/// - `DetailsTab`: no-op in Phase 1.
+/// - `Details`: no-op in Phase 1.
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
@@ -177,8 +181,8 @@ pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
                 .max(1);
             handle.session.performance.frame_chart_scroll_offset = buf_len.saturating_sub(visible);
         }
-        PerfSection::DetailsTab => {
-            // No-op in Phase 1.
+        PerfSection::Details => {
+            // No-op in Phase 1. Unreachable via Tab; kept for exhaustiveness.
         }
     }
 
@@ -188,7 +192,7 @@ pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
 /// Jump to the live edge in the focused section (newest data / last row).
 ///
 /// - `FrameChart`: set scroll offset to 0 (live edge).
-/// - `DetailsTab`: no-op in Phase 1.
+/// - `Details`: no-op in Phase 1.
 ///
 /// No-op when no session is selected.
 pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
@@ -200,8 +204,8 @@ pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
         PerfSection::FrameChart => {
             handle.session.performance.frame_chart_scroll_offset = 0;
         }
-        PerfSection::DetailsTab => {
-            // No-op in Phase 1.
+        PerfSection::Details => {
+            // No-op in Phase 1. Unreachable via Tab; kept for exhaustiveness.
         }
     }
 
@@ -567,34 +571,40 @@ mod tests {
         assert_eq!(perf_focused_section(&state), PerfSection::FrameChart);
 
         // T02: PerfSection::MemoryList removed — focusing a memory section
-        // now routes to MemorySection on session.memory. Use DetailsTab as the
-        // second valid PerfSection for this test.
-        handle_perf_focus_section(&mut state, PerfSection::DetailsTab);
+        // now routes to MemorySection on session.memory. Use Details as the
+        // second valid PerfSection for this test (direct assignment, bypassing Tab).
+        handle_perf_focus_section(&mut state, PerfSection::Details);
 
-        assert_eq!(perf_focused_section(&state), PerfSection::DetailsTab);
+        assert_eq!(perf_focused_section(&state), PerfSection::Details);
     }
 
     #[test]
     fn perf_focus_section_via_tab_key() {
         let (mut state, _) = make_state_in_performance_panel();
-        // Tab = PerfFocusSection(focused_section.next())
-        // Default section FrameChart.next() == DetailsTab (2-state cycle now)
+        // Phase 1: Tab is a visible no-op — next() always returns FrameChart.
+        // The keys.rs Tab handler emits PerfFocusSection(focused_section.next()),
+        // which is PerfFocusSection(FrameChart). Section stays at FrameChart.
         dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
-        // The keys.rs Tab handler routes to PerfFocusSection in the
-        // performance guard; assert the section changed.
-        assert_eq!(perf_focused_section(&state), PerfSection::DetailsTab);
+        assert_eq!(
+            perf_focused_section(&state),
+            PerfSection::FrameChart,
+            "Phase 1: Tab is a no-op, section stays at FrameChart"
+        );
     }
 
     #[test]
     fn perf_focus_section_via_shift_tab_key() {
         let (mut state, _) = make_state_in_performance_panel();
-        // Shift+Tab = PerfFocusSection(focused_section.prev())
-        // Default section FrameChart.prev() == DetailsTab (2-state cycle: prev == next)
+        // Phase 1: Shift+Tab is a visible no-op — prev() always returns FrameChart.
         dispatch(
             &mut state,
             Message::Key(crate::input_key::InputKey::BackTab),
         );
-        assert_eq!(perf_focused_section(&state), PerfSection::DetailsTab);
+        assert_eq!(
+            perf_focused_section(&state),
+            PerfSection::FrameChart,
+            "Phase 1: Shift+Tab is a no-op, section stays at FrameChart"
+        );
     }
 
     // ── handle_perf_scroll — FrameChart ──────────────────────────────────────
@@ -762,12 +772,9 @@ mod tests {
     fn perf_focus_section_message_routes_correctly() {
         let (mut state, _) = make_state_in_performance_panel();
 
-        update(
-            &mut state,
-            Message::PerfFocusSection(PerfSection::DetailsTab),
-        );
+        update(&mut state, Message::PerfFocusSection(PerfSection::Details));
 
-        assert_eq!(perf_focused_section(&state), PerfSection::DetailsTab);
+        assert_eq!(perf_focused_section(&state), PerfSection::Details);
     }
 
     #[test]
@@ -839,15 +846,15 @@ mod tests {
         let (mut state_keyboard, _) = make_state_in_performance_panel();
         let (mut state_mouse, _) = make_state_in_performance_panel();
 
-        // Keyboard-style dispatch (Tab from FrameChart → DetailsTab).
+        // Keyboard-style dispatch (direct Details focus via message — bypasses Tab no-op).
         update(
             &mut state_keyboard,
-            Message::PerfFocusSection(PerfSection::DetailsTab),
+            Message::PerfFocusSection(PerfSection::Details),
         );
         // Mouse-style dispatch (same message — mouse region emits it directly).
         update(
             &mut state_mouse,
-            Message::PerfFocusSection(PerfSection::DetailsTab),
+            Message::PerfFocusSection(PerfSection::Details),
         );
 
         assert_eq!(
@@ -855,10 +862,7 @@ mod tests {
             perf_focused_section(&state_mouse),
             "keyboard and mouse PerfFocusSection dispatch must yield identical focused_section"
         );
-        assert_eq!(
-            perf_focused_section(&state_keyboard),
-            PerfSection::DetailsTab,
-        );
+        assert_eq!(perf_focused_section(&state_keyboard), PerfSection::Details,);
     }
 
     // ── Task 08: Live-edge drift + integration tests ──────────────────────────
@@ -1009,11 +1013,13 @@ mod tests {
         );
     }
 
-    /// Pressing Tab two times from FrameChart must return to the original section.
+    /// Phase 1: Tab is a visible no-op — pressing Tab any number of times
+    /// must leave `focused_section` at `FrameChart`.
     ///
-    /// PerfSection is now a 2-state cycle: FrameChart → DetailsTab → FrameChart.
+    /// This test replaces the old "2-state cycle" test now that `next()` and
+    /// `prev()` unconditionally return `FrameChart` (Option A — YAGNI).
     #[test]
-    fn tab_cycles_focus_through_two_sections() {
+    fn tab_is_noop_in_phase_1() {
         let (mut state, _) = make_state_in_performance_panel();
         // Starting section is FrameChart (the default).
         assert_eq!(perf_focused_section(&state), PerfSection::FrameChart);
@@ -1021,15 +1027,15 @@ mod tests {
         dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
         assert_eq!(
             perf_focused_section(&state),
-            PerfSection::DetailsTab,
-            "Tab 1: FrameChart → DetailsTab"
+            PerfSection::FrameChart,
+            "Phase 1: Tab must be a no-op, section stays FrameChart"
         );
 
         dispatch(&mut state, Message::Key(crate::input_key::InputKey::Tab));
         assert_eq!(
             perf_focused_section(&state),
             PerfSection::FrameChart,
-            "Tab 2: DetailsTab → FrameChart (wraps around)"
+            "Phase 1: second Tab still no-op"
         );
     }
 }

@@ -17,23 +17,28 @@ pub enum PerfSection {
     /// Frame timing bar chart (default section on open).
     #[default]
     FrameChart,
-    /// Phase 2 anchor — the tabbed details pane. In Phase 1 cycling Tab to
-    /// this section is a no-op (no content yet).
-    DetailsTab,
+    /// Phase 2 anchor — the details pane. In Phase 1 Tab does not enter this
+    /// section (`next()` and `prev()` return `FrameChart` unconditionally) so
+    /// the variant is reserved but unreachable via user interaction.
+    Details,
 }
 
 impl PerfSection {
-    /// Return the next section in Tab order (wraps around).
+    /// Return the next section in Tab order.
+    ///
+    /// Phase 1: Tab is a visible no-op — `next()` always returns `FrameChart`
+    /// until Phase 2 introduces real content for `Details`.
     pub fn next(self) -> Self {
-        match self {
-            PerfSection::FrameChart => PerfSection::DetailsTab,
-            PerfSection::DetailsTab => PerfSection::FrameChart,
-        }
+        // Phase 2 will reintroduce cycling when Details has real content.
+        // For Phase 1: Tab is a visible no-op.
+        PerfSection::FrameChart
     }
 
-    /// Return the previous section in Tab order (wraps around).
+    /// Return the previous section in Tab order.
+    ///
+    /// Phase 1: `prev()` always returns `FrameChart` (mirrors `next()`).
     pub fn prev(self) -> Self {
-        self.next() // 2-state cycle: next == prev
+        self.next()
     }
 }
 
@@ -271,16 +276,17 @@ mod tests {
     // ── PerfSection navigation ───────────────────────────────────────────────
 
     #[test]
-    fn perf_section_next_cycles_forward() {
-        assert_eq!(PerfSection::FrameChart.next(), PerfSection::DetailsTab);
-        assert_eq!(PerfSection::DetailsTab.next(), PerfSection::FrameChart);
+    fn perf_section_next_is_noop_in_phase_1() {
+        // Phase 1: Tab is a visible no-op — next() always returns FrameChart.
+        assert_eq!(PerfSection::FrameChart.next(), PerfSection::FrameChart);
+        assert_eq!(PerfSection::Details.next(), PerfSection::FrameChart);
     }
 
     #[test]
-    fn perf_section_prev_cycles_backward() {
-        // 2-state cycle: prev == next
-        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::DetailsTab);
-        assert_eq!(PerfSection::DetailsTab.prev(), PerfSection::FrameChart);
+    fn perf_section_prev_is_noop_in_phase_1() {
+        // Phase 1: prev() mirrors next() — always returns FrameChart.
+        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::FrameChart);
+        assert_eq!(PerfSection::Details.prev(), PerfSection::FrameChart);
     }
 
     #[test]
