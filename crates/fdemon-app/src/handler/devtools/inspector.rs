@@ -433,6 +433,10 @@ pub fn handle_inspector_properties_fetched(
     // skips the fetch (cache hit).
     inspector.last_fetched_properties_node_id = inspector.pending_properties_node_id.take();
 
+    // Phase 3: the fetch may have changed which tabs are visible.
+    // If the active tab is now hidden, snap to Properties.
+    inspector.clamp_details_tab();
+
     UpdateResult::none()
 }
 
@@ -474,6 +478,10 @@ pub fn handle_inspector_properties_fetch_failed(
     inspector.pending_properties_node_id = None;
     // last_fetched_properties_node_id deliberately not updated; cache stays
     // empty so the next Enter retries.
+
+    // Phase 3: failure may leave render_properties empty; clamp if Render
+    // Object was the active tab.
+    inspector.clamp_details_tab();
 
     UpdateResult::none()
 }
@@ -674,9 +682,25 @@ pub fn handle_open_details(state: &mut AppState) -> UpdateResult {
     let Some(node_id) = inspector.selected_value_id() else {
         return UpdateResult::none(); // no selection, nothing to open
     };
-    inspector.details_open = true;
     inspector.details_tab = DetailsTab::Properties; // always start on first tab
     inspector.details_node_id = Some(node_id.clone());
+
+    // Phase 3: precompute tree-derived visibility predicates for the open session.
+    //
+    // Walks the tree once; cached on `inspector.details_context` and consumed by
+    // `visible_tabs()` for the duration of the details session. Cleared by
+    // `reset_details_and_groups()` and overwritten by the next open.
+    if let Some(root) = inspector.root.as_ref() {
+        inspector.details_context =
+            fdemon_core::widget_tree::compute_details_context(root, &node_id);
+    } else {
+        // Root absent (shouldn't happen if a node is selected, but defensive):
+        // default context means only the Properties tab will render until a
+        // future open lands.
+        inspector.details_context = fdemon_core::widget_tree::DetailsContext::default();
+    }
+
+    inspector.details_open = true;
 
     let session_id = match state.session_manager.selected().map(|h| h.session.id) {
         Some(id) => id,
@@ -744,18 +768,38 @@ pub fn handle_close_details(state: &mut AppState) -> UpdateResult {
 
 /// Cycle the active Details tab forward or backward.
 ///
-/// Wraps around at both ends (Properties → RenderObject → FlexExplorer →
-/// Properties when `forward == true`). No-op when Details is not open.
+/// Wraps around at both ends within the set of currently-visible tabs
+/// (as returned by [`InspectorState::visible_tabs`]). No-op when Details is
+/// not open. When only one tab is visible, forward and backward both leave the
+/// tab unchanged.
 pub fn handle_cycle_tab(state: &mut AppState, forward: bool) -> UpdateResult {
     let inspector = &mut state.devtools_view_state.inspector;
     if !inspector.details_open {
         return UpdateResult::none();
     }
-    inspector.details_tab = if forward {
-        inspector.details_tab.next()
-    } else {
-        inspector.details_tab.prev()
+
+    let visible = inspector.visible_tabs();
+    if visible.is_empty() {
+        // Defensive: visible_tabs always returns at least [Properties].
+        return UpdateResult::none();
+    }
+
+    // Find current tab in visible list. If somehow not present (e.g. clamp
+    // was missed), fall back to first visible tab.
+    let current_idx = visible.iter().position(|t| *t == inspector.details_tab);
+
+    inspector.details_tab = match current_idx {
+        Some(idx) => {
+            let next_idx = if forward {
+                (idx + 1) % visible.len()
+            } else {
+                (idx + visible.len() - 1) % visible.len()
+            };
+            visible[next_idx]
+        }
+        None => visible[0],
     };
+
     UpdateResult::none()
 }
 
@@ -2262,8 +2306,20 @@ mod tests {
     #[test]
     fn handle_cycle_tab_forward_advances_through_three_tabs_with_wrap() {
         let mut state = make_state_with_tree();
-        state.devtools_view_state.inspector.details_open = true;
-        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+        // Phase 3 update: populate state to make all three tabs visible.
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            inspector.details_context = fdemon_core::widget_tree::DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            };
+        }
 
         handle_cycle_tab(&mut state, true);
         assert_eq!(
@@ -2288,8 +2344,20 @@ mod tests {
     #[test]
     fn handle_cycle_tab_backward_advances_through_three_tabs_with_wrap() {
         let mut state = make_state_with_tree();
-        state.devtools_view_state.inspector.details_open = true;
-        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+        // Phase 3 update: populate state to make all three tabs visible.
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            inspector.details_context = fdemon_core::widget_tree::DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            };
+        }
 
         handle_cycle_tab(&mut state, false);
         assert_eq!(
@@ -2322,6 +2390,156 @@ mod tests {
             state.devtools_view_state.inspector.details_tab,
             crate::state::DetailsTab::Properties,
             "Tab should not change when details is closed"
+        );
+    }
+
+    // ── Phase 3 cycle-tab / visible-tabs / details-context tests ─────────────
+
+    #[test]
+    fn handle_cycle_tab_is_noop_when_only_properties_visible() {
+        let mut state = AppState::new();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+        // Default: render_properties empty, details_context default → 1 visible tab.
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "forward cycle with 1 visible tab should be a no-op"
+        );
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "backward cycle with 1 visible tab should be a no-op"
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_skips_flex_explorer_when_hidden() {
+        let mut state = AppState::new();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            // details_context default → is_flex_layout = false → FlexExplorer hidden
+        }
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "forward from Properties should land on RenderObject"
+        );
+        handle_cycle_tab(&mut state, true);
+        // Skip FlexExplorer, wrap to Properties.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "forward from RenderObject should skip FlexExplorer and wrap to Properties"
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_skips_render_object_when_hidden() {
+        let mut state = AppState::new();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            // render_properties empty → RenderObject hidden
+            inspector.details_context = fdemon_core::widget_tree::DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            };
+        }
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::FlexExplorer,
+            "forward from Properties should skip RenderObject and land on FlexExplorer"
+        );
+        handle_cycle_tab(&mut state, true);
+        // Skip RenderObject, wrap to Properties.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "forward from FlexExplorer should skip RenderObject and wrap to Properties"
+        );
+    }
+
+    #[test]
+    fn handle_open_details_populates_details_context_for_column_widget() {
+        let mut state = make_state_with_session();
+        let column = serde_json::from_value::<fdemon_core::DiagnosticsNode>(serde_json::json!({
+            "description": "Column",
+            "valueId": "col-id"
+        }))
+        .expect("valid DiagnosticsNode");
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.root = Some(column);
+            inspector.selected_index = 0;
+        }
+        handle_open_details(&mut state);
+        let ctx = &state.devtools_view_state.inspector.details_context;
+        assert!(ctx.is_flex_layout, "Column should be is_flex_layout=true");
+    }
+
+    #[test]
+    fn handle_open_details_populates_details_context_for_non_flex_root() {
+        let mut state = make_state_with_session();
+        let container = serde_json::from_value::<fdemon_core::DiagnosticsNode>(serde_json::json!({
+            "description": "Container",
+            "valueId": "c-id"
+        }))
+        .expect("valid DiagnosticsNode");
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.root = Some(container);
+            inspector.selected_index = 0;
+        }
+        handle_open_details(&mut state);
+        let ctx = &state.devtools_view_state.inspector.details_context;
+        assert!(
+            !ctx.is_flex_layout,
+            "Container with no parent should be is_flex_layout=false"
+        );
+    }
+
+    #[test]
+    fn handle_inspector_properties_fetched_clamps_active_tab_to_properties_when_render_object_disappears(
+    ) {
+        let mut state = make_state_with_session();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::RenderObject;
+            inspector.details_node_id = Some("node-id".into());
+            inspector.pending_properties_node_id = Some("node-id".into());
+            // Previously had render_properties → RenderObject was visible.
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderOld".into(),
+                ..Default::default()
+            }];
+        }
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        // Simulate a successful fetch that returns no render-object properties
+        // (e.g. user re-selected a widget with no RenderObject).
+        handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "node-id".to_string(),
+            vec![], // widget_props
+            vec![], // render_props — empty triggers clamp
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "clamp_details_tab should snap RenderObject → Properties when render_properties becomes empty"
         );
     }
 
