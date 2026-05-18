@@ -15,7 +15,7 @@ pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
 use fdemon_app::message::Message;
-use fdemon_app::session::{MemoryState, PerformanceState, SessionHandle};
+use fdemon_app::session::{MemoryState, PerfSection, PerformanceState, SessionHandle};
 use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
 use fdemon_app::{MouseAction, MouseRect};
 use ratatui::{
@@ -372,7 +372,18 @@ impl DevToolsView<'_> {
                 }
             }
             DevToolsPanel::Performance => {
-                "[Esc] Logs  [←/→] Frames  [Tab] Section  []/[] Tabs  [j/k] Scroll  [b] Browser"
+                let focused_section = self
+                    .session
+                    .map(|h| h.session.performance.focused_section)
+                    .unwrap_or(PerfSection::FrameChart);
+                match focused_section {
+                    PerfSection::FrameChart => {
+                        "[Esc] Logs  [←/→] Frames  [Tab] Section  ]/[ Tabs  [j/k] Scroll  [b] Browser"
+                    }
+                    PerfSection::Details => {
+                        "[Esc] Logs  [Tab] Section  ]/[ Tabs  [b] Browser"
+                    }
+                }
             }
             DevToolsPanel::Memory => {
                 let has_alloc_selection = self
@@ -1100,6 +1111,73 @@ mod tests {
     }
 
     // ── Performance footer tests ──────────────────────────────────────────────
+
+    /// Build a `SessionHandle` with `focused_section` set to `section`.
+    fn make_perf_session_handle(section: PerfSection) -> fdemon_app::session::SessionHandle {
+        use fdemon_app::session::{Session, SessionHandle};
+        let mut session = Session::new(
+            "test-device".to_string(),
+            "Test Device".to_string(),
+            "android".to_string(),
+            false,
+        );
+        session.performance.focused_section = section;
+        SessionHandle::new(session)
+    }
+
+    /// Render a DevToolsView in Performance mode with the given session handle and
+    /// return the footer row text.
+    fn performance_footer_string_with_session(
+        handle: &fdemon_app::session::SessionHandle,
+    ) -> String {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
+        let area = Rect::new(0, 0, 200, 24);
+        let mut buf = Buffer::empty(area);
+        DevToolsView::new(&state, Some(handle), IconSet::default()).render(area, &mut buf);
+        let footer_y = area.height - 1;
+        let mut row = String::new();
+        for x in 0..area.width {
+            if let Some(cell) = buf.cell((x, footer_y)) {
+                row.push_str(cell.symbol());
+            }
+        }
+        row
+    }
+
+    #[test]
+    fn performance_footer_hides_scroll_keys_when_details_focused() {
+        let handle = make_perf_session_handle(PerfSection::Details);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            !s.contains("[j/k] Scroll"),
+            "[j/k] Scroll must not appear when Details is focused; footer was: {s}"
+        );
+        assert!(
+            !s.contains("[←/→] Frames"),
+            "[←/→] Frames must not appear when Details is focused; footer was: {s}"
+        );
+        assert!(
+            s.contains("]/[") && s.contains("Tabs"),
+            "]/[ Tabs should appear; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn performance_footer_shows_scroll_keys_when_frame_chart_focused() {
+        let handle = make_perf_session_handle(PerfSection::FrameChart);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            s.contains("[j/k] Scroll"),
+            "[j/k] Scroll must appear when FrameChart is focused; footer was: {s}"
+        );
+        assert!(
+            s.contains("[←/→] Frames"),
+            "[←/→] Frames must appear when FrameChart is focused; footer was: {s}"
+        );
+    }
 
     #[test]
     fn performance_footer_mentions_details_tab_cycling() {

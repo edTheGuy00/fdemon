@@ -25,6 +25,14 @@ pub enum PerfSection {
 
 impl PerfSection {
     /// Return the next section in Tab order — wraps `FrameChart → Details → FrameChart`.
+    ///
+    /// # Caution: 2-variant assumption
+    ///
+    /// This implementation assumes `PerfSection` has exactly 2 variants
+    /// (`FrameChart` and `Details`). The body returns the opposite variant
+    /// unconditionally — correct for n=2, silently wrong if a third variant
+    /// is added. If you add a variant, rewrite both `next` and `prev` to
+    /// cycle through all variants explicitly.
     pub fn next(self) -> Self {
         match self {
             PerfSection::FrameChart => PerfSection::Details,
@@ -33,6 +41,14 @@ impl PerfSection {
     }
 
     /// Return the previous section in Tab order — wraps the other way.
+    ///
+    /// # Caution: 2-variant assumption
+    ///
+    /// This implementation assumes `PerfSection` has exactly 2 variants
+    /// (`FrameChart` and `Details`). The body returns the opposite variant
+    /// unconditionally — correct for n=2, silently wrong if a third variant
+    /// is added. If you add a variant, rewrite both `next` and `prev` to
+    /// cycle through all variants explicitly.
     pub fn prev(self) -> Self {
         match self {
             PerfSection::FrameChart => PerfSection::Details,

@@ -152,16 +152,17 @@ pub(crate) fn handle_perf_jump_to_start(state: &mut AppState) -> UpdateResult {
     match handle.session.performance.focused_section {
         PerfSection::FrameChart => {
             let buf_len = handle.session.performance.frame_history.len();
-            let visible = handle
-                .session
-                .performance
-                .frame_chart_visible_width
-                .get()
-                .max(1);
+            let visible_width = handle.session.performance.frame_chart_visible_width.get();
+            let visible = if visible_width == 0 {
+                DEFAULT_PERF_PAGE_SIZE
+            } else {
+                visible_width
+            };
             handle.session.performance.frame_chart_scroll_offset = buf_len.saturating_sub(visible);
         }
         PerfSection::Details => {
-            // No-op in Phase 2. Unreachable via Tab; kept for exhaustiveness.
+            // No-op for scroll/jump. Details pane content (Phase 3 Rebuild Stats /
+            // Timeline Events) will own its own scroll handlers.
         }
     }
 
@@ -184,7 +185,8 @@ pub(crate) fn handle_perf_jump_to_end(state: &mut AppState) -> UpdateResult {
             handle.session.performance.frame_chart_scroll_offset = 0;
         }
         PerfSection::Details => {
-            // No-op in Phase 2. Unreachable via Tab; kept for exhaustiveness.
+            // No-op for scroll/jump. Details pane content (Phase 3 Rebuild Stats /
+            // Timeline Events) will own its own scroll handlers.
         }
     }
 
@@ -708,6 +710,44 @@ mod tests {
     }
 
     // ── handle_perf_jump_to_start / end ──────────────────────────────────────
+
+    /// Regression: `handle_perf_page` and `handle_perf_jump_to_start` must produce
+    /// the same scroll offset for a pre-first-render keypress (visible_width == 0).
+    ///
+    /// Before m13 was fixed, `handle_perf_jump_to_start` used `.max(1)` while
+    /// `handle_perf_page` used `DEFAULT_PERF_PAGE_SIZE`. This caused inconsistent
+    /// behaviour at startup before the first render sets the visible-width hint.
+    #[test]
+    fn perf_jump_to_start_and_page_use_same_fallback_when_hint_is_zero() {
+        let (mut state_page, _) = make_state_in_performance_panel();
+        let (mut state_jump, _) = make_state_in_performance_panel();
+
+        // Push the same frames into both states. Leave visible_width at 0 (not yet rendered).
+        push_frames(&mut state_page, 1000);
+        push_frames(&mut state_jump, 1000);
+
+        // Page Up with hint=0 uses DEFAULT_PERF_PAGE_SIZE = 10.
+        handle_perf_page(&mut state_page, ScrollDir::Up);
+        let page_offset = perf_frame_scroll(&state_page);
+
+        // Jump-to-start with hint=0 should also use DEFAULT_PERF_PAGE_SIZE.
+        handle_perf_jump_to_start(&mut state_jump);
+        let jump_offset = perf_frame_scroll(&state_jump);
+
+        // Page Up from 0 moves 10 back; jump-to-start with visible=10 sets
+        // buf_len - visible = 1000 - 10 = 990.
+        // Both results should use DEFAULT_PERF_PAGE_SIZE (10) as their visible size.
+        assert_eq!(
+            page_offset,
+            super::DEFAULT_PERF_PAGE_SIZE,
+            "page_up with hint=0 should offset by DEFAULT_PERF_PAGE_SIZE"
+        );
+        assert_eq!(
+            jump_offset,
+            1000 - super::DEFAULT_PERF_PAGE_SIZE,
+            "jump_to_start with hint=0 should use DEFAULT_PERF_PAGE_SIZE as visible size"
+        );
+    }
 
     #[test]
     fn perf_jump_to_end_resets_to_live_edge() {

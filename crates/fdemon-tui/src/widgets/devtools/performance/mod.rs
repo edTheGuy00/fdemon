@@ -52,10 +52,14 @@ const COMPACT_THRESHOLD: u16 = 7;
 
 /// Minimum total inner height to show the dual-pane layout (chart + details).
 ///
-/// Derivation: FrameChart requires ≥ `MIN_CHART_HEIGHT (4) + DETAIL_PANEL_HEIGHT (3) = 7`
-/// rows internally. Details pane requires ≥ `MIN_DETAILS_HEIGHT (8)` rows. Inner area
-/// is `area.height - 1` (footer) - 2 (chart block borders). So we need 10 inner
-/// rows for the chart + 8 for details = 18 rows.
+/// 18 rows is the empirically-tested minimum; below this the chart-only fallback
+/// is used instead. At `usable.height = 18`, ratatui's `Constraint::Min`
+/// distributes space across the chart block (with 2 border rows) and the
+/// details block (with 2 border rows), producing acceptable inner heights for
+/// both sections. A strict bottom-up derivation would require 20 rows
+/// (1 footer + 2 chart borders + 7 chart inner + 2 details borders + 8 details
+/// inner), but ratatui's `Constraint::Min` behaviour at constrained sizes makes
+/// 18 the practical threshold at which the layout remains usable.
 const MIN_DUAL_PANE_HEIGHT: u16 = 18;
 
 /// Minimum details pane height — tab strip (2) + content (≥ 6).
@@ -66,7 +70,7 @@ const MIN_DETAILS_HEIGHT: u16 = 8;
 ///
 /// Derivation: 4 phase labels × ~9 chars each + 3 separators = 39 cols. Round
 /// up to 40 to leave room for borders and padding.
-const MIN_PHASE_BAR_WIDTH: u16 = 40;
+pub(super) const MIN_PHASE_BAR_WIDTH: u16 = 40;
 
 /// Percentage of the dual-pane inner area allocated to the Frame Chart.
 const FRAME_CHART_PCT: u16 = 55;
@@ -367,11 +371,6 @@ pub fn render_with_regions(
 ) {
     widget.render_impl(area, buf, ctx);
 }
-
-// MIN_PHASE_BAR_WIDTH is consumed by `details::frame_analysis_tab` (T05).
-// The child module can access this private constant because child modules
-// may access private items of their ancestor modules in Rust.
-const _: u16 = MIN_PHASE_BAR_WIDTH;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
