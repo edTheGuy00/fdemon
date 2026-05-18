@@ -692,6 +692,109 @@ pub(crate) fn count_visible_chain_subordinates(
 }
 
 // ============================================================================
+// DetailsContext
+// ============================================================================
+
+/// Per-open-details cached predicates derived from a `DiagnosticsNode` tree.
+///
+/// Populated by [`compute_details_context`] when the user opens the Inspector
+/// Details view. Cached on `InspectorState::details_context` to avoid re-walking
+/// the tree on every render. Cleared / overwritten by every open/close cycle.
+///
+/// Field semantics:
+///
+/// - `is_flex_layout`: mirrors DevTools' `isFlexLayout` predicate
+///   (`diagnostics_node.dart:487`). True if the selected widget is `Row`,
+///   `Column`, or `Flex`, OR if its tree parent is one of those. Used to gate
+///   the Flex Explorer tab in the Details view.
+///
+/// - `parent_type`: the parent's `widget_runtime_type()` value, or `None` if
+///   the selected node is the root (has no parent). Surfaced for diagnostics
+///   / future debugging; not currently consumed by visibility logic but cheap
+///   to capture during the same DFS.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailsContext {
+    pub is_flex_layout: bool,
+    pub parent_type: Option<String>,
+}
+
+/// Find the parent of the node whose `value_id == target_value_id` in `root`'s subtree.
+///
+/// Returns `None` if `root` itself matches (root has no parent), if no node in
+/// `root` matches, or if `target_value_id` is empty.
+///
+/// Performs a single depth-first walk over `root.children` (and recursively).
+/// Complexity: O(N) in tree size. Safe to call on every `handle_open_details`
+/// because the result is cached on `InspectorState::details_context`.
+pub fn parent_of<'a>(
+    root: &'a DiagnosticsNode,
+    target_value_id: &str,
+) -> Option<&'a DiagnosticsNode> {
+    if target_value_id.is_empty() {
+        return None;
+    }
+    parent_of_recursive(root, target_value_id)
+}
+
+fn parent_of_recursive<'a>(
+    parent: &'a DiagnosticsNode,
+    target_value_id: &str,
+) -> Option<&'a DiagnosticsNode> {
+    for child in &parent.children {
+        if child.value_id.as_deref() == Some(target_value_id) {
+            return Some(parent);
+        }
+        if let Some(found) = parent_of_recursive(child, target_value_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Compute the [`DetailsContext`] for a selected node.
+///
+/// Walks `root` to find the node with `value_id == target_value_id` and its
+/// parent (if any), then derives the visibility predicates.
+///
+/// Returns `DetailsContext::default()` if `target_value_id` is empty or if no
+/// matching node is found in `root`. (The empty-default case still allows the
+/// renderer to dispatch; the Properties tab is always visible.)
+pub fn compute_details_context(root: &DiagnosticsNode, target_value_id: &str) -> DetailsContext {
+    if target_value_id.is_empty() {
+        return DetailsContext::default();
+    }
+
+    let parent = parent_of(root, target_value_id);
+    let selected = find_by_value_id(root, target_value_id);
+
+    let Some(selected_node) = selected else {
+        return DetailsContext::default();
+    };
+
+    DetailsContext {
+        is_flex_layout: selected_node.is_flex_layout(parent),
+        parent_type: parent
+            .and_then(|p| p.widget_runtime_type())
+            .map(|s| s.to_string()),
+    }
+}
+
+fn find_by_value_id<'a>(
+    root: &'a DiagnosticsNode,
+    target_value_id: &str,
+) -> Option<&'a DiagnosticsNode> {
+    if root.value_id.as_deref() == Some(target_value_id) {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(found) = find_by_value_id(child, target_value_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+// ============================================================================
 // CreationLocation
 // ============================================================================
 
@@ -2614,5 +2717,182 @@ mod tests {
         let json = serde_json::json!({ "description": "Text" });
         let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
         assert!(node.name.is_none());
+    }
+
+    // =========================================================================
+    // DetailsContext / parent_of / compute_details_context tests
+    // =========================================================================
+
+    #[test]
+    fn parent_of_returns_none_for_root_match() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            children: vec![],
+            ..Default::default()
+        };
+        assert!(parent_of(&root, "root-id").is_none());
+    }
+
+    #[test]
+    fn parent_of_returns_immediate_parent() {
+        let child = DiagnosticsNode {
+            description: "Container".into(),
+            value_id: Some("child-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            value_id: Some("root-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let parent = parent_of(&root, "child-id").unwrap();
+        assert_eq!(parent.widget_runtime_type(), Some("Column"));
+    }
+
+    #[test]
+    fn parent_of_returns_none_for_missing_target() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            children: vec![],
+            ..Default::default()
+        };
+        assert!(parent_of(&root, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn parent_of_returns_none_for_empty_target_id() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            children: vec![],
+            ..Default::default()
+        };
+        assert!(parent_of(&root, "").is_none());
+    }
+
+    #[test]
+    fn compute_details_context_flex_widget_is_flex_layout() {
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            value_id: Some("col-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "col-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type, None); // root has no parent
+    }
+
+    #[test]
+    fn compute_details_context_child_of_flex_is_flex_layout() {
+        let child = DiagnosticsNode {
+            description: "Container".into(),
+            value_id: Some("c-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            value_id: Some("col-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "c-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type.as_deref(), Some("Column"));
+    }
+
+    #[test]
+    fn compute_details_context_non_flex_widget_is_not_flex_layout() {
+        let child = DiagnosticsNode {
+            description: "Container".into(),
+            value_id: Some("c-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Padding".into(),
+            value_id: Some("p-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "c-id");
+        assert!(!ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type.as_deref(), Some("Padding"));
+    }
+
+    #[test]
+    fn compute_details_context_unmatched_target_returns_default() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "missing");
+        assert_eq!(ctx, DetailsContext::default());
+    }
+
+    #[test]
+    fn compute_details_context_empty_target_returns_default() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "");
+        assert_eq!(ctx, DetailsContext::default());
+    }
+
+    #[test]
+    fn compute_details_context_row_widget_is_flex_layout() {
+        let root = DiagnosticsNode {
+            description: "Row".into(),
+            value_id: Some("row-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "row-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type, None);
+    }
+
+    #[test]
+    fn compute_details_context_child_of_row_is_flex_layout() {
+        let child = DiagnosticsNode {
+            description: "Text".into(),
+            value_id: Some("text-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Row".into(),
+            value_id: Some("row-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "text-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type.as_deref(), Some("Row"));
+    }
+
+    #[test]
+    fn parent_of_finds_deeply_nested_node() {
+        let grandchild = DiagnosticsNode {
+            description: "Leaf".into(),
+            value_id: Some("leaf-id".into()),
+            ..Default::default()
+        };
+        let child = DiagnosticsNode {
+            description: "Middle".into(),
+            value_id: Some("mid-id".into()),
+            children: vec![grandchild],
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Root".into(),
+            value_id: Some("root-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let parent = parent_of(&root, "leaf-id").unwrap();
+        assert_eq!(parent.widget_runtime_type(), Some("Middle"));
     }
 }

@@ -94,6 +94,7 @@ pub use types::{
     SearchState,
 };
 pub use widget_tree::{
-    build_inspector_rows, BoxConstraints, CreationLocation, DiagnosticLevel, DiagnosticsNode,
-    EdgeInsets, InspectorRow, InspectorRowBuilderInputs, LayoutInfo, RowGroup, WidgetSize,
+    build_inspector_rows, compute_details_context, parent_of, BoxConstraints, CreationLocation,
+    DetailsContext, DiagnosticLevel, DiagnosticsNode, EdgeInsets, InspectorRow,
+    InspectorRowBuilderInputs, LayoutInfo, RowGroup, WidgetSize,
 };
