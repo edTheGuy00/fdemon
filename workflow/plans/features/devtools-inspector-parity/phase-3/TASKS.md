@@ -67,11 +67,11 @@ Cf. parent plan at `workflow/plans/features/devtools-inspector-parity/PLAN.md` �
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-core-details-context](tasks/01-core-details-context.md) | Pending | — | 2–3h | `crates/fdemon-core/src/widget_tree.rs` |
-| 02 | [02-app-state-visible-tabs](tasks/02-app-state-visible-tabs.md) | Pending | 01 | 2–3h | `crates/fdemon-app/src/state.rs` |
-| 03 | [03-app-handler-cycle-and-context](tasks/03-app-handler-cycle-and-context.md) | Pending | 02 | 3–4h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
-| 04 | [04-tui-render-visible-tabs](tasks/04-tui-render-visible-tabs.md) | Pending | 02 | 3–5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` |
-| 05 | [05-docs-update](tasks/05-docs-update.md) | Pending | 01–04 | 1–2h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-core-details-context](tasks/01-core-details-context.md) | Done | — | 2–3h | `crates/fdemon-core/src/widget_tree.rs` |
+| 02 | [02-app-state-visible-tabs](tasks/02-app-state-visible-tabs.md) | Done | 01 | 2–3h | `crates/fdemon-app/src/state.rs` |
+| 03 | [03-app-handler-cycle-and-context](tasks/03-app-handler-cycle-and-context.md) | Done | 02 | 3–4h | `crates/fdemon-app/src/handler/devtools/inspector.rs` |
+| 04 | [04-tui-render-visible-tabs](tasks/04-tui-render-visible-tabs.md) | Done | 02 | 3–5h | `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` |
+| 05 | [05-docs-update](tasks/05-docs-update.md) | Done | 01–04 | 1–2h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
 
 ## Wave Schedule
 

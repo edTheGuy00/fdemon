@@ -302,3 +302,33 @@ If existing struct-literal `..Default::default()` patterns in nearby tests use d
 - The Phase 2 caching pattern (`last_fetched_properties_node_id`) is independent of `details_context` — properties caching does not invalidate `details_context`, and re-opening on the same node with a properties cache hit still re-runs `compute_details_context` in `handle_open_details` (cheap).
 - If `cargo clippy` flags `Vec::with_capacity(3)` as unnecessary (it sometimes does for small vecs), feel free to simplify to plain `vec![DetailsTab::Properties]` + `push`. The performance is identical.
 - Do NOT make `visible_tabs()` return `&[DetailsTab]` from a static cache — the contents are dynamic and the allocation is trivial.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `DetailsContext` import; added `details_context: DetailsContext` field to `InspectorState`; initialized in `Default`; cleared in `reset()` and `reset_details_and_groups()`; added `visible_tabs()` and `clamp_details_tab()` methods; added 8 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Formatting fix**: The task spec showed `clamp_details_tab` with a multi-line chain (`.first() / .copied() / .unwrap_or(...)`), but `cargo fmt` collapsed it to one line. Applied rustfmt's format to pass the format check.
+2. **`Vec::with_capacity(3)`**: Kept as-is; clippy did not flag it in this workspace.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2,379 tests, 8 new)
+- `cargo test --workspace` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **None**: Pure additive change — new field, new methods, new tests. No existing behaviour changed.

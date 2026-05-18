@@ -311,3 +311,34 @@ Adjust field initialization syntax if `DiagnosticsNode` does not derive `Default
 - `parent_of` does NOT honor the `inspector_rows` hideable-chain collapse — chain folding is a rendering concern, not a tree-structure concern. The parent in the underlying `DiagnosticsNode.children` tree is always the natural parent. This is correct: DevTools' `isFlexLayout` also operates on the raw tree.
 - Do NOT add `Serialize` / `Deserialize` to `DetailsContext` — it is a derived in-memory value, never persisted or sent over the wire.
 - If a future Phase needs to recompute `DetailsContext` on hot-restart / tree refresh, the cheap recourse is to call `compute_details_context(root, details_node_id)` again — no new RPCs required.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added `DetailsContext` struct, `parent_of` / `parent_of_recursive` free functions, `compute_details_context` / `find_by_value_id` free functions, 12 new unit tests |
+| `crates/fdemon-core/src/lib.rs` | Added `DetailsContext`, `parent_of`, `compute_details_context` to the public re-export block |
+
+### Notable Decisions/Tradeoffs
+
+1. **Function signature formatting**: `compute_details_context` signature fits on one line per rustfmt defaults, so not split across multiple lines as shown in the task template — rustfmt enforces this and the check would fail otherwise.
+2. **Two-pass DFS**: Uses separate `parent_of` and `find_by_value_id` passes (both O(N)) rather than a single combined pass. Trees are small; this keeps each function simple and independently testable.
+3. **Extra tests beyond the six required**: Added `compute_details_context_empty_target_returns_default`, `compute_details_context_row_widget_is_flex_layout`, `compute_details_context_child_of_row_is_flex_layout`, and `parent_of_finds_deeply_nested_node` for broader coverage.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-core` - Passed (457 tests, 12 new)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: All acceptance criteria met; the implementation is a straightforward tree-walk addition with no external dependencies or API surface changes beyond the new public exports.

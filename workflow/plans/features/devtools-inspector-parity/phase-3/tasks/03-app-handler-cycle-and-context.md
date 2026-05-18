@@ -359,3 +359,33 @@ The exact handler signature for `handle_inspector_properties_fetched` may differ
 - Do NOT modify `DetailsTab::next()` / `DetailsTab::prev()` in `state.rs`. They are unused by Phase 3 but may be referenced by older tests or future code; leaving them avoids unnecessary churn.
 - The "Defensive: visible_tabs always returns at least [Properties]" branch in `handle_cycle_tab` should never fire in practice. If `clippy` warns about it as unreachable, leave it — defensive against future regressions in `visible_tabs`.
 - After this task, `handle_open_details`'s line count grows by ~8 lines. `handle_cycle_tab` grows from ~12 lines to ~25 lines. `handle_inspector_properties_fetched` grows by 1 line. The file size stays well within the 500-line warn threshold (file is 2,921 lines total but distributed across many handlers).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Updated `handle_open_details` to compute and store `details_context`; rewrote `handle_cycle_tab` to use `visible_tabs()`; added `clamp_details_tab()` calls in `handle_inspector_properties_fetched` and `handle_inspector_properties_fetch_failed`; updated 2 existing cycle tests with full visibility setup; added 6 new tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **`details_open = true` moved after context computation**: The task spec said to set `details_context` before flipping `details_open`, so the assignment ordering was adjusted: `details_tab` → `details_node_id` → `details_context` → `details_open`. This is clean and readable.
+2. **Defensive empty-visible guard retained in `handle_cycle_tab`**: Clippy did not warn about it as unreachable because the code path is valid; it's kept for safety.
+3. **`fdemon_core::widget_tree::DetailsContext` used directly in tests**: The test file uses the full path rather than importing it, consistent with how other test assertions reference core types in this file.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2385 fdemon-app tests; all suite results ok)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: All acceptance criteria met; the new tests cover all required cases including single-tab no-op, two-tab skip-flex, two-tab skip-render, context for Column (flex), context for Container (non-flex), and clamp-on-fetch.

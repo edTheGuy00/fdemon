@@ -382,3 +382,35 @@ fn details_panel_falls_back_to_properties_when_active_tab_hidden() {
 - The Phase 2 stale-active-tab concern (m11) that affected fall-through to RenderObject visually is naturally addressed by the dispatch-clamp here.
 - After this task, `details/mod.rs` grows from ~458 lines to ~530–550 lines (adding the helper, the dispatch clamp, and ~6 new tests). This is just over the 500-line CODE_STANDARDS threshold — that threshold is a "should split" warning, not a hard cap, and Phase 2 follow-up item m1 already flags splitting as deferred. Do NOT split `details/mod.rs` as part of Phase 3 — keep the change focused on conditional visibility.
 - The "Render object" tab's "No render object for this widget." message at `render_object_tab.rs:78–80` becomes effectively unreachable after Phase 3 (the tab is hidden when `render_properties` is empty). It's left in place for defensive reasons — a future regression that removes the visibility clamp would gracefully degrade rather than render a blank panel.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a3e5e465566538b26
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details/mod.rs` | Replaced `TAB_LABELS` constant with `label_for` helper; updated `render_tab_strip` to iterate `state.visible_tabs()`; added defensive dispatch clamp in `render_details_panel`; updated module doc comment; updated 4 existing tests to set proper fixture fields; added `render_for_state` test helper; added 4 widget-type snapshot tests + 1 defensive fallback test |
+
+### Notable Decisions/Tradeoffs
+
+1. **`render_for_state` helper**: Introduced as a test-local convenience function to reduce boilerplate across the new snapshot tests. Follows the pattern of existing tests (construct `WidgetInspector`, create buffer, call `render_details_panel`, extract text via `collect_buf_text`).
+
+2. **`details_panel_all_tabs_no_panic` fixture update**: The smoke test now provides `render_properties` and `details_context.is_flex_layout = true` so all three tabs are visible for all three tab variants — this exercises both the direct dispatch path and the no-panic property more thoroughly than the old fixture (which would have hit the defensive fallback for RenderObject and FlexExplorer).
+
+3. **Underline test update**: `tab_strip_only_underlines_active_tab_not_others` now uses the default fixture (only Properties visible) — when only one tab renders, the ━ count equals the "Widget properties" label length (17). The original three-tab scenario is covered by `tab_strip_renders_three_labels_when_all_visible`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-tui` — Passed (1120 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **File length**: `details/mod.rs` is now ~590 lines, exceeding the 500-line CODE_STANDARDS "should split" threshold. Per task notes, splitting is deferred to a future follow-up (Phase 2 item m1). No action needed here.
