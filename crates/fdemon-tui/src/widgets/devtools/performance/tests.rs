@@ -66,6 +66,12 @@ fn test_performance_panel_renders_without_panic() {
 
 #[test]
 fn test_performance_panel_no_stats_section() {
+    // Verifies the old Memory/Stats block header (moved to the Memory panel in
+    // Phase 1) is no longer shown in the Performance panel. The string " Stats "
+    // (with surrounding spaces — ratatui block title pattern) must not appear as
+    // a standalone block title. Note: "Rebuild Stats" appears as a tab label in
+    // the dual-pane layout; the assertion checks for the old block-header pattern
+    // "─ Stats ─" or similar, so we check for the old section title format.
     let perf = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
@@ -74,9 +80,13 @@ fn test_performance_panel_no_stats_section() {
         &VmConnectionStatus::Connected,
     );
     let buf = render_to_buf(widget, 80, 30);
+    // The old Stats section had a block title like "─ Stats ─"; it must not appear.
+    // (The new "Rebuild Stats" tab label is acceptable — it does not use the block
+    // title format and is a Phase 2 addition to the Details pane tab strip.)
     assert!(
-        !buf_contains_text(&buf, 80, 30, " Stats "),
-        "Stats section should be removed"
+        !buf_contains_text(&buf, 80, 30, "Memory Stats")
+            && !buf_contains_text(&buf, 80, 30, "─ Stats"),
+        "Old Stats block section should have been removed from Performance panel"
     );
 }
 
@@ -331,6 +341,212 @@ fn performance_tab_after_tab_does_not_break_scroll_keys() {
         &VmConnectionStatus::Connected,
     );
     render_to_buf(widget, 80, 24);
+}
+
+// ── Phase 2 Task 04: dual-pane layout tests ───────────────────────────────────
+
+use fdemon_app::state::PerfDetailsTab;
+
+fn render_panel(perf: &PerformanceState, w: u16, h: u16) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+    let widget = PerformancePanel::new(
+        perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    widget.render(buf.area, &mut buf);
+    buf
+}
+
+fn collect_full_text(buf: &Buffer) -> String {
+    let mut s = String::new();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            if let Some(c) = buf.cell((x, y)) {
+                if let Some(ch) = c.symbol().chars().next() {
+                    s.push(ch);
+                }
+            }
+        }
+        s.push('\n');
+    }
+    s
+}
+
+#[test]
+fn dual_pane_renders_chart_and_details_at_tall_terminal() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+    assert!(
+        text.contains("Frame Timing"),
+        "expected 'Frame Timing' title in dual-pane mode, got:\n{text}"
+    );
+    assert!(
+        text.contains("Frame Details"),
+        "expected 'Frame Details' title in dual-pane mode, got:\n{text}"
+    );
+    assert!(
+        text.contains("Frame Analysis"),
+        "expected 'Frame Analysis' tab label, got:\n{text}"
+    );
+    assert!(
+        text.contains("Rebuild Stats"),
+        "expected 'Rebuild Stats' tab label, got:\n{text}"
+    );
+    assert!(
+        text.contains("Timeline Events"),
+        "expected 'Timeline Events' tab label, got:\n{text}"
+    );
+}
+
+#[test]
+fn chart_only_at_short_terminal_below_min_dual_pane() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 16);
+    let text = collect_full_text(&buf);
+    assert!(
+        text.contains("Frame Timing"),
+        "expected 'Frame Timing' in chart-only mode"
+    );
+    assert!(
+        !text.contains("Frame Details"),
+        "details pane must be suppressed below MIN_DUAL_PANE_HEIGHT, got:\n{text}"
+    );
+}
+
+#[test]
+fn details_dispatches_rebuild_stats_stub() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        details_tab: PerfDetailsTab::RebuildStats,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+    assert!(
+        text.contains("Coming soon"),
+        "rebuild stats stub must say 'Coming soon', got:\n{text}"
+    );
+}
+
+#[test]
+fn details_dispatches_timeline_events_stub() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        details_tab: PerfDetailsTab::TimelineEvents,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+    assert!(
+        text.contains("Coming soon"),
+        "timeline events stub must say 'Coming soon', got:\n{text}"
+    );
+}
+
+#[test]
+fn details_pane_visible_height_is_written_to_render_hint() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let _ = render_panel(&perf, 200, 30);
+    assert!(
+        perf.details_pane_visible_height.get() > 0,
+        "render-hint Cell must be written each frame"
+    );
+}
+
+#[test]
+fn active_tab_label_is_underlined() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        details_tab: PerfDetailsTab::RebuildStats,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    // Scan through all rows to find one containing the underline character ━
+    // that is in the vicinity of the tab strip.
+    let has_underline = (0..buf.area.height).any(|y| {
+        (0..buf.area.width).any(|x| {
+            buf.cell((x, y))
+                .and_then(|c| c.symbol().chars().next())
+                .map(|ch| ch == '\u{2501}')
+                .unwrap_or(false)
+        })
+    });
+    assert!(
+        has_underline,
+        "expected at least one ━ character for the active tab underline in the buffer"
+    );
 }
 
 // ── Phase 4.5 Task 03: render_with_regions parity test ───────────────────────

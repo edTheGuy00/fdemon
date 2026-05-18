@@ -1,20 +1,31 @@
 //! Performance panel widget for the DevTools TUI mode.
 //!
-//! Renders the Flutter Frames bar chart in the full inner area.
-//!
-//! Memory data and allocation profiling have moved to the dedicated Memory
-//! panel (`DevToolsPanel::Memory`); see [`super::memory`].
+//! Renders the Flutter Frames bar chart in the top section, and a tabbed
+//! Details pane in the bottom section (dual-pane layout).
 //!
 //! # Layout
 //!
 //! ```text
 //! ┌─ Frame Timing ──────────────────────────┐
 //! │                                         │
-//! │  [bar chart fills full inner area]      │
+//! │  [frame chart — FRAME_CHART_PCT %]      │
 //! │                                         │
 //! └─────────────────────────────────────────┘
+//! ┌─ ⚡ Frame Details ──────────────────────┐
+//! │ Frame Analysis  Rebuild Stats  Timeline │
+//! │ ━━━━━━━━━━━━━━                          │
+//! │  [tab content]                          │
+//! └─────────────────────────────────────────┘
 //! ```
+//!
+//! At short terminals (`inner_h < MIN_DUAL_PANE_HEIGHT`) the chart fills the
+//! full usable area (Phase 1 behaviour). At very short terminals
+//! (`total_h < COMPACT_THRESHOLD`) a single compact summary line is shown.
+//!
+//! Memory data and allocation profiling live in the dedicated Memory panel
+//! (`DevToolsPanel::Memory`); see [`super::memory`].
 
+mod details;
 mod frame_chart;
 pub(super) mod styles;
 
@@ -22,7 +33,7 @@ use fdemon_app::session::{PerfSection, PerformanceState};
 use fdemon_app::state::VmConnectionStatus;
 use fdemon_app::{MouseAction, MouseRect};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
@@ -36,8 +47,29 @@ use styles::fps_style;
 
 // ── Responsive layout thresholds ─────────────────────────────────────────────
 
-/// Below this height, show compact summary only.
+/// Below this height, show compact summary only (FPS + Jank single line).
 const COMPACT_THRESHOLD: u16 = 7;
+
+/// Minimum total inner height to show the dual-pane layout (chart + details).
+///
+/// Derivation: FrameChart requires ≥ `MIN_CHART_HEIGHT (4) + DETAIL_PANEL_HEIGHT (3) = 7`
+/// rows internally. Details pane requires ≥ `MIN_DETAILS_HEIGHT (8)` rows. Inner area
+/// is `area.height - 1` (footer) - 2 (chart block borders). So we need 10 inner
+/// rows for the chart + 8 for details = 18 rows.
+const MIN_DUAL_PANE_HEIGHT: u16 = 18;
+
+/// Minimum details pane height — tab strip (2) + content (≥ 6).
+const MIN_DETAILS_HEIGHT: u16 = 8;
+
+/// Minimum content-area width to show the proportional phase bar in the
+/// Frame Analysis tab. T05 consumes this constant; T04 defines it.
+///
+/// Derivation: 4 phase labels × ~9 chars each + 3 separators = 39 cols. Round
+/// up to 40 to leave room for borders and padding.
+const MIN_PHASE_BAR_WIDTH: u16 = 40;
+
+/// Percentage of the dual-pane inner area allocated to the Frame Chart.
+const FRAME_CHART_PCT: u16 = 55;
 
 // ── Focus / border styling constants ─────────────────────────────────────────
 
@@ -52,8 +84,8 @@ const COLOR_UNFOCUSED_BORDER: Color = Color::DarkGray;
 /// Performance panel widget for the DevTools mode.
 ///
 /// Displays FPS, frame timing, and jank metrics using data from Phase 3's
-/// monitoring pipeline. The Frame Chart takes the full inner area in Phase 1
-/// (memory data has moved to the dedicated Memory panel).
+/// monitoring pipeline. In Phase 2, the panel uses a dual-pane layout: the
+/// Frame Chart in the upper section and a tabbed Details pane below.
 pub struct PerformancePanel<'a> {
     performance: &'a PerformanceState,
     vm_connected: bool,
@@ -135,13 +167,37 @@ impl PerformancePanel<'_> {
             return;
         }
 
-        // Frame chart fills the entire usable area (memory is now in the Memory tab).
-        // Reserve 1 row at the bottom for the DevTools footer.
-        let usable_area = Rect {
+        // Reserve 1 row at the bottom for the DevTools footer (unchanged).
+        let usable = Rect {
             height: area.height.saturating_sub(1),
             ..area
         };
 
+        if usable.height < MIN_DUAL_PANE_HEIGHT {
+            // Short terminals — Frame Chart fills the entire usable area, same as Phase 1.
+            self.render_chart_only(usable, buf, ctx.as_deref_mut());
+            return;
+        }
+
+        // Dual-pane layout.
+        let chart_h = usable.height.saturating_mul(FRAME_CHART_PCT) / 100;
+        let chunks = Layout::vertical([
+            Constraint::Length(chart_h),
+            Constraint::Min(MIN_DETAILS_HEIGHT),
+        ])
+        .split(usable);
+
+        self.render_chart_only(chunks[0], buf, ctx.as_deref_mut());
+        self.render_details_pane(chunks[1], buf, ctx);
+    }
+
+    // ── Chart-only rendering ──────────────────────────────────────────────────
+
+    /// Render the frame chart into `area`, optionally registering click regions.
+    ///
+    /// Called both as the sole content on short terminals and as the upper half
+    /// of the dual-pane layout on taller terminals.
+    fn render_chart_only(&self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
         let frame_focused = self.performance.focused_section == PerfSection::FrameChart;
         let frame_border_color = if frame_focused {
             COLOR_FOCUSED_BORDER
@@ -154,20 +210,15 @@ impl PerformancePanel<'_> {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(frame_border_color))
             .title_style(Style::default().fg(palette::ACCENT_DIM));
-        let frame_inner = frame_block.inner(usable_area);
-        frame_block.render(usable_area, buf);
+        let frame_inner = frame_block.inner(area);
+        frame_block.render(area, buf);
 
         // Section-level focus region: clicking anywhere in the frame chart area
         // focuses this section. Per-bar clicks (z=1) win over this region (z=0).
         if let Some(c) = ctx.as_deref_mut() {
             // EXCEPTION (TEA): mouse_regions is a render-hint cell. See docs/CODE_STANDARDS.md
             // "Region Registry Pattern" and docs/REVIEW_FOCUS.md approved-exceptions list.
-            let section_rect = MouseRect::new(
-                usable_area.x,
-                usable_area.y,
-                usable_area.width,
-                usable_area.height,
-            );
+            let section_rect = MouseRect::new(area.x, area.y, area.width, area.height);
             c.click(
                 section_rect,
                 MouseAction::emit(fdemon_app::Message::PerfFocusSection(
@@ -185,6 +236,37 @@ impl PerformancePanel<'_> {
             &self.performance.frame_chart_visible_width,
         )
         .render_with_regions(frame_inner, buf, ctx);
+    }
+
+    // ── Details pane rendering ────────────────────────────────────────────────
+
+    /// Render the tabbed details pane into `area`.
+    ///
+    /// Draws the surrounding block (with focus-aware border colour) and
+    /// delegates the inner content to [`details::render`].
+    fn render_details_pane(&self, area: Rect, buf: &mut Buffer, _ctx: Option<&mut MouseCtx<'_>>) {
+        // Details pane block — same focus-aware border styling as the chart.
+        let details_focused = self.performance.focused_section == PerfSection::Details;
+        let border_color = if details_focused {
+            COLOR_FOCUSED_BORDER
+        } else {
+            COLOR_UNFOCUSED_BORDER
+        };
+        let block = Block::default()
+            .title(format!(" {} Frame Details ", self.icons.activity()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
+            .title_style(Style::default().fg(palette::ACCENT_DIM));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+        self.performance
+            .details_pane_visible_height
+            .set(inner.height as usize);
+
+        details::render(inner, buf, self.performance);
     }
 
     // ── Disconnected / no-data state ─────────────────────────────────────────
@@ -272,6 +354,11 @@ pub fn render_with_regions(
 ) {
     widget.render_impl(area, buf, ctx);
 }
+
+// Suppress the dead-code warning for MIN_PHASE_BAR_WIDTH, which is defined here
+// for co-location of thresholds but consumed by T05.
+#[allow(dead_code)]
+const _: u16 = MIN_PHASE_BAR_WIDTH;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
