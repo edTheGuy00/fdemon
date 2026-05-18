@@ -452,23 +452,39 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
             }
         }
         DevToolsPanel::Performance => {
-            // Unpause allocation polling when entering the Performance panel.
-            // The background task will fire one immediate fetch (via the
-            // `alloc_pause_rx.changed()` arm) so the allocation table is
+            // Unpause allocation polling when entering the Performance panel from
+            // a non-alloc panel. The background task will fire one immediate fetch
+            // (via the `alloc_pause_rx.changed()` arm) so the allocation table is
             // populated without waiting for the next scheduled tick.
-            if let Some(handle) = state.session_manager.selected() {
-                if let Some(ref tx) = handle.alloc_pause_tx {
-                    let _ = tx.send(false); // unpause
+            // Skip when the previous panel was also an alloc panel (e.g. Memory →
+            // Performance) — alloc polling was already unpaused, and resending the
+            // same value would create a spurious channel notification.
+            let entering_from_non_alloc = !matches!(
+                old_panel,
+                DevToolsPanel::Performance | DevToolsPanel::Memory
+            );
+            if entering_from_non_alloc {
+                if let Some(handle) = state.session_manager.selected() {
+                    if let Some(ref tx) = handle.alloc_pause_tx {
+                        let _ = tx.send(false); // unpause
+                    }
                 }
             }
         }
         DevToolsPanel::Memory => {
-            // Unpause allocation polling when entering the Memory panel so the
-            // background task fires an immediate fetch. T03 will add real memory
-            // state and widget rendering; this arm keeps allocation data flowing.
-            if let Some(handle) = state.session_manager.selected() {
-                if let Some(ref tx) = handle.alloc_pause_tx {
-                    let _ = tx.send(false); // unpause
+            // Unpause allocation polling when entering the Memory panel from a
+            // non-alloc panel so the background task fires an immediate fetch.
+            // Skip when the previous panel was also an alloc panel (e.g. Performance
+            // → Memory) to avoid a spurious channel notification.
+            let entering_from_non_alloc = !matches!(
+                old_panel,
+                DevToolsPanel::Performance | DevToolsPanel::Memory
+            );
+            if entering_from_non_alloc {
+                if let Some(handle) = state.session_manager.selected() {
+                    if let Some(ref tx) = handle.alloc_pause_tx {
+                        let _ = tx.send(false); // unpause
+                    }
                 }
             }
         }

@@ -1916,8 +1916,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     if let Some(ref tx) = handle.perf_pause_tx {
                         let _ = tx.send(false);
                     }
-                    // Unpause allocation polling only if the Performance panel is active.
-                    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+                    // Unpause allocation polling if the Performance or Memory panel is active.
+                    // Both panels share the same alloc polling task; the invariant is that
+                    // alloc polling is unpaused whenever either panel is visible.
+                    if matches!(
+                        state.devtools_view_state.active_panel,
+                        DevToolsPanel::Performance | DevToolsPanel::Memory,
+                    ) {
                         if let Some(ref tx) = handle.alloc_pause_tx {
                             let _ = tx.send(false);
                         }

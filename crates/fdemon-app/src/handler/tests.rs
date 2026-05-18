@@ -10003,6 +10003,136 @@ fn test_monitoring_started_handler_leaves_paused_when_devtools_not_active() {
 }
 
 #[test]
+fn test_lazy_start_memory_default_unpauses_alloc() {
+    // C1 regression (m8): VmServicePerformanceMonitoringStarted when DevTools
+    // active AND active_panel == Memory should send false (unpause) on alloc_pause_tx.
+    // Previously the guard only matched DevToolsPanel::Performance, so Memory
+    // users were stuck with alloc polling paused indefinitely.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Memory;
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (perf_pause_tx, perf_pause_rx) = tokio::sync::watch::channel(true);
+        let (alloc_pause_tx, alloc_pause_rx) = tokio::sync::watch::channel(true); // starts paused
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let task_arc = std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::VmServicePerformanceMonitoringStarted {
+                session_id,
+                perf_shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                perf_task_handle: task_arc,
+                alloc_pause_tx: std::sync::Arc::new(alloc_pause_tx),
+                perf_pause_tx: std::sync::Arc::new(perf_pause_tx),
+            },
+        );
+
+        // Memory panel active → both perf and alloc should be unpaused.
+        assert!(
+            !*perf_pause_rx.borrow(),
+            "perf_pause_tx should be unpaused when DevTools is active"
+        );
+        let alloc_rx_value = *alloc_pause_rx.borrow();
+        assert!(
+            !alloc_rx_value,
+            "alloc_pause_tx must be sent `false` when monitoring starts with Memory as the active panel"
+        );
+        // Also verify both monitoring flags are set.
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.memory.monitoring_active,
+            "memory.monitoring_active must be true after VmServicePerformanceMonitoringStarted"
+        );
+    });
+}
+
+#[test]
+fn test_switch_performance_to_memory_does_not_retoggle_alloc() {
+    // m7 regression: switching between Performance and Memory must NOT
+    // re-send on alloc_pause_tx (they share the same alloc polling task,
+    // so toggling is wasteful and could produce spurious channel wakeups).
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        use crate::handler::devtools::handle_switch_panel;
+
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Performance;
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Wire up an alloc_pause watch channel on the session handle.
+        let (alloc_pause_tx, mut alloc_pause_rx) = tokio::sync::watch::channel(false); // already unpaused
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .alloc_pause_tx = Some(std::sync::Arc::new(alloc_pause_tx));
+
+        // Consume the initial value so has_changed() is clean.
+        alloc_pause_rx.borrow_and_update();
+
+        // Switch Performance → Memory.
+        handle_switch_panel(&mut state, crate::state::DevToolsPanel::Memory);
+
+        // has_changed() must be false: the switch between two alloc-enabled panels
+        // must not send a new value on alloc_pause_tx.
+        assert!(
+            !alloc_pause_rx.has_changed().unwrap(),
+            "switching Performance→Memory must not send a new value on alloc_pause_tx"
+        );
+        // The channel value should still be false (unpaused).
+        assert!(
+            !*alloc_pause_rx.borrow(),
+            "alloc_pause_tx should still be false (unpaused) after Performance→Memory switch"
+        );
+    });
+}
+
+#[test]
+fn test_switch_memory_to_performance_does_not_retoggle_alloc() {
+    // m7 (symmetric): switching Memory → Performance should also not re-send.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        use crate::handler::devtools::handle_switch_panel;
+
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Memory;
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (alloc_pause_tx, mut alloc_pause_rx) = tokio::sync::watch::channel(false); // already unpaused
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .alloc_pause_tx = Some(std::sync::Arc::new(alloc_pause_tx));
+
+        // Consume the initial value so has_changed() is clean.
+        alloc_pause_rx.borrow_and_update();
+
+        // Switch Memory → Performance.
+        handle_switch_panel(&mut state, crate::state::DevToolsPanel::Performance);
+
+        assert!(
+            !alloc_pause_rx.has_changed().unwrap(),
+            "switching Memory→Performance must not send a new value on alloc_pause_tx"
+        );
+        assert!(
+            !*alloc_pause_rx.borrow(),
+            "alloc_pause_tx should still be false (unpaused) after Memory→Performance switch"
+        );
+    });
+}
+
+#[test]
 fn test_session_switch_in_devtools_starts_monitoring_for_new_session() {
     // When switching sessions while in DevTools, if the new session has VM
     // connected but no perf task, monitoring should start.
