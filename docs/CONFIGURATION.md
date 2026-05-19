@@ -341,12 +341,28 @@ Configure Flutter DevTools integration.
 [devtools]
 auto_open = false          # Automatically open DevTools when app starts
 browser = ""               # Browser command (empty = system default)
+
+# Inspector readiness poll (Phase 1+)
+readiness_poll_attempts = 2
+readiness_poll_interval_ms = 250
+readiness_poll_call_timeout_ms = 1000
+
+# Performance panel — Phase 3 rebuild stats + timeline
+auto_enable_rebuild_tracking = false   # Enable ext.flutter.profileWidgetBuilds on VM connect
+rebuild_stats_frame_window = 30        # Max frames retained in Rebuild Stats ring buffer
+timeline_event_buffer_size = 1000      # Max timeline events retained in Timeline Events buffer
 ```
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `auto_open` | `boolean` | `false` | If `true`, automatically opens DevTools in a browser when the app starts. |
 | `browser` | `string` | `""` | Browser command to use (e.g., `"chrome"`, `"firefox"`). Empty string uses system default. |
+| `readiness_poll_attempts` | `integer` | `2` | Number of `isWidgetTreeReady` poll attempts before giving up and fetching the tree anyway. |
+| `readiness_poll_interval_ms` | `integer` | `250` | Milliseconds between readiness poll attempts. |
+| `readiness_poll_call_timeout_ms` | `integer` | `1000` | Per-call timeout (ms) for each readiness poll RPC. |
+| `auto_enable_rebuild_tracking` | `boolean` | `false` | When `true`, `ext.flutter.profileWidgetBuilds` is enabled automatically on VM Service connect. Enabling this has a small runtime overhead on the Flutter app. |
+| `rebuild_stats_frame_window` | `integer` | `30` | Maximum number of frames retained in the Rebuild Stats ring buffer. Older frames are discarded as new ones arrive. |
+| `timeline_event_buffer_size` | `integer` | `1000` | Maximum number of VM timeline events retained in the Timeline Events buffer. Older events are discarded as new ones arrive. |
 
 ### Native Logs Settings
 

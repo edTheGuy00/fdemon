@@ -242,6 +242,8 @@ flutter-demon/
 │   │       ├── network.rs        # Network domain types (HttpProfileEntry, NetworkTiming, etc.)
 │   │       ├── performance.rs    # Performance domain types (FrameTiming, MemorySample, RingBuffer, etc.)
 │   │       ├── frame_hints.rs    # Refresh-rate-aware frame analysis hints (Phase 2 helper)
+│   │       ├── rebuild_stats.rs  # Widget rebuild telemetry types (Location, LocationMap, RebuildLocation, RebuildStatsSnapshot, RebuildEventPayload, parse_rebuilt_widgets_event)
+│   │       ├── timeline.rs       # VM timeline event types (TimelineThread, TimelinePhase, TimelineEvent, parse_vm_timeline)
 │   │       └── widget_tree.rs    # Widget tree types (DiagnosticsNode, LayoutInfo, EdgeInsets, FlexChild, FlexFit, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize)
 │   │
 │   ├── fdemon-daemon/            # Flutter process management
@@ -280,14 +282,15 @@ flutter-demon/
 │   │           ├── logging.rs    # VM Service logging utilities
 │   │           ├── network.rs    # ext.dart.io.* HTTP/socket profiling
 │   │           ├── performance.rs # Memory usage, allocation profiling
-│   │           ├── timeline.rs   # Frame timing from extension stream
+│   │           ├── timeline.rs   # Frame timing from extension stream; Phase 3 adds get_vm_timeline_micros, fetch_timeline_chunk
 │   │           └── extensions/   # Inspector, layout, overlays, dumps
 │   │               ├── mod.rs
 │   │               ├── inspector.rs
 │   │               ├── layout.rs
 │   │               ├── properties.rs  # getProperties response parsing + widget/render-object split
 │   │               ├── overlays.rs
-│   │               └── dumps.rs
+│   │               ├── dumps.rs
+│   │               └── performance.rs  # set_profile_widget_builds, get_profile_widget_builds; PROFILE_WIDGET_BUILDS and WIDGET_LOCATION_ID_MAP ext constants
 │   │
 │   ├── fdemon-app/               # Application state and orchestration
 │   │   ├── Cargo.toml            # depends: fdemon-core, fdemon-daemon
@@ -303,9 +306,11 @@ flutter-demon/
 │   │       │       ├── mod.rs    # Panel switching, enter/exit, overlays
 │   │       │       ├── inspector.rs  # Widget tree fetch, layout data fetch
 │   │       │       ├── performance/  # Performance handlers (split from performance.rs in Phase 2)
-│   │       │       │   ├── mod.rs    # Re-exports; panel entry/exit
-│   │       │       │   ├── frame.rs  # Frame chart navigation and selection
-│   │       │       │   └── details.rs # Details pane tab cycling and section focus
+│   │       │       │   ├── mod.rs         # Re-exports; panel entry/exit
+│   │       │       │   ├── frame.rs       # Frame chart navigation and selection
+│   │       │       │   ├── details.rs     # Details pane tab cycling and section focus
+│   │       │       │   ├── rebuild_stats.rs # Rebuild stats toggle, event ingestion, table navigation
+│   │       │       │   └── timeline.rs    # Timeline event ingestion, filter cycle, list navigation
 │   │       │       ├── memory.rs     # Memory samples, allocation profile, memory chart/table nav
 │   │       │       └── network.rs    # Network navigation, recording, filter, polling
 │   │       ├── session/          # Per-device session state
@@ -391,8 +396,8 @@ flutter-demon/
 │                   │   └── details/  # Details pane (Phase 2+)
 │                   │       ├── mod.rs               # DetailsPane dispatcher + tab bar
 │                   │       ├── frame_analysis_tab.rs # Frame Analysis tab (populated in Phase 2)
-│                   │       ├── rebuild_stats_tab.rs  # Rebuild Stats stub (populated in Phase 3)
-│                   │       └── timeline_events_tab.rs # Timeline Events stub (populated in Phase 3)
+│                   │       ├── rebuild_stats_tab.rs  # Rebuild Stats tab (widget rebuild counts and locations; conditionally visible when rebuild tracking is enabled)
+│                   │       └── timeline_events_tab.rs # Timeline Events tab (VM timeline events filtered by All/UI/Raster thread)
 │                   ├── memory/       # Memory monitoring (MemoryPanel widget)
 │                   │   ├── mod.rs    # MemoryPanel — top-level memory widget
 │                   │   ├── chart.rs  # Memory time-series chart
@@ -767,6 +772,7 @@ SessionHandle
 ├── network_shutdown_tx / network_task_handle  (network monitoring task)
 ├── network_pause_tx: Option<Arc<watch::Sender<bool>>>  (pause/resume network polling)
 ├── debug_shutdown_tx / debug_task_handle  (DAP debug event task)
+├── timeline_shutdown_tx / timeline_pause_tx / timeline_task_handle  (timeline polling task — Phase 3)
 ├── native_log_shutdown_tx / native_log_task_handle  (platform capture task)
 ├── native_tag_state: NativeTagState  (discovered tags + visibility)
 └── custom_source_handles: Vec<CustomSourceHandle>  (per-source handles)
@@ -879,7 +885,7 @@ The DevTools mode provides four inspection panels — Inspector, Performance, Me
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        DevTools Handlers                                │
 │                  (fdemon-app/handler/devtools/)                         │
-│  inspector.rs  performance/{mod,frame,details}.rs  memory.rs  network.rs │
+│  inspector.rs  performance/{mod,frame,details,rebuild_stats,timeline}.rs  memory.rs  network.rs │
 └─────────┬───────────────┬─────────────────┬──────────────────┬────────┘
           │               │                 │                  │
           ▼               ▼                 ▼                  ▼
@@ -894,7 +900,8 @@ The DevTools mode provides four inspection panels — Inspector, Performance, Me
 ┌────────────────────────────────────────────────────────────────────────┐
 │                       VM Service Client                                 │
 │                  (fdemon-daemon/vm_service/)                            │
-│  extensions/    performance.rs    network.rs   timeline                │
+│  extensions/{inspector,layout,properties,performance,overlays,dumps}   │
+│  performance.rs    network.rs   timeline.rs                            │
 └─────────┬───────────────┬─────────────────────────────────┬────────────┘
           │               │                                 │
           ▼               ▼                                 ▼
@@ -918,10 +925,11 @@ Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
 - `perf_pause_tx` — pauses the frame-timing polling loop when the user is not in DevTools; unpaused on DevTools entry, paused on DevTools exit.
 - `alloc_pause_tx` — pauses the allocation profile polling loop. Entering either the Performance tab or the Memory tab sends `false` (unpause); exiting DevTools sends `true` (pause). Both tabs share the same sender so the polling task remains active whenever either panel is visible.
 - `network_pause_tx` — pauses the network polling loop when the user is not on the Network tab; unpaused on Network tab entry, paused on Network tab exit.
+- `timeline_pause_tx` — pauses the 1 Hz timeline event polling loop; unpaused on Performance panel entry, paused on Performance panel exit. Added in Phase 3.
 
 ### VM Service Data Flow
 
-1. Performance monitoring starts lazily on the first DevTools entry for a session (not at VM Service connect time); network monitoring starts on the first Network tab visit. Both tasks pause when their corresponding panel is not visible and resume when it becomes visible again.
+1. Performance monitoring starts lazily on the first DevTools entry for a session (not at VM Service connect time); network monitoring starts on the first Network tab visit; timeline polling starts on the first Performance panel entry. All tasks pause when their corresponding panel is not visible and resume when it becomes visible again.
 2. Polling tasks call VM Service extensions via `VmServiceHandle`
 3. Responses are parsed into domain types (`MemorySample`, `HttpProfileEntry`, etc.)
 4. Results sent as `Message` variants to the Engine message channel
@@ -1045,15 +1053,15 @@ Phase 2 introduces a dual-pane layout: the upper area holds the frame timing cha
 
 **Details tab (`PerfDetailsTab` enum):**
 
-`PerfDetailsTab` (defined in `fdemon-app/src/state.rs`) has three variants, all unconditionally visible (unlike `InspectorState::visible_tabs()` which conditionally hides some tabs):
+`PerfDetailsTab` (defined in `fdemon-app/src/state.rs`) has three variants. Unlike `InspectorState::visible_tabs()` which conditionally hides some Inspector tabs, the `RebuildStats` tab uses a different conditional visibility mechanism — see "Conditional RebuildStats Tab Visibility" below.
 
-| Variant | Phase 2 status |
-|---|---|
-| `FrameAnalysis` | Fully populated — hints derived from `fdemon-core::frame_hints` |
-| `RebuildStats` | Stub — populated in Phase 3 (requires dedicated RPC) |
-| `TimelineEvents` | Stub — populated in Phase 3 (requires timeline stream) |
+| Variant | Status | Data source |
+|---|---|---|
+| `FrameAnalysis` | Fully populated | Hints derived from `fdemon-core::frame_hints` |
+| `RebuildStats` | Fully populated (Phase 3) | `ext.flutter.profileWidgetBuilds` stream via `Flutter.RebuiltWidgets` VM extension events |
+| `TimelineEvents` | Fully populated (Phase 3) | `getVMTimeline` polled at 1 Hz via `spawn_timeline_polling` |
 
-`PerfDetailsTab::FrameAnalysis` is the default. Pressing `]` emits `Message::PerfCycleDetailsTab { forward: true }`, pressing `[` emits `Message::PerfCycleDetailsTab { forward: false }`. Cycling wraps around all three tabs regardless of stub status. Mouse clicks on tab labels are Phase 3.
+`PerfDetailsTab::FrameAnalysis` is the default. Pressing `]` emits `Message::PerfCycleDetailsTab { forward: true }`, pressing `[` emits `Message::PerfCycleDetailsTab { forward: false }`. Cycling wraps around all tabs; the `RebuildStats` tab is only shown in the TUI tab bar when `rebuild_stats_enabled` is `true` — see below.
 
 **Scroll-offset model (live-edge drift):**
 
@@ -1076,7 +1084,7 @@ Both default to `0` ("not yet rendered — use fallback"). These are the same ap
 
 **Display refresh rate (`display_refresh_rate: f64`):**
 
-`PerformanceState` carries a `display_refresh_rate` field (default `60.0` Hz, hard-coded in Phase 2). This value is passed to `fdemon-core::frame_hints::frame_hints()` when computing per-frame analysis hints. Phase 3 may parse `Display.Refresh` VM Service events to support 90/120 Hz devices; 60 Hz is a conservative default that is never wrong for the `is_janky` predicate.
+`PerformanceState` carries a `display_refresh_rate` field (default `60.0` Hz, hard-coded). This value is passed to `fdemon-core::frame_hints::frame_hints()` when computing per-frame analysis hints. Parsing `Display.Refresh` VM Service events to support 90/120 Hz devices is still deferred — see PLAN.md §7.4. 60 Hz is a conservative default that is never wrong for the `is_janky` predicate.
 
 **Frame history capacity:**
 
@@ -1094,7 +1102,136 @@ Both default to `0` ("not yet rendered — use fallback"). These are the same ap
 | `RasterDominant { ui_ms, raster_ms }` | Raster time materially exceeds UI time. |
 | `BuildDominant { ui_ms, raster_ms }` | Build time materially exceeds raster time. |
 
-This is a pure helper module with no I/O; the Frame Analysis TUI tab consumes it directly from `frame_analysis_tab.rs`. No new VM Service RPCs are needed — Phase 2 is data-complete with the existing `FrameTiming.phases` field. Phase 3 will add Rebuild Stats and Timeline Events via dedicated RPCs.
+This is a pure helper module with no I/O; the Frame Analysis TUI tab consumes it directly from `frame_analysis_tab.rs`. No new VM Service RPCs are needed — the Frame Analysis tab is data-complete with the existing `FrameTiming.phases` field.
+
+**Phase 3: `PerformanceState` new fields (rebuild stats + timeline):**
+
+| Field | Type | Purpose |
+|---|---|---|
+| `rebuild_stats_enabled` | `bool` | Whether `ext.flutter.profileWidgetBuilds` is currently active; drives RebuildStats tab visibility and is preserved across hot restart for re-enable. |
+| `rebuild_stats_location_map` | `LocationMap` | Incrementally merged map from `Flutter.RebuiltWidgets` events and one-shot `widgetLocationIdMap` fallback; maps location id → `Location`. |
+| `rebuild_stats_totals` | `HashMap<u32, u32>` | Lifetime accumulator: location id → total rebuild count since tracking was last enabled. Cleared on disable. |
+| `rebuild_stats_frames` | `VecDeque<RebuildStatsSnapshot>` | Per-frame ring buffer (newest at back); capped by `settings.devtools.rebuild_stats_frame_window`. |
+| `rebuild_stats_scroll_offset` | `usize` | Scroll offset for the Rebuild Stats table. |
+| `rebuild_stats_selected_row` | `Option<usize>` | Currently-selected row in the Rebuild Stats table. |
+| `timeline_events` | `VecDeque<TimelineEvent>` | Ring buffer of recent timeline events; capped by `settings.devtools.timeline_event_buffer_size`. |
+| `timeline_events_scroll_offset` | `usize` | Scroll offset for the Timeline Events list. |
+| `timeline_thread_name_map` | `HashMap<i64, String>` | Thread-id-to-name cache populated from `getVMTimeline` metadata; persists across polls. |
+| `timeline_events_filter` | `TimelineFilter` | Current filter selection — `All`, `Ui`, or `Raster`. |
+
+**`TimelineFilter` enum:**
+
+`TimelineFilter` (defined in `fdemon-app/src/session/performance.rs`) controls which thread's events appear in the Timeline Events tab. The three variants cycle `All → Ui → Raster → All` when the user presses `f`. `TimelineFilter::All` is the default.
+
+**Phase 3: `SessionHandle` timeline task fields:**
+
+Three new fields mirror the existing `perf_*` / `alloc_*` / `network_*` pattern:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `timeline_shutdown_tx` | `Option<Arc<watch::Sender<bool>>>` | Signals the timeline polling task to stop. |
+| `timeline_pause_tx` | `Option<Arc<watch::Sender<bool>>>` | Pauses/resumes the timeline polling loop (false = running, true = paused). |
+| `timeline_task_handle` | `Option<JoinHandle<()>>` | Join handle for the background timeline polling task. |
+
+**Phase 3: new `Message` variants:**
+
+| Variant | Source | Handler |
+|---|---|---|
+| `RebuildStatsEventReceived { session_id, payload }` | `forward_vm_events` (`actions/vm_service.rs`) on `Flutter.RebuiltWidgets` extension event | `handler/devtools/performance/rebuild_stats.rs` |
+| `ToggleRebuildStats { session_id }` | `R` key binding | `handler/devtools/performance/rebuild_stats.rs` |
+| `RebuildStatsExtensionStateChanged { session_id, enabled }` | On-success follow-up from toggle RPC | `handler/devtools/performance/rebuild_stats.rs` |
+| `RebuildStatsLocationMapFetched { session_id, location_map }` | One-shot `widgetLocationIdMap` RPC response | `handler/devtools/performance/rebuild_stats.rs` |
+| `TimelineEventsBatchReceived { session_id, events }` | `spawn_timeline_polling` response | `handler/devtools/performance/timeline.rs` |
+| `TimelineEventsCycleFilter { session_id }` | `f` key binding on Timeline Events tab | `handler/devtools/performance/timeline.rs` |
+| `VmServiceTimelineMonitoringStarted { session_id, shutdown_tx, pause_tx, task_handle }` | `spawn_timeline_polling` startup | `handler/update.rs` — stores handles on `SessionHandle` |
+
+**Phase 3: VM Service additions:**
+
+New constants in `fdemon-daemon/vm_service/extensions/mod.rs::ext`:
+
+| Constant | Value |
+|---|---|
+| `PROFILE_WIDGET_BUILDS` | `"ext.flutter.profileWidgetBuilds"` |
+| `WIDGET_LOCATION_ID_MAP` | `"ext.flutter.inspector.widgetLocationIdMap"` |
+
+New module `fdemon-daemon/vm_service/extensions/performance.rs`:
+
+| Function | Purpose |
+|---|---|
+| `set_profile_widget_builds(client, isolate_id, enabled)` | Enables/disables widget build profiling; pass `None` to read current state. |
+| `get_profile_widget_builds(client, isolate_id)` | Convenience wrapper — calls `set_profile_widget_builds` with `None`. |
+
+New function in `fdemon-daemon/vm_service/extensions/inspector.rs`:
+
+| Function | Purpose |
+|---|---|
+| `widget_location_id_map(client, isolate_id)` | Fetches the static `widgetLocationIdMap` from the Flutter inspector. |
+
+New functions in `fdemon-daemon/vm_service/timeline.rs`:
+
+| Function | Purpose |
+|---|---|
+| `get_vm_timeline_micros(handle)` | Returns the current VM clock in microseconds; used as the chunk-fetch cursor. |
+| `fetch_timeline_chunk(handle, since_micros)` | Fetches timeline events since `since_micros`; parses with `fdemon-core::timeline::parse_vm_timeline`. |
+
+**Phase 3: `spawn_timeline_polling` task:**
+
+`fdemon-app/src/actions/performance::spawn_timeline_polling` starts a background task that polls `fetch_timeline_chunk` at approximately 1 Hz. The task is gated on `timeline_pause_tx`: `false` = polling active (entered Performance tab), `true` = paused (left Performance tab). The task is shut down via `timeline_shutdown_tx` on session teardown.
+
+**Phase 3: `Flutter.RebuiltWidgets` event dispatch:**
+
+`forward_vm_events` in `fdemon-app/src/actions/vm_service.rs` inspects the `extensionKind` field of each Flutter VM extension event. When `extensionKind == "Flutter.RebuiltWidgets"`, the event data is parsed with `fdemon-core::rebuild_stats::parse_rebuilt_widgets_event` and forwarded as `Message::RebuildStatsEventReceived`.
+
+**Phase 3: hot-restart re-enable of `profileWidgetBuilds`:**
+
+When `Message::SessionRestartCompleted` is processed, `fdemon-app/src/handler/update.rs` checks `handle.session.performance.rebuild_stats_enabled`. If `true`, it re-dispatches a `ToggleRebuildStats` action to re-enable `ext.flutter.profileWidgetBuilds` on the new post-restart isolate. This is necessary because hot restart replaces the Dart isolate, clearing all service extensions.
+
+**Conditional `RebuildStats` tab visibility:**
+
+The `RebuildStats` tab in the TUI tab bar (`fdemon-tui/src/widgets/devtools/performance/details/mod.rs`) is shown only when `perf_state.rebuild_stats_enabled == true`. When hidden, `PerfCycleDetailsTab` still cycles through all three `PerfDetailsTab` variants internally — the handler does not skip hidden tabs; the renderer simply does not display the tab label. This means a user cycling tabs while rebuild tracking is disabled can land on `RebuildStats` and see the empty state; the tab bar header is absent but the content area renders correctly with an "enable rebuild tracking" prompt.
+
+**Phase 3: `details_pane_visible_height` first consumer:**
+
+The `details_pane_visible_height` render-hint `Cell<usize>` field (added to `PerformanceState` in Phase 2, first consumed in Phase 3) is written by the `DetailsPane` renderer and read by the `PgUp`/`PgDn` scroll handlers for both the Rebuild Stats table and the Timeline Events list.
+
+**Phase 3: new `[devtools]` config keys:**
+
+Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/config/types.rs`) and loaded from `[devtools]` in `.fdemon/config.toml`:
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `auto_enable_rebuild_tracking` | `bool` | `false` | When `true`, `ext.flutter.profileWidgetBuilds` is enabled automatically on VM Service connect. |
+| `rebuild_stats_frame_window` | `u32` | `30` | Number of frames retained in the Rebuild Stats ring buffer. |
+| `timeline_event_buffer_size` | `usize` | `1000` | Maximum number of timeline events retained in `timeline_events`. |
+
+**Phase 3: new letter shortcuts (architecturally relevant):**
+
+| Key | Context | Effect |
+|---|---|---|
+| `R` | Performance panel, Details focused on Rebuild Stats tab | Toggles `ext.flutter.profileWidgetBuilds`; emits `Message::ToggleRebuildStats`. Shadows the global `R` (hot restart) only when focused. |
+| `f` | Performance panel, Details focused on Timeline Events tab | Cycles `TimelineFilter` (`All → Ui → Raster → All`); emits `Message::TimelineEventsCycleFilter`. |
+
+**Phase 3: `fdemon-core` rebuild stats and timeline types:**
+
+`fdemon-core/src/rebuild_stats.rs`:
+
+| Type / Function | Purpose |
+|---|---|
+| `Location` | Source location for a widget build site (file URI, line, column, name). |
+| `LocationMap` | Map from location id (`u32`) to `Location`; supports incremental merge via `merge_parallel_arrays`. |
+| `RebuildLocation` | Associates a `Location` with a `build_count` for a single frame snapshot. |
+| `RebuildStatsSnapshot` | Per-frame rebuild snapshot: `frame_number`, `start_time_micros`, `Vec<RebuildLocation>`. |
+| `RebuildEventPayload` | Raw decoded payload from a `Flutter.RebuiltWidgets` event. |
+| `parse_rebuilt_widgets_event` | Parses the JSON payload of a `Flutter.RebuiltWidgets` VM extension event into `RebuildEventPayload`. |
+
+`fdemon-core/src/timeline.rs`:
+
+| Type / Function | Purpose |
+|---|---|
+| `TimelineThread` | Thread classification — `Ui`, `Raster`, `Other(String)`. |
+| `TimelinePhase` | Event phase — `Begin`, `End`, `Complete`, `Instant`, `Other`. |
+| `TimelineEvent` | A single VM timeline event: `name`, `category`, `thread`, `tid`, `phase`, `ts`, `dur`, `frame_number`. |
+| `parse_vm_timeline` | Parses the JSON response of a `getVMTimeline` call into `Vec<TimelineEvent>`. |
 
 ### Memory Panel Interactivity
 
@@ -1843,6 +1980,8 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `DiagnosticsNode`, `LayoutInfo`, `EdgeInsets`, `WidgetSize`, `BoxConstraints` — Widget tree and layout types (`widget_tree.rs`)
 - `FlexChild`, `FlexFit`, `Axis`, `MainAxisAlignment`, `CrossAxisAlignment`, `MainAxisSize` — Flex layout types for `Row`/`Column`/`Flex` containers; populated from `getLayoutExplorerNode` responses (`widget_tree.rs`)
 - `DetailsContext` — Cached tree-derived visibility predicates for one Details view session; holds `is_flex_layout` (mirrors DevTools' `isFlexLayout`) and `parent_type`; computed by `compute_details_context` and stored on `InspectorState` (`widget_tree.rs`)
+- `Location`, `LocationMap`, `RebuildLocation`, `RebuildStatsSnapshot`, `RebuildEventPayload`, `parse_rebuilt_widgets_event` — Widget rebuild telemetry types and parser (`rebuild_stats.rs`)
+- `TimelineThread`, `TimelinePhase`, `TimelineEvent`, `parse_vm_timeline` — VM timeline event types and parser (`timeline.rs`)
 
 **Internal** (`pub(crate)`):
 - Protocol parsing helpers
