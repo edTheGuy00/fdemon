@@ -32,8 +32,9 @@ handler layer. These fields:
 - `TagFilterUiState::last_known_scroll_offset` — the renderer writes ratatui's `ListState.offset()` each frame after `render_stateful_widget`; the region recorder reads it to convert screen-row numbers to absolute tag indices for click region registration. Default 0 (safe fallback when no render has happened yet).
 - `MemoryState::memory_chart_visible_width` — the renderer writes the actual chart plot width (in columns) each frame; the chart-scroll handler reads it to clamp `memory_chart_scroll_offset` against the latest geometry. Default 0 (safe fallback when no render has happened yet).
 - `MemoryState::alloc_table_visible_height` — the renderer writes the visible data-row count (excluding header) each frame; the alloc-table page and jump handlers read it to size page-step and end-of-list navigation. Default 0 (safe fallback when no render has happened yet).
-- `PerformanceState::details_pane_visible_height` — the renderer writes the inner details-pane height (excluding borders) each frame; Phase 3 Rebuild Stats and Timeline Events scroll handlers will read it. Default 0 (safe fallback when no render has happened yet; Phase 2 has no reader).
+- `PerformanceState::details_pane_visible_height` — the renderer writes the inner details-pane height (excluding borders) each frame; Phase 3 Rebuild Stats and Timeline Events scroll handlers read it. Default 0 (safe fallback when no render has happened yet).
 - `PerformanceState::frame_chart_visible_width` — the renderer writes the visible bar count each frame; the chart-scroll, page, and jump handlers read it to clamp `frame_chart_scroll_offset` and size page-step navigation. Default 0 (safe fallback when no render has happened yet).
+- `PerformanceState::timeline_visible_row_count` — the Gantt renderer writes the actual visible thread-row count each frame; the `↑/↓` timeline thread-row scroll handler reads it to bound `timeline_thread_scroll_offset`. Default 0 (safe fallback when no render has happened yet). Write site annotated with the standard `// EXCEPTION:` comment in `timeline_events/mod.rs`.
 
 New `Cell`-based render-hint fields require explicit review and documentation here.
 
@@ -116,6 +117,22 @@ See `docs/ARCHITECTURE.md` for the complete dependency matrix.
 ### `pub(super)` Module Boundary: `text_helpers`
 
 `fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` is declared `pub(super)` and all its exports (`truncate_with_ellipsis`, `pad_right`, `pad_left`, `PLACEHOLDER_LINE_COUNT`) are also `pub(super)`. This is intentional: the helpers are shared across sibling tab renderers within the `details` module but must not leak to the broader `widgets` hierarchy. Future helpers added to this module must keep the same visibility.
+
+### Gantt Depth-Stacked Rendering
+
+Phase 4: depth-stacked timeline event rendering follows DevTools' legacy `FlameChart` pattern — depth-N child events render at row `Y+N` within their parent's row band. This is an approved exception to "one widget = one rectangular region" because depth math is bounded by `MAX_DEPTH` and the renderer always honors `Layout::vertical` parent constraints. Reviewers should not flag this.
+
+### Thread-Row Scroll Offset Semantics
+
+Phase 4: `timeline_thread_scroll_offset` measures scroll position in **thread rows**, not event lines. The Gantt has no event-level selection in Phase 4, so the scroll target is the thread row itself. Phase 5 may add event-level selection within rows.
+
+### Full-Column Frame-Chart Selection Overlay
+
+Phase 4: the frame chart's selected bar is rendered with a full-column overlay (side-marker characters `▏`/`▕` across every chart row), not a single-character tip. This is an approved replacement for the Phase 1 single-`▔` highlight, which was visually invisible.
+
+### Phase 5 Deferred Scope (Timeline Gantt)
+
+Pan/zoom, minimap, event-level selection, search/filter by name, and CPU sample overlays in the Timeline Gantt view are deferred to Phase 5. Reviewers seeing PRs touching `timeline_events/` should expect a fixed-viewport rendering in Phase 4 and a configurable viewport in Phase 5. Absence of these features is intentional and should not be flagged.
 
 ## Performance Concerns
 

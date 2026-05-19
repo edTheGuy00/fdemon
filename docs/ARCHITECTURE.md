@@ -243,7 +243,7 @@ flutter-demon/
 │   │       ├── performance.rs    # Performance domain types (FrameTiming, MemorySample, RingBuffer, etc.)
 │   │       ├── frame_hints.rs    # Refresh-rate-aware frame analysis hints (Phase 2 helper)
 │   │       ├── rebuild_stats.rs  # Widget rebuild telemetry types (Location, LocationMap, RebuildLocation, RebuildStatsSnapshot, RebuildEventPayload, parse_rebuilt_widgets_event)
-│   │       ├── timeline.rs       # VM timeline event types (TimelineThread, TimelinePhase, TimelineEvent, parse_vm_timeline)
+│   │       ├── timeline.rs       # VM timeline event types (TimelineThread, TimelinePhase, TimelineEvent, TimelineNode, TimelineTrack, ThreadMetadata, pair_be_events, build_tracks, parse_vm_timeline, parse_vm_timeline_with_metadata)
 │   │       └── widget_tree.rs    # Widget tree types (DiagnosticsNode, LayoutInfo, EdgeInsets, FlexChild, FlexFit, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize)
 │   │
 │   ├── fdemon-daemon/            # Flutter process management
@@ -282,7 +282,7 @@ flutter-demon/
 │   │           ├── logging.rs    # VM Service logging utilities
 │   │           ├── network.rs    # ext.dart.io.* HTTP/socket profiling
 │   │           ├── performance.rs # Memory usage, allocation profiling
-│   │           ├── timeline.rs   # Frame timing from extension stream; Phase 3 adds get_vm_timeline_micros, fetch_timeline_chunk
+│   │           ├── timeline.rs   # Frame timing from extension stream; Phase 3 adds get_vm_timeline_micros, fetch_timeline_chunk; Phase 4 adds fetch_timeline_chunk_with_metadata
 │   │           └── extensions/   # Inspector, layout, overlays, dumps
 │   │               ├── mod.rs
 │   │               ├── inspector.rs
@@ -397,7 +397,12 @@ flutter-demon/
 │                   │       ├── mod.rs               # DetailsPane dispatcher + tab bar
 │                   │       ├── frame_analysis_tab.rs # Frame Analysis tab (populated in Phase 2)
 │                   │       ├── rebuild_stats_tab.rs  # Rebuild Stats tab (widget rebuild counts and locations; conditionally visible when rebuild tracking is enabled)
-│                   │       └── timeline_events_tab.rs # Timeline Events tab (VM timeline events filtered by All/UI/Raster thread)
+│                   │       ├── text_helpers.rs       # pub(super) helpers: truncate_with_ellipsis, pad_right, pad_left, PLACEHOLDER_LINE_COUNT
+│                   │       └── timeline_events/      # Timeline Events tab — Gantt chart (Phase 4)
+│                   │           ├── mod.rs            # Entry point: filter strip + render dispatch
+│                   │           ├── gantt.rs          # Thread rows, depth-stacked bars, time axis
+│                   │           ├── palette.rs        # Two-color depth-alternating palette per TimelineThread
+│                   │           └── viewport.rs       # Pure math: compute_viewport, micros_to_column, clip_bar
 │                   ├── memory/       # Memory monitoring (MemoryPanel widget)
 │                   │   ├── mod.rs    # MemoryPanel — top-level memory widget
 │                   │   ├── chart.rs  # Memory time-series chart
@@ -1114,9 +1119,10 @@ This is a pure helper module with no I/O; the Frame Analysis TUI tab consumes it
 | `rebuild_stats_frames` | `VecDeque<RebuildStatsSnapshot>` | Per-frame ring buffer (newest at back); capped by `settings.devtools.rebuild_stats_frame_window`. |
 | `rebuild_stats_scroll_offset` | `usize` | Scroll offset for the Rebuild Stats table. |
 | `rebuild_stats_selected_row` | `Option<usize>` | Currently-selected row in the Rebuild Stats table. |
-| `timeline_events` | `VecDeque<TimelineEvent>` | Ring buffer of recent timeline events; capped by `settings.devtools.timeline_event_buffer_size`. |
-| `timeline_events_scroll_offset` | `usize` | Scroll offset for the Timeline Events list. |
-| `timeline_thread_name_map` | `HashMap<i64, String>` | Thread-id-to-name cache populated from `getVMTimeline` metadata; persists across polls. |
+| `timeline_tracks` | `BTreeMap<i64, TimelineTrack>` | Per-thread event trees, keyed by `tid` ascending; replaces the Phase 3 flat `VecDeque<TimelineEvent>` ring buffer. Iteration order is stable (`BTreeMap`) so the Gantt renderer produces consistent thread-row ordering. |
+| `timeline_thread_scroll_offset` | `usize` | Scroll offset measured in thread rows (not event lines); replaces `timeline_events_scroll_offset`. |
+| `timeline_visible_row_count` | `Cell<usize>` | Render-hint write-back: actual visible thread-row count drawn last frame; used by the `↑/↓` scroll handler to bound scrolling. |
+| `timeline_thread_name_map` | `HashMap<i64, String>` | Thread-id-to-name map, now written from `ph="M" name="thread_name"` metadata events received alongside timeline batches; used by the Gantt renderer to label thread rows. |
 | `timeline_events_filter` | `TimelineFilter` | Current filter selection — `All`, `Ui`, or `Raster`. |
 
 **`TimelineFilter` enum:**
@@ -1142,7 +1148,7 @@ Three new fields mirror the existing `perf_*` / `alloc_*` / `network_*` pattern:
 | `RebuildStatsExtensionStateChanged { session_id, enabled }` | On-success follow-up from toggle RPC | `handler/devtools/performance/rebuild_stats.rs` |
 | `RebuildStatsLocationMapFetched { session_id, location_map }` | One-shot `widgetLocationIdMap` RPC response | `handler/devtools/performance/rebuild_stats.rs` |
 | `RebuildStatsToggleFailed { session_id, reason }` | On-failure follow-up from toggle RPC or `widgetLocationIdMap` fetch | `handler/devtools/performance/rebuild_stats.rs` — appends a `Warning` log entry |
-| `TimelineEventsBatchReceived { session_id, events }` | `spawn_timeline_polling` response | `handler/devtools/performance/timeline.rs` |
+| `TimelineEventsBatchReceived { session_id, events, metadata }` | `spawn_timeline_polling` response | `handler/devtools/performance/timeline.rs` |
 | `TimelineEventsCycleFilter { session_id }` | `f` key binding on Timeline Events tab | `handler/devtools/performance/timeline.rs` |
 | `VmServiceTimelineMonitoringStarted { session_id, shutdown_tx, pause_tx, task_handle }` | `spawn_timeline_polling` startup | `handler/update.rs` — stores handles on `SessionHandle` |
 
@@ -1174,7 +1180,8 @@ New functions in `fdemon-daemon/vm_service/timeline.rs`:
 | Function | Purpose |
 |---|---|
 | `get_vm_timeline_micros(handle)` | Returns the current VM clock in microseconds; used as the chunk-fetch cursor. |
-| `fetch_timeline_chunk(handle, since_micros)` | Fetches timeline events since `since_micros`; parses with `fdemon-core::timeline::parse_vm_timeline`. |
+| `fetch_timeline_chunk(handle, since_micros)` | Fetches timeline events since `since_micros`; parses with `fdemon-core::timeline::parse_vm_timeline`. Backward-compatible; preserved for existing consumers. |
+| `fetch_timeline_chunk_with_metadata(handle, since_micros)` | Like `fetch_timeline_chunk` but uses `parse_vm_timeline_with_metadata`, returning both events and `Vec<ThreadMetadata>`. Used by `run_one_timeline_fetch_cycle` in Phase 4. |
 
 **Phase 3: `spawn_timeline_polling` task:**
 
@@ -1184,7 +1191,7 @@ New functions in `fdemon-daemon/vm_service/timeline.rs`:
 
 **Timeline watermark seeding:** before the first poll tick, the task calls `seed_timeline_watermark`, which queries `getVMTimelineMicros` to establish the starting cursor. On failure it retries once after 100 ms; if the retry also fails, it falls back to a wall-clock "now-ish" estimate. This bounds the first fetch extent to milliseconds rather than the full VM-lifetime event buffer.
 
-**Timeline pause and buffer clear on panel leave:** when the user navigates away from the Performance panel (`handle_switch_panel`) or exits DevTools mode (`handle_exit_devtools_mode`), the handler sends `true` on `timeline_pause_tx` to pause polling, and clears `PerformanceState::timeline_events` plus resets `timeline_events_scroll_offset` to `0`. This ensures the next entry to the Performance panel starts from a clean, current-data state rather than displaying a stale backlog. The same exit path also closes the `Flutter.RebuiltWidgets` panel gate for all sessions.
+**Timeline pause and buffer clear on panel leave:** when the user navigates away from the Performance panel (`handle_switch_panel`) or exits DevTools mode (`handle_exit_devtools_mode`), the handler sends `true` on `timeline_pause_tx` to pause polling, and clears `PerformanceState::timeline_tracks`, `timeline_thread_name_map`, and resets `timeline_thread_scroll_offset` to `0`. This ensures the next entry to the Performance panel starts from a clean, current-data state rather than displaying a stale backlog. The same exit path also closes the `Flutter.RebuiltWidgets` panel gate for all sessions.
 
 **Post-fetch watermark update:** after each successful `fetch_timeline_chunk` call, the task re-queries `getVMTimelineMicros` to advance the watermark to the post-fetch VM clock. Using the pre-fetch timestamp plus one would silently drop events whose `ts` falls in the window between the pre-fetch query and the moment the fetch completes. The post-fetch query closes this gap. On failure, the task falls back to `pre_fetch_micros + 1` to maintain forward progress.
 
@@ -1232,7 +1239,7 @@ Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/confi
 |---|---|---|---|
 | `auto_enable_rebuild_tracking` | `bool` | `false` | When `true`, `ext.flutter.profileWidgetBuilds` is enabled automatically on VM Service connect. |
 | `rebuild_stats_frame_window` | `u32` | `30` | Number of frames retained in the Rebuild Stats ring buffer. |
-| `timeline_event_buffer_size` | `usize` | `1000` | Maximum number of timeline events retained in `timeline_events`. |
+| `timeline_event_buffer_size` | `usize` | `1000` | Maximum total node count retained across all `timeline_tracks`. Eviction drops the oldest root event globally (by `ts`) until the total is within the cap. |
 
 **Phase 3: new letter shortcuts (architecturally relevant):**
 
@@ -1258,10 +1265,16 @@ Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/confi
 
 | Type / Function | Purpose |
 |---|---|
-| `TimelineThread` | Thread classification — `Ui`, `Raster`, `Other(String)`. |
+| `TimelineThread` | Thread classification — `Ui`, `Raster`, `Other`. |
 | `TimelinePhase` | Event phase — `Begin`, `End`, `Complete`, `Instant`, `Other`. |
 | `TimelineEvent` | A single VM timeline event: `name`, `category`, `thread`, `tid`, `phase`, `ts`, `dur`, `frame_number`. |
-| `parse_vm_timeline` | Parses the JSON response of a `getVMTimeline` call into `Vec<TimelineEvent>`. |
+| `parse_vm_timeline` | Parses the JSON response of a `getVMTimeline` call into `Vec<TimelineEvent>`. Backward-compatible; filters `ph="M"` metadata events. |
+| `TimelineNode` | A duration-reconstructed event node with `name`, `ts`, `dur`, `phase`, `children`, `category`. Begin/End pairs are reconciled into a single node; children are nested by interval containment within the same `tid`. |
+| `TimelineTrack` | Per-thread container: `tid`, `name`, `thread`, `root_events: Vec<TimelineNode>`. Iteration of a `BTreeMap<i64, TimelineTrack>` yields tracks in `tid` ascending order. |
+| `ThreadMetadata` | Extracted from `ph="M" name="thread_name"` events: `tid` and human-readable `name` (e.g. `"io.flutter.raster"`). |
+| `pair_be_events` | Stack-based B/E pair reconstruction for a single `tid`'s event slice. Unmatched Begin events emit with `dur=None`; mismatched B/E names pop defensively and log at debug. Nesting by interval containment runs after flattening. |
+| `build_tracks` | Groups a `Vec<TimelineEvent>` by `tid`, calls `pair_be_events` per group, returns `BTreeMap<i64, TimelineTrack>`. |
+| `parse_vm_timeline_with_metadata` | Like `parse_vm_timeline` but also returns `Vec<ThreadMetadata>` extracted from `ph="M"` events. |
 
 **Phase 3-followup: `PROFILE_WIDGET_BUILDS` constant and `I64_MAX_AS_U64` guard:**
 
@@ -1271,7 +1284,32 @@ Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/confi
 
 **Phase 3-followup: `text_helpers` module (`fdemon-tui`):**
 
-`fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` is a `pub(super)` module shared by the three sibling tab renderers (`frame_analysis_tab.rs`, `rebuild_stats_tab.rs`, `timeline_events_tab.rs`). It provides `truncate_with_ellipsis`, `pad_right`, `pad_left`, and the `PLACEHOLDER_LINE_COUNT` constant. All exports are `pub(super)` — they are invisible outside the `details` module subtree. Integration tests for `VmRequestApi` polling live in `fdemon-app/src/actions/performance.rs` (inline `#[cfg(test)]` module).
+`fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` is a `pub(super)` module shared by the sibling tab renderers within `details/`. It provides `truncate_with_ellipsis`, `pad_right`, `pad_left`, and the `PLACEHOLDER_LINE_COUNT` constant. All exports are `pub(super)` — invisible outside the `details` module subtree. Integration tests for `VmRequestApi` polling live in `fdemon-app/src/actions/performance.rs` (inline `#[cfg(test)]` module).
+
+**Phase 4: Timeline Event Tree Model:**
+
+Timeline events are stored per-thread as trees of `TimelineNode` instances rather than a flat ring buffer. `fdemon-core::timeline::pair_be_events` reconstructs Begin/End pairs into duration nodes using a stack-based algorithm, then nests them by interval containment within each `tid`. `PerformanceState::timeline_tracks: BTreeMap<i64, TimelineTrack>` holds the result, with stable thread ordering by `tid` ascending. The polling task calls `fetch_timeline_chunk_with_metadata`, which uses `parse_vm_timeline_with_metadata` to extract `ph="M" name="thread_name"` metadata events alongside the event stream, so `timeline_thread_name_map` is populated with human-readable names like `"io.flutter.raster"`. Incoming batches are merged into existing tracks via `build_tracks` → merge; the per-track buffer cap (`timeline_event_buffer_size`) is enforced by evicting the globally oldest root event (by `ts`) until total node count is within the limit.
+
+**Phase 4: Gantt Timeline Widget (`fdemon-tui`):**
+
+The Timeline Events tab renders as a Gantt chart. The subdirectory `widgets/devtools/performance/details/timeline_events/` contains four modules:
+
+| Module | Role |
+|---|---|
+| `mod.rs` | Entry point: filter strip, thread-filter display, dispatch to Gantt renderer |
+| `gantt.rs` | Thread rows with left-column labels, colored event bars across a time canvas, depth-stacked children, time axis |
+| `palette.rs` | Two-color depth-alternating palette per `TimelineThread` (`Ui`=LightBlue/Blue, `Raster`=Blue/DarkGray, `Other`=Magenta/LightMagenta) |
+| `viewport.rs` | Pure math helpers: `compute_viewport`, `micros_to_column`, `clip_bar` |
+
+The viewport is fixed at the most recent `TIMELINE_VIEWPORT_MICROS` (5 s) and auto-scrolls forward as new events arrive. Each thread row is `THREAD_ROW_HEIGHT` (6) lines tall, accommodating up to `MAX_DEPTH` (5) depth-stacked child bars. Thread rows are vertically scrollable via `↑/↓` using `timeline_thread_scroll_offset`; the Gantt renderer writes the actual visible row count back to `timeline_visible_row_count` each frame. Thread filtering (`T` key — `All → UI → Raster → All`) is preserved. Pan, zoom, event-level selection, minimap, and search are deferred to Phase 5.
+
+**Phase 4: Immediate Timeline Fetch on Unpause:**
+
+`spawn_timeline_polling` now uses `tokio::select!` mirroring the allocation-polling pattern: when `timeline_pause_rx.changed() → false` fires (Performance panel entered), a helper `run_one_timeline_fetch_cycle` runs immediately before re-entering the 1-Hz tick loop. This eliminates the ~1 s cold-start placeholder window on every Performance-panel entry. The helper returns a `FetchOutcome` enum (`Ok`, `TransientError`, `ChannelClosed`) for testability.
+
+**Phase 4: Frame-Chart Selection and Bar-Height Fixes:**
+
+`compute_visible_range` in `frame_chart/bars.rs` now uses `frame_chart_scroll_offset` as the sole viewport authority — the selected frame is no longer anchored to the right edge. `handle_select_performance_frame` only adjusts `scroll_offset` when the selection moves outside the visible viewport (selection within viewport leaves the offset unchanged). `ms_to_half_blocks` clamps nonzero `ms` values to at least `MIN_BAR_HALF_BLOCKS = 1` half-block, preventing fast frames from disappearing in shallow terminal windows. The selection highlight is a full-column Option-A side-marker overlay (`▏` left-eighth / `▕` right-eighth) spanning every chart row, replacing the previous single-`▔` top-row indicator.
 
 ### Memory Panel Interactivity
 
