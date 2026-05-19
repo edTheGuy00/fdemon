@@ -10,13 +10,22 @@ use crate::state::{AppState, PerfDetailsTab};
 /// otherwise the key emission is a no-op. (The keys.rs guard already enforces
 /// this, but the handler is defensive — a future mouse-driven dispatch path
 /// could land here without the keyboard guard.)
+///
+/// Forward cycling respects rebuild-stats visibility: when
+/// `rebuild_stats_enabled == false`, the cycle skips `RebuildStats` and goes
+/// directly `FrameAnalysis → TimelineEvents → FrameAnalysis`.
 pub(crate) fn handle_perf_cycle_details_tab(state: &mut AppState, forward: bool) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         if handle.session.performance.focused_section != PerfSection::Details {
             return UpdateResult::none();
         }
+        let rebuild_stats_enabled = handle.session.performance.rebuild_stats_enabled;
         let next = if forward {
-            handle.session.performance.details_tab.next()
+            handle
+                .session
+                .performance
+                .details_tab
+                .next_visible(rebuild_stats_enabled)
         } else {
             handle.session.performance.details_tab.prev()
         };
@@ -75,7 +84,29 @@ mod tests {
 
     #[test]
     fn cycle_forward_advances_details_tab() {
+        // rebuild_stats_enabled defaults to false, so FrameAnalysis → TimelineEvents
+        // (RebuildStats is skipped via next_visible).
         let mut state = make_state_in_performance_details();
+        update(&mut state, Message::PerfCycleDetailsTab { forward: true });
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .details_tab,
+            PerfDetailsTab::TimelineEvents,
+        );
+    }
+
+    #[test]
+    fn cycle_forward_advances_details_tab_with_rebuild_enabled() {
+        // With rebuild_stats_enabled = true, FrameAnalysis → RebuildStats (full cycle).
+        let mut state = make_state_in_performance_details();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.rebuild_stats_enabled = true;
+        }
         update(&mut state, Message::PerfCycleDetailsTab { forward: true });
         assert_eq!(
             state
@@ -140,6 +171,99 @@ mod tests {
                 .performance
                 .details_tab,
             PerfDetailsTab::TimelineEvents,
+        );
+    }
+
+    // ── Visibility-aware cycle tests (M1) ────────────────────────────────────
+
+    #[test]
+    fn test_cycle_skips_rebuild_stats_when_disabled() {
+        // FrameAnalysis → TimelineEvents → FrameAnalysis when rebuild tracking is off.
+        let mut state = make_state_in_performance_details();
+        // Ensure rebuild_stats_enabled is false (default).
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.rebuild_stats_enabled = false;
+            h.session.performance.details_tab = PerfDetailsTab::FrameAnalysis;
+        }
+
+        // First forward cycle: FrameAnalysis → TimelineEvents (skipping RebuildStats).
+        update(&mut state, Message::PerfCycleDetailsTab { forward: true });
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .details_tab,
+            PerfDetailsTab::TimelineEvents,
+            "With rebuild disabled, FrameAnalysis should cycle directly to TimelineEvents"
+        );
+
+        // Second forward cycle: TimelineEvents → FrameAnalysis.
+        update(&mut state, Message::PerfCycleDetailsTab { forward: true });
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .details_tab,
+            PerfDetailsTab::FrameAnalysis,
+            "With rebuild disabled, TimelineEvents should cycle back to FrameAnalysis"
+        );
+    }
+
+    #[test]
+    fn test_cycle_includes_rebuild_stats_when_enabled() {
+        // FrameAnalysis → RebuildStats → TimelineEvents → FrameAnalysis when on.
+        let mut state = make_state_in_performance_details();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.rebuild_stats_enabled = true;
+            h.session.performance.details_tab = PerfDetailsTab::FrameAnalysis;
+        }
+
+        // First: FrameAnalysis → RebuildStats.
+        update(&mut state, Message::PerfCycleDetailsTab { forward: true });
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .details_tab,
+            PerfDetailsTab::RebuildStats,
+            "With rebuild enabled, FrameAnalysis should cycle to RebuildStats"
+        );
+
+        // Second: RebuildStats → TimelineEvents.
+        update(&mut state, Message::PerfCycleDetailsTab { forward: true });
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .details_tab,
+            PerfDetailsTab::TimelineEvents,
+            "With rebuild enabled, RebuildStats should cycle to TimelineEvents"
+        );
+
+        // Third: TimelineEvents → FrameAnalysis.
+        update(&mut state, Message::PerfCycleDetailsTab { forward: true });
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .details_tab,
+            PerfDetailsTab::FrameAnalysis,
+            "With rebuild enabled, TimelineEvents should cycle back to FrameAnalysis"
         );
     }
 }

@@ -454,6 +454,7 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
     let details_open = in_inspector && state.devtools_view_state.inspector.details_open;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
+    let is_busy = state.session_manager.any_session_busy();
 
     // ── Network filter input mode ─────────────────────────────────────────────
     // When filter input is active, route keys to the filter buffer before any
@@ -826,6 +827,17 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // Force quit
         InputKey::CharCtrl('c') => Some(Message::Quit),
+
+        // ── Hot restart fallthrough ───────────────────────────────────────────
+        //
+        // `R` (Shift+r) triggers hot restart in all DevTools contexts EXCEPT
+        // Performance/Details/RebuildStats, which is intercepted earlier by the
+        // `in_performance` early-return block to emit `ToggleRebuildStats`.
+        //
+        // This arm preserves muscle-memory: pressing `R` in Inspector, Memory,
+        // Network, or Performance-with-FrameChart/FrameAnalysis/TimelineEvents
+        // focused all behave the same as in Normal mode.
+        InputKey::Char('R') if !is_busy => Some(Message::HotRestart),
 
         _ => None,
     }
@@ -2134,16 +2146,14 @@ mod performance_sort_key_tests {
 
     #[test]
     fn test_capital_r_on_frame_analysis_tab_triggers_hot_restart() {
-        // `R` with FrameAnalysis tab (not RebuildStats) must NOT emit ToggleRebuildStats.
-        // In DevTools mode the `R` key has no global binding (it falls through to None),
-        // so the critical regression check is that `ToggleRebuildStats` is NOT emitted.
-        // The Logs-panel (Normal mode) test below pins that the global hot-restart `R`
-        // is preserved there.
+        // `R` with FrameAnalysis tab (not RebuildStats) must emit HotRestart — it falls
+        // through the early-return block (which only fires on RebuildStats tab) and hits
+        // the global `Char('R') if !is_busy` arm in the main DevTools match.
         let state = make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
         let msg = handle_key_devtools(&state, InputKey::Char('R'));
         assert!(
-            !matches!(msg, Some(Message::ToggleRebuildStats { .. })),
-            "'R' on FrameAnalysis tab must NOT emit ToggleRebuildStats; got {msg:?}"
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on FrameAnalysis tab should emit HotRestart; got {msg:?}"
         );
     }
 
@@ -2163,14 +2173,65 @@ mod performance_sort_key_tests {
 
     #[test]
     fn test_capital_r_on_memory_panel_triggers_hot_restart() {
-        // `R` in DevTools/Memory panel must NOT emit ToggleRebuildStats.
-        // (In DevTools mode, `R` with no specific perf-details context falls through
-        // to None; the hot-restart binding lives in Normal mode only.)
+        // `R` in DevTools/Memory panel must emit HotRestart — falls through the
+        // `in_performance` early-return block and hits the global `Char('R') if !is_busy`
+        // arm in the main DevTools match.
         let state = make_state_in_memory_panel();
         let msg = handle_key_devtools(&state, InputKey::Char('R'));
         assert!(
-            !matches!(msg, Some(Message::ToggleRebuildStats { .. })),
-            "'R' on Memory panel must NOT emit ToggleRebuildStats; got {msg:?}"
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on Memory panel should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_inspector_panel_triggers_hot_restart() {
+        // `R` in DevTools/Inspector panel must emit HotRestart (fallthrough to global arm).
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on Inspector panel should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_network_panel_triggers_hot_restart() {
+        // `R` in DevTools/Network panel must emit HotRestart (fallthrough to global arm).
+        let state = make_state_in_network_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on Network panel should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_frame_chart_focused_triggers_hot_restart() {
+        // `R` in Performance panel with FrameChart focused must emit HotRestart.
+        // The `in_performance` early-return only fires when Details is focused AND
+        // on the RebuildStats tab; FrameChart focus falls through to the global arm.
+        let state = make_state_in_performance_panel();
+        // focused_section defaults to FrameChart
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' in Performance/FrameChart should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_timeline_events_tab_triggers_hot_restart() {
+        // `R` in Performance/Details/TimelineEvents must emit HotRestart.
+        let state = make_state_in_details(crate::state::PerfDetailsTab::TimelineEvents);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on TimelineEvents tab should emit HotRestart; got {msg:?}"
         );
     }
 }

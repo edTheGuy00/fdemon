@@ -211,6 +211,25 @@ impl PerfDetailsTab {
             PerfDetailsTab::TimelineEvents => PerfDetailsTab::RebuildStats,
         }
     }
+
+    /// Next tab in display order, skipping `RebuildStats` when `rebuild_stats_enabled` is false.
+    ///
+    /// When `rebuild_stats_enabled == false`:
+    /// - `FrameAnalysis → TimelineEvents → FrameAnalysis` (two-step cycle).
+    ///
+    /// When `rebuild_stats_enabled == true`:
+    /// - `FrameAnalysis → RebuildStats → TimelineEvents → FrameAnalysis` (full three-step cycle).
+    pub fn next_visible(self, rebuild_stats_enabled: bool) -> Self {
+        if rebuild_stats_enabled {
+            self.next()
+        } else {
+            match self {
+                PerfDetailsTab::FrameAnalysis => PerfDetailsTab::TimelineEvents,
+                PerfDetailsTab::RebuildStats => PerfDetailsTab::TimelineEvents,
+                PerfDetailsTab::TimelineEvents => PerfDetailsTab::FrameAnalysis,
+            }
+        }
+    }
 }
 
 /// State for the widget inspector tree view.
