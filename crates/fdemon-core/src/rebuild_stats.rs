@@ -178,7 +178,7 @@ pub struct RebuildStatsSnapshot {
 /// 1. Merge `new_locations` into their persistent [`LocationMap`] first.
 /// 2. Resolve `events` pairs via the now-updated map.
 /// 3. Produce a [`RebuildStatsSnapshot`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RebuildEventPayload {
     /// Monotonically increasing frame counter from the engine.
     pub frame_number: u64,
@@ -425,5 +425,36 @@ mod tests {
         assert_eq!(loc.name, "NewName");
         assert_eq!(loc.line, 99);
         assert_eq!(loc.column, 7);
+    }
+
+    // ── RebuildEventPayload serde round-trip ──────────────────────────────────
+
+    #[test]
+    fn rebuild_event_payload_serde_round_trip() {
+        // Build a payload that mirrors the Phase 3 wire shape: new_locations
+        // contains a file URI mapped to a nested object with parallel arrays.
+        let mut new_locations = HashMap::new();
+        new_locations.insert(
+            "package:foo/main.dart".to_owned(),
+            json!({
+                "ids": [1, 2],
+                "lines": [10, 20],
+                "columns": [3, 4],
+                "names": ["Counter", "MaterialApp"]
+            }),
+        );
+
+        let original = RebuildEventPayload {
+            frame_number: 57,
+            start_time_micros: 2_352_949,
+            events: vec![(1, 3), (2, 1)],
+            new_locations: Some(new_locations),
+        };
+
+        let serialized = serde_json::to_string(&original).expect("serialization should succeed");
+        let deserialized: RebuildEventPayload =
+            serde_json::from_str(&serialized).expect("deserialization should succeed");
+
+        assert_eq!(original, deserialized);
     }
 }

@@ -7,24 +7,24 @@
 //!
 //! Thread identity is determined from metadata events (`ph: "M"`,
 //! `name: "thread_name"`) using the thread-name string, **not** the raw `tid`.
-//! This matches the upstream DevTools `timeline_event_processor.dart` rules and
-//! is stable across Dart VM versions.
+//! This is stable across Dart VM versions.
 //!
-//! Classification rules (applied in order):
-//! - Name contains `.ui` but NOT `.flutter.test..ui` → [`TimelineThread::Ui`]
-//! - Name contains `.raster` → [`TimelineThread::Raster`]
-//! - Name contains `.platform` (macOS fallback) → [`TimelineThread::Raster`]
+//! Classification rules (applied in order, simple substring containment):
+//! - Name contains `.ui` → [`TimelineThread::Ui`]
+//! - Name contains `.raster` or `.platform` → [`TimelineThread::Raster`]
 //! - Otherwise → [`TimelineThread::Other`]
 //!
-//! The Flutter test runner case (`io.flutter.test..ui`) maps to
-//! [`TimelineThread::Ui`] — the `.flutter.test..ui` check above ensures this
-//! does NOT match the early-exit exclusion (the exclusion targets
-//! `io.flutter.test..ui` as if it were NOT a UI thread, but per DevTools source
-//! the tester UI thread IS still classified as Ui).
+//! Note: the Flutter test-runner UI thread (`io.flutter.test..ui`) is
+//! intentionally classified as [`TimelineThread::Ui`] because its name contains
+//! `.ui`. This is by design — fdemon treats the single-track tester as a UI
+//! thread, which is the correct behavior for displaying tester frame timings.
+//! (Upstream DevTools uses an exclusion guard for this case; fdemon does not
+//! need one because the containment check already produces the correct result.)
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::debug;
 
 // ── TimelineThread ────────────────────────────────────────────────────────────
 
@@ -96,6 +96,17 @@ pub struct TimelineEvent {
 ///
 /// Metadata events (`ph: "M"`) are NOT included in the returned vec.
 ///
+/// ## Field tolerance
+///
+/// - `name` and `ts` are **required** — their absence causes an [`Error::protocol`]
+///   return so the caller can surface a parse failure.
+/// - `ph` and `tid` are **tolerated as absent** (defensive — the Chrome-trace
+///   spec technically allows unknown/missing fields). A missing `ph` defaults to
+///   `"?"` (parsed as [`TimelinePhase::Other`]); a missing `tid` defaults to `0`
+///   (the event is classified as [`TimelineThread::Other`] unless a thread-name
+///   mapping exists for tid 0). Both cases emit a `tracing::debug!` log so
+///   callers can diagnose unexpected data without treating it as a hard error.
+///
 /// Returns [`Error::protocol`] if the top-level `traceEvents` field is missing
 /// or if any non-metadata event is missing required fields (`name`, `ts`).
 pub fn parse_vm_timeline(
@@ -110,9 +121,11 @@ pub fn parse_vm_timeline(
     let mut events = Vec::new();
 
     for raw in trace_events {
-        let ph = raw.get("ph").and_then(|v| v.as_str()).unwrap_or("?");
+        let ph_opt = raw.get("ph").and_then(|v| v.as_str());
+        let ph = ph_opt.unwrap_or("?");
 
-        let tid = raw.get("tid").and_then(|v| v.as_i64()).unwrap_or(0);
+        let tid_opt = raw.get("tid").and_then(|v| v.as_i64());
+        let tid = tid_opt.unwrap_or(0);
 
         // Step 1: collect metadata events for thread-name resolution.
         if ph == "M" {
@@ -135,6 +148,20 @@ pub fn parse_vm_timeline(
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::protocol("timeline event missing 'name' field"))?
             .to_owned();
+
+        // Log when optional fields were absent and their defaults were used.
+        if ph_opt.is_none() {
+            debug!(
+                event_name = %name,
+                "timeline event missing 'ph' field; defaulting to '?' (TimelinePhase::Other)"
+            );
+        }
+        if tid_opt.is_none() {
+            debug!(
+                event_name = %name,
+                "timeline event missing 'tid' field; defaulting to 0 (thread classification uses tid 0 lookup)"
+            );
+        }
 
         let ts = raw.get("ts").and_then(|v| v.as_u64()).ok_or_else(|| {
             Error::protocol(format!(
@@ -182,11 +209,15 @@ pub fn parse_vm_timeline(
 
 /// Classify a thread name string into a [`TimelineThread`] variant.
 ///
-/// Rules (applied in order, matching upstream DevTools logic):
-/// 1. Contains `.ui` → [`TimelineThread::Ui`]. This includes the Flutter test
-///    runner thread `io.flutter.test..ui`.
+/// Uses simple substring containment — no exclusion guards. Rules applied in
+/// order:
+/// 1. Contains `.ui` → [`TimelineThread::Ui`].
+///    This includes `io.flutter.test..ui` (the Flutter test-runner UI thread),
+///    which is intentionally classified as `Ui`. fdemon does not replicate the
+///    upstream DevTools exclusion guard because the containment check already
+///    produces the correct result for our use case.
 /// 2. Contains `.raster` or `.platform` → [`TimelineThread::Raster`].
-///    `.platform` is the macOS fallback for the raster thread.
+///    `.platform` is the macOS fallback name for the raster thread.
 /// 3. Otherwise → [`TimelineThread::Other`].
 fn classify_thread(thread_name: &str) -> TimelineThread {
     if thread_name.contains(".ui") {
