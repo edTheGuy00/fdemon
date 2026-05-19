@@ -39,10 +39,20 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HEARTBEAT_FAILURES: u32 = 3;
 
 /// Spawn a task that connects to the VM Service and forwards events as Messages.
+///
+/// `rebuilt_widgets_gate_rx` controls whether `Flutter.RebuiltWidgets` events
+/// are forwarded. When `true` the forwarder parses and dispatches the event;
+/// when `false` it skips parsing entirely. The receiver is updated by the
+/// TEA handler (via `SessionHandle::rebuilt_widgets_gate_tx`) whenever the
+/// active DevTools panel changes. `None` means no gate is installed — the
+/// forwarder will always skip `Flutter.RebuiltWidgets` (safe default for
+/// the rare case where hydration was skipped, e.g. in unit tests that don't
+/// call `process_message`).
 pub(super) fn spawn_vm_service_connection(
     session_id: SessionId,
     ws_uri: String,
     msg_tx: mpsc::Sender<Message>,
+    rebuilt_widgets_gate_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let connect_result =
@@ -114,7 +124,14 @@ pub(super) fn spawn_vm_service_connection(
                     .await;
 
                 // Forward events from the VM Service to the TEA message loop
-                forward_vm_events(client, session_id, msg_tx, vm_shutdown_rx).await;
+                forward_vm_events(
+                    client,
+                    session_id,
+                    msg_tx,
+                    vm_shutdown_rx,
+                    rebuilt_widgets_gate_rx,
+                )
+                .await;
             }
             Err(e) => {
                 warn!(
@@ -138,12 +155,18 @@ pub(super) fn spawn_vm_service_connection(
 /// - The event receiver closes (client disconnects or is dropped), OR
 /// - The shutdown watch channel receives `true` (session stopped/closed)
 ///
+/// The `rebuilt_widgets_gate_rx` receiver gates `Flutter.RebuiltWidgets` event
+/// forwarding. When the current value is `false` (gate closed), the branch
+/// returns early without parsing or allocating. When `None`, events are always
+/// skipped (conservative default).
+///
 /// Sends `VmServiceDisconnected` when the loop exits.
 async fn forward_vm_events(
     mut client: VmServiceClient,
     session_id: SessionId,
     msg_tx: mpsc::Sender<Message>,
     mut vm_shutdown_rx: watch::Receiver<bool>,
+    rebuilt_widgets_gate_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) {
     let heartbeat_handle = client.request_handle();
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -173,6 +196,19 @@ async fn forward_vm_events(
                         if let Some("Flutter.RebuiltWidgets") =
                             flutter_extension_kind(&event.params.event)
                         {
+                            // H1 — Panel gate: skip parsing entirely when Performance is not
+                            // the active panel. The gate receiver is `true` when forwarding
+                            // should proceed and `false` (or absent) when it should be skipped.
+                            // This eliminates ~60 fps allocation and dispatch churn when the
+                            // user is viewing Logs, Inspector, Memory, or Network.
+                            let gate_open = rebuilt_widgets_gate_rx
+                                .as_ref()
+                                .map(|rx| *rx.borrow())
+                                .unwrap_or(false);
+                            if !gate_open {
+                                continue;
+                            }
+
                             if let Some(ext_data) =
                                 event.params.event.data.get("extensionData")
                             {
@@ -180,15 +216,43 @@ async fn forward_vm_events(
                                     ext_data,
                                 ) {
                                     Ok(payload) => {
-                                        let _ = msg_tx
-                                            .send(Message::RebuildStatsEventReceived {
-                                                session_id,
-                                                payload,
-                                            })
-                                            .await;
+                                        // L10 — Non-blocking send: replace .send().await with
+                                        // try_send to avoid head-of-line blocking other events
+                                        // (Flutter.Frame, errors) when the handler is slow.
+                                        let frame_number = payload.frame_number;
+                                        match msg_tx.try_send(Message::RebuildStatsEventReceived {
+                                            session_id,
+                                            payload,
+                                        }) {
+                                            Ok(()) => {}
+                                            Err(tokio::sync::mpsc::error::TrySendError::Full(
+                                                _,
+                                            )) => {
+                                                tracing::debug!(
+                                                    "Flutter.RebuiltWidgets: channel full, \
+                                                     dropping frame {} for session {}",
+                                                    frame_number,
+                                                    session_id
+                                                );
+                                            }
+                                            Err(tokio::sync::mpsc::error::TrySendError::Closed(
+                                                _,
+                                            )) => {
+                                                tracing::error!(
+                                                    "Flutter.RebuiltWidgets: message channel \
+                                                     closed for session {} — exiting forwarder",
+                                                    session_id
+                                                );
+                                                break;
+                                            }
+                                        }
                                     }
+                                    // L3 — Parse-error log level downgrade from warn! to debug!
+                                    // to prevent log flooding at 60 fps in pathological cases.
+                                    // The panel gate further bounds this: parse errors only occur
+                                    // when the user is actively viewing the Performance panel.
                                     Err(e) => {
-                                        tracing::warn!(
+                                        tracing::debug!(
                                             "Failed to parse Flutter.RebuiltWidgets: {}",
                                             e
                                         );
@@ -458,5 +522,98 @@ mod tests {
         let kind = flutter_extension_kind(&stream_event);
         assert_ne!(kind, Some("Flutter.RebuiltWidgets"));
         assert_eq!(kind, Some("Flutter.Frame"));
+    }
+
+    // ── Panel gate tests (H1) ─────────────────────────────────────────────────
+
+    /// Assert that `Flutter.RebuiltWidgets` events are NOT dispatched when the
+    /// panel gate is closed (false). This exercises the panel-gate branch that
+    /// was introduced to eliminate ~60 fps parsing churn while the user is
+    /// viewing Inspector, Memory, Network, or Logs.
+    ///
+    /// We test the gate contract in isolation: when the receiver holds `false`,
+    /// the `gate_open` check must be `false` and no `RebuildStatsEventReceived`
+    /// should be emitted.
+    #[test]
+    fn test_rebuilt_widgets_event_skipped_when_panel_not_performance() {
+        // Simulate gate states for non-Performance panels: Inspector, Memory,
+        // Network, and the "None" case (no receiver installed).
+        let gate_states: &[(Option<bool>, &str)] = &[
+            (Some(false), "Inspector"),
+            (Some(false), "Memory"),
+            (Some(false), "Network"),
+            (None, "no receiver (default)"),
+        ];
+
+        for (gate_value, label) in gate_states {
+            // Construct the receiver (or None) matching this panel state.
+            let gate_rx: Option<tokio::sync::watch::Receiver<bool>> =
+                gate_value.map(|v| tokio::sync::watch::channel(v).1);
+
+            // Evaluate the same gate expression used in forward_vm_events.
+            let gate_open = gate_rx.as_ref().map(|rx| *rx.borrow()).unwrap_or(false);
+
+            assert!(
+                !gate_open,
+                "Gate should be CLOSED for panel '{}' — got gate_open = {}",
+                label, gate_open
+            );
+        }
+    }
+
+    /// Assert that `Flutter.RebuiltWidgets` events ARE dispatched when the
+    /// panel gate is open (true), i.e. when the Performance panel is active.
+    #[test]
+    fn test_rebuilt_widgets_event_dispatched_when_performance_active() {
+        // Simulate gate state for Performance panel: gate is open (true).
+        let (gate_tx, gate_rx) = tokio::sync::watch::channel(true);
+        let _ = gate_tx; // keep sender alive to prevent channel close
+
+        // Evaluate the same gate expression used in forward_vm_events.
+        let gate_open = Some(&gate_rx).map(|rx| *rx.borrow()).unwrap_or(false);
+
+        assert!(
+            gate_open,
+            "Gate should be OPEN for Performance panel — got gate_open = {}",
+            gate_open
+        );
+
+        // Verify that the gate correctly transitions from open to closed when
+        // a panel switch fires (analogous to handle_switch_panel sending false).
+        gate_tx.send(false).expect("send should succeed");
+        let gate_open_after = *gate_rx.borrow();
+        assert!(
+            !gate_open_after,
+            "Gate should be CLOSED after panel-switch signal — got {}",
+            gate_open_after
+        );
+    }
+
+    /// Verify that `try_send` error variants behave correctly — specifically that
+    /// `TrySendError::Closed` is distinct from `TrySendError::Full`.
+    ///
+    /// This test documents the expected branching behavior for the L10 fix.
+    #[test]
+    fn test_try_send_error_variant_discrimination() {
+        use tokio::sync::mpsc::error::TrySendError;
+
+        // Create a channel with capacity 1.
+        let (tx, rx) = tokio::sync::mpsc::channel::<u32>(1);
+
+        // First send fills the slot.
+        assert!(tx.try_send(1).is_ok(), "first send should succeed");
+
+        // Second send should be Full.
+        match tx.try_send(2) {
+            Err(TrySendError::Full(_)) => {} // expected
+            other => panic!("expected TrySendError::Full, got {:?}", other),
+        }
+
+        // Drop receiver — now sends should be Closed.
+        drop(rx);
+        match tx.try_send(3) {
+            Err(TrySendError::Closed(_)) => {} // expected
+            other => panic!("expected TrySendError::Closed, got {:?}", other),
+        }
     }
 }

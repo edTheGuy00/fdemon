@@ -235,8 +235,17 @@ pub fn handle_action(
             spawn::spawn_entry_point_discovery(msg_tx, project_path);
         }
 
-        UpdateAction::ConnectVmService { session_id, ws_uri } => {
-            let handle = vm_service::spawn_vm_service_connection(session_id, ws_uri, msg_tx);
+        UpdateAction::ConnectVmService {
+            session_id,
+            ws_uri,
+            rebuilt_widgets_gate_rx,
+        } => {
+            let handle = vm_service::spawn_vm_service_connection(
+                session_id,
+                ws_uri,
+                msg_tx,
+                rebuilt_widgets_gate_rx,
+            );
             match session_tasks.lock() {
                 Ok(mut guard) => {
                     guard.insert(session_id, handle);

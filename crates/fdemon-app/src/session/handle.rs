@@ -200,6 +200,21 @@ pub struct SessionHandle {
     /// `VmServiceTimelineMonitoringStarted`, cleared on disconnect/close.
     pub timeline_task_handle: Option<tokio::task::JoinHandle<()>>,
 
+    /// Gate sender for the `Flutter.RebuiltWidgets` forwarder.
+    ///
+    /// When `false` (gate closed), the event forwarder skips parsing and
+    /// dispatching `Flutter.RebuiltWidgets` events, eliminating ~60 fps
+    /// allocations when the user is not viewing the Performance panel.
+    /// When `true` (gate open), events are parsed and forwarded normally.
+    ///
+    /// Initial value is `false` (gate closed) — forwarding begins paused and
+    /// opens when `ui_mode == DevTools && active_panel == Performance`.
+    ///
+    /// Stored as `Arc` because it is created in `process.rs` (where both
+    /// sides of the channel are available) and the handle must be kept alive
+    /// for the session's lifetime.
+    pub rebuilt_widgets_gate_tx: Option<Arc<tokio::sync::watch::Sender<bool>>>,
+
     /// Per-session native log tag discovery and visibility state.
     ///
     /// Tracks every distinct tag seen in this session's native log stream
@@ -246,6 +261,10 @@ impl std::fmt::Debug for SessionHandle {
             )
             .field("has_timeline_pause", &self.timeline_pause_tx.is_some())
             .field("has_timeline_task", &self.timeline_task_handle.is_some())
+            .field(
+                "has_rebuilt_widgets_gate",
+                &self.rebuilt_widgets_gate_tx.is_some(),
+            )
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
@@ -276,6 +295,7 @@ impl SessionHandle {
             timeline_shutdown_tx: None,
             timeline_pause_tx: None,
             timeline_task_handle: None,
+            rebuilt_widgets_gate_tx: None,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
         }

@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, watch};
 use crate::handler::Task;
 use crate::message::Message;
 use crate::session::SessionId;
-use crate::state::AppState;
+use crate::state::{AppState, DevToolsPanel, UiMode};
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
@@ -70,7 +70,11 @@ pub fn process_message(
             // Hydrate actions that carry an optional VmRequestHandle with the
             // actual handle from the session. The handlers only return session_id;
             // we need the handle from AppState here before dispatching.
-            let action = hydrate_start_performance_monitoring(action, state);
+            // ConnectVmService hydration: creates the rebuilt-widgets gate channel
+            // and injects the receiver into the action. Must run before any other
+            // hydration so the gate is in place before the forwarder task spawns.
+            let action = hydrate_connect_vm_service(action, state);
+            let action = action.and_then(|a| hydrate_start_performance_monitoring(a, state));
             let action = action.and_then(|a| hydrate_fetch_widget_tree(a, state));
             let action = action.and_then(|a| hydrate_fetch_layout_data(a, state));
             let action = action.and_then(|a| hydrate_fetch_inspector_properties(a, state));
@@ -194,6 +198,68 @@ pub fn process_message(
         // Continue with follow-up message
         msg = follow_msg;
     }
+}
+
+/// Hydrate `ConnectVmService` by creating the `Flutter.RebuiltWidgets` gate channel.
+///
+/// Creates a `watch::channel(bool)` where `true` means "gate open — forward events"
+/// and `false` means "gate closed — skip events". The initial value is determined
+/// from the current UI mode and active panel:
+/// - `true`  when `ui_mode == DevTools && active_panel == Performance`
+/// - `false` for all other states
+///
+/// The sender half (`Arc<watch::Sender<bool>>`) is stored in the session's
+/// `rebuilt_widgets_gate_tx` so panel-switch handlers can open/close the gate
+/// without changing any action or message types.
+///
+/// The receiver half is injected into the `ConnectVmService` action to be passed
+/// to `spawn_vm_service_connection` → `forward_vm_events`.
+///
+/// Already-hydrated actions (receiver is `Some`) are returned unchanged.
+/// All other action variants are returned unchanged.
+fn hydrate_connect_vm_service(action: UpdateAction, state: &mut AppState) -> Option<UpdateAction> {
+    if let UpdateAction::ConnectVmService {
+        session_id,
+        ws_uri,
+        rebuilt_widgets_gate_rx,
+    } = action
+    {
+        if rebuilt_widgets_gate_rx.is_some() {
+            // Already hydrated — return as-is.
+            return Some(UpdateAction::ConnectVmService {
+                session_id,
+                ws_uri,
+                rebuilt_widgets_gate_rx,
+            });
+        }
+
+        // Gate is open (true) only when viewing the Performance panel in DevTools mode.
+        let gate_open = state.ui_mode == UiMode::DevTools
+            && state.devtools_view_state.active_panel == DevToolsPanel::Performance;
+
+        let (tx, rx) = tokio::sync::watch::channel(gate_open);
+        let tx = Arc::new(tx);
+
+        // Store the sender in the session handle so panel-switch handlers can
+        // open/close the gate by calling `tx.send(bool)`.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.rebuilt_widgets_gate_tx = Some(tx);
+        } else {
+            // Session no longer exists — discard the action.
+            tracing::debug!(
+                session_id = %session_id,
+                "ConnectVmService: session not found during gate hydration — discarding"
+            );
+            return None;
+        }
+
+        return Some(UpdateAction::ConnectVmService {
+            session_id,
+            ws_uri,
+            rebuilt_widgets_gate_rx: Some(rx),
+        });
+    }
+    Some(action)
 }
 
 /// Hydrate `StartPerformanceMonitoring` with the `VmRequestHandle` from the

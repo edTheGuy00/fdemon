@@ -223,10 +223,19 @@ pub enum UpdateAction {
     /// Discover entry points in background (Phase 3, Task 09)
     DiscoverEntryPoints { project_path: std::path::PathBuf },
 
-    /// Connect to the VM Service WebSocket for a session
+    /// Connect to the VM Service WebSocket for a session.
+    ///
+    /// `rebuilt_widgets_gate_rx` is `None` when emitted by `handler::update()` and
+    /// hydrated by `process.rs` with a `watch::Receiver<bool>` that controls whether
+    /// `Flutter.RebuiltWidgets` events are forwarded. `false` = gate closed (skip);
+    /// `true` = gate open (forward). The sender is stored in `SessionHandle` so that
+    /// panel-switch handlers can update the gate without touching the action enum.
     ConnectVmService {
         session_id: SessionId,
         ws_uri: String,
+        /// Panel-gate receiver — `None` until hydrated by `process.rs`.
+        #[allow(clippy::type_complexity)]
+        rebuilt_widgets_gate_rx: Option<tokio::sync::watch::Receiver<bool>>,
     },
 
     /// Start periodic performance monitoring for a session.

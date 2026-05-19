@@ -353,6 +353,7 @@ pub fn maybe_connect_vm_service(
                 return Some(UpdateAction::ConnectVmService {
                     session_id,
                     ws_uri: debug_port.ws_uri.clone(),
+                    rebuilt_widgets_gate_rx: None, // hydrated by process.rs
                 });
             }
         }

@@ -392,6 +392,14 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
         handle.session.performance.timeline_events_scroll_offset = 0;
     }
 
+    // Close the Flutter.RebuiltWidgets gate for all sessions: exiting DevTools
+    // means Performance is no longer visible regardless of which panel was active.
+    for handle in state.session_manager.iter_mut() {
+        if let Some(ref tx) = handle.rebuilt_widgets_gate_tx {
+            let _ = tx.send(false); // gate closed
+        }
+    }
+
     state.exit_devtools_mode();
 
     if let Some(handle) = state.session_manager.selected() {
@@ -457,6 +465,16 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
     }
 
     state.switch_devtools_panel(panel);
+
+    // Update the Flutter.RebuiltWidgets gate for all sessions.
+    // Gate is open (true = forward) only when Performance panel is active.
+    // All sessions share the same active_panel so we update all of them.
+    let gate_open = panel == DevToolsPanel::Performance;
+    for handle in state.session_manager.iter_mut() {
+        if let Some(ref tx) = handle.rebuilt_widgets_gate_tx {
+            let _ = tx.send(gate_open);
+        }
+    }
 
     match panel {
         DevToolsPanel::Inspector => {
