@@ -21,8 +21,8 @@ use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::vm_service::protocol::stream_id;
 use fdemon_daemon::vm_service::{
-    enable_frame_tracking, flutter_error_to_log_entry, parse_debug_event, parse_flutter_error,
-    parse_frame_timing, parse_gc_event, parse_isolate_event, parse_log_record,
+    enable_frame_tracking, flutter_error_to_log_entry, flutter_extension_kind, parse_debug_event,
+    parse_flutter_error, parse_frame_timing, parse_gc_event, parse_isolate_event, parse_log_record,
     redact_vm_service_token, vm_log_to_log_entry, VmClientEvent, VmServiceClient,
 };
 
@@ -164,6 +164,37 @@ async fn forward_vm_events(
                                     log_entry,
                                 })
                                 .await;
+                            continue;
+                        }
+
+                        // Try parsing as Flutter.RebuiltWidgets (Phase 3 rebuild stats).
+                        // Placed before Flutter.Frame because both share the Extension stream
+                        // and rebuild events are more expensive to miss than frame timing.
+                        if let Some("Flutter.RebuiltWidgets") =
+                            flutter_extension_kind(&event.params.event)
+                        {
+                            if let Some(ext_data) =
+                                event.params.event.data.get("extensionData")
+                            {
+                                match fdemon_core::rebuild_stats::parse_rebuilt_widgets_event(
+                                    ext_data,
+                                ) {
+                                    Ok(payload) => {
+                                        let _ = msg_tx
+                                            .send(Message::RebuildStatsEventReceived {
+                                                session_id,
+                                                payload,
+                                            })
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to parse Flutter.RebuiltWidgets: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            }
                             continue;
                         }
 
@@ -367,5 +398,65 @@ mod tests {
             MAX_HEARTBEAT_FAILURES > 1,
             "MAX_HEARTBEAT_FAILURES must be > 1 for counter reset to have effect"
         );
+    }
+
+    // ── Flutter.RebuiltWidgets routing ────────────────────────────────────────
+
+    /// Verify that `flutter_extension_kind` correctly identifies `Flutter.RebuiltWidgets`
+    /// from the event data, which is the discriminator used in `forward_vm_events`.
+    #[test]
+    fn forward_vm_events_routes_rebuilt_widgets_discriminator() {
+        use fdemon_daemon::vm_service::protocol::StreamEvent;
+        use serde_json::json;
+
+        // Build a StreamEvent whose `data` field contains extensionKind.
+        let rebuilt_widgets_event_data = json!({
+            "kind": "Extension",
+            "extensionKind": "Flutter.RebuiltWidgets",
+            "extensionData": {
+                "frameNumber": 42,
+                "startTime": 12345,
+                "events": [1, 1, 2, 3]
+            }
+        });
+
+        // Deserialize as a StreamEvent (we use serde).
+        let stream_event: StreamEvent =
+            serde_json::from_value(rebuilt_widgets_event_data).expect("should parse StreamEvent");
+
+        // Verify the discriminator matches what forward_vm_events checks.
+        let kind = flutter_extension_kind(&stream_event);
+        assert_eq!(kind, Some("Flutter.RebuiltWidgets"));
+
+        // Verify that parse_rebuilt_widgets_event can parse the extensionData.
+        let ext_data = stream_event
+            .data
+            .get("extensionData")
+            .expect("extensionData should exist");
+        let payload = fdemon_core::rebuild_stats::parse_rebuilt_widgets_event(ext_data)
+            .expect("should parse RebuildEventPayload");
+        assert_eq!(payload.frame_number, 42);
+        assert_eq!(payload.start_time_micros, 12345);
+        assert_eq!(payload.events, vec![(1, 1), (2, 3)]);
+    }
+
+    /// Verify that non-RebuiltWidgets extension events do NOT match the discriminator.
+    #[test]
+    fn forward_vm_events_does_not_route_frame_event_as_rebuilt_widgets() {
+        use fdemon_daemon::vm_service::protocol::StreamEvent;
+        use serde_json::json;
+
+        let frame_event_data = json!({
+            "kind": "Extension",
+            "extensionKind": "Flutter.Frame",
+            "extensionData": { "number": 10 }
+        });
+
+        let stream_event: StreamEvent =
+            serde_json::from_value(frame_event_data).expect("should parse StreamEvent");
+
+        let kind = flutter_extension_kind(&stream_event);
+        assert_ne!(kind, Some("Flutter.RebuiltWidgets"));
+        assert_eq!(kind, Some("Flutter.Frame"));
     }
 }

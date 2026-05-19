@@ -118,8 +118,8 @@ pub fn handle_previous_session(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
-/// Start performance monitoring for the newly selected session if DevTools is
-/// active, the VM is connected, and no polling task is already running.
+/// Start performance and timeline monitoring for the newly selected session if
+/// DevTools is active, the VM is connected, and no polling task is already running.
 ///
 /// This handles the edge case where the user switches sessions while in
 /// DevTools — the new session may never have had monitoring started (it was
@@ -153,6 +153,10 @@ fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateRe
                 if let Some(ref tx) = handle.alloc_pause_tx {
                     let _ = tx.send(false); // unpause
                 }
+                // Unpause timeline polling on the Performance panel.
+                if let Some(ref tx) = handle.timeline_pause_tx {
+                    let _ = tx.send(false); // unpause
+                }
             }
             // Unpause network polling if the Network panel is active.
             if state.devtools_view_state.active_panel == DevToolsPanel::Network {
@@ -169,6 +173,11 @@ fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateRe
     };
     let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
     let allocation_profile_interval_ms = state.settings.devtools.allocation_profile_interval_ms;
+    // Timeline polls at 1 Hz (1000ms) regardless of performance_refresh_ms.
+    // This is a Phase 3 design decision: timeline data is relatively stable
+    // at 1Hz and VM Service `getVMTimeline` is an expensive call.
+    // If a dedicated `timeline_refresh_ms` config key is added later, use that.
+    let timeline_poll_interval_ms = 1000_u64;
     let mode = state
         .session_manager
         .selected()
@@ -176,13 +185,20 @@ fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateRe
         .map(|c| c.mode)
         .unwrap_or(crate::config::FlutterMode::Debug);
 
-    UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
-        session_id,
-        handle: None, // hydrated by process.rs
-        performance_refresh_ms,
-        allocation_profile_interval_ms,
-        mode,
-    })
+    UpdateResult::actions_vec(vec![
+        UpdateAction::StartPerformanceMonitoring {
+            session_id,
+            handle: None, // hydrated by process.rs
+            performance_refresh_ms,
+            allocation_profile_interval_ms,
+            mode,
+        },
+        UpdateAction::StartTimelineMonitoring {
+            session_id,
+            handle: None, // hydrated by process.rs
+            poll_interval_ms: timeline_poll_interval_ms,
+        },
+    ])
 }
 
 /// Shared logic for closing a session by id. Used by both
@@ -231,6 +247,17 @@ fn close_session_internal(state: &mut AppState, session_id: SessionId) -> Update
             let _ = tx.send(true);
             tracing::info!(
                 "Sent network shutdown signal on session close for session {}",
+                session_id
+            );
+        }
+        // Abort and signal the timeline monitoring polling task to stop.
+        if let Some(h) = handle.timeline_task_handle.take() {
+            h.abort();
+        }
+        if let Some(tx) = handle.timeline_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::info!(
+                "Sent timeline shutdown signal on session close for session {}",
                 session_id
             );
         }

@@ -300,9 +300,9 @@ pub async fn widget_location_id_map(
 
     // Response is a JSON object whose keys are file URIs. Filter out the
     // "type" marker key that VM Service responses always carry.
-    let obj = response.as_object().ok_or_else(|| {
-        Error::protocol("widgetLocationIdMap response was not a JSON object")
-    })?;
+    let obj = response
+        .as_object()
+        .ok_or_else(|| Error::protocol("widgetLocationIdMap response was not a JSON object"))?;
 
     let mut map = LocationMap::default();
     for (key, value) in obj {
@@ -798,7 +798,11 @@ mod tests {
                 .expect("merge should succeed");
         }
 
-        assert_eq!(map.by_id.len(), 4, "expected 4 location entries across 2 files");
+        assert_eq!(
+            map.by_id.len(),
+            4,
+            "expected 4 location entries across 2 files"
+        );
         assert!(map.by_id.contains_key(&1));
         assert!(map.by_id.contains_key(&2));
         assert!(map.by_id.contains_key(&3));
@@ -827,7 +831,10 @@ mod tests {
                 .expect("merge should succeed");
         }
 
-        assert!(map.by_id.is_empty(), "empty response should yield empty map");
+        assert!(
+            map.by_id.is_empty(),
+            "empty response should yield empty map"
+        );
     }
 
     #[test]
@@ -858,7 +865,10 @@ mod tests {
                 had_error = true;
             }
         }
-        assert!(had_error, "malformed parallel arrays should produce an error");
+        assert!(
+            had_error,
+            "malformed parallel arrays should produce an error"
+        );
     }
 
     #[test]

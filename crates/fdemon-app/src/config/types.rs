@@ -424,6 +424,29 @@ pub struct DevToolsSettings {
     #[serde(default = "default_hide_implementation_widgets")]
     pub hide_implementation_widgets: bool,
 
+    /// Phase 3: Whether to enable widget rebuild tracking automatically on
+    /// session start. Defaults to `false` because the underlying extension
+    /// adds non-trivial overhead in dev builds.
+    #[serde(default = "default_auto_enable_rebuild_tracking")]
+    pub auto_enable_rebuild_tracking: bool,
+
+    /// Phase 3: How many recent frames to keep in the rebuild stats ring buffer.
+    ///
+    /// Only the most recent `rebuild_stats_frame_window` frames are displayed
+    /// in the Rebuild Stats tab. Oldest frames are evicted when the buffer is full.
+    /// Default: 30 frames (~0.5 seconds at 60 FPS).
+    #[serde(default = "default_rebuild_stats_frame_window")]
+    pub rebuild_stats_frame_window: u32,
+
+    /// Phase 3: Max timeline events kept in memory.
+    ///
+    /// The timeline polling task (1 Hz) appends all new Chrome-trace events
+    /// from `getVMTimeline` to a `VecDeque` capped at this size. Oldest events
+    /// are evicted from the front when the buffer is full.
+    /// Default: 1000 events.
+    #[serde(default = "default_timeline_event_buffer_size")]
+    pub timeline_event_buffer_size: usize,
+
     /// Logging sub-settings
     #[serde(default)]
     pub logging: DevToolsLoggingSettings,
@@ -450,6 +473,9 @@ impl Default for DevToolsSettings {
             inspector_readiness_poll_call_timeout_ms:
                 default_inspector_readiness_poll_call_timeout_ms(),
             hide_implementation_widgets: default_hide_implementation_widgets(),
+            auto_enable_rebuild_tracking: default_auto_enable_rebuild_tracking(),
+            rebuild_stats_frame_window: default_rebuild_stats_frame_window(),
+            timeline_event_buffer_size: default_timeline_event_buffer_size(),
             logging: DevToolsLoggingSettings::default(),
         }
     }
@@ -457,6 +483,18 @@ impl Default for DevToolsSettings {
 
 fn default_hide_implementation_widgets() -> bool {
     true
+}
+
+fn default_auto_enable_rebuild_tracking() -> bool {
+    false
+}
+
+fn default_rebuild_stats_frame_window() -> u32 {
+    30
+}
+
+fn default_timeline_event_buffer_size() -> usize {
+    1000
 }
 
 fn default_devtools_panel() -> String {
@@ -1834,6 +1872,10 @@ theme = "default"
         assert_eq!(settings.inspector_readiness_poll_attempts, 2);
         assert_eq!(settings.inspector_readiness_poll_interval_ms, 250);
         assert_eq!(settings.inspector_readiness_poll_call_timeout_ms, 1000);
+        // Phase 3 defaults
+        assert!(!settings.auto_enable_rebuild_tracking);
+        assert_eq!(settings.rebuild_stats_frame_window, 30);
+        assert_eq!(settings.timeline_event_buffer_size, 1000);
     }
 
     #[test]
@@ -1871,6 +1913,9 @@ theme = "default"
             max_network_entries = 200
             network_auto_record = false
             network_poll_interval_ms = 2000
+            auto_enable_rebuild_tracking = true
+            rebuild_stats_frame_window = 60
+            timeline_event_buffer_size = 500
 
             [logging]
             hybrid_enabled = true
@@ -1891,6 +1936,10 @@ theme = "default"
         assert_eq!(settings.max_network_entries, 200);
         assert!(!settings.network_auto_record);
         assert_eq!(settings.network_poll_interval_ms, 2000);
+        // Phase 3 fields
+        assert!(settings.auto_enable_rebuild_tracking);
+        assert_eq!(settings.rebuild_stats_frame_window, 60);
+        assert_eq!(settings.timeline_event_buffer_size, 500);
     }
 
     #[test]

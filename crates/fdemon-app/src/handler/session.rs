@@ -154,6 +154,17 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
                 session_id
             );
         }
+        // Abort and signal the timeline monitoring polling task to stop.
+        if let Some(h) = handle.timeline_task_handle.take() {
+            h.abort();
+        }
+        if let Some(tx) = handle.timeline_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::info!(
+                "Sent timeline shutdown signal on process exit for session {}",
+                session_id
+            );
+        }
 
         // Shut down the native log capture task (if running).
         handle.shutdown_native_logs();
@@ -228,6 +239,14 @@ pub fn handle_session_message_state(
                 if let Some(tx) = handle.network_shutdown_tx.take() {
                     let _ = tx.send(true);
                     tracing::info!("Sent network shutdown signal for session {}", session_id);
+                }
+                // Abort and signal the timeline monitoring polling task to stop.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.timeline_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                    tracing::info!("Sent timeline shutdown signal for session {}", session_id);
                 }
 
                 // Shut down the native log capture task (if running).

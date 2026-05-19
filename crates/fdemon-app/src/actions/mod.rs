@@ -976,6 +976,158 @@ pub fn handle_action(
                 );
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 3: Timeline monitoring
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::StartTimelineMonitoring {
+            session_id,
+            handle,
+            poll_interval_ms,
+        } => {
+            if let Some(vm_handle) = handle {
+                performance::spawn_timeline_polling(
+                    session_id,
+                    vm_handle,
+                    msg_tx,
+                    poll_interval_ms,
+                );
+            } else {
+                warn!(
+                    "StartTimelineMonitoring reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 3: Toggle profileWidgetBuilds extension
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::ToggleProfileWidgetBuilds {
+            session_id,
+            enabled,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                tokio::spawn(async move {
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                "ToggleProfileWidgetBuilds for session {}: isolate ID error: {}",
+                                session_id,
+                                e
+                            );
+                            return;
+                        }
+                    };
+                    let result = handle
+                        .call_extension(
+                            "ext.flutter.profileWidgetBuilds",
+                            &isolate_id,
+                            Some(
+                                [("enabled".to_string(), enabled.to_string())]
+                                    .into_iter()
+                                    .collect(),
+                            ),
+                        )
+                        .await;
+                    match result {
+                        Ok(_) => {
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsExtensionStateChanged {
+                                    session_id,
+                                    enabled,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "ToggleProfileWidgetBuilds for session {}: extension call failed: {}",
+                                session_id,
+                                e
+                            );
+                        }
+                    }
+                });
+            } else {
+                warn!(
+                    "ToggleProfileWidgetBuilds reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 3: Fetch widgetLocationIdMap (fallback seed for location map)
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::FetchWidgetLocationIdMap {
+            session_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                tokio::spawn(async move {
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                "FetchWidgetLocationIdMap for session {}: isolate ID error: {}",
+                                session_id,
+                                e
+                            );
+                            return;
+                        }
+                    };
+                    let result = handle
+                        .call_extension(
+                            "ext.flutter.inspector.widgetLocationIdMap",
+                            &isolate_id,
+                            None,
+                        )
+                        .await;
+                    match result {
+                        Ok(response) => {
+                            let mut map = fdemon_core::rebuild_stats::LocationMap::default();
+                            if let Some(obj) = response.as_object() {
+                                for (key, value) in obj {
+                                    if key == "type" {
+                                        continue;
+                                    }
+                                    if let Err(e) = map.merge_parallel_arrays(key, value) {
+                                        tracing::warn!(
+                                            "FetchWidgetLocationIdMap: failed to merge '{}': {}",
+                                            key,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsLocationMapFetched {
+                                    session_id,
+                                    map,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "FetchWidgetLocationIdMap for session {} failed: {}",
+                                session_id,
+                                e
+                            );
+                        }
+                    }
+                });
+            } else {
+                warn!(
+                    "FetchWidgetLocationIdMap reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
     }
 }
 

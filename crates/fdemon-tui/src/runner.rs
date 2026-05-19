@@ -452,7 +452,10 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::SwitchFlutterVersion { .. }
             | UpdateAction::RemoveFlutterVersion { .. }
             | UpdateAction::ProbeFlutterVersion { .. }
-            | UpdateAction::SendDaemonCommand { .. } => {
+            | UpdateAction::SendDaemonCommand { .. }
+            | UpdateAction::StartTimelineMonitoring { .. }
+            | UpdateAction::ToggleProfileWidgetBuilds { .. }
+            | UpdateAction::FetchWidgetLocationIdMap { .. } => {
                 warn!("runner action queue received non-runner variant: {action:?}");
             }
         }

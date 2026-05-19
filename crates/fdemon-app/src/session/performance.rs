@@ -3,10 +3,42 @@
 //! Memory monitoring state has moved to [`super::memory`].
 
 use std::cell::Cell;
+use std::collections::{HashMap, VecDeque};
 
 use fdemon_core::performance::{FrameTiming, PerformanceStats, RingBuffer};
+use fdemon_core::rebuild_stats::{LocationMap, RebuildStatsSnapshot};
+use fdemon_core::timeline::TimelineEvent;
+use serde::{Deserialize, Serialize};
 
 use crate::state::PerfDetailsTab;
+
+// ── TimelineFilter ────────────────────────────────────────────────────────────
+
+/// Filter controlling which timeline threads are shown in the Timeline Events tab.
+///
+/// Cycles `All → Ui → Raster → All` when the user presses `f` on the Timeline
+/// Events tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TimelineFilter {
+    /// Show events from all threads.
+    #[default]
+    All,
+    /// Show only Flutter UI thread events.
+    Ui,
+    /// Show only Flutter Raster (GPU) thread events.
+    Raster,
+}
+
+impl TimelineFilter {
+    /// Cycle to the next filter value: `All → Ui → Raster → All`.
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Ui,
+            Self::Ui => Self::Raster,
+            Self::Raster => Self::All,
+        }
+    }
+}
 
 /// 30 seconds at 60 FPS — enables meaningful scroll-back.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 1800;
@@ -123,6 +155,47 @@ pub struct PerformanceState {
     /// Extension event stream to detect 90 / 120 Hz devices. A conservative
     /// 60 Hz default never reports a non-janky frame as janky.
     pub display_refresh_rate: f64,
+
+    // ── Phase 3: Rebuild Stats ────────────────────────────────────────────────
+    /// Whether the `ext.flutter.profileWidgetBuilds` extension is currently on.
+    ///
+    /// Drives Rebuild Stats tab visibility; persisted across hot restart so
+    /// `session_lifecycle::handle_session_restart_completed` can re-enable it.
+    pub rebuild_stats_enabled: bool,
+
+    /// Persistent location map: incrementally merged from
+    /// `Flutter.RebuiltWidgets` events and the one-shot
+    /// `widgetLocationIdMap` fallback.
+    pub rebuild_stats_location_map: LocationMap,
+
+    /// Lifetime accumulator (since extension was last enabled): location id →
+    /// total rebuild count across all observed frames. Cleared on disable.
+    pub rebuild_stats_totals: HashMap<u32, u32>,
+
+    /// Per-frame snapshot ring buffer (newest at the back). Capped by
+    /// `Settings::devtools::rebuild_stats_frame_window` (default 30).
+    pub rebuild_stats_frames: VecDeque<RebuildStatsSnapshot>,
+
+    /// Scroll offset for the Rebuild Stats table.
+    pub rebuild_stats_scroll_offset: usize,
+
+    /// Currently-selected row in the Rebuild Stats table (j/k navigation).
+    pub rebuild_stats_selected_row: Option<usize>,
+
+    // ── Phase 3: Timeline Events ──────────────────────────────────────────────
+    /// Ring buffer of recent timeline events. Capped by
+    /// `Settings::devtools::timeline_event_buffer_size` (default 1000).
+    pub timeline_events: VecDeque<TimelineEvent>,
+
+    /// Scroll offset for the Timeline Events list.
+    pub timeline_events_scroll_offset: usize,
+
+    /// `tid → thread_name` cache, populated from `getVMTimeline` metadata
+    /// events. Persists across polls within a session.
+    pub timeline_thread_name_map: HashMap<i64, String>,
+
+    /// Current filter selection — `All`, `Ui`, or `Raster`.
+    pub timeline_events_filter: TimelineFilter,
 }
 
 impl Default for PerformanceState {
@@ -138,6 +211,18 @@ impl Default for PerformanceState {
             details_tab: PerfDetailsTab::default(),
             details_pane_visible_height: Cell::new(0),
             display_refresh_rate: 60.0,
+            // Phase 3: Rebuild Stats — all start empty/disabled
+            rebuild_stats_enabled: false,
+            rebuild_stats_location_map: LocationMap::default(),
+            rebuild_stats_totals: HashMap::new(),
+            rebuild_stats_frames: VecDeque::new(),
+            rebuild_stats_scroll_offset: 0,
+            rebuild_stats_selected_row: None,
+            // Phase 3: Timeline Events — all start empty
+            timeline_events: VecDeque::new(),
+            timeline_events_scroll_offset: 0,
+            timeline_thread_name_map: HashMap::new(),
+            timeline_events_filter: TimelineFilter::All,
         }
     }
 }
@@ -575,5 +660,41 @@ mod tests {
     fn test_default_monitoring_active_is_false() {
         let state = PerformanceState::default();
         assert!(!state.monitoring_active);
+    }
+
+    // ── Phase 3: TimelineFilter ──────────────────────────────────────────────
+
+    #[test]
+    fn timeline_filter_default_is_all() {
+        assert_eq!(TimelineFilter::default(), TimelineFilter::All);
+    }
+
+    #[test]
+    fn timeline_filter_next_cycles_all_ui_raster_all() {
+        assert_eq!(TimelineFilter::All.next(), TimelineFilter::Ui);
+        assert_eq!(TimelineFilter::Ui.next(), TimelineFilter::Raster);
+        assert_eq!(TimelineFilter::Raster.next(), TimelineFilter::All);
+    }
+
+    // ── Phase 3: PerformanceState defaults ──────────────────────────────────
+
+    #[test]
+    fn performance_state_phase3_rebuild_stats_defaults() {
+        let s = PerformanceState::default();
+        assert!(!s.rebuild_stats_enabled);
+        assert!(s.rebuild_stats_location_map.by_id.is_empty());
+        assert!(s.rebuild_stats_totals.is_empty());
+        assert!(s.rebuild_stats_frames.is_empty());
+        assert_eq!(s.rebuild_stats_scroll_offset, 0);
+        assert!(s.rebuild_stats_selected_row.is_none());
+    }
+
+    #[test]
+    fn performance_state_phase3_timeline_defaults() {
+        let s = PerformanceState::default();
+        assert!(s.timeline_events.is_empty());
+        assert_eq!(s.timeline_events_scroll_offset, 0);
+        assert!(s.timeline_thread_name_map.is_empty());
+        assert_eq!(s.timeline_events_filter, TimelineFilter::All);
     }
 }

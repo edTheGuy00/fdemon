@@ -476,6 +476,156 @@ async fn fetch_and_send_alloc_profile(
     false
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Timeline polling task
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Spawn the 1-Hz timeline polling task for a session.
+///
+/// Modelled on [`spawn_performance_polling`]. Creates shutdown and pause watch
+/// channels outside the spawned task so both ends are available before the
+/// task starts. The task:
+///
+/// 1. Sends `VmServiceTimelineMonitoringStarted` immediately to wire the handles
+///    into `SessionHandle`.
+/// 2. On each 1-Hz tick (subject to the pause gate), calls
+///    `getVMTimelineMicros` → `getVMTimeline` to fetch events since the last
+///    poll, then sends `TimelineEventsBatchReceived`.
+///
+/// The pause channel initial value is `true` (paused) — the task starts at VM
+/// connect time but only begins fetching when the user opens the Performance panel.
+pub(super) fn spawn_timeline_polling(
+    session_id: SessionId,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+    poll_interval_ms: u64,
+) {
+    let poll_interval = Duration::from_millis(poll_interval_ms.max(200));
+
+    // Shutdown channel — `true` stops the loop cleanly.
+    let (timeline_shutdown_tx, mut timeline_shutdown_rx) = tokio::sync::watch::channel(false);
+    let timeline_shutdown_tx = std::sync::Arc::new(timeline_shutdown_tx);
+
+    // Pause channel — `true` = paused (Performance panel not active).
+    // Initial value `true`: starts paused, unpaused when user enters Performance panel.
+    let (timeline_pause_tx, mut timeline_pause_rx) = tokio::sync::watch::channel(true);
+    let timeline_pause_tx = std::sync::Arc::new(timeline_pause_tx);
+
+    // Rendezvous slot for the JoinHandle — filled synchronously after spawn.
+    let task_handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let task_handle_slot_for_msg = task_handle_slot.clone();
+
+    let join_handle = tokio::spawn(async move {
+        // Notify TEA that timeline monitoring has started and wire handles.
+        // The slot is populated synchronously before this first `.await`.
+        if msg_tx
+            .send(Message::VmServiceTimelineMonitoringStarted {
+                session_id,
+                timeline_shutdown_tx: timeline_shutdown_tx.clone(),
+                timeline_pause_tx: timeline_pause_tx.clone(),
+                timeline_task_handle: task_handle_slot_for_msg,
+            })
+            .await
+            .is_err()
+        {
+            // Channel closed — engine is shutting down.
+            return;
+        }
+
+        let mut interval = tokio::time::interval(poll_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Seed the last-poll timestamp from the current VM timeline clock.
+        // If this fails we start from 0 (fetches all available events on the
+        // first poll, which is acceptable).
+        let mut last_poll_micros: u64 = fdemon_daemon::vm_service::get_vm_timeline_micros(&handle)
+            .await
+            .unwrap_or(0);
+
+        let mut thread_name_map: std::collections::HashMap<i64, String> =
+            std::collections::HashMap::new();
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Skip if paused (Performance panel not active).
+                    if *timeline_pause_rx.borrow() {
+                        continue;
+                    }
+
+                    let now_micros = match fdemon_daemon::vm_service::get_vm_timeline_micros(&handle).await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Timeline poll: getVMTimelineMicros failed for session {}: {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    let extent = now_micros.saturating_sub(last_poll_micros);
+                    if extent == 0 {
+                        continue;
+                    }
+
+                    match fdemon_daemon::vm_service::fetch_timeline_chunk(
+                        &handle,
+                        last_poll_micros,
+                        extent,
+                        &mut thread_name_map,
+                    )
+                    .await
+                    {
+                        Ok(events) if !events.is_empty() => {
+                            if msg_tx
+                                .send(Message::TimelineEventsBatchReceived {
+                                    session_id,
+                                    events,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Ok(_) => {} // empty batch — normal
+                        Err(e) => {
+                            tracing::debug!(
+                                "Timeline poll: fetch_timeline_chunk failed for session {}: {}",
+                                session_id, e
+                            );
+                        }
+                    }
+
+                    // Advance the watermark past the events we just fetched.
+                    last_poll_micros = now_micros.saturating_add(1);
+                }
+
+                Ok(()) = timeline_pause_rx.changed() => {
+                    // Pause state changed — the next tick will re-check.
+                }
+
+                _ = timeline_shutdown_rx.changed() => {
+                    if *timeline_shutdown_rx.borrow() {
+                        info!(
+                            "Timeline monitoring stopped for session {}",
+                            session_id
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Synchronously store the JoinHandle before any async code in the task runs.
+    if let Ok(mut slot) = task_handle_slot.lock() {
+        *slot = Some(join_handle);
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

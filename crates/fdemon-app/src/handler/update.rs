@@ -220,6 +220,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::SessionRestartCompleted { session_id } => {
+            let mut should_reenable_rebuild_stats = false;
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.complete_reload();
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -233,6 +234,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(ref vm_handle) = handle.vm_request_handle {
                     vm_handle.invalidate_isolate_cache();
                 }
+                // Phase 3: if rebuild tracking was enabled before the restart,
+                // re-enable it after the new isolate registers its extensions.
+                // The VM extension is lost on hot-restart; we must re-call
+                // set_profile_widget_builds on the new isolate.
+                should_reenable_rebuild_stats = handle.session.performance.rebuild_stats_enabled;
             }
             // Hot restart creates a new isolate with a fresh framework state.
             // Reset the sticky render flag so the next fetch polls readiness
@@ -247,6 +253,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .devtools_view_state
                 .inspector
                 .reset_details_and_groups();
+            // Phase 3: re-enable profileWidgetBuilds if it was active before restart.
+            if should_reenable_rebuild_stats {
+                return UpdateResult::action(UpdateAction::ToggleProfileWidgetBuilds {
+                    session_id,
+                    enabled: true,
+                    vm_handle: None, // hydrated by process.rs
+                });
+            }
             UpdateResult::none()
         }
 
@@ -1493,6 +1507,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Clear the network-pause sender — a new one will arrive with
                 // the next VmServiceNetworkMonitoringStarted message.
                 handle.network_pause_tx = None;
+                // Clean up any existing timeline monitoring task.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.timeline_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+                handle.timeline_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1635,6 +1657,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Clear the old network-pause sender — a new one will arrive
                 // if the user re-enters the Network tab after reconnect.
                 handle.network_pause_tx = None;
+                // Abort the old timeline monitoring task.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.timeline_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+                handle.timeline_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1755,6 +1785,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // handles clean exit. Setting to None signals no Network tab
                 // is open for this disconnected session.
                 handle.network_pause_tx = None;
+                // Abort the timeline monitoring polling task and signal it to stop.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(ref tx) = handle.timeline_shutdown_tx {
+                    let _ = tx.send(true);
+                }
+                handle.timeline_shutdown_tx = None;
+                handle.timeline_pause_tx = None;
 
                 // Clear DevTools endpoint and pending flag. If the daemon
                 // dies mid-flight, devtools_serve_pending would otherwise
@@ -2357,6 +2396,66 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
         Message::PerfFocusDetailsTab(tab) => {
             devtools::performance::handle_perf_focus_details_tab(state, tab)
+        }
+
+        // ── Performance Phase 3: Rebuild Stats + Timeline ────────────────────
+        Message::RebuildStatsEventReceived {
+            session_id,
+            payload,
+        } => devtools::performance::rebuild_stats::handle_event(state, session_id, payload),
+        Message::ToggleRebuildStats { session_id } => {
+            devtools::performance::rebuild_stats::handle_toggle(state, session_id)
+        }
+        Message::RebuildStatsExtensionStateChanged {
+            session_id,
+            enabled,
+        } => devtools::performance::rebuild_stats::handle_extension_state_changed(
+            state, session_id, enabled,
+        ),
+        Message::RebuildStatsLocationMapFetched { session_id, map } => {
+            devtools::performance::rebuild_stats::handle_location_map_fetched(
+                state, session_id, map,
+            )
+        }
+        Message::TimelineEventsBatchReceived { session_id, events } => {
+            devtools::performance::timeline::handle_batch(state, session_id, events)
+        }
+        Message::TimelineEventsCycleFilter { session_id } => {
+            devtools::performance::timeline::handle_cycle_filter(state, session_id)
+        }
+        Message::VmServiceTimelineMonitoringStarted {
+            session_id,
+            timeline_shutdown_tx,
+            timeline_pause_tx,
+            timeline_task_handle,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.timeline_shutdown_tx = Some(timeline_shutdown_tx);
+                // Take the JoinHandle out of the Arc<Mutex<Option<>>> so it is
+                // owned by the SessionHandle and can be aborted on session close.
+                handle.timeline_task_handle = match timeline_task_handle.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("timeline task handle mutex poisoned: {e}");
+                        e.into_inner().take()
+                    }
+                };
+                handle.timeline_pause_tx = Some(timeline_pause_tx);
+
+                // If we are already in DevTools on the Performance panel, unpause
+                // immediately so polling begins. Otherwise leave paused until
+                // the user enters the Performance panel.
+                if state.ui_mode == UiMode::DevTools
+                    && state.devtools_view_state.active_panel == DevToolsPanel::Performance
+                {
+                    if let Some(handle) = state.session_manager.get(session_id) {
+                        if let Some(ref tx) = handle.timeline_pause_tx {
+                            let _ = tx.send(false);
+                        }
+                    }
+                }
+            }
+            UpdateResult::none()
         }
 
         // ─────────────────────────────────────────────────────────────────────

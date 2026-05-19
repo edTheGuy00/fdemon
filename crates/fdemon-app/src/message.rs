@@ -1182,6 +1182,74 @@ pub enum Message {
     /// regions on the tab strip that emit this variant.
     PerfFocusDetailsTab(PerfDetailsTab),
 
+    // --- Performance Phase 3: Rebuild Stats + Timeline ---
+    /// A new `Flutter.RebuiltWidgets` extension event arrived.
+    ///
+    /// Emitted by `forward_vm_events` when it receives a stream event whose
+    /// `extensionKind == "Flutter.RebuiltWidgets"`. The payload has already
+    /// been parsed by `fdemon_core::rebuild_stats::parse_rebuilt_widgets_event`.
+    RebuildStatsEventReceived {
+        session_id: SessionId,
+        payload: fdemon_core::rebuild_stats::RebuildEventPayload,
+    },
+
+    /// The user pressed `R` on the Rebuild Stats tab — toggle the extension.
+    ///
+    /// Triggers an async `set_profile_widget_builds` RPC and emits
+    /// `RebuildStatsExtensionStateChanged` on success.
+    ToggleRebuildStats { session_id: SessionId },
+
+    /// The async toggle returned a new state — update `rebuild_stats_enabled`.
+    ///
+    /// When `enabled` flips to `false`, clears `rebuild_stats_totals` and
+    /// `rebuild_stats_frames` and snaps the active details tab if it was
+    /// on `RebuildStats`.
+    RebuildStatsExtensionStateChanged {
+        session_id: SessionId,
+        enabled: bool,
+    },
+
+    /// The one-shot `widgetLocationIdMap` RPC returned a fresh map.
+    ///
+    /// Used as a fallback seed for the location map when early
+    /// `Flutter.RebuiltWidgets` events were missed (location data arrives
+    /// inline in those events, but the RPC covers the case where they were
+    /// not observed).
+    RebuildStatsLocationMapFetched {
+        session_id: SessionId,
+        map: fdemon_core::rebuild_stats::LocationMap,
+    },
+
+    /// The 1-Hz timeline poll returned a batch of new events.
+    ///
+    /// Appended to `PerformanceState::timeline_events` and truncated to
+    /// `settings.devtools.timeline_event_buffer_size`.
+    TimelineEventsBatchReceived {
+        session_id: SessionId,
+        events: Vec<fdemon_core::timeline::TimelineEvent>,
+    },
+
+    /// The user pressed `f` on the Timeline Events tab — cycle the filter.
+    ///
+    /// Cycles `TimelineFilter::All → Ui → Raster → All` and resets the
+    /// scroll offset to the top.
+    TimelineEventsCycleFilter { session_id: SessionId },
+
+    /// The timeline polling task started — carries shutdown/pause/handle refs.
+    ///
+    /// Modeled on `VmServicePerformanceMonitoringStarted`. The TEA handler
+    /// stores the senders and handle on `SessionHandle` so lifecycle events
+    /// (session close, VM disconnect, panel switch) can pause/stop the task.
+    VmServiceTimelineMonitoringStarted {
+        session_id: SessionId,
+        /// Shutdown sender — `true` stops the polling loop.
+        timeline_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Pause sender — `true` skips poll ticks (Performance panel not active).
+        timeline_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Shared slot containing the task's `JoinHandle` (for abort on close).
+        timeline_task_handle: SharedTaskHandle,
+    },
+
     // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)
     // ─────────────────────────────────────────────────────────────────────────

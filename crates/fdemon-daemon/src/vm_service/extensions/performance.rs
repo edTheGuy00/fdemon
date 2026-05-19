@@ -44,10 +44,7 @@ pub async fn set_profile_widget_builds(
 ///
 /// - [`Error::Protocol`] if the VM Service returned a JSON-RPC error.
 /// - [`Error::ChannelClosed`] if the VM Service client connection is closed.
-pub async fn get_profile_widget_builds(
-    client: &VmServiceClient,
-    isolate_id: &str,
-) -> Result<bool> {
+pub async fn get_profile_widget_builds(client: &VmServiceClient, isolate_id: &str) -> Result<bool> {
     set_profile_widget_builds(client, isolate_id, None).await
 }
 
@@ -63,7 +60,10 @@ mod tests {
     // functions is exactly what the Flutter engine expects.
     #[test]
     fn set_profile_widget_builds_uses_correct_extension_name() {
-        assert_eq!(ext::PROFILE_WIDGET_BUILDS, "ext.flutter.profileWidgetBuilds");
+        assert_eq!(
+            ext::PROFILE_WIDGET_BUILDS,
+            "ext.flutter.profileWidgetBuilds"
+        );
     }
 
     // Verify that the constant starts with the correct namespace prefix so
@@ -118,6 +118,9 @@ mod tests {
 
         let mock_response = json!({"enabled": "true"});
         let result = parse_bool_extension_response(&mock_response).unwrap();
-        assert!(result, "parse of {{\"enabled\":\"true\"}} should return true");
+        assert!(
+            result,
+            "parse of {{\"enabled\":\"true\"}} should return true"
+        );
     }
 }

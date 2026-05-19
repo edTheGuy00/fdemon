@@ -414,6 +414,16 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
         }
     }
 
+    // Before switching, check if we are leaving the Performance panel — if so,
+    // pause timeline polling so no getVMTimeline RPCs fire while on other panels.
+    if old_panel == DevToolsPanel::Performance && panel != DevToolsPanel::Performance {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.timeline_pause_tx {
+                let _ = tx.send(true); // pause timeline polling
+            }
+        }
+    }
+
     // Before switching, check if we are leaving the Network panel — if so,
     // pause network polling so no getHttpProfile RPCs fire while on other panels.
     if old_panel == DevToolsPanel::Network && panel != DevToolsPanel::Network {
@@ -475,6 +485,14 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                     if let Some(ref tx) = handle.alloc_pause_tx {
                         let _ = tx.send(false); // unpause
                     }
+                }
+            }
+            // Unpause timeline polling when entering the Performance panel.
+            // Timeline polling is always paused when leaving Performance, so
+            // we unconditionally unpause here.
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(ref tx) = handle.timeline_pause_tx {
+                    let _ = tx.send(false); // unpause
                 }
             }
         }

@@ -80,6 +80,10 @@ pub fn process_message(
             let action = action.and_then(|a| hydrate_fetch_http_request_detail(a, state));
             let action = action.and_then(|a| hydrate_clear_http_profile(a, state));
             let action = action.and_then(|a| hydrate_send_daemon_command(a, state));
+            // Phase 3: Timeline and rebuild stats hydration.
+            let action = action.and_then(|a| hydrate_start_timeline_monitoring(a, state));
+            let action = action.and_then(|a| hydrate_toggle_profile_widget_builds(a, state));
+            let action = action.and_then(|a| hydrate_fetch_widget_location_id_map(a, state));
 
             if let Some(action) = action {
                 // `SetMouseCapture` and `WriteClipboard` require synchronous
@@ -538,6 +542,108 @@ fn hydrate_clear_http_profile(action: UpdateAction, state: &AppState) -> Option<
             .get(session_id)
             .and_then(|h| h.vm_request_handle.clone())?;
         return Some(UpdateAction::ClearHttpProfile {
+            session_id,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `StartTimelineMonitoring` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_start_timeline_monitoring(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::StartTimelineMonitoring {
+        session_id,
+        handle,
+        poll_interval_ms,
+    } = action
+    {
+        if handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::StartTimelineMonitoring {
+                session_id,
+                handle,
+                poll_interval_ms,
+            });
+        }
+        let vm_handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::StartTimelineMonitoring {
+            session_id,
+            handle: Some(vm_handle),
+            poll_interval_ms,
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `ToggleProfileWidgetBuilds` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_toggle_profile_widget_builds(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::ToggleProfileWidgetBuilds {
+        session_id,
+        enabled,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::ToggleProfileWidgetBuilds {
+                session_id,
+                enabled,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::ToggleProfileWidgetBuilds {
+            session_id,
+            enabled,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `FetchWidgetLocationIdMap` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_fetch_widget_location_id_map(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::FetchWidgetLocationIdMap {
+        session_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::FetchWidgetLocationIdMap {
+                session_id,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::FetchWidgetLocationIdMap {
             session_id,
             vm_handle: Some(handle),
         });

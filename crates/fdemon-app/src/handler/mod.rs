@@ -679,6 +679,51 @@ pub enum UpdateAction {
     /// pushes an optimistic success toast; on write failure the runner pushes
     /// a warning toast on top of it.
     WriteClipboard { text: String },
+
+    // ── Phase 3: Timeline monitoring ─────────────────────────────────────────
+    /// Start the 1-Hz timeline polling task for a session.
+    ///
+    /// Spawns a background task that calls `getVMTimeline` at the given interval,
+    /// filtering via `getVMTimelineMicros` to fetch only new events since the
+    /// last poll. Sends `TimelineEventsBatchReceived` messages with parsed events.
+    ///
+    /// `handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` discards the action when it remains
+    /// `None` (VM not yet connected).
+    StartTimelineMonitoring {
+        session_id: SessionId,
+        /// VM Service request handle. `None` until hydrated by `process.rs`.
+        handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// Polling interval in milliseconds (default 1000ms = 1 Hz).
+        poll_interval_ms: u64,
+    },
+
+    /// Toggle `ext.flutter.profileWidgetBuilds` on/off for a session.
+    ///
+    /// Issues the extension call asynchronously and emits
+    /// `RebuildStatsExtensionStateChanged` on success.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs`.
+    ToggleProfileWidgetBuilds {
+        session_id: SessionId,
+        /// Target enabled state (`true` = enable, `false` = disable).
+        enabled: bool,
+        /// VM Service request handle. `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    /// Fetch the one-shot `widgetLocationIdMap` fallback to seed the location map.
+    ///
+    /// Emits `RebuildStatsLocationMapFetched` on success. Used when early
+    /// `Flutter.RebuiltWidgets` events (which carry inline location data) were
+    /// missed because tracking was enabled after the app started.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs`.
+    FetchWidgetLocationIdMap {
+        session_id: SessionId,
+        /// VM Service request handle. `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
 }
 
 /// Background tasks to spawn
