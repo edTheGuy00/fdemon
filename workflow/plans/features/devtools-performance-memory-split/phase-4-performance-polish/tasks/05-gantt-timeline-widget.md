@@ -236,3 +236,41 @@ If `timeline_tracks.is_empty()`, render the existing centered placeholder ("Wait
 - **No minimap.** Single Gantt canvas only. Phase 5 will add a minimap ribbon above the time axis.
 - If the existing `↑/↓` scroll-handler for the timeline tab is in a file T04 already touched, this task may not need to write any handler code. Confirm at implementation time.
 - Use `Layout::vertical` with `Constraint::Length(TIME_AXIS_HEIGHT)`, `Constraint::Length(THREAD_ROW_HEIGHT)` per row, and `Constraint::Min(0)` absorber — per CODE_STANDARDS Principle 2.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/mod.rs` | New — public render entry, filter strip, constants |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` | New — thread-row layout, bar rendering, depth stacking, time axis |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/palette.rs` | New — two-color palette per thread, alternating by depth |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/viewport.rs` | New — compute_viewport, micros_to_column, clip_bar |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/mod.rs` | Updated — `mod timeline_events_tab` → `mod timeline_events`, updated call site and doc comment |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events_tab.rs` | Deleted |
+
+### Notable Decisions/Tradeoffs
+
+1. **TimelineThread::Other maps to magenta palette**: The task mentioned a `Tester` variant that does not exist in the actual enum. `Other` maps to magenta/light-magenta instead of yellow/light-yellow as the task suggested for `Tester`.
+2. **Time axis label overflow fix**: Labels at the right edge of the canvas (e.g., "0s") are shifted left to avoid overflow when the label characters would exceed the buffer width. This required a wider test buffer (150 cols) to verify the label renders correctly.
+3. **`render_bar` allowed 8 args with clippy allow**: The function needs all 8 parameters for correct recursion; refactoring into a struct would add more complexity than the lint suppression.
+4. **No handler changes needed**: T04 already created `timeline_thread_scroll_offset` and `timeline_visible_row_count`. The scroll handlers already existed in the codebase; this task only implements the renderer side.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (1245 fdemon-tui unit tests, all workspace green)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No pan/zoom**: The viewport is fixed at the most recent 5 seconds as specified. Phase 5 deferred.
+2. **No event selection**: Bar click-to-detail is Phase 5 scope.
+3. **Time axis label density**: At very wide terminals (>300 cols), tick labels at 1-second intervals render correctly; at narrow terminals some ticks may overlap but won't panic.

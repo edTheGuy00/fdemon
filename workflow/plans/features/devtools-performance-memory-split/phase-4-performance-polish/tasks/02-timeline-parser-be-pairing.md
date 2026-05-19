@@ -131,3 +131,38 @@ const MAX_BE_STACK_DEPTH: usize = 256;
 - Nesting uses **interval containment** rather than **stack depth at emit time** to be robust to out-of-order events within a `tid`. The polling task receives events in microbatches; events within a batch are sorted by `ts`, but consecutive batches may interleave at the boundaries.
 - The `MAX_BE_STACK_DEPTH` guard is defensive; in practice Flutter generates ≤ 10 levels.
 - Test coverage should include the `classify_thread_tester_special_case` flow (`io.flutter.test..ui`) — verify it still returns `TimelineThread::Ui` after the parser changes.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/timeline.rs` | Added `TimelineNode`, `TimelineTrack`, `ThreadMetadata` types; `MAX_BE_STACK_DEPTH` constant; `pair_be_events()`, `parse_vm_timeline_with_metadata()`, `build_tracks()` functions; `#[derive(Default)]` on `TimelineThread`; 15+ new unit tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **`TimelineThread::Other` as derive default**: Clippy required using `#[derive(Default)]` with `#[default]` on `Other` rather than a manual impl. This is cleaner and avoids the `derivable_impls` warning.
+2. **`ts: i64` in `TimelineNode`**: Used `i64` (from `u64` in `TimelineEvent`) to allow signed arithmetic in nesting containment checks without explicit casts. The cast happens once at node creation (`event.ts as i64`).
+3. **`pair_be_events` takes `&[TimelineEvent]` not `&mut`**: Read-only slice to keep the API functional; `build_tracks` sorts a `Vec<&TimelineEvent>` reference group before collecting owned copies for the call.
+4. **`track.name = None` in `build_tracks`**: The raw thread-name string is not stored on `TimelineEvent` (only the classified `TimelineThread` enum is). Callers fill in `track.name` from a `thread_name_map` if they have one. This avoids forcing `build_tracks` to take a `HashMap` parameter it may not always need.
+5. **Stack-based nesting in `nest_by_containment`**: Uses a LIFO frame stack instead of O(n²) search. After sorting by `(ts asc, dur desc)` a single pass suffices; frames that don't contain the current node are closed and pushed to their parent before the current node is pushed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-core --all-targets` — Passed
+- `cargo test -p fdemon-core` — Passed (511 tests)
+- `cargo clippy -p fdemon-core --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (all crates, no regressions)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **`ts as i64` cast**: If the VM ever emits a `ts` larger than `i64::MAX` (≈9.2×10¹⁸ µs ≈ 292,000 years), the cast truncates. In practice Dart VM timestamps are sub-second relative values well within `u64` range; this is not a practical risk.
+2. **`build_tracks` does not populate `track.name`**: Intentional — callers with a `thread_name_map` (e.g., the performance handler) must fill it in. Documented in the function's doc comment.

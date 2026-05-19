@@ -117,3 +117,39 @@ Reuse the `VmRequestApi` mock from T11 of Phase 3-followup (`MockVmRequestApi`, 
 - The added `metadata: vec![]` field in the `TimelineEventsBatchReceived` message is a forward-compatible placeholder; T04 will populate it from `parse_vm_timeline_with_metadata`. If T04 hasn't landed yet, leave the field empty — the handler just won't have thread names to label rows with.
 - If the message variant doesn't yet carry `metadata` (it currently doesn't — that's a T04 change), then this task can ship with `events`-only and T04 extends the variant. Confirm at implementation time which task touches `message.rs` first.
 - The `tokio::time::pause()` testing pattern from T11's mock setup is the right approach for the timing assertions.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/performance.rs` | Extracted `run_one_timeline_fetch_cycle` helper + `FetchOutcome` enum; added immediate-fetch on unpause in `timeline_pause_rx.changed()` arm; added 2 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`FetchOutcome` enum instead of `bool`**: A named enum (`Ok`, `TransientError`, `ChannelClosed`) is more self-documenting than a `bool` "should break" pattern. Mirrors `fetch_and_send_alloc_profile`'s bool return but improves readability. The enum is `#[derive(Debug, PartialEq, Eq)]` for testability.
+
+2. **No `metadata` field in `TimelineEventsBatchReceived`**: Confirmed the current message variant has only `session_id` and `events` (no `metadata` yet — T04 adds that). Shipped as `events`-only per the task notes.
+
+3. **`watch` channel coalescing handles rapid pause/unpause**: The `watch` channel naturally coalesces rapid `false → true → false` toggles — the task only sees the final value, so a single `changed()` notification fires with `borrow() == false`. This satisfies acceptance criterion 2 (no double-fetch on rapid toggle) without extra logic.
+
+4. **`tokio::time::pause()` for timing assertions**: Used frozen-time testing to verify the immediate fetch fires *before* any interval tick, making the test deterministic on slow CI machines.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-app --all-targets` — Passed
+- `cargo test -p fdemon-app actions::performance` — Passed (18 tests: 16 existing + 2 new)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (all crates, zero failures)
+
+### Risks/Limitations
+
+1. **Acceptance criterion 6 (manual test)**: The `"timeline immediate fetch on unpause"` debug log line is present in the code. Manual verification requires a live Flutter session, which cannot be tested in this automated workflow.
+2. **Rapid-toggle coalescing relies on `watch` semantics**: If the channel implementation changes in future tokio versions, rapid-toggle behaviour should be re-verified. Current behaviour is documented in the tokio `watch` channel docs.

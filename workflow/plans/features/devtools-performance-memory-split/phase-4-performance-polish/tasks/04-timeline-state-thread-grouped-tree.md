@@ -191,3 +191,46 @@ handle.session.performance.timeline_thread_scroll_offset = 0;  // reset on filte
 - The `Cell<usize>` for `timeline_visible_row_count` follows the CODE_STANDARDS Principle 3 render-hint pattern. Add the standard `// EXCEPTION:` annotation at the write site (in T05's renderer).
 - Removing `timeline_events_scroll_offset` (event-line scroll) and adding `timeline_thread_scroll_offset` (thread-row scroll) is semantically correct: the Gantt scrolls by thread row, not by event line.
 - If `cargo test -p fdemon-tui` shows compilation failures because `timeline_events_tab.rs` still references the old state shape, that's expected — T05 replaces that file. Confirm `cargo check --workspace` is green so T05 can compile from a clean baseline.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Replaced `timeline_events: VecDeque<TimelineEvent>` and `timeline_events_scroll_offset` with `timeline_tracks: BTreeMap<i64, TimelineTrack>`, `timeline_visible_row_count: Cell<usize>`, `timeline_thread_scroll_offset: usize`. Updated `Default` impl and tests. |
+| `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` | Rewrote `handle_batch` to accept `(state, session_id, events, metadata)` — builds trees via `build_tracks`, merges into `timeline_tracks`, updates `timeline_thread_name_map`, enforces cap. Added `enforce_track_buffer_cap`. Updated `handle_cycle_filter` to reset `timeline_thread_scroll_offset`. Replaced all tests. |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Updated `handle_exit_devtools_mode` and `handle_switch_panel` Performance-leave branch to clear `timeline_tracks`, `timeline_thread_name_map`, reset `timeline_thread_scroll_offset`. Updated `test_leaving_performance_clears_timeline_buffer` → `test_leaving_performance_clears_timeline_tracks`. |
+| `crates/fdemon-app/src/message.rs` | Added `metadata: Vec<ThreadMetadata>` to `TimelineEventsBatchReceived` variant. Updated doc comment. |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `TimelineEventsBatchReceived` dispatch to pass `metadata` to `handle_batch`. |
+| `crates/fdemon-app/src/actions/performance.rs` | Switched `run_one_timeline_fetch_cycle` to use `fetch_timeline_chunk_with_metadata`; passes `metadata` in the dispatched message. |
+| `crates/fdemon-daemon/src/vm_service/timeline.rs` | Added `fetch_timeline_chunk_with_metadata` function. Updated import to include `parse_vm_timeline_with_metadata` and `ThreadMetadata`. |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported `fetch_timeline_chunk_with_metadata`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Buffer cap eviction by global oldest root event**: When total node count exceeds cap, we find the track whose first root event has the smallest `ts` globally and remove it. This preserves tree integrity (no mid-subtree trimming) but may drop events from a single busy thread faster than evenly across threads. This matches the task spec verbatim and is correct for typical Flutter workloads where UI and Raster threads interleave.
+
+2. **`handle_batch` signature uses positional args, not a struct wrapper**: The task's pseudocode showed a `TimelineEventsBatchReceived` struct passed to `handle_batch`. We kept the existing convention of destructuring the `Message` enum variant in `update.rs` and passing fields individually — consistent with all other handlers in the codebase.
+
+3. **`fetch_timeline_chunk` left unchanged**: The original function is preserved for backward compatibility; `fetch_timeline_chunk_with_metadata` is a new additive function. No existing tests needed changing.
+
+4. **TUI `timeline_events_tab.rs` compilation failures**: 4 errors in `fdemon-tui` are expected — the file references the removed `timeline_events` and `timeline_events_scroll_offset` fields. T05 replaces this file. `cargo check --workspace` does fail on `fdemon-tui`; `cargo check -p fdemon-app -p fdemon-core -p fdemon-daemon` is fully clean.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-app -p fdemon-core -p fdemon-daemon` — Passed (clean)
+- `cargo test -p fdemon-app -p fdemon-core` — Passed (2458 + 357 tests)
+- `cargo clippy -p fdemon-app -p fdemon-core -p fdemon-daemon -- -D warnings` — Passed
+- `cargo test --workspace` — `fdemon-tui` fails to compile (expected; T05 fixes it); all other crates pass
+
+### Risks/Limitations
+
+1. **TUI compilation broken until T05**: `fdemon-tui/timeline_events_tab.rs` still references the old state shape. T05 must land before the full workspace compiles cleanly.
+2. **`timeline_visible_row_count` Cell not yet written**: The `Cell<usize>` field is initialized to 0 but not written until T05's Gantt renderer. The `// EXCEPTION:` annotation should be added at the write site in T05.

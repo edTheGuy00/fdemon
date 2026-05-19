@@ -49,12 +49,12 @@ Wave 4 (sequential, doc_maintainer)
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [frame-chart-fixes](tasks/01-frame-chart-fixes.md) | Not Started | — | 3–4h | implementor | 1 |
-| 02 | [timeline-parser-be-pairing](tasks/02-timeline-parser-be-pairing.md) | Not Started | — | 2–3h | implementor | 1 |
-| 03 | [immediate-timeline-fetch-on-unpause](tasks/03-immediate-timeline-fetch-on-unpause.md) | Not Started | — | 1–2h | implementor | 1 |
-| 04 | [timeline-state-thread-grouped-tree](tasks/04-timeline-state-thread-grouped-tree.md) | Not Started | 02 | 3–5h | implementor | 2 |
-| 05 | [gantt-timeline-widget](tasks/05-gantt-timeline-widget.md) | Not Started | 04 | 5–8h | implementor | 3 |
-| 06 | [update-arch-and-review-focus-docs](tasks/06-update-arch-and-review-focus-docs.md) | Not Started | 01,02,04,05 | 2h | doc_maintainer | 4 |
+| 01 | [frame-chart-fixes](tasks/01-frame-chart-fixes.md) | Done ✅ | — | 3–4h | implementor | 1 |
+| 02 | [timeline-parser-be-pairing](tasks/02-timeline-parser-be-pairing.md) | Done ✅ | — | 2–3h | implementor | 1 |
+| 03 | [immediate-timeline-fetch-on-unpause](tasks/03-immediate-timeline-fetch-on-unpause.md) | Done ⚠️ (concern: mislabeled test doc on criterion 2 — non-blocking) | — | 1–2h | implementor | 1 |
+| 04 | [timeline-state-thread-grouped-tree](tasks/04-timeline-state-thread-grouped-tree.md) | Done ✅ | 02 | 3–5h | implementor | 2 |
+| 05 | [gantt-timeline-widget](tasks/05-gantt-timeline-widget.md) | Done ⚠️ (concerns: gantt.rs 989 lines from inline tests; AC8 narrow-bar path has no dedicated test — both non-blocking) | 04 | 5–8h | implementor | 3 |
+| 06 | [update-arch-and-review-focus-docs](tasks/06-update-arch-and-review-focus-docs.md) | Done ✅ | 01,02,04,05 | 2h | doc_maintainer | 4 |
 
 ## File Overlap Analysis
 
