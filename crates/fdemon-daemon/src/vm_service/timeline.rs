@@ -158,6 +158,75 @@ pub async fn enable_frame_tracking(handle: &VmRequestHandle, isolate_id: &str) -
 }
 
 // ---------------------------------------------------------------------------
+// VM Timeline RPCs
+// ---------------------------------------------------------------------------
+
+use fdemon_core::timeline::{parse_vm_timeline, TimelineEvent};
+use serde_json::json;
+use std::collections::HashMap;
+
+/// Wrap the VM Service `getVMTimelineMicros` RPC. Returns the current VM
+/// timeline clock value in microseconds.
+///
+/// This is a raw VM Service method, not a Flutter extension. It requires no
+/// `isolateId` parameter.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the response does not contain a `timestamp`
+/// field. Returns [`Error::ChannelClosed`] if the background WebSocket task
+/// has exited.
+pub async fn get_vm_timeline_micros(handle: &VmRequestHandle) -> Result<u64> {
+    let response = handle.request("getVMTimelineMicros", None).await?;
+    let ts = response
+        .get("timestamp")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| Error::protocol("getVMTimelineMicros response missing timestamp"))?;
+    // Clamp negative values to 0 (defensive; the VM should never send a
+    // negative timestamp, but as_i64() accepts them).
+    Ok(ts.max(0) as u64)
+}
+
+/// Fetch a slice of the VM timeline (`getVMTimeline`) covering the window
+/// `[since_micros, since_micros + extent_micros)` and return it as a vector
+/// of parsed [`TimelineEvent`]s with thread classification applied.
+///
+/// `thread_name_map` is the caller's persistent `tid → thread name` cache —
+/// it is updated in place as metadata events arrive. Pass a fresh
+/// `HashMap::new()` on the very first call; reuse for subsequent calls so
+/// that thread-name associations from earlier responses are available for
+/// later ones.
+///
+/// Returns an empty vec if the VM had no events in the window.
+///
+/// # Cast safety
+///
+/// `timeOriginMicros` and `timeExtentMicros` use `i64` per the VM Service
+/// protocol. Real timeline values stay well under `i64::MAX` (decades of
+/// microseconds). The `u64 → i64` cast via `as i64` is therefore safe in
+/// practice; the VM clamps internally if an overflow were somehow to occur.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the response is missing the `traceEvents`
+/// field or contains malformed events. Returns [`Error::ChannelClosed`] if
+/// the background WebSocket task has exited.
+pub async fn fetch_timeline_chunk(
+    handle: &VmRequestHandle,
+    since_micros: u64,
+    extent_micros: u64,
+    thread_name_map: &mut HashMap<i64, String>,
+) -> Result<Vec<TimelineEvent>> {
+    // VM Service protocol uses i64 for these parameters.
+    let params = json!({
+        "timeOriginMicros": since_micros as i64,
+        "timeExtentMicros": extent_micros as i64,
+    });
+    let response = handle.request("getVMTimeline", Some(params)).await?;
+    parse_vm_timeline(&response, thread_name_map)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -386,5 +455,323 @@ mod tests {
         );
         let timing = parse_frame_timing(&event).unwrap();
         assert!(!timing.shader_compilation);
+    }
+
+    // ── get_vm_timeline_micros ────────────────────────────────────────────────
+
+    /// Build a VmRequestHandle wired to a live channel where the test acts as
+    /// the fake VM responder. Returns the handle and the command receiver.
+    ///
+    /// The returned handle's `request()` method sends a
+    /// `ClientCommand::SendRequest` to the receiver. The test reads the
+    /// command, inspects the method/params, and sends a response via the
+    /// embedded oneshot sender.
+    fn make_mock_handle() -> (
+        super::super::client::VmRequestHandle,
+        tokio::sync::mpsc::Receiver<crate::vm_service::client::ClientCommand>,
+    ) {
+        super::super::client::VmRequestHandle::new_with_test_channel()
+    }
+
+    #[tokio::test]
+    async fn get_vm_timeline_micros_parses_timestamp() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        // Spawn a fake responder that answers getVMTimelineMicros.
+        tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({
+                    "type": "Timestamp",
+                    "timestamp": 12345_i64
+                })));
+            }
+        });
+
+        let result = get_vm_timeline_micros(&handle).await;
+        assert_eq!(result.unwrap(), 12345u64);
+    }
+
+    #[tokio::test]
+    async fn get_vm_timeline_micros_missing_timestamp_errors() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                // Response is missing the "timestamp" field.
+                let _ = response_tx.send(Ok(json!({ "type": "Timestamp" })));
+            }
+        });
+
+        let result = get_vm_timeline_micros(&handle).await;
+        assert!(result.is_err(), "missing timestamp should produce an error");
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                fdemon_core::error::Error::Protocol { .. }
+            ),
+            "expected Protocol error"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_vm_timeline_micros_negative_clamped_to_zero() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({ "type": "Timestamp", "timestamp": -1_i64 })));
+            }
+        });
+
+        let result = get_vm_timeline_micros(&handle).await;
+        assert_eq!(
+            result.unwrap(),
+            0u64,
+            "negative timestamp should clamp to 0"
+        );
+    }
+
+    // ── fetch_timeline_chunk ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn fetch_timeline_chunk_sends_correct_method() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        // Capture the method name then respond with an empty timeline.
+        let responder = tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest {
+                method,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVMTimeline");
+                let _ = response_tx.send(Ok(json!({ "type": "Timeline", "traceEvents": [] })));
+            }
+        });
+
+        let mut map = HashMap::new();
+        let _ = fetch_timeline_chunk(&handle, 0, 50_000, &mut map).await;
+        let _ = responder.await;
+    }
+
+    #[tokio::test]
+    async fn fetch_timeline_chunk_sends_origin_and_extent() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        let responder = tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest {
+                params,
+                response_tx,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                let p = params.expect("params must be present");
+                assert_eq!(
+                    p.get("timeOriginMicros").and_then(|v| v.as_i64()),
+                    Some(12_345_000_i64),
+                    "timeOriginMicros must match since_micros cast to i64"
+                );
+                assert_eq!(
+                    p.get("timeExtentMicros").and_then(|v| v.as_i64()),
+                    Some(50_000_i64),
+                    "timeExtentMicros must match extent_micros cast to i64"
+                );
+                let _ = response_tx.send(Ok(json!({ "type": "Timeline", "traceEvents": [] })));
+            }
+        });
+
+        let mut map = HashMap::new();
+        let _ = fetch_timeline_chunk(&handle, 12_345_000, 50_000, &mut map).await;
+        let _ = responder.await;
+    }
+
+    #[tokio::test]
+    async fn fetch_timeline_chunk_parses_empty_response() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({
+                    "type": "Timeline",
+                    "traceEvents": [],
+                    "timeOriginMicros": 0_i64,
+                    "timeExtentMicros": 50_000_i64
+                })));
+            }
+        });
+
+        let mut map = HashMap::new();
+        let events = fetch_timeline_chunk(&handle, 0, 50_000, &mut map)
+            .await
+            .expect("should succeed");
+        assert!(
+            events.is_empty(),
+            "empty traceEvents should produce empty vec"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_timeline_chunk_parses_metadata_and_ui_event_fixture() {
+        use crate::vm_service::client::ClientCommand;
+        use fdemon_core::timeline::{TimelinePhase, TimelineThread};
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        // Fixture: metadata for UI (tid=1) + Raster (tid=2) threads, then
+        // a Frame event (UI), a Raster event (Raster), and a GC event (Other).
+        tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({
+                    "type": "Timeline",
+                    "traceEvents": [
+                        // Metadata: UI thread
+                        { "ph": "M", "name": "thread_name", "pid": 1, "tid": 1,
+                          "args": { "name": "io.flutter.1.ui (1)" } },
+                        // Metadata: Raster thread
+                        { "ph": "M", "name": "thread_name", "pid": 1, "tid": 2,
+                          "args": { "name": "io.flutter.1.raster (2)" } },
+                        // Frame event on UI thread (Complete, with frame_number)
+                        { "ph": "X", "name": "Frame", "cat": "Embedder",
+                          "pid": 1, "tid": 1, "ts": 12_350_000_u64, "dur": 8_000_u64,
+                          "args": { "frame_number": "42" } },
+                        // Raster event on Raster thread
+                        { "ph": "X", "name": "Raster", "cat": "Embedder",
+                          "pid": 1, "tid": 2, "ts": 12_355_000_u64, "dur": 5_000_u64 },
+                        // GC event on a different (Other) thread
+                        { "ph": "X", "name": "GC", "cat": "Dart",
+                          "pid": 1, "tid": 99, "ts": 12_360_000_u64, "dur": 1_000_u64 }
+                    ]
+                })));
+            }
+        });
+
+        let mut map = HashMap::new();
+        let events = fetch_timeline_chunk(&handle, 12_345_000, 50_000, &mut map)
+            .await
+            .expect("should parse successfully");
+
+        // 3 non-metadata events returned; metadata excluded.
+        assert_eq!(events.len(), 3, "metadata events must not be in the output");
+
+        // Frame event: UI thread, Complete phase, frame_number = 42.
+        assert_eq!(events[0].name, "Frame");
+        assert_eq!(events[0].thread, TimelineThread::Ui);
+        assert_eq!(events[0].phase, TimelinePhase::Complete);
+        assert_eq!(events[0].frame_number, Some(42));
+        assert_eq!(events[0].ts, 12_350_000);
+        assert_eq!(events[0].dur, Some(8_000));
+
+        // Raster event: Raster thread.
+        assert_eq!(events[1].name, "Raster");
+        assert_eq!(events[1].thread, TimelineThread::Raster);
+
+        // GC event: Other thread (tid 99 has no metadata).
+        assert_eq!(events[2].name, "GC");
+        assert_eq!(events[2].thread, TimelineThread::Other);
+
+        // thread_name_map must be populated with the two metadata entries.
+        assert_eq!(
+            map.get(&1).map(|s| s.as_str()),
+            Some("io.flutter.1.ui (1)"),
+            "UI thread name must be in thread_name_map"
+        );
+        assert_eq!(
+            map.get(&2).map(|s| s.as_str()),
+            Some("io.flutter.1.raster (2)"),
+            "Raster thread name must be in thread_name_map"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_timeline_chunk_accumulates_thread_name_map_across_calls() {
+        use crate::vm_service::client::ClientCommand;
+        use fdemon_core::timeline::TimelineThread;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        // First response: metadata for tid=1 (UI) + one event on tid=1.
+        // Second response: one event on tid=2 (Raster) — no metadata this time.
+        tokio::spawn(async move {
+            // First call
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({
+                    "type": "Timeline",
+                    "traceEvents": [
+                        { "ph": "M", "name": "thread_name", "pid": 1, "tid": 1,
+                          "args": { "name": "io.flutter.1.ui (1)" } },
+                        { "ph": "M", "name": "thread_name", "pid": 1, "tid": 2,
+                          "args": { "name": "io.flutter.1.raster (2)" } },
+                        { "ph": "X", "name": "Build", "cat": "Dart",
+                          "pid": 1, "tid": 1, "ts": 1000_u64, "dur": 100_u64 }
+                    ]
+                })));
+            }
+            // Second call — no metadata events; event on tid=2.
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({
+                    "type": "Timeline",
+                    "traceEvents": [
+                        { "ph": "X", "name": "Raster", "cat": "Embedder",
+                          "pid": 1, "tid": 2, "ts": 2000_u64, "dur": 200_u64 }
+                    ]
+                })));
+            }
+        });
+
+        let mut map = HashMap::new();
+
+        // First call populates map with tid→name entries.
+        let first = fetch_timeline_chunk(&handle, 0, 1_000, &mut map)
+            .await
+            .expect("first call should succeed");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].thread, TimelineThread::Ui);
+
+        // Second call: no metadata in response, but map carries over tid=2.
+        let second = fetch_timeline_chunk(&handle, 1_000, 1_000, &mut map)
+            .await
+            .expect("second call should succeed");
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            second[0].thread,
+            TimelineThread::Raster,
+            "raster thread must be classified correctly using map from first call"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_timeline_chunk_propagates_request_errors() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        // Responder sends back an Err, simulating a VM Service error.
+        tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Err(fdemon_core::error::Error::vm_service(
+                    "simulated VM service error",
+                )));
+            }
+        });
+
+        let mut map = HashMap::new();
+        let result = fetch_timeline_chunk(&handle, 0, 50_000, &mut map).await;
+        assert!(
+            result.is_err(),
+            "errors from the transport must be propagated"
+        );
     }
 }

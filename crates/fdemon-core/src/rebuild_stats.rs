@@ -216,16 +216,12 @@ pub fn parse_rebuilt_widgets_event(
     let start_time_micros = extension_data
         .get("startTime")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            Error::protocol("Flutter.RebuiltWidgets event missing 'startTime' field")
-        })?;
+        .ok_or_else(|| Error::protocol("Flutter.RebuiltWidgets event missing 'startTime' field"))?;
 
     let raw_events = extension_data
         .get("events")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            Error::protocol("Flutter.RebuiltWidgets event missing 'events' array")
-        })?;
+        .ok_or_else(|| Error::protocol("Flutter.RebuiltWidgets event missing 'events' array"))?;
 
     if raw_events.len() % 2 != 0 {
         return Err(Error::protocol(format!(
@@ -261,13 +257,14 @@ pub fn parse_rebuilt_widgets_event(
     }
 
     // `locations` is optional — only present when new IDs are introduced.
-    let new_locations = extension_data.get("locations").and_then(|v| v.as_object()).map(
-        |obj| {
+    let new_locations = extension_data
+        .get("locations")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
             obj.iter()
                 .map(|(file_uri, block)| (file_uri.clone(), block.clone()))
                 .collect::<HashMap<_, _>>()
-        },
-    );
+        });
 
     Ok(RebuildEventPayload {
         frame_number,

@@ -212,6 +212,28 @@ impl VmRequestHandle {
         }
     }
 
+    /// Create a `VmRequestHandle` wired to a live channel whose receiver is
+    /// returned to the caller.
+    ///
+    /// Intended for unit tests that need to intercept and respond to RPC
+    /// requests: the caller receives `cmd_rx` and can drive a fake responder
+    /// by reading [`ClientCommand::SendRequest`] messages from it.
+    ///
+    /// Unlike [`new_for_test`](Self::new_for_test), the receiver is **not**
+    /// immediately dropped, so `request()` calls will block until the caller
+    /// handles them (or the receiver is dropped).
+    #[cfg(test)]
+    pub(crate) fn new_with_test_channel() -> (Self, tokio::sync::mpsc::Receiver<ClientCommand>) {
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
+        let handle = Self {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::new(Mutex::new(None)),
+            ws_uri: String::new(),
+        };
+        (handle, cmd_rx)
+    }
+
     /// Peek at the current cached isolate ID without modifying it.
     ///
     /// Returns `None` if the cache is empty or if the lock cannot be
@@ -476,7 +498,7 @@ pub enum ConnectionState {
 // ---------------------------------------------------------------------------
 
 /// Internal messages sent from the public API to the background task.
-enum ClientCommand {
+pub(crate) enum ClientCommand {
     /// Send a JSON-RPC request and deliver the response to `response_tx`.
     SendRequest {
         method: String,

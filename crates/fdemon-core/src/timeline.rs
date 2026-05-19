@@ -110,10 +110,7 @@ pub fn parse_vm_timeline(
     let mut events = Vec::new();
 
     for raw in trace_events {
-        let ph = raw
-            .get("ph")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
+        let ph = raw.get("ph").and_then(|v| v.as_str()).unwrap_or("?");
 
         let tid = raw.get("tid").and_then(|v| v.as_i64()).unwrap_or(0);
 
@@ -139,14 +136,11 @@ pub fn parse_vm_timeline(
             .ok_or_else(|| Error::protocol("timeline event missing 'name' field"))?
             .to_owned();
 
-        let ts = raw
-            .get("ts")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| {
-                Error::protocol(format!(
-                    "timeline event '{name}' missing or invalid 'ts' field"
-                ))
-            })?;
+        let ts = raw.get("ts").and_then(|v| v.as_u64()).ok_or_else(|| {
+            Error::protocol(format!(
+                "timeline event '{name}' missing or invalid 'ts' field"
+            ))
+        })?;
 
         let category = raw
             .get("cat")
@@ -163,10 +157,7 @@ pub fn parse_vm_timeline(
         };
 
         // Classify thread via name lookup (accumulated from metadata events).
-        let thread_name = thread_name_map
-            .get(&tid)
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let thread_name = thread_name_map.get(&tid).map(|s| s.as_str()).unwrap_or("");
         let thread = classify_thread(thread_name);
 
         // Frame-number extraction: try both key names, handle string and integer forms.
@@ -413,11 +404,9 @@ mod tests {
             let response = json!({ "traceEvents": [event] });
             let events = parse_vm_timeline(&response, &mut map).expect("should parse");
             assert_eq!(
-                events[0].phase,
-                *expected_phase,
+                events[0].phase, *expected_phase,
                 "ph='{}' should map to {:?}",
-                ph_str,
-                expected_phase
+                ph_str, expected_phase
             );
         }
     }
@@ -459,9 +448,6 @@ mod tests {
     fn classify_thread_tester_special_case() {
         // The Flutter test runner's UI thread name contains ".ui" and should
         // classify as Ui, not be excluded.
-        assert_eq!(
-            classify_thread("io.flutter.test..ui"),
-            TimelineThread::Ui
-        );
+        assert_eq!(classify_thread("io.flutter.test..ui"), TimelineThread::Ui);
     }
 }
