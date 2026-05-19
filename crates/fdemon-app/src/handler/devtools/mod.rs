@@ -246,6 +246,11 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             None
         };
 
+        // Timeline polls at 1 Hz independently of `performance_refresh_ms`.
+        // Mirrors the dual-dispatch in
+        // `session_lifecycle::maybe_start_monitoring_for_selected_session`.
+        let timeline_poll_interval_ms = 1000_u64;
+
         return UpdateResult {
             message: followup_msg,
             action: Some(UpdateAction::StartPerformanceMonitoring {
@@ -255,7 +260,11 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                 allocation_profile_interval_ms,
                 mode,
             }),
-            extra_actions: Vec::new(),
+            extra_actions: vec![UpdateAction::StartTimelineMonitoring {
+                session_id,
+                handle: None, // hydrated by process.rs
+                poll_interval_ms: timeline_poll_interval_ms,
+            }],
         };
     }
 
