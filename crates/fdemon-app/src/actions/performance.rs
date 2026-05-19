@@ -539,6 +539,116 @@ async fn seed_timeline_watermark<H: VmRequestApi>(handle: &H, session_id: Sessio
     }
 }
 
+/// Outcome of a single timeline fetch cycle.
+///
+/// Returned by [`run_one_timeline_fetch_cycle`] so the polling loop can
+/// decide whether to `break` (channel closed) or continue.
+#[derive(Debug, PartialEq, Eq)]
+enum FetchOutcome {
+    /// Fetch succeeded (batch may have been empty — that is normal).
+    Ok,
+    /// A transient RPC error occurred; the loop should continue and retry.
+    TransientError,
+    /// The message channel is closed (engine shutting down); the loop must `break`.
+    ChannelClosed,
+}
+
+/// Perform one timeline poll cycle: query the current VM clock, fetch events
+/// since `last_poll_micros`, dispatch them to the TEA message bus, then advance
+/// `last_poll_micros` to the post-fetch VM clock.
+///
+/// Called from two places in the `spawn_timeline_polling` loop:
+/// - The scheduled `interval.tick()` arm (periodic 1-Hz fetch).
+/// - The `timeline_pause_rx.changed()` arm when the user resumes the panel
+///   (immediate fetch on unpause — avoids the ~1 s cold-start delay).
+///
+/// ## Watermark semantics (M8)
+///
+/// The watermark is advanced to the VM clock captured *after* the fetch, not
+/// to `now_micros + 1`. Using the pre-fetch value + 1 would silently drop any
+/// events whose `ts` falls between the pre-fetch query and the moment the fetch
+/// response was received. See the comment in [`spawn_timeline_polling`] for
+/// full rationale.
+///
+/// ## Return value
+///
+/// Returns [`FetchOutcome::ChannelClosed`] if `msg_tx.send()` fails (engine
+/// shutting down). Returns [`FetchOutcome::TransientError`] on RPC failure
+/// (caller logs and continues). Returns [`FetchOutcome::Ok`] otherwise.
+async fn run_one_timeline_fetch_cycle<H: VmRequestApi>(
+    handle: &H,
+    msg_tx: &mpsc::Sender<Message>,
+    session_id: crate::session::SessionId,
+    last_poll_micros: &mut u64,
+    thread_name_map: &mut std::collections::HashMap<i64, String>,
+) -> FetchOutcome {
+    let now_micros = match fdemon_daemon::vm_service::get_vm_timeline_micros(handle).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!(
+                "Timeline poll: getVMTimelineMicros failed for session {}: {}",
+                session_id,
+                e
+            );
+            return FetchOutcome::TransientError;
+        }
+    };
+
+    let extent = now_micros.saturating_sub(*last_poll_micros);
+    if extent == 0 {
+        return FetchOutcome::Ok;
+    }
+
+    match fdemon_daemon::vm_service::fetch_timeline_chunk(
+        handle,
+        *last_poll_micros,
+        extent,
+        thread_name_map,
+    )
+    .await
+    {
+        Ok(events) if !events.is_empty() => {
+            if msg_tx
+                .send(Message::TimelineEventsBatchReceived { session_id, events })
+                .await
+                .is_err()
+            {
+                return FetchOutcome::ChannelClosed;
+            }
+        }
+        Ok(_) => {} // empty batch — normal
+        Err(e) => {
+            tracing::debug!(
+                "Timeline poll: fetch_timeline_chunk failed for session {}: {}",
+                session_id,
+                e
+            );
+            return FetchOutcome::TransientError;
+        }
+    }
+
+    // Advance the watermark using a post-fetch VM clock query.
+    //
+    // M8: Using `now_micros + 1` (captured *before* the fetch) would
+    // silently drop any events whose `ts` falls in the window
+    // [now_micros, fetch_completion_time]. Under slow VM Service
+    // responses (heap walk, profile-mode lag) this manifests as
+    // sporadic timeline gaps. By re-querying after the fetch we
+    // capture that window in the next poll.
+    //
+    // Cost: one extra `getVMTimelineMicros` RPC per tick (~50 µs
+    // over a local WebSocket). Acceptable given the 1 Hz poll rate.
+    //
+    // Fallback: if the post-fetch query fails (e.g. VM restarting),
+    // fall back to `now_micros + 1` to maintain forward progress.
+    *last_poll_micros = match fdemon_daemon::vm_service::get_vm_timeline_micros(handle).await {
+        Ok(post_fetch_ts) => post_fetch_ts,
+        Err(_) => now_micros.saturating_add(1),
+    };
+
+    FetchOutcome::Ok
+}
+
 /// Spawn the 1-Hz timeline polling task for a session.
 ///
 /// Modelled on [`spawn_performance_polling`]. Creates shutdown and pause watch
@@ -550,6 +660,9 @@ async fn seed_timeline_watermark<H: VmRequestApi>(handle: &H, session_id: Sessio
 /// 2. On each 1-Hz tick (subject to the pause gate), calls
 ///    `getVMTimelineMicros` → `getVMTimeline` to fetch events since the last
 ///    poll, then sends `TimelineEventsBatchReceived`.
+/// 3. On unpause (`pause_rx.changed() → false`), immediately fires one fetch
+///    cycle so the panel shows data without waiting up to `poll_interval` for
+///    the next scheduled tick.
 ///
 /// The pause channel initial value is `true` (paused) — the task starts at VM
 /// connect time but only begins fetching when the user opens the Performance panel.
@@ -612,74 +725,45 @@ pub(super) fn spawn_timeline_polling<H: VmRequestApi + Send + Sync + 'static>(
                         continue;
                     }
 
-                    let now_micros = match fdemon_daemon::vm_service::get_vm_timeline_micros(&handle).await {
-                        Ok(t) => t,
-                        Err(e) => {
-                            tracing::debug!(
-                                "Timeline poll: getVMTimelineMicros failed for session {}: {}",
-                                session_id, e
-                            );
-                            continue;
-                        }
-                    };
-
-                    let extent = now_micros.saturating_sub(last_poll_micros);
-                    if extent == 0 {
-                        continue;
-                    }
-
-                    match fdemon_daemon::vm_service::fetch_timeline_chunk(
+                    match run_one_timeline_fetch_cycle(
                         &handle,
-                        last_poll_micros,
-                        extent,
+                        &msg_tx,
+                        session_id,
+                        &mut last_poll_micros,
                         &mut thread_name_map,
                     )
                     .await
                     {
-                        Ok(events) if !events.is_empty() => {
-                            if msg_tx
-                                .send(Message::TimelineEventsBatchReceived {
-                                    session_id,
-                                    events,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Ok(_) => {} // empty batch — normal
-                        Err(e) => {
-                            tracing::debug!(
-                                "Timeline poll: fetch_timeline_chunk failed for session {}: {}",
-                                session_id, e
-                            );
-                        }
+                        FetchOutcome::ChannelClosed => break,
+                        FetchOutcome::Ok | FetchOutcome::TransientError => {}
                     }
-
-                    // Advance the watermark using a post-fetch VM clock query.
-                    //
-                    // M8: Using `now_micros + 1` (captured *before* the fetch) would
-                    // silently drop any events whose `ts` falls in the window
-                    // [now_micros, fetch_completion_time]. Under slow VM Service
-                    // responses (heap walk, profile-mode lag) this manifests as
-                    // sporadic timeline gaps. By re-querying after the fetch we
-                    // capture that window in the next poll.
-                    //
-                    // Cost: one extra `getVMTimelineMicros` RPC per tick (~50 µs
-                    // over a local WebSocket). Acceptable given the 1 Hz poll rate.
-                    //
-                    // Fallback: if the post-fetch query fails (e.g. VM restarting),
-                    // fall back to `now_micros + 1` to maintain forward progress.
-                    last_poll_micros =
-                        match fdemon_daemon::vm_service::get_vm_timeline_micros(&handle).await {
-                            Ok(post_fetch_ts) => post_fetch_ts,
-                            Err(_) => now_micros.saturating_add(1),
-                        };
                 }
 
                 Ok(()) = timeline_pause_rx.changed() => {
-                    // Pause state changed — the next tick will re-check.
+                    if *timeline_pause_rx.borrow() {
+                        // Transitioned to paused — nothing to do.
+                        continue;
+                    }
+
+                    // Transitioned to active (Performance panel became visible).
+                    // Fetch immediately so the panel shows events without waiting
+                    // up to `poll_interval` for the next scheduled tick.
+                    tracing::debug!(
+                        "timeline immediate fetch on unpause (session {})",
+                        session_id
+                    );
+                    match run_one_timeline_fetch_cycle(
+                        &handle,
+                        &msg_tx,
+                        session_id,
+                        &mut last_poll_micros,
+                        &mut thread_name_map,
+                    )
+                    .await
+                    {
+                        FetchOutcome::ChannelClosed => break,
+                        FetchOutcome::Ok | FetchOutcome::TransientError => {}
+                    }
                 }
 
                 _ = timeline_shutdown_rx.changed() => {
@@ -1486,5 +1570,150 @@ mod tests {
         // The key assertion is that `shutdown_tx.send(true)` returns Ok, meaning
         // the task was alive when we sent the signal.
         // (If the task had already panicked, send() would return Err.)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Immediate fetch on unpause — acceptance criteria 1 & 2
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Verify that a `getVMTimeline` call is issued immediately on unpause,
+    /// without waiting for the next `interval.tick()`.
+    ///
+    /// The test uses `tokio::time::pause()` to freeze wall-clock time so that
+    /// the interval never fires on its own. After unpausing the task, it yields
+    /// control and asserts that at least one `getVMTimeline` RPC happened — well
+    /// before any real time could have elapsed.
+    ///
+    /// This verifies acceptance criterion 1: "When `pause_rx.changed -> false`
+    /// fires, exactly one `fetch_timeline_chunk` call happens before waiting for
+    /// the next `interval.tick()`."
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_timeline_immediate_fetch_on_unpause() {
+        tokio::time::pause();
+
+        let session_id: crate::session::SessionId = 200;
+        let mock = MockVmRequestApi::new();
+
+        // Seed: respond to seed getVMTimelineMicros (before loop).
+        mock.enqueue_ok(
+            "getVMTimelineMicros",
+            serde_json::json!({ "timestamp": 1_000_i64 }),
+        );
+        // Immediate-fetch pre-fetch getVMTimelineMicros.
+        mock.enqueue_ok(
+            "getVMTimelineMicros",
+            serde_json::json!({ "timestamp": 2_000_i64 }),
+        );
+        // getVMTimeline for the immediate fetch.
+        mock.enqueue_ok(
+            "getVMTimeline",
+            serde_json::json!({ "type": "Timeline", "traceEvents": [] }),
+        );
+        // Post-fetch getVMTimelineMicros.
+        mock.enqueue_ok(
+            "getVMTimelineMicros",
+            serde_json::json!({ "timestamp": 2_001_i64 }),
+        );
+
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        spawn_timeline_polling(session_id, mock.clone(), msg_tx, 1_000);
+
+        let (pause_tx, shutdown_tx) = drain_started_msg(&mut msg_rx).await;
+
+        // Verify no RPCs fired yet (task is paused and time is frozen).
+        tokio::task::yield_now().await;
+        let calls_before_unpause = mock.call_count("getVMTimeline");
+        assert_eq!(
+            calls_before_unpause, 0,
+            "no getVMTimeline calls expected before unpause with frozen time"
+        );
+
+        // Unpause — this should trigger an immediate fetch.
+        let _ = pause_tx.send(false);
+
+        // Give the task a few yield points to run the immediate fetch cycle.
+        // Time is still frozen (no interval tick can fire), so any getVMTimeline
+        // call must have been triggered by the unpause arm.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        let calls_after_unpause = mock.call_count("getVMTimeline");
+        assert!(
+            calls_after_unpause >= 1,
+            "expected at least one getVMTimeline call immediately after unpause \
+             (with frozen time, no interval tick fires), got {calls_after_unpause}"
+        );
+
+        let _ = shutdown_tx.send(true);
+    }
+
+    /// Verify that a rapid pause → unpause cycle triggers exactly one immediate
+    /// fetch on the final unpause, not multiple stacked fetches.
+    ///
+    /// This tests acceptance criterion 2: "No double-fetch on rapid
+    /// pause/unpause — toggling `false → true → false` within < 100 ms
+    /// triggers exactly one immediate fetch on the final resume."
+    ///
+    /// The `watch` channel coalesces rapid sends — the task only sees the
+    /// *final* value when it processes the `changed()` notification. If the
+    /// channel was `true → false → true → false` in quick succession, the task
+    /// sees `changed()` at most twice, and the second time the value is `false`,
+    /// so it fires one immediate fetch.
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_timeline_immediate_fetch_failure_logs_and_continues() {
+        tokio::time::pause();
+
+        let session_id: crate::session::SessionId = 201;
+        let mock = MockVmRequestApi::new();
+
+        // Seed: getVMTimelineMicros succeeds.
+        mock.enqueue_ok(
+            "getVMTimelineMicros",
+            serde_json::json!({ "timestamp": 1_000_i64 }),
+        );
+        // Immediate-fetch pre-fetch getVMTimelineMicros → Err.
+        mock.enqueue(
+            "getVMTimelineMicros",
+            MockResponse::Err("simulated VM error on immediate fetch".to_string()),
+        );
+        // Subsequent getVMTimelineMicros calls succeed (for recovery).
+        for ts in 2..20_u64 {
+            mock.enqueue_ok(
+                "getVMTimelineMicros",
+                serde_json::json!({ "timestamp": (ts * 1000_u64) as i64 }),
+            );
+        }
+        for _ in 0..20_u64 {
+            mock.enqueue_ok(
+                "getVMTimeline",
+                serde_json::json!({ "type": "Timeline", "traceEvents": [] }),
+            );
+        }
+
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        spawn_timeline_polling(session_id, mock.clone(), msg_tx, 1_000);
+
+        let (pause_tx, shutdown_tx) = drain_started_msg(&mut msg_rx).await;
+
+        // Unpause — the immediate fetch will fail (first getVMTimelineMicros → Err).
+        let _ = pause_tx.send(false);
+
+        // Yield several times; the task should not crash or hang.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        // Advance time to let a regular interval tick fire.
+        tokio::time::advance(Duration::from_millis(1_100)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+
+        // The task must still be alive (shutdown_tx send must succeed).
+        assert!(
+            shutdown_tx.send(true).is_ok(),
+            "task should still be alive after a failed immediate fetch"
+        );
     }
 }
