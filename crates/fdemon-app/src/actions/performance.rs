@@ -608,6 +608,14 @@ async fn run_one_timeline_fetch_cycle<H: VmRequestApi>(
     .await
     {
         Ok((events, metadata)) if !events.is_empty() || !metadata.is_empty() => {
+            tracing::info!(
+                "Timeline poll: received {} events, {} metadata for session {} (window [{}, +{}] µs)",
+                events.len(),
+                metadata.len(),
+                session_id,
+                *last_poll_micros,
+                extent
+            );
             if msg_tx
                 .send(Message::TimelineEventsBatchReceived {
                     session_id,
@@ -620,7 +628,14 @@ async fn run_one_timeline_fetch_cycle<H: VmRequestApi>(
                 return FetchOutcome::ChannelClosed;
             }
         }
-        Ok(_) => {} // empty batch — normal
+        Ok(_) => {
+            tracing::info!(
+                "Timeline poll: empty batch for session {} (window [{}, +{}] µs)",
+                session_id,
+                *last_poll_micros,
+                extent
+            );
+        }
         Err(e) => {
             tracing::debug!(
                 "Timeline poll: fetch_timeline_chunk_with_metadata failed for session {}: {}",
@@ -717,6 +732,11 @@ pub(super) fn spawn_timeline_polling<H: VmRequestApi + Send + Sync + 'static>(
         // rationale — a zero seed would cause the first fetch to retrieve the
         // entire VM event buffer, potentially thousands of events.
         let mut last_poll_micros: u64 = seed_timeline_watermark(&handle, session_id).await;
+        tracing::info!(
+            "Timeline polling task started (session {}, seed watermark {} µs)",
+            session_id,
+            last_poll_micros
+        );
 
         let mut thread_name_map: std::collections::HashMap<i64, String> =
             std::collections::HashMap::new();

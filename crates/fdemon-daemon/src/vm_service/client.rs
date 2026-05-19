@@ -841,15 +841,19 @@ impl VmServiceClient {
         // array and the Timeline Events tab stays on "Waiting for timeline events…".
         // Non-fatal: older Dart VMs that do not support setVMTimelineFlags should
         // still run fdemon without timeline data rather than failing to connect.
-        if let Err(e) = super::timeline::set_vm_timeline_flags(
+        match super::timeline::set_vm_timeline_flags(
             &self.handle,
             super::timeline::DEFAULT_RECORDED_STREAMS,
         )
         .await
         {
-            warn!(
+            Ok(()) => info!(
+                "VM Service: setVMTimelineFlags enabled streams {:?}",
+                super::timeline::DEFAULT_RECORDED_STREAMS
+            ),
+            Err(e) => warn!(
                 "VM Service: setVMTimelineFlags failed (timeline events may be unavailable): {e}"
-            );
+            ),
         }
 
         errors
