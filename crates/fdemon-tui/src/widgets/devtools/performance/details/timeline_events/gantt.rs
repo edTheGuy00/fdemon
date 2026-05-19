@@ -392,6 +392,7 @@ mod tests {
             dur: Some(dur),
             phase: TimelinePhase::Complete,
             thread,
+            frame_number: None,
             children: vec![],
         }
     }
@@ -856,6 +857,7 @@ mod tests {
             dur: Some(200_000),
             phase: TimelinePhase::Complete,
             thread: TimelineThread::Ui,
+            frame_number: None,
             children: vec![],
         };
         let child = TimelineNode {
@@ -865,6 +867,7 @@ mod tests {
             dur: Some(600_000),
             phase: TimelinePhase::Complete,
             thread: TimelineThread::Ui,
+            frame_number: None,
             children: vec![grandchild],
         };
         let root = TimelineNode {
@@ -874,6 +877,7 @@ mod tests {
             dur: Some(800_000),
             phase: TimelinePhase::Complete,
             thread: TimelineThread::Ui,
+            frame_number: None,
             children: vec![child],
         };
 

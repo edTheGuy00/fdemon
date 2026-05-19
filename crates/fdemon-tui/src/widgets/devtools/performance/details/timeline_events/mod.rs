@@ -161,6 +161,7 @@ mod tests {
             dur: Some(dur),
             phase: TimelinePhase::Complete,
             thread,
+            frame_number: None,
             children: vec![],
         }
     }

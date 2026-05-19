@@ -110,6 +110,11 @@ pub struct TimelineNode {
     pub phase: TimelinePhase,
     /// Classified thread.
     pub thread: TimelineThread,
+    /// Frame number from the originating event's `args.frame_number` or
+    /// `args.flutterFrameNumber`. Used to correlate Gantt bars with the
+    /// frame selected in the Frame Chart above the timeline view.
+    /// `None` when the originating event carried no frame-number annotation.
+    pub frame_number: Option<u64>,
     /// Child nodes whose intervals are fully contained within this node's
     /// interval, ordered by `(ts asc, dur desc)`.
     pub children: Vec<TimelineNode>,
@@ -180,12 +185,13 @@ const MAX_BE_STACK_DEPTH: usize = 256;
 /// The input slice must be sorted by `ts` ascending. Callers (e.g.,
 /// [`build_tracks`]) are responsible for sorting before calling this function.
 pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
-    // Stack entries: (name, ts, category, phase, thread) for unmatched Begin events.
+    // Stack entries: (name, ts, category, phase, thread, frame_number) for unmatched Begin events.
     struct StackEntry {
         name: String,
         category: String,
         ts: i64,
         thread: TimelineThread,
+        frame_number: Option<u64>,
     }
 
     let mut stack: Vec<StackEntry> = Vec::new();
@@ -201,6 +207,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
                         category: event.category.clone(),
                         ts,
                         thread: event.thread,
+                        frame_number: event.frame_number,
                     });
                 } else {
                     debug!(
@@ -219,6 +226,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
                         dur: None,
                         phase: TimelinePhase::Begin,
                         thread: event.thread,
+                        frame_number: event.frame_number,
                         children: vec![],
                     });
                 }
@@ -246,6 +254,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
                         dur: Some(dur),
                         phase: TimelinePhase::Begin,
                         thread: top.thread,
+                        frame_number: top.frame_number,
                         children: vec![],
                     });
                 } else {
@@ -265,6 +274,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
                         dur: None,
                         phase: TimelinePhase::End,
                         thread: event.thread,
+                        frame_number: event.frame_number,
                         children: vec![],
                     });
                 }
@@ -283,6 +293,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
                     dur,
                     phase: TimelinePhase::Complete,
                     thread: event.thread,
+                    frame_number: event.frame_number,
                     children: vec![],
                 });
             }
@@ -299,6 +310,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
                     dur: None,
                     phase: TimelinePhase::Instant,
                     thread: event.thread,
+                    frame_number: event.frame_number,
                     children: vec![],
                 });
             }
@@ -326,6 +338,7 @@ pub fn pair_be_events(events: &[TimelineEvent]) -> Vec<TimelineNode> {
             dur: None,
             phase: TimelinePhase::Begin,
             thread: entry.thread,
+            frame_number: entry.frame_number,
             children: vec![],
         });
     }
@@ -1305,6 +1318,7 @@ mod tests {
                 dur: Some(8000),
                 phase: TimelinePhase::Complete,
                 thread: TimelineThread::Ui,
+                frame_number: None,
                 children: vec![TimelineNode {
                     name: "Layout".to_owned(),
                     category: None,
@@ -1312,6 +1326,7 @@ mod tests {
                     dur: Some(3000),
                     phase: TimelinePhase::Begin,
                     thread: TimelineThread::Ui,
+                    frame_number: None,
                     children: vec![],
                 }],
             }],
@@ -1332,11 +1347,45 @@ mod tests {
             dur: None,
             phase: TimelinePhase::Instant,
             thread: TimelineThread::Other,
+            frame_number: None,
             children: vec![],
         };
 
         let json = serde_json::to_string(&node).expect("serialize failed");
         let restored: TimelineNode = serde_json::from_str(&json).expect("deserialize failed");
         assert_eq!(restored, node);
+    }
+
+    /// AC1 new test: Complete event with args.frame_number round-trips through
+    /// parse_vm_timeline_with_metadata → pair_be_events →  TimelineNode.frame_number.
+    #[test]
+    fn complete_event_with_frame_number_propagates_to_timeline_node() {
+        let mut map = HashMap::new();
+        let response = json!({
+            "traceEvents": [
+                make_thread_metadata(1, "io.flutter.1.ui (1)"),
+                make_complete_event(
+                    "Frame",
+                    1,
+                    1_000_000,
+                    8_000,
+                    Some(json!({ "frame_number": 42 }))
+                )
+            ]
+        });
+
+        let (events, _metadata) =
+            parse_vm_timeline_with_metadata(&response, &mut map).expect("should parse");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].frame_number, Some(42), "TimelineEvent should carry frame_number");
+
+        // Run pair_be_events — the single Complete event should produce one node.
+        let nodes = pair_be_events(&events);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].frame_number,
+            Some(42),
+            "TimelineNode.frame_number should equal Some(42) after pair_be_events"
+        );
     }
 }

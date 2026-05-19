@@ -124,6 +124,7 @@ mod tests {
                 dur: Some(dur),
                 phase: TimelinePhase::Complete,
                 thread: TimelineThread::Ui,
+                frame_number: None,
                 children: vec![],
             }],
         }
