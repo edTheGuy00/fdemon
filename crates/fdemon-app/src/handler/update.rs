@@ -1479,6 +1479,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .unwrap_or(crate::config::FlutterMode::Debug);
             let auto_repaint_rainbow = state.settings.devtools.auto_repaint_rainbow;
             let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
+            let auto_enable_rebuild_tracking = state.settings.devtools.auto_enable_rebuild_tracking;
 
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Clean up any existing performance task before spawning a new one.
@@ -1575,7 +1576,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
 
-            // Two things must happen on VmServiceConnected:
+            // Three things must happen on VmServiceConnected:
             //   (a) Start performance monitoring — but only when DevTools is
             //       already active. In Normal mode the monitoring task is
             //       not spawned (zero overhead until DevTools is opened);
@@ -1586,16 +1587,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             //       delayed event ordering). Must run in *both* UI modes —
             //       a DevTools-first user (DevTools opened before VM
             //       connected) would otherwise never see the fallback fire.
+            //   (c) Auto-enable rebuild tracking if `auto_enable_rebuild_tracking`
+            //       is set. This fires on first connection only (rebuild_stats_enabled
+            //       is false after the PerformanceState reset above). The hot-restart
+            //       re-enable in `SessionRestartCompleted` is independent and fires
+            //       at a different lifecycle point, so there is no race.
             //
-            // `UpdateResult` has a single action slot, so we route the
-            // fallback through a `TriggerDevToolsServeFallback` follow-up
-            // message that chains the original `follow_up_msg` as its
-            // continuation. The follow-up's handler is idempotent (no-op
-            // when an endpoint is already set or a previous dispatch is in
-            // flight), so unconditional queuing is safe.
+            // `UpdateResult` has a primary action slot and extra_actions. The
+            // fallback is routed through a `TriggerDevToolsServeFallback` follow-up
+            // message; `perf_action` is the primary action; and the auto-enable
+            // rebuild tracking action (if needed) goes into `extra_actions`.
             //
-            // process.rs hydrates `StartPerformanceMonitoring.handle` with
-            // the VmRequestHandle from the session before dispatch.
+            // process.rs hydrates `StartPerformanceMonitoring.handle` and
+            // `ToggleProfileWidgetBuilds.vm_handle` with the VmRequestHandle
+            // from the session before dispatch.
             let perf_action = if state.ui_mode == UiMode::DevTools {
                 Some(UpdateAction::StartPerformanceMonitoring {
                     session_id,
@@ -1608,13 +1613,39 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 None
             };
 
+            // Auto-enable rebuild tracking: gate on setting AND the session's
+            // current rebuild_stats_enabled being false. After the reset above,
+            // rebuild_stats_enabled is always false, so this is effectively
+            // gated solely on the config flag — but checking the field keeps
+            // the logic idempotent if the reset is ever removed or reordered.
+            let rebuild_stats_currently_enabled = state
+                .session_manager
+                .get(session_id)
+                .map(|h| h.session.performance.rebuild_stats_enabled)
+                .unwrap_or(false);
+            let auto_enable_action =
+                if auto_enable_rebuild_tracking && !rebuild_stats_currently_enabled {
+                    Some(UpdateAction::ToggleProfileWidgetBuilds {
+                        session_id,
+                        enabled: true,
+                        vm_handle: None, // hydrated by process.rs
+                    })
+                } else {
+                    None
+                };
+
+            let mut extra_actions = Vec::new();
+            if let Some(action) = auto_enable_action {
+                extra_actions.push(action);
+            }
+
             UpdateResult {
                 message: Some(Message::TriggerDevToolsServeFallback {
                     session_id,
                     continuation: follow_up_msg.map(Box::new),
                 }),
                 action: perf_action,
-                extra_actions: Vec::new(),
+                extra_actions,
             }
         }
 

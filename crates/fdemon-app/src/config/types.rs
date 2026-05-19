@@ -425,8 +425,14 @@ pub struct DevToolsSettings {
     pub hide_implementation_widgets: bool,
 
     /// Phase 3: Whether to enable widget rebuild tracking automatically on
-    /// session start. Defaults to `false` because the underlying extension
+    /// VM Service connect. Defaults to `false` because the underlying extension
     /// adds non-trivial overhead in dev builds.
+    ///
+    /// When `true`, fdemon queues `ext.flutter.profileWidgetBuilds = true` on
+    /// `VmServiceConnected`. Hot-restart preservation (re-enable if previously
+    /// on) is independent of this setting and fires on `SessionRestartCompleted`
+    /// instead; the hot-restart re-enable always takes precedence over this
+    /// auto-enable since they fire at different lifecycle points.
     #[serde(default = "default_auto_enable_rebuild_tracking")]
     pub auto_enable_rebuild_tracking: bool,
 
