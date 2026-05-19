@@ -73,7 +73,7 @@ const MIN_DETAILS_HEIGHT: u16 = 8;
 pub(super) const MIN_PHASE_BAR_WIDTH: u16 = 40;
 
 /// Percentage of the dual-pane inner area allocated to the Frame Chart.
-const FRAME_CHART_PCT: u16 = 55;
+const FRAME_CHART_PCT: u16 = 35;
 
 // ── Focus / border styling constants ─────────────────────────────────────────
 

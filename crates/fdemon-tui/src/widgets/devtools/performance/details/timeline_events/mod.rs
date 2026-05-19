@@ -51,8 +51,11 @@ pub(super) const MIN_BAR_WIDTH: u16 = 1;
 pub(super) const TIME_AXIS_HEIGHT: u16 = 1;
 
 /// Height of a single thread row's content area (in terminal lines).
-/// Allows up to MAX_DEPTH stacked child bars + 1 root row = 6 lines.
-pub(super) const THREAD_ROW_HEIGHT: u16 = 6;
+/// 2 lines: 1 for the depth-stacked bars (children overlay onto the same
+/// line as their root, since deep nesting is rare in practice) + 1 spacer
+/// to separate adjacent thread rows visually. Keep tight so more threads
+/// fit on screen.
+pub(super) const THREAD_ROW_HEIGHT: u16 = 2;
 
 /// Filter strip height (1 row).
 const FILTER_STRIP_HEIGHT: u16 = 1;
