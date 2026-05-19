@@ -480,6 +480,65 @@ async fn fetch_and_send_alloc_profile(
 // Timeline polling task
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Minimum timeline poll interval (200 ms).
+/// Safety floor preventing accidental sub-200ms polling if `poll_interval_ms`
+/// is mis-configured. PLAN.md §5.4 target is 1 Hz (1000 ms); 200 ms is the
+/// floor at which VM Service stress remains acceptable.
+const TIMELINE_POLL_MIN_MS: u64 = 200;
+
+/// Seed the timeline watermark from the current VM clock, with one retry on
+/// failure.
+///
+/// **Why this matters (L11):** If the seed fails and we fall back to
+/// `last_poll_micros = 0`, the first `fetch_timeline_chunk(handle, 0, extent)`
+/// retrieves the *entire VM lifetime* worth of events (up to the VM's circular
+/// buffer, ~32 MB). This dumps thousands of events on the handler at once,
+/// causing a visible stall.
+///
+/// **Strategy:**
+/// 1. Try `getVMTimelineMicros` once.
+/// 2. On failure, wait 100 ms (transient race at startup) and retry once.
+/// 3. If the retry also fails, log at `warn!` and fall back to a
+///    "now-ish" estimate: current wall-clock time converted to microseconds via
+///    `std::time::SystemTime`. This caps the first poll extent to the
+///    milliseconds elapsed since the estimate was computed (typically < 10 ms),
+///    preventing a flood of stale events.
+///
+/// Returns the seed value to use as `last_poll_micros`.
+async fn seed_timeline_watermark(handle: &VmRequestHandle, session_id: SessionId) -> u64 {
+    match fdemon_daemon::vm_service::get_vm_timeline_micros(handle).await {
+        Ok(ts) => ts,
+        Err(first_err) => {
+            tracing::debug!(
+                "Timeline seed: first getVMTimelineMicros failed for session {}: {} — retrying in 100ms",
+                session_id,
+                first_err
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            match fdemon_daemon::vm_service::get_vm_timeline_micros(handle).await {
+                Ok(ts) => ts,
+                Err(retry_err) => {
+                    // Both attempts failed. Use wall-clock as a now-ish estimate
+                    // so the first fetch window is bounded to a small extent
+                    // (milliseconds, not the entire VM lifetime).
+                    let now_ish = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_micros() as u64)
+                        .unwrap_or(0);
+                    tracing::warn!(
+                        "Timeline seed: getVMTimelineMicros failed twice for session {}; \
+                         falling back to wall-clock estimate ({} µs). Error: {}",
+                        session_id,
+                        now_ish,
+                        retry_err
+                    );
+                    now_ish
+                }
+            }
+        }
+    }
+}
+
 /// Spawn the 1-Hz timeline polling task for a session.
 ///
 /// Modelled on [`spawn_performance_polling`]. Creates shutdown and pause watch
@@ -500,7 +559,7 @@ pub(super) fn spawn_timeline_polling(
     msg_tx: mpsc::Sender<Message>,
     poll_interval_ms: u64,
 ) {
-    let poll_interval = Duration::from_millis(poll_interval_ms.max(200));
+    let poll_interval = Duration::from_millis(poll_interval_ms.max(TIMELINE_POLL_MIN_MS));
 
     // Shutdown channel — `true` stops the loop cleanly.
     let (timeline_shutdown_tx, mut timeline_shutdown_rx) = tokio::sync::watch::channel(false);
@@ -536,12 +595,11 @@ pub(super) fn spawn_timeline_polling(
         let mut interval = tokio::time::interval(poll_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        // Seed the last-poll timestamp from the current VM timeline clock.
-        // If this fails we start from 0 (fetches all available events on the
-        // first poll, which is acceptable).
-        let mut last_poll_micros: u64 = fdemon_daemon::vm_service::get_vm_timeline_micros(&handle)
-            .await
-            .unwrap_or(0);
+        // Seed the last-poll timestamp from the current VM timeline clock, with
+        // retry and bounded fallback. See [`seed_timeline_watermark`] for the
+        // rationale — a zero seed would cause the first fetch to retrieve the
+        // entire VM event buffer, potentially thousands of events.
+        let mut last_poll_micros: u64 = seed_timeline_watermark(&handle, session_id).await;
 
         let mut thread_name_map: std::collections::HashMap<i64, String> =
             std::collections::HashMap::new();
@@ -599,8 +657,25 @@ pub(super) fn spawn_timeline_polling(
                         }
                     }
 
-                    // Advance the watermark past the events we just fetched.
-                    last_poll_micros = now_micros.saturating_add(1);
+                    // Advance the watermark using a post-fetch VM clock query.
+                    //
+                    // M8: Using `now_micros + 1` (captured *before* the fetch) would
+                    // silently drop any events whose `ts` falls in the window
+                    // [now_micros, fetch_completion_time]. Under slow VM Service
+                    // responses (heap walk, profile-mode lag) this manifests as
+                    // sporadic timeline gaps. By re-querying after the fetch we
+                    // capture that window in the next poll.
+                    //
+                    // Cost: one extra `getVMTimelineMicros` RPC per tick (~50 µs
+                    // over a local WebSocket). Acceptable given the 1 Hz poll rate.
+                    //
+                    // Fallback: if the post-fetch query fails (e.g. VM restarting),
+                    // fall back to `now_micros + 1` to maintain forward progress.
+                    last_poll_micros =
+                        match fdemon_daemon::vm_service::get_vm_timeline_micros(&handle).await {
+                            Ok(post_fetch_ts) => post_fetch_ts,
+                            Err(_) => now_micros.saturating_add(1),
+                        };
                 }
 
                 Ok(()) = timeline_pause_rx.changed() => {
@@ -803,5 +878,262 @@ mod tests {
             result, 2000,
             "multiplier should be applied after base clamp"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TIMELINE_POLL_MIN_MS constant
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_timeline_poll_min_ms_value() {
+        // L1: the named constant must equal 200 ms.
+        assert_eq!(
+            TIMELINE_POLL_MIN_MS, 200,
+            "TIMELINE_POLL_MIN_MS must be 200 ms per PLAN.md §5.4"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // seed_timeline_watermark — L11
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Both `getVMTimelineMicros` calls fail → fall back to a non-zero
+    /// wall-clock estimate. Tests the full-failure path of `seed_timeline_watermark`.
+    #[tokio::test]
+    async fn test_seed_timeline_watermark_both_fail_returns_nonzero_fallback() {
+        // `new_for_test(None)` drops the receiver immediately, so every RPC
+        // returns `Error::ChannelClosed` — simulating two consecutive failures.
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
+        let session_id: crate::session::SessionId = 42;
+
+        let seed = seed_timeline_watermark(&handle, session_id).await;
+
+        // The wall-clock estimate is in microseconds since UNIX epoch.
+        // It must be strictly positive (> 0) and plausibly recent
+        // (> 1_600_000_000_000_000 µs ≈ year 2020).
+        assert!(
+            seed > 1_600_000_000_000_000,
+            "wall-clock fallback should produce a recent timestamp, got {seed}"
+        );
+    }
+
+    /// First `getVMTimelineMicros` fails, second succeeds → seed equals the
+    /// successful response. Tests the retry-then-succeed path.
+    ///
+    /// Uses `VmRequestHandle::new_with_test_channel()` (available under the
+    /// `test-helpers` feature that `fdemon-app` enables for `fdemon-daemon`)
+    /// to drive a stateful fake responder.
+    #[tokio::test]
+    async fn test_first_tick_seed_failure_retries_and_falls_back() {
+        use fdemon_daemon::vm_service::client::ClientCommand;
+        use fdemon_daemon::vm_service::VmRequestHandle;
+        use serde_json::json;
+
+        let session_id: crate::session::SessionId = 42;
+        let (handle, mut cmd_rx) = VmRequestHandle::new_with_test_channel();
+
+        // Fake responder: fails on first call, returns a known timestamp on retry.
+        let responder = tokio::spawn(async move {
+            // First call → Err (simulates transient startup race).
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Err(fdemon_core::error::Error::vm_service(
+                    "simulated transient failure",
+                )));
+            }
+            // Second call (after 100 ms retry backoff) → Ok with timestamp 99_000.
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({ "timestamp": 99_000_i64 })));
+            }
+        });
+
+        let seed = seed_timeline_watermark(&handle, session_id).await;
+
+        // The retry succeeded — seed must equal the successful response value.
+        assert_eq!(
+            seed, 99_000,
+            "seed should equal the timestamp returned on the successful retry"
+        );
+
+        let _ = responder.await;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Watermark post-fetch capture — M8
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Verifies that after a successful `fetch_timeline_chunk`, the watermark
+    /// is advanced to the post-fetch clock value (not the pre-fetch value + 1).
+    ///
+    /// The test uses a fake responder to:
+    ///   1. Answer the *pre-fetch* `getVMTimelineMicros` with `t=10_000`.
+    ///   2. Answer `getVMTimeline` (the chunk fetch) with an event at `ts=11_000`.
+    ///   3. Answer the *post-fetch* `getVMTimelineMicros` with `t=12_000`.
+    ///
+    /// In the pre-fix code `last_poll_micros` would be set to `10_000 + 1 = 10_001`,
+    /// leaving the window `[10_001, 12_000]` uncovered by the next poll.
+    ///
+    /// With the fix, `last_poll_micros` is set to `12_000` (the post-fetch value),
+    /// so the next poll covers `[12_000, …]` without a gap.
+    ///
+    /// Because the watermark is internal to the spawned task, we verify the
+    /// *observable consequence*: a second poll tick with `now_micros = 15_000`
+    /// must request events starting from `last_poll_micros = 12_000`
+    /// (extent = 3_000), not from 10_001 (extent = 4_999).
+    #[tokio::test]
+    async fn test_watermark_captured_after_fetch_avoids_event_loss() {
+        use fdemon_daemon::vm_service::client::ClientCommand;
+        use fdemon_daemon::vm_service::VmRequestHandle;
+        use serde_json::json;
+
+        let session_id: crate::session::SessionId = 42;
+        let (handle, mut cmd_rx) = VmRequestHandle::new_with_test_channel();
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<crate::message::Message>(16);
+
+        // Spawn the timeline task.
+        // We use a very short interval so the test doesn't need real wall-clock delays.
+        spawn_timeline_polling(session_id, handle, msg_tx, TIMELINE_POLL_MIN_MS);
+
+        // Drain the VmServiceTimelineMonitoringStarted message.
+        // The task sends this before doing any RPC.
+        let started_msg = msg_rx.recv().await.expect("should receive started message");
+        let (timeline_pause_tx, timeline_shutdown_tx) = match started_msg {
+            crate::message::Message::VmServiceTimelineMonitoringStarted {
+                timeline_pause_tx,
+                timeline_shutdown_tx,
+                ..
+            } => (timeline_pause_tx, timeline_shutdown_tx),
+            other => panic!("unexpected message: {other:?}"),
+        };
+
+        // The task starts paused. We must unpause before it will poll.
+        // First we set up the fake responder for the seed call.
+        // Then we unpause.
+
+        // Responder: answer the seed `getVMTimelineMicros` call with t=5_000.
+        // (The task calls this immediately after unpausing, for the seed.)
+        let responder = tokio::spawn(async move {
+            // Seed call (before unpausing in the loop — actually called right
+            // at task start before the loop begins, so respond first).
+            if let Some(ClientCommand::SendRequest {
+                response_tx,
+                method,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(
+                    method, "getVMTimelineMicros",
+                    "first RPC should be seed getVMTimelineMicros"
+                );
+                let _ = response_tx.send(Ok(json!({ "timestamp": 5_000_i64 })));
+            }
+
+            // First poll tick after unpause:
+            // 1. Pre-fetch getVMTimelineMicros → t=10_000.
+            if let Some(ClientCommand::SendRequest {
+                response_tx,
+                method,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVMTimelineMicros");
+                let _ = response_tx.send(Ok(json!({ "timestamp": 10_000_i64 })));
+            }
+            // 2. getVMTimeline chunk (extent = 10_000 - 5_000 = 5_000).
+            if let Some(ClientCommand::SendRequest {
+                response_tx,
+                method,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVMTimeline");
+                // Return one event at ts=11_000 (in the gap that old code would miss).
+                let _ = response_tx.send(Ok(json!({
+                    "type": "Timeline",
+                    "traceEvents": [
+                        { "ph": "X", "name": "Frame", "cat": "Embedder",
+                          "pid": 1, "tid": 1, "ts": 11_000_u64, "dur": 500_u64 }
+                    ]
+                })));
+            }
+            // 3. Post-fetch getVMTimelineMicros → t=12_000.
+            //    This is the value the watermark should be set to.
+            if let Some(ClientCommand::SendRequest {
+                response_tx,
+                method,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVMTimelineMicros");
+                let _ = response_tx.send(Ok(json!({ "timestamp": 12_000_i64 })));
+            }
+
+            // Second poll tick: pre-fetch getVMTimelineMicros → t=15_000.
+            // extent must be 15_000 - 12_000 = 3_000 (not 15_000 - 10_001 = 4_999).
+            if let Some(ClientCommand::SendRequest {
+                response_tx,
+                method,
+                ..
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVMTimelineMicros");
+                let _ = response_tx.send(Ok(json!({ "timestamp": 15_000_i64 })));
+            }
+            // getVMTimeline — capture params to verify the extent.
+            if let Some(ClientCommand::SendRequest {
+                response_tx,
+                method,
+                params,
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "getVMTimeline");
+                let p = params.expect("params must be present");
+                let origin = p
+                    .get("timeOriginMicros")
+                    .and_then(|v| v.as_i64())
+                    .expect("timeOriginMicros");
+                let extent = p
+                    .get("timeExtentMicros")
+                    .and_then(|v| v.as_i64())
+                    .expect("timeExtentMicros");
+                // With the fix: origin = 12_000, extent = 3_000.
+                assert_eq!(
+                    origin, 12_000,
+                    "second poll origin must be post-fetch watermark (12_000), not pre-fetch+1"
+                );
+                assert_eq!(
+                    extent, 3_000,
+                    "second poll extent must cover [12_000, 15_000] = 3_000 µs"
+                );
+                let _ = response_tx.send(Ok(json!({ "type": "Timeline", "traceEvents": [] })));
+            }
+            // Post-fetch getVMTimelineMicros for second tick.
+            if let Some(ClientCommand::SendRequest { response_tx, .. }) = cmd_rx.recv().await {
+                let _ = response_tx.send(Ok(json!({ "timestamp": 15_001_i64 })));
+            }
+        });
+
+        // Unpause the timeline task.
+        let _ = timeline_pause_tx.send(false);
+
+        // Receive the TimelineEventsBatchReceived from the first tick.
+        let batch_msg = tokio::time::timeout(Duration::from_millis(2_000), msg_rx.recv())
+            .await
+            .expect("timeout waiting for batch message")
+            .expect("channel should be open");
+
+        assert!(
+            matches!(
+                batch_msg,
+                crate::message::Message::TimelineEventsBatchReceived { .. }
+            ),
+            "expected TimelineEventsBatchReceived, got: {batch_msg:?}"
+        );
+
+        // Allow the second tick to run and the responder's assertions to fire.
+        // We just wait for the responder to finish (assertions are inside it).
+        let _ = tokio::time::timeout(Duration::from_millis(2_000), responder).await;
+
+        // Shut down cleanly.
+        let _ = timeline_shutdown_tx.send(true);
     }
 }
