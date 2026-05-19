@@ -377,6 +377,21 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
+    // Pause timeline polling: the 1-Hz getVMTimeline loop must not fire while
+    // the user is viewing logs or other non-DevTools modes.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.timeline_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
+    // Clear the timeline events buffer and reset the scroll offset so the next
+    // DevTools entry shows fresh data rather than stale accumulated events.
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.performance.timeline_events.clear();
+        handle.session.performance.timeline_events_scroll_offset = 0;
+    }
+
     state.exit_devtools_mode();
 
     if let Some(handle) = state.session_manager.selected() {
@@ -415,12 +430,19 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
     }
 
     // Before switching, check if we are leaving the Performance panel — if so,
-    // pause timeline polling so no getVMTimeline RPCs fire while on other panels.
+    // pause timeline polling so no getVMTimeline RPCs fire while on other panels,
+    // and clear the events buffer so the next entry shows fresh data.
     if old_panel == DevToolsPanel::Performance && panel != DevToolsPanel::Performance {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.timeline_pause_tx {
                 let _ = tx.send(true); // pause timeline polling
             }
+        }
+        // Clear accumulated timeline events and reset the scroll offset so that
+        // re-entry to the Performance panel always starts from a clean state.
+        if let Some(handle) = state.session_manager.selected_mut() {
+            handle.session.performance.timeline_events.clear();
+            handle.session.performance.timeline_events_scroll_offset = 0;
         }
     }
 
@@ -1956,6 +1978,148 @@ mod tests {
             state.ui_mode,
             UiMode::Normal,
             "Esc on Performance panel should exit DevTools even if inspector.details_open"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // timeline_pause_tx tests (Phase 3 followup, Task 01)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with a live `timeline_pause_tx` channel (initial: paused/true).
+    /// Returns AppState and a receiver to observe the channel value.
+    fn make_state_with_timeline_pause() -> (AppState, tokio::sync::watch::Receiver<bool>) {
+        let mut state = make_state_with_session();
+        // Initial value true (paused) — timeline polling starts paused.
+        let (tx, rx) = tokio::sync::watch::channel(true);
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.timeline_pause_tx = Some(std::sync::Arc::new(tx));
+        (state, rx)
+    }
+
+    #[test]
+    fn test_exit_devtools_pauses_timeline() {
+        // handle_exit_devtools_mode should send true on timeline_pause_tx (pause).
+        let (mut state, rx) = make_state_with_timeline_pause();
+
+        // Simulate: timeline was unpaused (user was on Performance panel).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .timeline_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+        assert!(!*rx.borrow(), "precondition: timeline should be active");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "exiting DevTools should pause timeline polling (send true on timeline_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_leaving_performance_clears_timeline_buffer() {
+        // Verify that both handle_switch_panel (Performance → other) and
+        // handle_exit_devtools_mode clear `timeline_events` and reset
+        // `timeline_events_scroll_offset` to 0.
+        use fdemon_core::timeline::{TimelineEvent, TimelinePhase, TimelineThread};
+
+        fn fake_event(name: &str) -> TimelineEvent {
+            TimelineEvent {
+                name: name.to_string(),
+                category: "test".to_string(),
+                thread: TimelineThread::Ui,
+                tid: 1,
+                phase: TimelinePhase::Complete,
+                ts: 1000,
+                dur: Some(500),
+                frame_number: None,
+            }
+        }
+
+        // ── Part 1: panel-switch path (Performance → Inspector) ──────────────
+        let mut state = make_state_with_session();
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        // Populate the buffer.
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            handle
+                .session
+                .performance
+                .timeline_events
+                .push_back(fake_event("A"));
+            handle
+                .session
+                .performance
+                .timeline_events
+                .push_back(fake_event("B"));
+            handle.session.performance.timeline_events_scroll_offset = 5;
+        }
+
+        // Sanity-check: events are present before the switch.
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .timeline_events
+                .len(),
+            2
+        );
+
+        handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        let perf = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_events.is_empty(),
+            "panel-switch away from Performance should clear timeline_events"
+        );
+        assert_eq!(
+            perf.timeline_events_scroll_offset, 0,
+            "panel-switch away from Performance should reset timeline_events_scroll_offset to 0"
+        );
+
+        // ── Part 2: exit-DevTools path ────────────────────────────────────────
+        let mut state = make_state_with_session();
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            handle
+                .session
+                .performance
+                .timeline_events
+                .push_back(fake_event("C"));
+            handle.session.performance.timeline_events_scroll_offset = 3;
+        }
+
+        handle_exit_devtools_mode(&mut state);
+
+        let perf = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_events.is_empty(),
+            "handle_exit_devtools_mode should clear timeline_events"
+        );
+        assert_eq!(
+            perf.timeline_events_scroll_offset, 0,
+            "handle_exit_devtools_mode should reset timeline_events_scroll_offset to 0"
         );
     }
 }
