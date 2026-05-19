@@ -3,11 +3,11 @@
 //! Memory monitoring state has moved to [`super::memory`].
 
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use fdemon_core::performance::{FrameTiming, PerformanceStats, RingBuffer};
 use fdemon_core::rebuild_stats::{LocationMap, RebuildStatsSnapshot};
-use fdemon_core::timeline::TimelineEvent;
+use fdemon_core::timeline::TimelineTrack;
 use serde::{Deserialize, Serialize};
 
 use crate::state::PerfDetailsTab;
@@ -182,16 +182,29 @@ pub struct PerformanceState {
     /// Currently-selected row in the Rebuild Stats table (j/k navigation).
     pub rebuild_stats_selected_row: Option<usize>,
 
-    // ── Phase 3: Timeline Events ──────────────────────────────────────────────
-    /// Ring buffer of recent timeline events. Capped by
-    /// `Settings::devtools::timeline_event_buffer_size` (default 1000).
-    pub timeline_events: VecDeque<TimelineEvent>,
+    // ── Phase 4: Timeline Events (thread-grouped tree) ────────────────────────
+    /// Per-thread event trees, keyed by `tid`. `BTreeMap` iteration order is
+    /// `tid` ascending so the renderer produces stable thread-row ordering.
+    ///
+    /// Total node count across all tracks is capped by
+    /// `Settings::devtools::timeline_event_buffer_size` (default 1000). Eviction
+    /// drops the oldest root events globally (by `ts`) until under the cap.
+    pub timeline_tracks: BTreeMap<i64, TimelineTrack>,
 
-    /// Scroll offset for the Timeline Events list.
-    pub timeline_events_scroll_offset: usize,
+    /// Render-hint write-back: actual visible thread-row count last frame.
+    ///
+    /// Written by the Gantt renderer (T05); read by the scroll handler.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    pub timeline_visible_row_count: Cell<usize>,
 
-    /// `tid → thread_name` cache, populated from `getVMTimeline` metadata
-    /// events. Persists across polls within a session.
+    /// Scroll offset measured in thread rows (not individual events).
+    ///
+    /// Reset to 0 on filter change or panel exit.
+    pub timeline_thread_scroll_offset: usize,
+
+    /// `tid → thread_name` cache, populated from `ph:"M"` metadata events.
+    /// Persists across polls within a session. Used by the Gantt renderer to
+    /// label thread rows.
     pub timeline_thread_name_map: HashMap<i64, String>,
 
     /// Current filter selection — `All`, `Ui`, or `Raster`.
@@ -218,9 +231,10 @@ impl Default for PerformanceState {
             rebuild_stats_frames: VecDeque::new(),
             rebuild_stats_scroll_offset: 0,
             rebuild_stats_selected_row: None,
-            // Phase 3: Timeline Events — all start empty
-            timeline_events: VecDeque::new(),
-            timeline_events_scroll_offset: 0,
+            // Phase 4: Timeline Events (thread-grouped tree) — all start empty
+            timeline_tracks: BTreeMap::new(),
+            timeline_visible_row_count: Cell::new(0),
+            timeline_thread_scroll_offset: 0,
             timeline_thread_name_map: HashMap::new(),
             timeline_events_filter: TimelineFilter::All,
         }
@@ -689,11 +703,17 @@ mod tests {
         assert!(s.rebuild_stats_selected_row.is_none());
     }
 
+    // ── Phase 4: Timeline tree state defaults ────────────────────────────────
+
     #[test]
-    fn performance_state_phase3_timeline_defaults() {
+    fn performance_state_phase4_timeline_tree_defaults() {
         let s = PerformanceState::default();
-        assert!(s.timeline_events.is_empty());
-        assert_eq!(s.timeline_events_scroll_offset, 0);
+        assert!(
+            s.timeline_tracks.is_empty(),
+            "timeline_tracks should start empty"
+        );
+        assert_eq!(s.timeline_visible_row_count.get(), 0);
+        assert_eq!(s.timeline_thread_scroll_offset, 0);
         assert!(s.timeline_thread_name_map.is_empty());
         assert_eq!(s.timeline_events_filter, TimelineFilter::All);
     }

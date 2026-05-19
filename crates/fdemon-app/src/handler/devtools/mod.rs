@@ -385,11 +385,13 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
-    // Clear the timeline events buffer and reset the scroll offset so the next
-    // DevTools entry shows fresh data rather than stale accumulated events.
+    // Clear the timeline tracks and thread-name map so the next DevTools entry
+    // shows fresh data rather than stale accumulated events.
     if let Some(handle) = state.session_manager.selected_mut() {
-        handle.session.performance.timeline_events.clear();
-        handle.session.performance.timeline_events_scroll_offset = 0;
+        let perf = &mut handle.session.performance;
+        perf.timeline_tracks.clear();
+        perf.timeline_thread_name_map.clear();
+        perf.timeline_thread_scroll_offset = 0;
     }
 
     // Close the Flutter.RebuiltWidgets gate for all sessions: exiting DevTools
@@ -446,11 +448,13 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                 let _ = tx.send(true); // pause timeline polling
             }
         }
-        // Clear accumulated timeline events and reset the scroll offset so that
+        // Clear accumulated timeline tracks and reset scroll so that
         // re-entry to the Performance panel always starts from a clean state.
         if let Some(handle) = state.session_manager.selected_mut() {
-            handle.session.performance.timeline_events.clear();
-            handle.session.performance.timeline_events_scroll_offset = 0;
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.clear();
+            perf.timeline_thread_name_map.clear();
+            perf.timeline_thread_scroll_offset = 0;
         }
     }
 
@@ -2040,22 +2044,26 @@ mod tests {
     }
 
     #[test]
-    fn test_leaving_performance_clears_timeline_buffer() {
+    fn test_leaving_performance_clears_timeline_tracks() {
         // Verify that both handle_switch_panel (Performance → other) and
-        // handle_exit_devtools_mode clear `timeline_events` and reset
-        // `timeline_events_scroll_offset` to 0.
-        use fdemon_core::timeline::{TimelineEvent, TimelinePhase, TimelineThread};
+        // handle_exit_devtools_mode clear `timeline_tracks`, `timeline_thread_name_map`,
+        // and reset `timeline_thread_scroll_offset` to 0.
+        use fdemon_core::timeline::{TimelineNode, TimelinePhase, TimelineThread, TimelineTrack};
 
-        fn fake_event(name: &str) -> TimelineEvent {
-            TimelineEvent {
-                name: name.to_string(),
-                category: "test".to_string(),
+        fn fake_track(tid: i64) -> TimelineTrack {
+            TimelineTrack {
+                tid,
+                name: Some("io.flutter.ui".to_string()),
                 thread: TimelineThread::Ui,
-                tid: 1,
-                phase: TimelinePhase::Complete,
-                ts: 1000,
-                dur: Some(500),
-                frame_number: None,
+                root_events: vec![TimelineNode {
+                    name: "Frame".to_string(),
+                    category: None,
+                    ts: 1000,
+                    dur: Some(500),
+                    phase: TimelinePhase::Complete,
+                    thread: TimelineThread::Ui,
+                    children: vec![],
+                }],
             }
         }
 
@@ -2063,23 +2071,18 @@ mod tests {
         let mut state = make_state_with_session();
         state.devtools_view_state.active_panel = DevToolsPanel::Performance;
 
-        // Populate the buffer.
+        // Populate the tracks and name map.
         {
             let handle = state.session_manager.selected_mut().unwrap();
-            handle
-                .session
-                .performance
-                .timeline_events
-                .push_back(fake_event("A"));
-            handle
-                .session
-                .performance
-                .timeline_events
-                .push_back(fake_event("B"));
-            handle.session.performance.timeline_events_scroll_offset = 5;
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.insert(1, fake_track(1));
+            perf.timeline_tracks.insert(2, fake_track(2));
+            perf.timeline_thread_name_map
+                .insert(1, "io.flutter.ui".to_string());
+            perf.timeline_thread_scroll_offset = 5;
         }
 
-        // Sanity-check: events are present before the switch.
+        // Sanity-check: tracks are present before the switch.
         assert_eq!(
             state
                 .session_manager
@@ -2087,7 +2090,7 @@ mod tests {
                 .unwrap()
                 .session
                 .performance
-                .timeline_events
+                .timeline_tracks
                 .len(),
             2
         );
@@ -2101,12 +2104,16 @@ mod tests {
             .session
             .performance;
         assert!(
-            perf.timeline_events.is_empty(),
-            "panel-switch away from Performance should clear timeline_events"
+            perf.timeline_tracks.is_empty(),
+            "panel-switch away from Performance should clear timeline_tracks"
+        );
+        assert!(
+            perf.timeline_thread_name_map.is_empty(),
+            "panel-switch away from Performance should clear timeline_thread_name_map"
         );
         assert_eq!(
-            perf.timeline_events_scroll_offset, 0,
-            "panel-switch away from Performance should reset timeline_events_scroll_offset to 0"
+            perf.timeline_thread_scroll_offset, 0,
+            "panel-switch away from Performance should reset timeline_thread_scroll_offset to 0"
         );
 
         // ── Part 2: exit-DevTools path ────────────────────────────────────────
@@ -2115,12 +2122,11 @@ mod tests {
 
         {
             let handle = state.session_manager.selected_mut().unwrap();
-            handle
-                .session
-                .performance
-                .timeline_events
-                .push_back(fake_event("C"));
-            handle.session.performance.timeline_events_scroll_offset = 3;
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.insert(1, fake_track(1));
+            perf.timeline_thread_name_map
+                .insert(1, "io.flutter.ui".to_string());
+            perf.timeline_thread_scroll_offset = 3;
         }
 
         handle_exit_devtools_mode(&mut state);
@@ -2132,12 +2138,16 @@ mod tests {
             .session
             .performance;
         assert!(
-            perf.timeline_events.is_empty(),
-            "handle_exit_devtools_mode should clear timeline_events"
+            perf.timeline_tracks.is_empty(),
+            "handle_exit_devtools_mode should clear timeline_tracks"
+        );
+        assert!(
+            perf.timeline_thread_name_map.is_empty(),
+            "handle_exit_devtools_mode should clear timeline_thread_name_map"
         );
         assert_eq!(
-            perf.timeline_events_scroll_offset, 0,
-            "handle_exit_devtools_mode should reset timeline_events_scroll_offset to 0"
+            perf.timeline_thread_scroll_offset, 0,
+            "handle_exit_devtools_mode should reset timeline_thread_scroll_offset to 0"
         );
     }
 }

@@ -2451,9 +2451,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::RebuildStatsToggleFailed { session_id, reason } => {
             devtools::performance::rebuild_stats::handle_toggle_failed(state, session_id, reason)
         }
-        Message::TimelineEventsBatchReceived { session_id, events } => {
-            devtools::performance::timeline::handle_batch(state, session_id, events)
-        }
+        Message::TimelineEventsBatchReceived {
+            session_id,
+            events,
+            metadata,
+        } => devtools::performance::timeline::handle_batch(state, session_id, events, metadata),
         Message::TimelineEventsCycleFilter { session_id } => {
             devtools::performance::timeline::handle_cycle_filter(state, session_id)
         }

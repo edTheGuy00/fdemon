@@ -115,8 +115,9 @@ pub use protocol::{
 };
 pub use request_api::VmRequestApi;
 pub use timeline::{
-    enable_frame_tracking, fetch_timeline_chunk, flutter_extension_kind, get_vm_timeline_micros,
-    is_frame_event, parse_frame_timing, parse_str_u64,
+    enable_frame_tracking, fetch_timeline_chunk, fetch_timeline_chunk_with_metadata,
+    flutter_extension_kind, get_vm_timeline_micros, is_frame_event, parse_frame_timing,
+    parse_str_u64,
 };
 
 /// Redact the auth token from a Dart VM Service WebSocket URI.

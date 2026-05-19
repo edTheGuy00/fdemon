@@ -1237,11 +1237,14 @@ pub enum Message {
 
     /// The 1-Hz timeline poll returned a batch of new events.
     ///
-    /// Appended to `PerformanceState::timeline_events` and truncated to
-    /// `settings.devtools.timeline_event_buffer_size`.
+    /// Merged into `PerformanceState::timeline_tracks` and capped at
+    /// `settings.devtools.timeline_event_buffer_size` total nodes.
+    /// `metadata` carries `ph:"M"` thread-name events extracted from the same
+    /// response and used to populate `timeline_thread_name_map`.
     TimelineEventsBatchReceived {
         session_id: SessionId,
         events: Vec<fdemon_core::timeline::TimelineEvent>,
+        metadata: Vec<fdemon_core::timeline::ThreadMetadata>,
     },
 
     /// The user pressed `f` on the Timeline Events tab — cycle the filter.

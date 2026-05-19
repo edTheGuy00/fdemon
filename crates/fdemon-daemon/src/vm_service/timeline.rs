@@ -162,7 +162,9 @@ pub async fn enable_frame_tracking(handle: &VmRequestHandle, isolate_id: &str) -
 // VM Timeline RPCs
 // ---------------------------------------------------------------------------
 
-use fdemon_core::timeline::{parse_vm_timeline, TimelineEvent};
+use fdemon_core::timeline::{
+    parse_vm_timeline, parse_vm_timeline_with_metadata, ThreadMetadata, TimelineEvent,
+};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -229,6 +231,35 @@ pub async fn fetch_timeline_chunk<H: VmRequestApi>(
     });
     let response = handle.request("getVMTimeline", Some(params)).await?;
     parse_vm_timeline(&response, thread_name_map)
+}
+
+/// Like [`fetch_timeline_chunk`] but also returns thread-name metadata events.
+///
+/// Uses [`parse_vm_timeline_with_metadata`] so that `ph:"M"` thread-name events
+/// are returned as a [`Vec<ThreadMetadata>`] in addition to the event stream.
+/// The caller (timeline handler) uses the metadata to populate
+/// `PerformanceState::timeline_thread_name_map` and the human-readable `name`
+/// field on [`fdemon_core::timeline::TimelineTrack`].
+///
+/// `thread_name_map` is the caller's persistent `tid → thread name` cache —
+/// updated in place exactly as in [`fetch_timeline_chunk`].
+///
+/// # Errors
+///
+/// Same as [`fetch_timeline_chunk`].
+pub async fn fetch_timeline_chunk_with_metadata<H: VmRequestApi>(
+    handle: &H,
+    since_micros: u64,
+    extent_micros: u64,
+    thread_name_map: &mut HashMap<i64, String>,
+) -> Result<(Vec<TimelineEvent>, Vec<ThreadMetadata>)> {
+    const I64_MAX_AS_U64: u64 = i64::MAX as u64;
+    let params = json!({
+        "timeOriginMicros": since_micros.min(I64_MAX_AS_U64) as i64,
+        "timeExtentMicros": extent_micros.min(I64_MAX_AS_U64) as i64,
+    });
+    let response = handle.request("getVMTimeline", Some(params)).await?;
+    parse_vm_timeline_with_metadata(&response, thread_name_map)
 }
 
 // ---------------------------------------------------------------------------

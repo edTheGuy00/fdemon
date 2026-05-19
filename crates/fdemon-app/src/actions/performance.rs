@@ -599,7 +599,7 @@ async fn run_one_timeline_fetch_cycle<H: VmRequestApi>(
         return FetchOutcome::Ok;
     }
 
-    match fdemon_daemon::vm_service::fetch_timeline_chunk(
+    match fdemon_daemon::vm_service::fetch_timeline_chunk_with_metadata(
         handle,
         *last_poll_micros,
         extent,
@@ -607,9 +607,13 @@ async fn run_one_timeline_fetch_cycle<H: VmRequestApi>(
     )
     .await
     {
-        Ok(events) if !events.is_empty() => {
+        Ok((events, metadata)) if !events.is_empty() || !metadata.is_empty() => {
             if msg_tx
-                .send(Message::TimelineEventsBatchReceived { session_id, events })
+                .send(Message::TimelineEventsBatchReceived {
+                    session_id,
+                    events,
+                    metadata,
+                })
                 .await
                 .is_err()
             {
@@ -619,7 +623,7 @@ async fn run_one_timeline_fetch_cycle<H: VmRequestApi>(
         Ok(_) => {} // empty batch — normal
         Err(e) => {
             tracing::debug!(
-                "Timeline poll: fetch_timeline_chunk failed for session {}: {}",
+                "Timeline poll: fetch_timeline_chunk_with_metadata failed for session {}: {}",
                 session_id,
                 e
             );
