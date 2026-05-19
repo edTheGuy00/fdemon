@@ -6,7 +6,7 @@
 //! - **Frame Analysis** — populated in Phase 2 ([`frame_analysis_tab`]).
 //! - **Rebuild Stats** — Phase 3 ([`rebuild_stats_tab`]); visible only when
 //!   `PerformanceState::rebuild_stats_enabled == true`.
-//! - **Timeline Events** — Phase 3 ([`timeline_events_tab`]).
+//! - **Timeline Events** — Phase 4 Gantt renderer ([`timeline_events`]).
 //!
 //! Tab cycling is keyboard-only (`]` / `[`). The `RebuildStats` tab chip is
 //! conditionally hidden from the strip when rebuild tracking is disabled; if the
@@ -26,7 +26,7 @@ use crate::theme::palette;
 mod frame_analysis_tab;
 mod rebuild_stats_tab;
 pub(super) mod text_helpers;
-mod timeline_events_tab;
+mod timeline_events;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -97,9 +97,7 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, performance: &PerformanceStat
     match active {
         PerfDetailsTab::FrameAnalysis => frame_analysis_tab::render(content_area, buf, performance),
         PerfDetailsTab::RebuildStats => rebuild_stats_tab::render(content_area, buf, performance),
-        PerfDetailsTab::TimelineEvents => {
-            timeline_events_tab::render(content_area, buf, performance)
-        }
+        PerfDetailsTab::TimelineEvents => timeline_events::render(content_area, buf, performance),
     }
 }
 
