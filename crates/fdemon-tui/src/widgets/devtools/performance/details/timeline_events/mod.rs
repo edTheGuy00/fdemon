@@ -132,7 +132,7 @@ fn render_filter_strip(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
 mod tests {
     use super::*;
     use fdemon_app::session::PerformanceState;
-    use fdemon_core::timeline::{TimelineNode, TimelinePhase, TimelineThread, TimelineTrack};
+    use fdemon_core::timeline::{TimelineNode, TimelineThread, TimelineTrack};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Modifier;
@@ -151,19 +151,6 @@ mod tests {
             s.push('\n');
         }
         s
-    }
-
-    fn make_node(name: &str, thread: TimelineThread, ts: i64, dur: i64) -> TimelineNode {
-        TimelineNode {
-            name: name.to_owned(),
-            category: None,
-            ts,
-            dur: Some(dur),
-            phase: TimelinePhase::Complete,
-            thread,
-            frame_number: None,
-            children: vec![],
-        }
     }
 
     // ── AC14: Filter strip preserved ─────────────────────────────────────────
@@ -205,6 +192,8 @@ mod tests {
 
     // ── AC9: Empty state via render entry ────────────────────────────────────
 
+    /// When committed_frame_anchor == None (default), the "Select a frame"
+    /// prompt is shown via the Gantt's anchor gate.
     #[test]
     fn timeline_events_renders_empty_state() {
         let state = PerformanceState::default();
@@ -213,8 +202,8 @@ mod tests {
         render(area, &mut buf, &state);
         let text = collect_text(&buf);
         assert!(
-            text.contains("Waiting for timeline events"),
-            "expected empty-state placeholder, got:\n{text}"
+            text.contains("Select a frame"),
+            "expected 'Select a frame' placeholder when no anchor, got:\n{text}"
         );
     }
 
@@ -231,7 +220,11 @@ mod tests {
 
     #[test]
     fn timeline_events_render_hint_updated() {
-        let mut state = PerformanceState::default();
+        let mut state = PerformanceState {
+            // Set anchor = 1 so the Gantt renders (not placeholder)
+            committed_frame_anchor: Some(1),
+            ..Default::default()
+        };
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -241,7 +234,17 @@ mod tests {
                 tid: 1,
                 name: None,
                 thread: TimelineThread::Ui,
-                root_events: vec![make_node("Frame", TimelineThread::Ui, ts, dur)],
+                // frame_number=1 matches committed_frame_anchor=1
+                root_events: vec![TimelineNode {
+                    name: "Frame".to_owned(),
+                    category: None,
+                    ts,
+                    dur: Some(dur),
+                    phase: fdemon_core::timeline::TimelinePhase::Complete,
+                    thread: TimelineThread::Ui,
+                    frame_number: Some(1),
+                    children: vec![],
+                }],
             },
         );
         state.timeline_tracks = tracks;
@@ -251,9 +254,6 @@ mod tests {
         render(area, &mut buf, &state);
 
         // Render hint should be updated (non-zero for one track with sufficient height)
-        // Gantt area height = 20 - FILTER_STRIP_HEIGHT(1) = 19
-        // max_rows_visible = (19 - TIME_AXIS_HEIGHT(1)) / THREAD_ROW_HEIGHT(6) = 3
-        // Only 1 track → visible = 1
         assert_eq!(
             state.timeline_visible_row_count.get(),
             1,

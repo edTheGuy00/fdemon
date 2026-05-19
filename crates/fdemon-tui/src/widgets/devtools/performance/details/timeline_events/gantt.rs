@@ -15,7 +15,7 @@ use ratatui::{
 use super::{
     palette,
     text_helpers::truncate_with_ellipsis,
-    viewport::{clip_bar, compute_viewport},
+    viewport::{clip_bar, compute_frame_anchored_viewport},
     MAX_DEPTH, MIN_BAR_WIDTH, THREAD_LABEL_WIDTH, THREAD_ROW_HEIGHT, TIMELINE_VIEWPORT_MICROS,
     TIME_AXIS_HEIGHT,
 };
@@ -25,6 +25,13 @@ use crate::theme::palette as theme;
 /// Derived from: 1 message line = 1.
 const EMPTY_PLACEHOLDER_LINE_COUNT: u16 = 1;
 
+/// Viewport span below which the time axis switches from whole-second labels
+/// to millisecond labels (less than 1 second wide).
+///
+/// Derived from: 1 second = 1_000_000 microseconds. An anchored frame viewport
+/// is typically 16–20 ms wide, well under this threshold.
+const MS_AXIS_THRESHOLD_MICROS: u64 = 1_000_000;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Render the Gantt area below the filter strip.
@@ -32,17 +39,52 @@ const EMPTY_PLACEHOLDER_LINE_COUNT: u16 = 1;
 /// `area` is the content area below the filter strip (filter strip is drawn
 /// by the caller in `mod.rs`). Writes `timeline_visible_row_count` render-hint
 /// to state before returning.
+///
+/// ## Anchor logic
+///
+/// When `state.committed_frame_anchor == None`: renders the "Select a frame…"
+/// placeholder (the viewport is driven by the anchor, not by auto-scroll).
+///
+/// When `state.committed_frame_anchor == Some(N)` but no matching node is found
+/// in the tracks: renders the "not available" placeholder.
+///
+/// When `state.committed_frame_anchor == Some(N)` and a matching node is found:
+/// renders the Gantt with a viewport spanning that node ± 20% padding.
 pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
 
-    if state.timeline_tracks.is_empty() {
-        render_empty_placeholder(area, buf, "Waiting for timeline events\u{2026}");
-        // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
-        state.timeline_visible_row_count.set(0);
-        return;
-    }
+    // ── Anchor gate: nothing renders without an explicit frame selection ─────
+    let frame_number = match state.committed_frame_anchor {
+        None => {
+            render_empty_placeholder(
+                area,
+                buf,
+                "Select a frame in the chart above to inspect its timeline events",
+            );
+            // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
+            state.timeline_visible_row_count.set(0);
+            return;
+        }
+        Some(n) => n,
+    };
+
+    // Compute the anchored viewport — fails gracefully when the frame was evicted.
+    let (vp_start, vp_end) =
+        match compute_frame_anchored_viewport(&state.timeline_tracks, frame_number) {
+            Some(vp) => vp,
+            None => {
+                let msg = format!(
+                    "Timeline data not available for frame #{frame_number} \
+                     (may have been evicted from the 1000-event buffer)"
+                );
+                render_empty_placeholder(area, buf, &msg);
+                // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
+                state.timeline_visible_row_count.set(0);
+                return;
+            }
+        };
 
     // Collect filtered tracks
     let filtered_tracks: Vec<(&i64, &TimelineTrack)> = state
@@ -57,9 +99,6 @@ pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceStat
         state.timeline_visible_row_count.set(0);
         return;
     }
-
-    // Compute viewport bounds from all tracks (unfiltered, for stable time axis)
-    let (vp_start, vp_end) = compute_viewport(&state.timeline_tracks);
 
     // Time axis takes TIME_AXIS_HEIGHT rows at the top of the gantt area.
     // Then rows of THREAD_ROW_HEIGHT each. Absorber takes remaining space.
@@ -88,8 +127,12 @@ pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceStat
 
     let chunks = Layout::vertical(constraints).split(area);
 
+    // Choose time axis label style: ms labels for sub-second viewports (anchored frames),
+    // second labels for the full sliding-window view.
+    let use_ms_labels = (vp_end - vp_start) < MS_AXIS_THRESHOLD_MICROS;
+
     // Render time axis in chunks[0]
-    render_time_axis(chunks[0], buf, vp_start, vp_end);
+    render_time_axis(chunks[0], buf, vp_start, vp_end, use_ms_labels);
 
     // Render each thread row
     for (row_idx, (tid, track)) in visible_tracks.iter().enumerate() {
@@ -267,9 +310,12 @@ fn render_bar(
 
 /// Render the time axis row above the thread rows.
 ///
-/// Shows tick labels at approximately 1-second intervals (relative to viewport
-/// end): `-5s`, `-4s`, `-3s`, `-2s`, `-1s`, `0s`.
-fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64) {
+/// When `use_ms_labels` is `true` (sub-second viewport, i.e. anchored mode),
+/// labels are shown as frame-relative milliseconds: `0ms`, `4ms`, `8ms`, …
+///
+/// When `use_ms_labels` is `false` (full sliding-window viewport), labels are
+/// shown at approximately 1-second intervals: `-5s`, `-4s`, … `0s`.
+fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64, use_ms_labels: bool) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -279,53 +325,108 @@ fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64) {
         return;
     }
 
-    // Number of 1-second ticks to show = viewport_seconds, up to 6
-    let viewport_secs = ((vp_end - vp_start) / 1_000_000).max(1) as i64;
-    let tick_interval_micros: u64 = 1_000_000; // 1 second per tick
-    let num_ticks = (TIMELINE_VIEWPORT_MICROS / tick_interval_micros + 1) as i64;
-
-    // Label area starts after the thread-label column
     let label_x_base = area.x + THREAD_LABEL_WIDTH;
+    let label_style = Style::default().fg(theme::TEXT_SECONDARY);
+    let area_right = area.x + area.width;
 
-    // Build tick labels from -viewport_secs to 0
-    for tick_idx in 0..=viewport_secs.min(num_ticks) {
-        let tick_offset_micros = tick_idx as u64 * tick_interval_micros;
-        let tick_ts =
-            vp_end.saturating_sub(TIMELINE_VIEWPORT_MICROS.saturating_sub(tick_offset_micros));
-
-        // Column position for this tick
-        let col = super::viewport::micros_to_column(tick_ts, vp_start, vp_end, canvas_width);
-        let x = label_x_base + col;
-        if x >= area.x + area.width {
-            continue;
-        }
-
-        let secs_relative = -(viewport_secs - tick_idx);
-        let label = if secs_relative == 0 {
-            "0s".to_owned()
+    if use_ms_labels {
+        // ── ms labels: 0ms, 4ms, 8ms, 12ms, 16ms (every ~4ms, up to 6 ticks) ──
+        // Choose a tick interval that gives ~5 ticks across the viewport span.
+        let span_ms = ((vp_end - vp_start) / 1_000).max(1) as i64;
+        // Round to a "nice" interval: 1, 2, 4, 5, 8, 10, 16, 20 ms …
+        let raw_interval = (span_ms / 5).max(1);
+        let tick_interval_ms: i64 = if raw_interval <= 1 {
+            1
+        } else if raw_interval <= 2 {
+            2
+        } else if raw_interval <= 4 {
+            4
+        } else if raw_interval <= 5 {
+            5
+        } else if raw_interval <= 8 {
+            8
+        } else if raw_interval <= 10 {
+            10
+        } else if raw_interval <= 16 {
+            16
         } else {
-            format!("{secs_relative}s")
+            20
         };
+        let tick_interval_micros = tick_interval_ms as u64 * 1_000;
 
-        let label_style = Style::default().fg(theme::TEXT_SECONDARY);
-        let label_len = label.chars().count() as u16;
-        let area_right = area.x + area.width;
-        // Shift label left if it would overflow the right edge
-        let lx_start = if x + label_len > area_right {
-            area_right.saturating_sub(label_len)
-        } else {
-            x
-        };
-        let mut lx = lx_start;
-        for ch in label.chars() {
-            if lx >= area_right {
+        let num_ticks = (span_ms / tick_interval_ms + 1).min(10) as u64;
+        for i in 0..=num_ticks {
+            let tick_ts = vp_start + i * tick_interval_micros;
+            if tick_ts > vp_end {
                 break;
             }
-            if let Some(cell) = buf.cell_mut((lx, area.y)) {
-                cell.set_symbol(&ch.to_string());
-                cell.set_style(label_style);
+            let ms_offset = ((tick_ts - vp_start) / 1_000) as i64;
+            let label = format!("{ms_offset}ms");
+
+            let col = super::viewport::micros_to_column(tick_ts, vp_start, vp_end, canvas_width);
+            let x = label_x_base + col;
+            if x >= area_right {
+                continue;
             }
-            lx += 1;
+            let label_len = label.chars().count() as u16;
+            let lx_start = if x + label_len > area_right {
+                area_right.saturating_sub(label_len)
+            } else {
+                x
+            };
+            let mut lx = lx_start;
+            for ch in label.chars() {
+                if lx >= area_right {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut((lx, area.y)) {
+                    cell.set_symbol(&ch.to_string());
+                    cell.set_style(label_style);
+                }
+                lx += 1;
+            }
+        }
+    } else {
+        // ── Second labels: -5s … -1s, 0s ─────────────────────────────────────
+        let viewport_secs = ((vp_end - vp_start) / 1_000_000).max(1) as i64;
+        let tick_interval_micros: u64 = 1_000_000;
+        let num_ticks = (TIMELINE_VIEWPORT_MICROS / tick_interval_micros + 1) as i64;
+
+        for tick_idx in 0..=viewport_secs.min(num_ticks) {
+            let tick_offset_micros = tick_idx as u64 * tick_interval_micros;
+            let tick_ts =
+                vp_end.saturating_sub(TIMELINE_VIEWPORT_MICROS.saturating_sub(tick_offset_micros));
+
+            let col = super::viewport::micros_to_column(tick_ts, vp_start, vp_end, canvas_width);
+            let x = label_x_base + col;
+            if x >= area_right {
+                continue;
+            }
+
+            let secs_relative = -(viewport_secs - tick_idx);
+            let label = if secs_relative == 0 {
+                "0s".to_owned()
+            } else {
+                format!("{secs_relative}s")
+            };
+
+            let label_len = label.chars().count() as u16;
+            let lx_start = if x + label_len > area_right {
+                area_right.saturating_sub(label_len)
+            } else {
+                x
+            };
+            let mut lx = lx_start;
+            for ch in label.chars() {
+                if lx >= area_right {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut((lx, area.y)) {
+                    cell.set_symbol(&ch.to_string());
+                    cell.set_style(label_style);
+                }
+                lx += 1;
+            }
         }
     }
 }
@@ -385,6 +486,8 @@ mod tests {
     }
 
     fn make_complete_node(name: &str, thread: TimelineThread, ts: i64, dur: i64) -> TimelineNode {
+        // Embed frame_number = Some(1) so tests that set committed_frame_anchor=1
+        // will correctly find this node and render the Gantt.
         TimelineNode {
             name: name.to_owned(),
             category: None,
@@ -392,7 +495,7 @@ mod tests {
             dur: Some(dur),
             phase: TimelinePhase::Complete,
             thread,
-            frame_number: None,
+            frame_number: Some(1),
             children: vec![],
         }
     }
@@ -406,18 +509,32 @@ mod tests {
         }
     }
 
+    /// Return a `PerformanceState` with `committed_frame_anchor = Some(1)`.
+    ///
+    /// All test tracks built via `make_complete_node` / `make_track` carry
+    /// `frame_number = Some(1)`, so anchor `1` always resolves to a node.
+    fn make_anchored_state() -> PerformanceState {
+        PerformanceState {
+            committed_frame_anchor: Some(1),
+            ..Default::default()
+        }
+    }
+
     // ── AC9: Empty state placeholder ──────────────────────────────────────────
 
+    /// When committed_frame_anchor == None (no frame selected), the Gantt shows
+    /// the "Select a frame" prompt.
     #[test]
     fn gantt_renders_empty_state_placeholder() {
+        // Default state: committed_frame_anchor == None
         let state = PerformanceState::default();
         let area = Rect::new(0, 0, 80, 10);
         let mut buf = Buffer::empty(area);
         render_gantt(area, &mut buf, &state);
         let text = collect_text(&buf);
         assert!(
-            text.contains("Waiting for timeline events"),
-            "expected empty-state placeholder, got:\n{text}"
+            text.contains("Select a frame"),
+            "expected 'Select a frame' placeholder when no anchor, got:\n{text}"
         );
     }
 
@@ -434,7 +551,7 @@ mod tests {
 
     #[test]
     fn gantt_renders_two_thread_rows_with_labels() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
         let mut tracks = BTreeMap::new();
         // Add event at ts within the last 5s window
         let ts = 1_000_000i64;
@@ -479,7 +596,7 @@ mod tests {
 
     #[test]
     fn gantt_uses_thread_name_map_for_labels() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -511,7 +628,7 @@ mod tests {
 
     #[test]
     fn gantt_fallback_label_when_name_not_in_map() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -542,7 +659,7 @@ mod tests {
 
     #[test]
     fn gantt_ui_bars_render_with_light_blue_color() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
         let ts = 4_500_000i64; // near end of 5s window
         let dur = 400_000i64;
         let mut tracks = BTreeMap::new();
@@ -580,6 +697,7 @@ mod tests {
     fn gantt_filter_ui_hides_raster_rows() {
         let mut state = PerformanceState {
             timeline_events_filter: TimelineFilter::Ui,
+            committed_frame_anchor: Some(1),
             ..Default::default()
         };
         let ts = 1_000_000i64;
@@ -633,6 +751,7 @@ mod tests {
     fn gantt_filter_raster_hides_ui_rows() {
         let mut state = PerformanceState {
             timeline_events_filter: TimelineFilter::Raster,
+            committed_frame_anchor: Some(1),
             ..Default::default()
         };
         let ts = 1_000_000i64;
@@ -686,6 +805,7 @@ mod tests {
     fn gantt_filter_all_shows_all_threads() {
         let mut state = PerformanceState {
             timeline_events_filter: TimelineFilter::All,
+            committed_frame_anchor: Some(1),
             ..Default::default()
         };
         let ts = 1_000_000i64;
@@ -739,7 +859,7 @@ mod tests {
 
     #[test]
     fn gantt_thread_scroll_offset_skips_top_rows() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -794,7 +914,7 @@ mod tests {
 
     #[test]
     fn gantt_writes_visible_row_count_render_hint() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -847,7 +967,7 @@ mod tests {
 
     #[test]
     fn gantt_depth_stacked_children_render_at_correct_y() {
-        let mut state = PerformanceState::default();
+        let mut state = make_anchored_state();
 
         // Root event [ts=4_000_000, dur=800_000] containing child and grandchild
         let grandchild = TimelineNode {
@@ -870,6 +990,7 @@ mod tests {
             frame_number: None,
             children: vec![grandchild],
         };
+        // Root carries frame_number=1 to satisfy the committed_frame_anchor gate.
         let root = TimelineNode {
             name: "Root".to_owned(),
             category: None,
@@ -877,7 +998,7 @@ mod tests {
             dur: Some(800_000),
             phase: TimelinePhase::Complete,
             thread: TimelineThread::Ui,
-            frame_number: None,
+            frame_number: Some(1),
             children: vec![child],
         };
 
@@ -923,27 +1044,21 @@ mod tests {
 
     // ── AC15: Time axis labels ─────────────────────────────────────────────────
 
+    /// Second labels render correctly when `use_ms_labels = false`.
+    ///
+    /// Tests `render_time_axis` directly (private function, accessible within the
+    /// same module as the test) to avoid the anchor-gated path in `render_gantt`.
     #[test]
     fn time_axis_labels_at_one_second_intervals() {
-        let mut state = PerformanceState::default();
-        let ts = 1_000_000i64;
-        let dur = 500_000i64;
-        let mut tracks = BTreeMap::new();
-        tracks.insert(
-            1,
-            make_track(
-                1,
-                TimelineThread::Ui,
-                vec![make_complete_node("Frame", TimelineThread::Ui, ts, dur)],
-            ),
-        );
-        state.timeline_tracks = tracks;
+        // Use a 5-second viewport: [0, 5_000_000)
+        let vp_start: u64 = 0;
+        let vp_end: u64 = 5_000_000;
 
         // Use a wide area (150 cols) so that "0s" at the right edge has room
         // for both characters and does not get clipped.
-        let area = Rect::new(0, 0, 150, 15);
+        let area = Rect::new(0, 0, 150, 1);
         let mut buf = Buffer::empty(area);
-        render_gantt(area, &mut buf, &state);
+        render_time_axis(area, &mut buf, vp_start, vp_end, false); // false = second labels
         let text = collect_text(&buf);
 
         // Time axis should show "0s" and at least one negative second label
@@ -985,5 +1100,103 @@ mod tests {
             TimelineThread::Other,
             TimelineFilter::Raster
         ));
+    }
+
+    // ── Phase 5: anchor-related placeholder tests ─────────────────────────────
+
+    /// Build a track with a single Complete node that carries a frame_number.
+    fn make_track_with_frame(
+        tid: i64,
+        thread: TimelineThread,
+        ts: i64,
+        dur: i64,
+        frame_number: Option<u64>,
+    ) -> TimelineTrack {
+        TimelineTrack {
+            tid,
+            name: None,
+            thread,
+            root_events: vec![TimelineNode {
+                name: "Frame".to_owned(),
+                category: None,
+                ts,
+                dur: Some(dur),
+                phase: TimelinePhase::Complete,
+                thread,
+                frame_number,
+                children: vec![],
+            }],
+        }
+    }
+
+    /// AC5: When committed_frame_anchor == None, the Gantt should show the
+    /// "Select a frame" placeholder regardless of track content.
+    #[test]
+    fn render_gantt_shows_select_a_frame_placeholder_when_no_anchor() {
+        let mut state = PerformanceState::default();
+        // Populate tracks so we know the placeholder comes from the anchor gate,
+        // not from empty tracks.
+        let mut tracks = BTreeMap::new();
+        tracks.insert(
+            1,
+            make_track_with_frame(1, TimelineThread::Ui, 1_000_000, 16_000, Some(1)),
+        );
+        state.timeline_tracks = tracks;
+        // committed_frame_anchor is None by default
+
+        let area = Rect::new(0, 0, 80, 10);
+        let mut buf = Buffer::empty(area);
+        render_gantt(area, &mut buf, &state);
+        let text = collect_text(&buf);
+
+        assert!(
+            text.contains("Select a frame"),
+            "expected 'Select a frame' placeholder when anchor is None, got:\n{text}"
+        );
+    }
+
+    /// AC5: When committed_frame_anchor == Some(N) but no matching event exists
+    /// in the tracks, the Gantt should show the "not available" placeholder.
+    #[test]
+    fn render_gantt_shows_not_available_placeholder_when_anchor_missing_from_tracks() {
+        let mut state = PerformanceState::default();
+        // Tracks contain frame 1 but not frame 99.
+        let mut tracks = BTreeMap::new();
+        tracks.insert(
+            1,
+            make_track_with_frame(1, TimelineThread::Ui, 1_000_000, 16_000, Some(1)),
+        );
+        state.timeline_tracks = tracks;
+        state.committed_frame_anchor = Some(99);
+
+        let area = Rect::new(0, 0, 120, 10);
+        let mut buf = Buffer::empty(area);
+        render_gantt(area, &mut buf, &state);
+        let text = collect_text(&buf);
+
+        assert!(
+            text.contains("not available") || text.contains("Timeline data"),
+            "expected 'not available' placeholder for missing frame, got:\n{text}"
+        );
+    }
+
+    /// AC4: When viewport span < 1s, the time axis should use ms labels
+    /// (e.g. "0ms") instead of second labels like "0s".
+    #[test]
+    fn time_axis_uses_ms_labels_when_viewport_under_one_second() {
+        // vp_start=0, vp_end=50_000 (50 µs → sub-millisecond) — well under 1s threshold
+        let area = Rect::new(0, 0, 150, 3);
+        let mut buf = Buffer::empty(area);
+        render_time_axis(area, &mut buf, 0, 50_000, true);
+        let text = collect_text(&buf);
+
+        assert!(
+            text.contains("ms"),
+            "expected 'ms' suffix in time axis labels for sub-second viewport, got:\n{text}"
+        );
+        assert!(
+            !text.contains("-5s") && !text.contains("-4s"),
+            "expected NO second labels in ms-mode time axis, got:\n{text}"
+        );
     }
 }

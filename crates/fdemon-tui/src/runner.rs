@@ -455,7 +455,8 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::SendDaemonCommand { .. }
             | UpdateAction::StartTimelineMonitoring { .. }
             | UpdateAction::ToggleProfileWidgetBuilds { .. }
-            | UpdateAction::FetchWidgetLocationIdMap { .. } => {
+            | UpdateAction::FetchWidgetLocationIdMap { .. }
+            | UpdateAction::DebounceFrameAnchor { .. } => {
                 warn!("runner action queue received non-runner variant: {action:?}");
             }
         }

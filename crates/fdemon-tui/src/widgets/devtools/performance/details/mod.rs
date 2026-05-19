@@ -342,9 +342,9 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 15));
         render(buf.area, &mut buf, &state);
         let text = collect_text(&buf);
-        // Timeline Events renders "Waiting for timeline events…" as empty placeholder.
+        // Timeline Events renders "Select a frame…" placeholder when no anchor is set.
         assert!(
-            text.contains("Waiting for timeline events"),
+            text.contains("Select a frame"),
             "expected Timeline Events content (fall-through), got:\n{text}"
         );
     }
@@ -454,7 +454,7 @@ mod tests {
         let text = collect_text(&buf);
         // No events → shows empty placeholder.
         assert!(
-            text.contains("Waiting for timeline events"),
+            text.contains("Select a frame"),
             "expected timeline events empty placeholder, got:\n{text}"
         );
     }

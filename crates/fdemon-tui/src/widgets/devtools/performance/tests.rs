@@ -481,7 +481,7 @@ fn details_dispatches_rebuild_stats_stub() {
 #[test]
 fn details_dispatches_timeline_events_stub() {
     // Phase 3: TimelineEvents tab is now live. When no events are present it
-    // shows the "Waiting for timeline events…" empty placeholder (the Phase-2
+    // shows the "Select a frame…" empty placeholder when no frame is anchored.
     // "Coming soon" stub has been removed).
     let mut perf = PerformanceState {
         monitoring_active: true,
@@ -502,7 +502,7 @@ fn details_dispatches_timeline_events_stub() {
     let text = collect_full_text(&buf);
     // No timeline events yet → empty-state placeholder.
     assert!(
-        text.contains("Waiting for timeline events"),
+        text.contains("Select a frame"),
         "timeline events (no events yet) must show empty placeholder, got:\n{text}"
     );
 }
