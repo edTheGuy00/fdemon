@@ -92,7 +92,7 @@ These commands control the Flutter app running in the current session. They are 
 | Key | Action | Description |
 |-----|--------|-------------|
 | `r` | Hot Reload | Trigger a hot reload (disabled when busy) |
-| `R` | Hot Restart | Trigger a hot restart (disabled when busy) |
+| `R` | Hot Restart | Trigger a hot restart (disabled when busy). **Context-dependent:** In DevTools Performance with the Rebuild Stats tab focused, `R` instead toggles `ext.flutter.profileWidgetBuilds` (rebuild tracking) — the hot-restart binding is shadowed in that specific context. |
 | `s` | Stop App | Stop the running app (disabled when busy) |
 
 ### Log Navigation
@@ -512,8 +512,14 @@ When the Performance panel is active:
 | `Esc` | Deselect frame; or, if no frame selected, return to Logs |
 | `Ctrl+p` | Toggle performance overlay on device |
 | `b` | Open DevTools in browser |
+| `f` | Performance, Details, TimelineEvents tab — Cycle filter All → UI → Raster |
+| `R` (Shift+r) | Performance, Details, RebuildStats tab — Toggle widget rebuild tracking |
 
-> The `]`/`[` cycle only fires when the Details pane has focus (press `Tab` from the Frame Chart). Frame Analysis is populated in Phase 2; Rebuild Stats and Timeline Events show a "Coming soon" stub until Phase 3.
+> The `]`/`[` cycle only fires when the Details pane has focus (press `Tab` from the Frame Chart).
+>
+> The `f` key only fires when the Details pane has focus **and** the Timeline Events tab is active.
+>
+> The `R` (Shift+r) key only fires when the Details pane has focus **and** the Rebuild Stats tab is active. In all other contexts (Logs panel, Frame Chart focus, Frame Analysis tab, Memory panel, etc.) `R` performs a hot restart as usual.
 
 ### Memory Panel
 

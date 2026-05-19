@@ -16,7 +16,7 @@ pub use performance::PerformancePanel;
 
 use fdemon_app::message::Message;
 use fdemon_app::session::{MemoryState, PerfSection, PerformanceState, SessionHandle};
-use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
+use fdemon_app::state::{DevToolsPanel, DevToolsViewState, PerfDetailsTab, VmConnectionStatus};
 use fdemon_app::{MouseAction, MouseRect};
 use ratatui::{
     buffer::Buffer,
@@ -363,12 +363,12 @@ impl DevToolsView<'_> {
 
         let y = area.y + area.height - 1;
 
-        let hints = match self.state.active_panel {
+        let hints: std::borrow::Cow<'static, str> = match self.state.active_panel {
             DevToolsPanel::Inspector => {
                 if self.state.inspector.details_open {
-                    "[Esc] Close  [Tab] Next Tab  [Shift+Tab] Prev Tab  [r] Refresh  [b] Browser"
+                    "[Esc] Close  [Tab] Next Tab  [Shift+Tab] Prev Tab  [r] Refresh  [b] Browser".into()
                 } else {
-                    "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [Enter] Details  [Shift+H] Hide Impl  [r] Refresh  [b] Browser"
+                    "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [Enter] Details  [Shift+H] Hide Impl  [r] Refresh  [b] Browser".into()
                 }
             }
             DevToolsPanel::Performance => {
@@ -378,10 +378,23 @@ impl DevToolsView<'_> {
                     .unwrap_or(PerfSection::FrameChart);
                 match focused_section {
                     PerfSection::FrameChart => {
-                        "[Esc] Logs  [←/→] Frames  [Tab] Section  ]/[ Tabs  [j/k] Scroll  [b] Browser"
+                        "[Esc] Logs  [←/→] Frames  [Tab] Section  ]/[ Tabs  [j/k] Scroll  [b] Browser".into()
                     }
                     PerfSection::Details => {
-                        "[Esc] Logs  [Tab] Section  ]/[ Tabs  [b] Browser"
+                        let details_tab = self
+                            .session
+                            .map(|h| h.session.performance.details_tab)
+                            .unwrap_or(PerfDetailsTab::FrameAnalysis);
+                        let base = "[Esc] Logs  [Tab] Section  ]/[ Tabs  [b] Browser";
+                        match details_tab {
+                            PerfDetailsTab::TimelineEvents => {
+                                format!("{base}  [f] Filter").into()
+                            }
+                            PerfDetailsTab::RebuildStats => {
+                                format!("{base}  [R] Rebuild track").into()
+                            }
+                            PerfDetailsTab::FrameAnalysis => base.into(),
+                        }
                     }
                 }
             }
@@ -390,9 +403,9 @@ impl DevToolsView<'_> {
                     .session
                     .is_some_and(|s| s.session.memory.alloc_table_selected_row.is_some());
                 if has_alloc_selection {
-                    "[Esc] Deselect  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser"
+                    "[Esc] Deselect  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser".into()
                 } else {
-                    "[Esc] Logs  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser"
+                    "[Esc] Logs  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser".into()
                 }
             }
             DevToolsPanel::Network => {
@@ -400,9 +413,9 @@ impl DevToolsView<'_> {
                     .session
                     .is_some_and(|s| s.session.network.selected_index.is_some());
                 if has_selection {
-                    "[Esc] Deselect  [g/h/q/s/t] Detail tabs  [Space] Toggle rec  [b] Browser"
+                    "[Esc] Deselect  [g/h/q/s/t] Detail tabs  [Space] Toggle rec  [b] Browser".into()
                 } else {
-                    "[Esc] Logs  [↑↓] Navigate  [Enter] Detail  [Space] Toggle rec  [b] Browser"
+                    "[Esc] Logs  [↑↓] Navigate  [Enter] Detail  [Space] Toggle rec  [b] Browser".into()
                 }
             }
         };
@@ -1203,6 +1216,76 @@ mod tests {
         assert!(
             s.contains("Section"),
             "footer should mention Section; footer was: {s}"
+        );
+    }
+
+    // ── Phase-3 Performance footer tests ─────────────────────────────────────
+
+    /// Build a `SessionHandle` with `focused_section == Details` and the given
+    /// `details_tab`.
+    fn make_perf_session_handle_with_details_tab(
+        tab: PerfDetailsTab,
+    ) -> fdemon_app::session::SessionHandle {
+        use fdemon_app::session::{Session, SessionHandle};
+        let mut session = Session::new(
+            "test-device".to_string(),
+            "Test Device".to_string(),
+            "android".to_string(),
+            false,
+        );
+        session.performance.focused_section = PerfSection::Details;
+        session.performance.details_tab = tab;
+        SessionHandle::new(session)
+    }
+
+    #[test]
+    fn test_performance_footer_includes_filter_hint_on_timeline_events_tab() {
+        let handle =
+            make_perf_session_handle_with_details_tab(PerfDetailsTab::TimelineEvents);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            s.contains("[f] Filter"),
+            "footer should include [f] Filter on TimelineEvents tab; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn test_performance_footer_includes_rebuild_hint_on_rebuild_stats_tab() {
+        let handle =
+            make_perf_session_handle_with_details_tab(PerfDetailsTab::RebuildStats);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            s.contains("[R] Rebuild track"),
+            "footer should include [R] Rebuild track on RebuildStats tab; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn test_performance_footer_omits_phase_3_hints_on_frame_analysis_tab() {
+        let handle =
+            make_perf_session_handle_with_details_tab(PerfDetailsTab::FrameAnalysis);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            !s.contains("[f] Filter"),
+            "footer must NOT include [f] Filter on FrameAnalysis tab; footer was: {s}"
+        );
+        assert!(
+            !s.contains("[R] Rebuild track"),
+            "footer must NOT include [R] Rebuild track on FrameAnalysis tab; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn test_performance_footer_omits_phase_3_hints_when_frame_chart_focused() {
+        let handle = make_perf_session_handle(PerfSection::FrameChart);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            !s.contains("[f] Filter"),
+            "footer must NOT include [f] Filter when FrameChart is focused; footer was: {s}"
+        );
+        assert!(
+            !s.contains("[R] Rebuild track"),
+            "footer must NOT include [R] Rebuild track when FrameChart is focused; footer was: {s}"
         );
     }
 

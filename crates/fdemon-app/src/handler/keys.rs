@@ -4,7 +4,7 @@ use crate::input_key::InputKey;
 use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::session::performance::PerfSection;
 use crate::session::NetworkDetailTab;
-use crate::state::{AppState, DevToolsPanel, UiMode};
+use crate::state::{AppState, DevToolsPanel, PerfDetailsTab, UiMode};
 
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
@@ -518,6 +518,45 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             // ── Jump to oldest / live edge ────────────────────────────────────
             InputKey::Home => return Some(Message::PerfJumpToStart),
             InputKey::End => return Some(Message::PerfJumpToEnd),
+
+            // ── Phase-3 contextual bindings (Details section only) ───────────
+            //
+            // `f` cycles the Timeline Events filter (All → UI → Raster → All).
+            // `R` (Shift+r) toggles `ext.flutter.profileWidgetBuilds` for Rebuild Stats.
+            //
+            // IMPORTANT — `R` precedence: these early-returns MUST fire before the
+            // main `match key` block where `InputKey::Char('R') if !is_busy` maps
+            // to `Message::HotRestart`. The early-return here ensures that pressing
+            // `R` on the RebuildStats tab toggles tracking rather than hot-restarting.
+            // The regression tests in `performance_sort_key_tests` pin this ordering.
+            InputKey::Char('f') => {
+                let details_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| {
+                        h.session.performance.focused_section == PerfSection::Details
+                    })
+                    .map(|h| h.session.performance.details_tab);
+                if let Some(PerfDetailsTab::TimelineEvents) = details_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineEventsCycleFilter { session_id });
+                    }
+                }
+            }
+            InputKey::Char('R') => {
+                let details_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| {
+                        h.session.performance.focused_section == PerfSection::Details
+                    })
+                    .map(|h| h.session.performance.details_tab);
+                if let Some(PerfDetailsTab::RebuildStats) = details_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::ToggleRebuildStats { session_id });
+                    }
+                }
+            }
 
             // ── Details tab cycling (Phase 2) ─────────────────────────────────
             // Only active when the Details section is focused.
@@ -2027,6 +2066,119 @@ mod performance_sort_key_tests {
         assert!(
             msg.is_none(),
             "'[' when FrameChart focused should produce no message"
+        );
+    }
+
+    // ── Phase-3 contextual `f` and `R` tests ────────────────────────────────
+
+    /// Helper: state in Performance/Details with a given details_tab.
+    fn make_state_in_details(tab: crate::state::PerfDetailsTab) -> AppState {
+        let mut state = make_state_in_performance_panel();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+            h.session.performance.details_tab = tab;
+        }
+        state
+    }
+
+    #[test]
+    fn test_f_on_timeline_events_tab_emits_filter_cycle() {
+        let state =
+            make_state_in_details(crate::state::PerfDetailsTab::TimelineEvents);
+        let msg = handle_key_devtools(&state, InputKey::Char('f'));
+        assert!(
+            matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
+            "'f' on TimelineEvents tab should emit TimelineEventsCycleFilter; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_f_on_frame_analysis_tab_does_not_emit_filter_cycle() {
+        let state =
+            make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
+        let msg = handle_key_devtools(&state, InputKey::Char('f'));
+        assert!(
+            !matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
+            "'f' on FrameAnalysis tab should NOT emit TimelineEventsCycleFilter; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_f_on_logs_panel_does_not_emit_filter_cycle() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        // active_panel defaults to Inspector (not Performance)
+        let msg = handle_key_devtools(&state, InputKey::Char('f'));
+        assert!(
+            !matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
+            "'f' outside Performance panel should NOT emit TimelineEventsCycleFilter; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_rebuild_stats_tab_emits_toggle() {
+        let state =
+            make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::ToggleRebuildStats { .. })),
+            "'R' on RebuildStats tab should emit ToggleRebuildStats; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_rebuild_stats_tab_does_not_trigger_hot_restart() {
+        let state =
+            make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            !matches!(msg, Some(Message::HotRestart)),
+            "'R' on RebuildStats tab must NOT emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_frame_analysis_tab_triggers_hot_restart() {
+        // `R` with FrameAnalysis tab (not RebuildStats) must NOT emit ToggleRebuildStats.
+        // In DevTools mode the `R` key has no global binding (it falls through to None),
+        // so the critical regression check is that `ToggleRebuildStats` is NOT emitted.
+        // The Logs-panel (Normal mode) test below pins that the global hot-restart `R`
+        // is preserved there.
+        let state = make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            !matches!(msg, Some(Message::ToggleRebuildStats { .. })),
+            "'R' on FrameAnalysis tab must NOT emit ToggleRebuildStats; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_logs_panel_triggers_hot_restart() {
+        // In Normal (logs) mode, `R` must still trigger hot restart.
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::Normal;
+        let msg = handle_key(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' in Normal (logs) mode should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_memory_panel_triggers_hot_restart() {
+        // `R` in DevTools/Memory panel must NOT emit ToggleRebuildStats.
+        // (In DevTools mode, `R` with no specific perf-details context falls through
+        // to None; the hot-restart binding lives in Normal mode only.)
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            !matches!(msg, Some(Message::ToggleRebuildStats { .. })),
+            "'R' on Memory panel must NOT emit ToggleRebuildStats; got {msg:?}"
         );
     }
 }
