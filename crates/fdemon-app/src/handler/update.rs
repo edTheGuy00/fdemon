@@ -2417,6 +2417,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 state, session_id, map,
             )
         }
+        Message::RebuildStatsToggleFailed { session_id, reason } => {
+            devtools::performance::rebuild_stats::handle_toggle_failed(state, session_id, reason)
+        }
         Message::TimelineEventsBatchReceived { session_id, events } => {
             devtools::performance::timeline::handle_batch(state, session_id, events)
         }

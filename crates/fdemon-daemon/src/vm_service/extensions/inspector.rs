@@ -13,6 +13,7 @@ use super::ext;
 use super::parse_diagnostics_node_response;
 use super::parse_optional_diagnostics_node_response;
 use super::VmServiceClient;
+use crate::vm_service::client::VmRequestHandle;
 
 // ---------------------------------------------------------------------------
 // Object Group Manager
@@ -295,6 +296,42 @@ pub async fn widget_location_id_map(
     isolate_id: &str,
 ) -> Result<LocationMap> {
     let response = client
+        .call_extension(ext::WIDGET_LOCATION_ID_MAP, isolate_id, None)
+        .await?;
+
+    // Response is a JSON object whose keys are file URIs. Filter out the
+    // "type" marker key that VM Service responses always carry.
+    let obj = response
+        .as_object()
+        .ok_or_else(|| Error::protocol("widgetLocationIdMap response was not a JSON object"))?;
+
+    let mut map = LocationMap::default();
+    for (key, value) in obj {
+        if key == "type" {
+            continue;
+        }
+        map.merge_parallel_arrays(key, value)?;
+    }
+    Ok(map)
+}
+
+/// Fetch the engine's widget location map using a [`VmRequestHandle`].
+///
+/// Identical to [`widget_location_id_map`] but accepts the channel-based
+/// [`VmRequestHandle`] that background action tasks hold, rather than the
+/// full [`VmServiceClient`]. Use this from `fdemon-app` action tasks where
+/// only the handle (not the client) is available.
+///
+/// # Errors
+///
+/// - [`Error::Protocol`] if the VM Service response is not a JSON object, or
+///   if any per-file location block fails to parse (e.g., array length mismatch).
+/// - [`Error::ChannelClosed`] if the VM Service client connection is closed.
+pub async fn widget_location_id_map_handle(
+    handle: &VmRequestHandle,
+    isolate_id: &str,
+) -> Result<LocationMap> {
+    let response = handle
         .call_extension(ext::WIDGET_LOCATION_ID_MAP, isolate_id, None)
         .await?;
 

@@ -5,6 +5,7 @@
 //! - [`handle_toggle`] — toggle `ext.flutter.profileWidgetBuilds` via an async RPC.
 //! - [`handle_extension_state_changed`] — update state when the toggle completes.
 //! - [`handle_location_map_fetched`] — merge a one-shot location map fallback.
+//! - [`handle_toggle_failed`] — surface RPC toggle failure to the session log buffer.
 
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::session::SessionId;
@@ -158,6 +159,30 @@ pub(crate) fn handle_location_map_fetched(
                 .by_id
                 .insert(id, location);
         }
+    }
+    UpdateResult::none()
+}
+
+// ── handle_toggle_failed ──────────────────────────────────────────────────────
+
+/// Handle a failed `ToggleProfileWidgetBuilds` RPC or `widgetLocationIdMap` fetch.
+///
+/// Appends a `LogEntry` with [`fdemon_core::LogLevel::Warning`] to the session's
+/// log buffer so the user knows the rebuild-tracking toggle (or location-map fetch)
+/// did not succeed. Returns `UpdateResult::none()` — no further action required,
+/// since the companion `RebuildStatsExtensionStateChanged` rollback message has
+/// already been emitted by the action task.
+pub(crate) fn handle_toggle_failed(
+    state: &mut AppState,
+    session_id: SessionId,
+    reason: String,
+) -> UpdateResult {
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.add_log(fdemon_core::LogEntry::new(
+            fdemon_core::LogLevel::Warning,
+            fdemon_core::LogSource::App,
+            format!("Rebuild tracking toggle failed: {reason}"),
+        ));
     }
     UpdateResult::none()
 }
@@ -488,5 +513,159 @@ mod tests {
             .performance;
         assert!(perf.rebuild_stats_location_map.by_id.contains_key(&1));
         assert!(perf.rebuild_stats_location_map.by_id.contains_key(&2));
+    }
+
+    // ── handle_toggle_failed ──────────────────────────────────────────────────
+
+    /// Verify that `RebuildStatsToggleFailed` appends exactly one log entry to
+    /// the session's log buffer with the expected message text.
+    #[test]
+    fn test_handle_toggle_failed_appends_log_entry() {
+        let (mut state, session_id) = make_state_with_session();
+
+        let initial_log_count = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .logs
+            .len();
+
+        update(
+            &mut state,
+            Message::RebuildStatsToggleFailed {
+                session_id,
+                reason: "test error reason".to_string(),
+            },
+        );
+
+        let session = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            session.session.logs.len(),
+            initial_log_count + 1,
+            "expected one new log entry"
+        );
+
+        let last = session.session.logs.iter().last().unwrap();
+        assert!(
+            last.message.contains("test error reason"),
+            "log message should contain the reason: {}",
+            last.message
+        );
+        assert!(
+            last.message.contains("Rebuild tracking toggle failed"),
+            "log message should mention 'Rebuild tracking toggle failed': {}",
+            last.message
+        );
+        assert_eq!(
+            last.level,
+            fdemon_core::LogLevel::Warning,
+            "log entry should use Warning level"
+        );
+    }
+
+    /// Verify that when both rollback (`RebuildStatsExtensionStateChanged`) and
+    /// failure (`RebuildStatsToggleFailed`) messages arrive (as emitted by the
+    /// `ToggleProfileWidgetBuilds` action on RPC failure), the state is consistent:
+    /// - The optimistic state is rolled back.
+    /// - The session log has a failure entry.
+    #[test]
+    fn test_toggle_failure_emits_rollback_and_log() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Simulate: user presses R, handle_toggle optimistically sets enabled = true.
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.rebuild_stats_enabled = true;
+        }
+
+        let initial_log_count = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .logs
+            .len();
+
+        // The action task emits:
+        //   1. RebuildStatsExtensionStateChanged { enabled: false } — rollback
+        //   2. RebuildStatsToggleFailed { reason: "..." }
+        update(
+            &mut state,
+            Message::RebuildStatsExtensionStateChanged {
+                session_id,
+                enabled: false,
+            },
+        );
+        update(
+            &mut state,
+            Message::RebuildStatsToggleFailed {
+                session_id,
+                reason: "isolate disconnected".to_string(),
+            },
+        );
+
+        let session = state.session_manager.get(session_id).unwrap();
+
+        // State should be rolled back to disabled.
+        assert!(
+            !session.session.performance.rebuild_stats_enabled,
+            "rebuild_stats_enabled should be false after rollback"
+        );
+
+        // Log buffer should have grown by at least one entry (the failure notice).
+        assert!(
+            session.session.logs.len() > initial_log_count,
+            "expected at least one new log entry from toggle failure"
+        );
+
+        let last = session.session.logs.iter().last().unwrap();
+        assert!(
+            last.message.contains("isolate disconnected"),
+            "log should contain the failure reason: {}",
+            last.message
+        );
+    }
+
+    /// Verify that `RebuildStatsToggleFailed` is also the mechanism used when the
+    /// location-map fetch fails (observable behavior: same handler path).
+    ///
+    /// This verifies the handler contract for AC #3 and AC #5 from the task spec.
+    /// The action-layer wiring (T04) calls the same message variant whether the
+    /// failure comes from `ToggleProfileWidgetBuilds` or `FetchWidgetLocationIdMap`.
+    #[test]
+    fn test_location_map_fetch_failure_emits_toggle_failed() {
+        let (mut state, session_id) = make_state_with_session();
+
+        let initial_log_count = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .logs
+            .len();
+
+        // A `FetchWidgetLocationIdMap` failure sends `RebuildStatsToggleFailed`
+        // with a reason that includes "Failed to fetch widget location map".
+        update(
+            &mut state,
+            Message::RebuildStatsToggleFailed {
+                session_id,
+                reason: "Failed to fetch widget location map: channel closed".to_string(),
+            },
+        );
+
+        let session = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            session.session.logs.len(),
+            initial_log_count + 1,
+            "expected one new log entry for location-map fetch failure"
+        );
+
+        let last = session.session.logs.iter().last().unwrap();
+        assert!(
+            last.message.contains("Failed to fetch widget location map"),
+            "log should contain the location-map failure reason: {}",
+            last.message
+        );
     }
 }

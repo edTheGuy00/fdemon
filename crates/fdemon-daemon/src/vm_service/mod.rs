@@ -93,8 +93,8 @@ pub use extensions::{
     get_layout_node, get_root_widget_tree, get_selected_widget, is_extension_not_available,
     parse_bool_extension_response, parse_data_extension_response, parse_diagnostics_node_response,
     parse_optional_diagnostics_node_response, performance_overlay, query_all_overlays,
-    repaint_rainbow, toggle_bool_extension, widget_inspector, DebugDumpKind, DebugOverlayState,
-    ObjectGroupManager, WidgetInspector,
+    repaint_rainbow, toggle_bool_extension, widget_inspector, widget_location_id_map_handle,
+    DebugDumpKind, DebugOverlayState, ObjectGroupManager, WidgetInspector,
 };
 pub use logging::{parse_log_record, vm_level_to_log_level, vm_log_to_log_entry, VmLogRecord};
 pub use network::{

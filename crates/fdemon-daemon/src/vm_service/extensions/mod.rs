@@ -44,8 +44,8 @@ pub use dumps::{
     debug_dump, debug_dump_app, debug_dump_layer_tree, debug_dump_render_tree, DebugDumpKind,
 };
 pub use inspector::{
-    get_details_subtree, get_root_widget_tree, get_selected_widget, ObjectGroupManager,
-    WidgetInspector,
+    get_details_subtree, get_root_widget_tree, get_selected_widget, widget_location_id_map_handle,
+    ObjectGroupManager, WidgetInspector,
 };
 pub use layout::{extract_layout_info, extract_layout_tree, fetch_layout_data, get_layout_node};
 pub use overlays::{

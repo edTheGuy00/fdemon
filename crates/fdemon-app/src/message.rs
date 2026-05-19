@@ -1220,6 +1220,21 @@ pub enum Message {
         map: fdemon_core::rebuild_stats::LocationMap,
     },
 
+    /// The async toggle of `ext.flutter.profileWidgetBuilds` failed.
+    ///
+    /// Emitted by the `ToggleProfileWidgetBuilds` action when the RPC call
+    /// returns an error (e.g., dying isolate during hot-restart). The handler
+    /// appends a `LogEntry` to the session log buffer so the user knows the
+    /// toggle did not take effect.
+    ///
+    /// A companion `RebuildStatsExtensionStateChanged` with the rolled-back
+    /// state is also emitted so the UI is consistent with the actual extension
+    /// state.
+    RebuildStatsToggleFailed {
+        session_id: SessionId,
+        reason: String,
+    },
+
     /// The 1-Hz timeline poll returned a batch of new events.
     ///
     /// Appended to `PerformanceState::timeline_events` and truncated to

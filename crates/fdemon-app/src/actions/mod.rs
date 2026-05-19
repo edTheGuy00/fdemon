@@ -1048,6 +1048,22 @@ pub fn handle_action(
                                 session_id,
                                 e
                             );
+                            // Roll back the optimistic UI state by emitting the opposite of
+                            // what was attempted: if we tried to enable and failed, the extension
+                            // is still disabled (and vice versa).
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsExtensionStateChanged {
+                                    session_id,
+                                    enabled: !enabled,
+                                })
+                                .await;
+                            // Notify the user via the session log buffer.
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsToggleFailed {
+                                    session_id,
+                                    reason: format!("{e}"),
+                                })
+                                .await;
                         }
                     }
                 });
@@ -1077,33 +1093,22 @@ pub fn handle_action(
                                 session_id,
                                 e
                             );
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsToggleFailed {
+                                    session_id,
+                                    reason: format!("Failed to fetch widget location map: {e}"),
+                                })
+                                .await;
                             return;
                         }
                     };
-                    let result = handle
-                        .call_extension(
-                            "ext.flutter.inspector.widgetLocationIdMap",
-                            &isolate_id,
-                            None,
-                        )
-                        .await;
-                    match result {
-                        Ok(response) => {
-                            let mut map = fdemon_core::rebuild_stats::LocationMap::default();
-                            if let Some(obj) = response.as_object() {
-                                for (key, value) in obj {
-                                    if key == "type" {
-                                        continue;
-                                    }
-                                    if let Err(e) = map.merge_parallel_arrays(key, value) {
-                                        tracing::warn!(
-                                            "FetchWidgetLocationIdMap: failed to merge '{}': {}",
-                                            key,
-                                            e
-                                        );
-                                    }
-                                }
-                            }
+                    match fdemon_daemon::vm_service::widget_location_id_map_handle(
+                        &handle,
+                        &isolate_id,
+                    )
+                    .await
+                    {
+                        Ok(map) => {
                             let _ = msg_tx
                                 .send(crate::message::Message::RebuildStatsLocationMapFetched {
                                     session_id,
@@ -1117,6 +1122,12 @@ pub fn handle_action(
                                 session_id,
                                 e
                             );
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsToggleFailed {
+                                    session_id,
+                                    reason: format!("Failed to fetch widget location map: {e}"),
+                                })
+                                .await;
                         }
                     }
                 });
