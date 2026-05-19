@@ -366,7 +366,8 @@ impl DevToolsView<'_> {
         let hints: std::borrow::Cow<'static, str> = match self.state.active_panel {
             DevToolsPanel::Inspector => {
                 if self.state.inspector.details_open {
-                    "[Esc] Close  [Tab] Next Tab  [Shift+Tab] Prev Tab  [r] Refresh  [b] Browser".into()
+                    "[Esc] Close  [Tab] Next Tab  [Shift+Tab] Prev Tab  [r] Refresh  [b] Browser"
+                        .into()
                 } else {
                     "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [Enter] Details  [Shift+H] Hide Impl  [r] Refresh  [b] Browser".into()
                 }
@@ -413,9 +414,11 @@ impl DevToolsView<'_> {
                     .session
                     .is_some_and(|s| s.session.network.selected_index.is_some());
                 if has_selection {
-                    "[Esc] Deselect  [g/h/q/s/t] Detail tabs  [Space] Toggle rec  [b] Browser".into()
+                    "[Esc] Deselect  [g/h/q/s/t] Detail tabs  [Space] Toggle rec  [b] Browser"
+                        .into()
                 } else {
-                    "[Esc] Logs  [↑↓] Navigate  [Enter] Detail  [Space] Toggle rec  [b] Browser".into()
+                    "[Esc] Logs  [↑↓] Navigate  [Enter] Detail  [Space] Toggle rec  [b] Browser"
+                        .into()
                 }
             }
         };
@@ -1240,8 +1243,7 @@ mod tests {
 
     #[test]
     fn test_performance_footer_includes_filter_hint_on_timeline_events_tab() {
-        let handle =
-            make_perf_session_handle_with_details_tab(PerfDetailsTab::TimelineEvents);
+        let handle = make_perf_session_handle_with_details_tab(PerfDetailsTab::TimelineEvents);
         let s = performance_footer_string_with_session(&handle);
         assert!(
             s.contains("[f] Filter"),
@@ -1251,8 +1253,7 @@ mod tests {
 
     #[test]
     fn test_performance_footer_includes_rebuild_hint_on_rebuild_stats_tab() {
-        let handle =
-            make_perf_session_handle_with_details_tab(PerfDetailsTab::RebuildStats);
+        let handle = make_perf_session_handle_with_details_tab(PerfDetailsTab::RebuildStats);
         let s = performance_footer_string_with_session(&handle);
         assert!(
             s.contains("[R] Rebuild track"),
@@ -1262,8 +1263,7 @@ mod tests {
 
     #[test]
     fn test_performance_footer_omits_phase_3_hints_on_frame_analysis_tab() {
-        let handle =
-            make_perf_session_handle_with_details_tab(PerfDetailsTab::FrameAnalysis);
+        let handle = make_perf_session_handle_with_details_tab(PerfDetailsTab::FrameAnalysis);
         let s = performance_footer_string_with_session(&handle);
         assert!(
             !s.contains("[f] Filter"),

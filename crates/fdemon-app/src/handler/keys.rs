@@ -533,9 +533,7 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                 let details_tab = state
                     .session_manager
                     .selected()
-                    .filter(|h| {
-                        h.session.performance.focused_section == PerfSection::Details
-                    })
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
                     .map(|h| h.session.performance.details_tab);
                 if let Some(PerfDetailsTab::TimelineEvents) = details_tab {
                     if let Some(session_id) = active_id {
@@ -547,9 +545,7 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                 let details_tab = state
                     .session_manager
                     .selected()
-                    .filter(|h| {
-                        h.session.performance.focused_section == PerfSection::Details
-                    })
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
                     .map(|h| h.session.performance.details_tab);
                 if let Some(PerfDetailsTab::RebuildStats) = details_tab {
                     if let Some(session_id) = active_id {
@@ -2084,8 +2080,7 @@ mod performance_sort_key_tests {
 
     #[test]
     fn test_f_on_timeline_events_tab_emits_filter_cycle() {
-        let state =
-            make_state_in_details(crate::state::PerfDetailsTab::TimelineEvents);
+        let state = make_state_in_details(crate::state::PerfDetailsTab::TimelineEvents);
         let msg = handle_key_devtools(&state, InputKey::Char('f'));
         assert!(
             matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
@@ -2095,8 +2090,7 @@ mod performance_sort_key_tests {
 
     #[test]
     fn test_f_on_frame_analysis_tab_does_not_emit_filter_cycle() {
-        let state =
-            make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
+        let state = make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
         let msg = handle_key_devtools(&state, InputKey::Char('f'));
         assert!(
             !matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
@@ -2120,8 +2114,7 @@ mod performance_sort_key_tests {
 
     #[test]
     fn test_capital_r_on_rebuild_stats_tab_emits_toggle() {
-        let state =
-            make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
+        let state = make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
         let msg = handle_key_devtools(&state, InputKey::Char('R'));
         assert!(
             matches!(msg, Some(Message::ToggleRebuildStats { .. })),
@@ -2131,8 +2124,7 @@ mod performance_sort_key_tests {
 
     #[test]
     fn test_capital_r_on_rebuild_stats_tab_does_not_trigger_hot_restart() {
-        let state =
-            make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
+        let state = make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
         let msg = handle_key_devtools(&state, InputKey::Char('R'));
         assert!(
             !matches!(msg, Some(Message::HotRestart)),
