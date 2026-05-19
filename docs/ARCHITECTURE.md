@@ -1141,6 +1141,7 @@ Three new fields mirror the existing `perf_*` / `alloc_*` / `network_*` pattern:
 | `ToggleRebuildStats { session_id }` | `R` key binding | `handler/devtools/performance/rebuild_stats.rs` |
 | `RebuildStatsExtensionStateChanged { session_id, enabled }` | On-success follow-up from toggle RPC | `handler/devtools/performance/rebuild_stats.rs` |
 | `RebuildStatsLocationMapFetched { session_id, location_map }` | One-shot `widgetLocationIdMap` RPC response | `handler/devtools/performance/rebuild_stats.rs` |
+| `RebuildStatsToggleFailed { session_id, reason }` | On-failure follow-up from toggle RPC or `widgetLocationIdMap` fetch | `handler/devtools/performance/rebuild_stats.rs` — appends a `Warning` log entry |
 | `TimelineEventsBatchReceived { session_id, events }` | `spawn_timeline_polling` response | `handler/devtools/performance/timeline.rs` |
 | `TimelineEventsCycleFilter { session_id }` | `f` key binding on Timeline Events tab | `handler/devtools/performance/timeline.rs` |
 | `VmServiceTimelineMonitoringStarted { session_id, shutdown_tx, pause_tx, task_handle }` | `spawn_timeline_polling` startup | `handler/update.rs` — stores handles on `SessionHandle` |
@@ -1161,11 +1162,12 @@ New module `fdemon-daemon/vm_service/extensions/performance.rs`:
 | `set_profile_widget_builds(client, isolate_id, enabled)` | Enables/disables widget build profiling; pass `None` to read current state. |
 | `get_profile_widget_builds(client, isolate_id)` | Convenience wrapper — calls `set_profile_widget_builds` with `None`. |
 
-New function in `fdemon-daemon/vm_service/extensions/inspector.rs`:
+New functions in `fdemon-daemon/vm_service/extensions/inspector.rs`:
 
 | Function | Purpose |
 |---|---|
-| `widget_location_id_map(client, isolate_id)` | Fetches the static `widgetLocationIdMap` from the Flutter inspector. |
+| `widget_location_id_map(client, isolate_id)` | Fetches the static `widgetLocationIdMap` from the Flutter inspector; takes a `VmServiceClient`. |
+| `widget_location_id_map_handle(handle, isolate_id)` | Identical to `widget_location_id_map` but accepts a `VmRequestHandle`; used from action tasks where only the handle is available. |
 
 New functions in `fdemon-daemon/vm_service/timeline.rs`:
 
@@ -1178,17 +1180,45 @@ New functions in `fdemon-daemon/vm_service/timeline.rs`:
 
 `fdemon-app/src/actions/performance::spawn_timeline_polling` starts a background task that polls `fetch_timeline_chunk` at approximately 1 Hz. The task is gated on `timeline_pause_tx`: `false` = polling active (entered Performance tab), `true` = paused (left Performance tab). The task is shut down via `timeline_shutdown_tx` on session teardown.
 
+`TIMELINE_POLL_MIN_MS` (200 ms) is a compile-time safety floor on the poll interval; it prevents accidental sub-200 ms polling when `poll_interval_ms` is misconfigured. The user-facing default of 1 Hz (1000 ms) is well above this floor.
+
+**Timeline watermark seeding:** before the first poll tick, the task calls `seed_timeline_watermark`, which queries `getVMTimelineMicros` to establish the starting cursor. On failure it retries once after 100 ms; if the retry also fails, it falls back to a wall-clock "now-ish" estimate. This bounds the first fetch extent to milliseconds rather than the full VM-lifetime event buffer.
+
+**Timeline pause and buffer clear on panel leave:** when the user navigates away from the Performance panel (`handle_switch_panel`) or exits DevTools mode (`handle_exit_devtools_mode`), the handler sends `true` on `timeline_pause_tx` to pause polling, and clears `PerformanceState::timeline_events` plus resets `timeline_events_scroll_offset` to `0`. This ensures the next entry to the Performance panel starts from a clean, current-data state rather than displaying a stale backlog. The same exit path also closes the `Flutter.RebuiltWidgets` panel gate for all sessions.
+
+**Post-fetch watermark update:** after each successful `fetch_timeline_chunk` call, the task re-queries `getVMTimelineMicros` to advance the watermark to the post-fetch VM clock. Using the pre-fetch timestamp plus one would silently drop events whose `ts` falls in the window between the pre-fetch query and the moment the fetch completes. The post-fetch query closes this gap. On failure, the task falls back to `pre_fetch_micros + 1` to maintain forward progress.
+
+**`VmRequestApi` trait (`fdemon-daemon/vm_service/request_api.rs`):** a minimal `pub` trait with two async methods — `request` and `call_extension` — mirroring the signatures on `VmRequestHandle`. `VmRequestHandle` implements it for production use. `spawn_timeline_polling` and the free functions it calls (`get_vm_timeline_micros`, `fetch_timeline_chunk`) are generic over `impl VmRequestApi`, which allows unit tests to substitute a `MockVmRequestApi` without the concrete WebSocket infrastructure. Test-only mock types remain `#[cfg(test)]`-gated. This is the only polling task currently using this trait; higher-level helpers that need `main_isolate_id` call free functions rather than the trait directly.
+
 **Phase 3: `Flutter.RebuiltWidgets` event dispatch:**
 
 `forward_vm_events` in `fdemon-app/src/actions/vm_service.rs` inspects the `extensionKind` field of each Flutter VM extension event. When `extensionKind == "Flutter.RebuiltWidgets"`, the event data is parsed with `fdemon-core::rebuild_stats::parse_rebuilt_widgets_event` and forwarded as `Message::RebuildStatsEventReceived`.
+
+**Phase 3-followup: forwarder panel gate:**
+
+`forward_vm_events` consults `rebuilt_widgets_gate_rx` — a `watch::Receiver<bool>` — before parsing any `Flutter.RebuiltWidgets` event. When the received value is `false` (gate closed), the branch continues immediately without parsing or allocating. The gate is open only when the Performance panel is the active DevTools panel; it is closed on all other panel switches and on DevTools exit. The sender (`rebuilt_widgets_gate_tx: Option<Arc<watch::Sender<bool>>>`) is held on `SessionHandle` and updated by `handle_switch_panel` and `handle_exit_devtools_mode`. This eliminates per-frame allocation and message dispatch at ~60 fps when the user is viewing Inspector, Memory, Network, or normal logs.
+
+`Flutter.RebuiltWidgets` events are sent to the TEA handler via `msg_tx.try_send(...)` rather than `.send().await`. This avoids head-of-line blocking: if the handler is slow, the channel back-pressure drops the current frame rather than stalling the forwarder loop (which would delay `Flutter.Frame` events and error forwarding). A `TrySendError::Full` result is logged at `debug` level; `TrySendError::Closed` exits the loop.
 
 **Phase 3: hot-restart re-enable of `profileWidgetBuilds`:**
 
 When `Message::SessionRestartCompleted` is processed, `fdemon-app/src/handler/update.rs` checks `handle.session.performance.rebuild_stats_enabled`. If `true`, it re-dispatches a `ToggleRebuildStats` action to re-enable `ext.flutter.profileWidgetBuilds` on the new post-restart isolate. This is necessary because hot restart replaces the Dart isolate, clearing all service extensions.
 
-**Conditional `RebuildStats` tab visibility:**
+**Phase 3-followup: `RebuildStatsToggleFailed` and rollback flow:**
 
-The `RebuildStats` tab in the TUI tab bar (`fdemon-tui/src/widgets/devtools/performance/details/mod.rs`) is shown only when `perf_state.rebuild_stats_enabled == true`. When hidden, `PerfCycleDetailsTab` still cycles through all three `PerfDetailsTab` variants internally — the handler does not skip hidden tabs; the renderer simply does not display the tab label. This means a user cycling tabs while rebuild tracking is disabled can land on `RebuildStats` and see the empty state; the tab bar header is absent but the content area renders correctly with an "enable rebuild tracking" prompt.
+When the `ToggleProfileWidgetBuilds` RPC fails, or when the subsequent `FetchWidgetLocationIdMap` action fails, the action task emits two messages in sequence: `RebuildStatsExtensionStateChanged { enabled: <actual_state> }` (the rollback) followed by `RebuildStatsToggleFailed { reason }`. The handler for `RebuildStatsToggleFailed` (`handle_toggle_failed` in `handler/devtools/performance/rebuild_stats.rs`) appends a `Warning`-level `LogEntry` to the session log so the user sees the failure without a modal. The companion `RebuildStatsExtensionStateChanged` rollback fires first to keep `rebuild_stats_enabled` consistent with the actual extension state before the warning is displayed.
+
+**Phase 3-followup: `FetchWidgetLocationIdMap` action-layer cleanup:**
+
+The `FetchWidgetLocationIdMap` action in `fdemon-app/src/actions/mod.rs` calls `fdemon_daemon::vm_service::widget_location_id_map_handle` directly and forwards the typed `LocationMap` as `Message::RebuildStatsLocationMapFetched`. The action task is a thin transport wrapper — it resolves the isolate ID, calls the daemon helper, and dispatches the result or a `RebuildStatsToggleFailed` on error. This mirrors the `FetchAllocationProfile` pattern and means no raw JSON parsing remains in `fdemon-app`.
+
+**Phase 3-followup: `auto_enable_rebuild_tracking` wiring:**
+
+`auto_enable_rebuild_tracking` (a `[devtools]` config key) is consulted in the `VmServiceConnected` handler. After the `PerformanceState` reset that runs on every connect, `rebuild_stats_enabled` is always `false`. If `auto_enable_rebuild_tracking == true`, the handler appends a `ToggleProfileWidgetBuilds { enabled: true }` action to `UpdateResult::extra_actions`. The hot-restart re-enable path in `SessionRestartCompleted` is independent — it re-enables only when `rebuild_stats_enabled` was `true` at restart time — and the two paths are mutually exclusive in practice: `VmServiceConnected` fires on first connect and the `SessionRestartCompleted` path fires on subsequent restarts.
+
+**Conditional `RebuildStats` tab visibility and `next_visible` cycle:**
+
+The `RebuildStats` tab in the TUI tab bar (`fdemon-tui/src/widgets/devtools/performance/details/mod.rs`) is shown only when `perf_state.rebuild_stats_enabled == true`. `PerfDetailsTab::next_visible(rebuild_stats_enabled: bool)` (defined in `fdemon-app/src/state.rs`) computes the next visible tab in the cycle, skipping `RebuildStats` when it is disabled: `FrameAnalysis → TimelineEvents → FrameAnalysis`. When enabled, it delegates to the full three-step `next()` cycle. `PerfCycleDetailsTab` uses `next_visible` so the user never lands on the disabled tab by cycling. The `RebuildStats` variant is skipped regardless of which tab the user is currently on when the flag is false — including when the cursor is already on `RebuildStats` (e.g. the user disabled tracking mid-session).
 
 **Phase 3: `details_pane_visible_height` first consumer:**
 
@@ -1208,7 +1238,7 @@ Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/confi
 
 | Key | Context | Effect |
 |---|---|---|
-| `R` | Performance panel, Details focused on Rebuild Stats tab | Toggles `ext.flutter.profileWidgetBuilds`; emits `Message::ToggleRebuildStats`. Shadows the global `R` (hot restart) only when focused. |
+| `R` | Performance panel, Details focused on Rebuild Stats tab | Toggles `ext.flutter.profileWidgetBuilds`; emits `Message::ToggleRebuildStats`. Falls through to `HotRestart` in all other contexts (Inspector, Memory, Network, FrameChart, FrameAnalysis tab, TimelineEvents tab). |
 | `f` | Performance panel, Details focused on Timeline Events tab | Cycles `TimelineFilter` (`All → Ui → Raster → All`); emits `Message::TimelineEventsCycleFilter`. |
 
 **Phase 3: `fdemon-core` rebuild stats and timeline types:**
@@ -1232,6 +1262,16 @@ Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/confi
 | `TimelinePhase` | Event phase — `Begin`, `End`, `Complete`, `Instant`, `Other`. |
 | `TimelineEvent` | A single VM timeline event: `name`, `category`, `thread`, `tid`, `phase`, `ts`, `dur`, `frame_number`. |
 | `parse_vm_timeline` | Parses the JSON response of a `getVMTimeline` call into `Vec<TimelineEvent>`. |
+
+**Phase 3-followup: `PROFILE_WIDGET_BUILDS` constant and `I64_MAX_AS_U64` guard:**
+
+`PROFILE_WIDGET_BUILDS` (`"ext.flutter.profileWidgetBuilds"`) is defined in `fdemon-daemon/vm_service/extensions/mod.rs::ext` and used both by `set_profile_widget_builds` in `extensions/performance.rs` and by the `enable_frame_tracking` helper in `timeline.rs`. Using the named constant (rather than a raw string literal) at every call site prevents typo divergence.
+
+`I64_MAX_AS_U64` is a private constant in `fetch_timeline_chunk` (`timeline.rs`) that clamps the `u64` timestamp arguments to `i64::MAX` before casting them to `i64` for the `getVMTimeline` JSON params. This guards against undefined behaviour on pathological values from the VM clock.
+
+**Phase 3-followup: `text_helpers` module (`fdemon-tui`):**
+
+`fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` is a `pub(super)` module shared by the three sibling tab renderers (`frame_analysis_tab.rs`, `rebuild_stats_tab.rs`, `timeline_events_tab.rs`). It provides `truncate_with_ellipsis`, `pad_right`, `pad_left`, and the `PLACEHOLDER_LINE_COUNT` constant. All exports are `pub(super)` — they are invisible outside the `details` module subtree. Integration tests for `VmRequestApi` polling live in `fdemon-app/src/actions/performance.rs` (inline `#[cfg(test)]` module).
 
 ### Memory Panel Interactivity
 

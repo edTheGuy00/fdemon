@@ -103,6 +103,20 @@ See `docs/ARCHITECTURE.md` for the complete dependency matrix.
 - Classify errors as `fatal` vs `recoverable`
 - Add context with `.context()` or `.with_context()`
 
+## Approved Optimizations
+
+### Forwarder Panel Gate (`forward_vm_events`)
+
+`forward_vm_events` in `fdemon-app/src/actions/vm_service.rs` consults a `watch::Receiver<bool>` (`rebuilt_widgets_gate_rx`) before parsing any `Flutter.RebuiltWidgets` event. When the value is `false`, the branch calls `continue` without parsing or allocating. This is an intentional early-return optimization, not a logic error: `Flutter.RebuiltWidgets` events arrive at ~60 fps and are only meaningful when the Performance panel is visible. The gate is managed by `handle_switch_panel` and `handle_exit_devtools_mode`.
+
+### `try_send` for `Flutter.RebuiltWidgets` (Backpressure)
+
+`Flutter.RebuiltWidgets` events are forwarded to the TEA handler via `msg_tx.try_send(...)` rather than `.send().await`. This is the canonical backpressure strategy for high-frequency VM Service events: if the handler is slow and the channel is full, the current frame is dropped and logged at `debug` level, preventing head-of-line blocking of lower-volume events (`Flutter.Frame`, error events). `TrySendError::Closed` exits the loop. Do not change this to `.send().await` without understanding the throughput implications.
+
+### `pub(super)` Module Boundary: `text_helpers`
+
+`fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` is declared `pub(super)` and all its exports (`truncate_with_ellipsis`, `pad_right`, `pad_left`, `PLACEHOLDER_LINE_COUNT`) are also `pub(super)`. This is intentional: the helpers are shared across sibling tab renderers within the `details` module but must not leak to the broader `widgets` hierarchy. Future helpers added to this module must keep the same visibility.
+
 ## Performance Concerns
 
 ### Hot Paths
