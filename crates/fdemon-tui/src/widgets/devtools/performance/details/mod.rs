@@ -4,11 +4,14 @@
 //! panel contains three tabs:
 //!
 //! - **Frame Analysis** — populated in Phase 2 ([`frame_analysis_tab`]).
-//! - **Rebuild Stats** — Phase 2 stub ([`rebuild_stats_tab`]); populated in Phase 3.
-//! - **Timeline Events** — Phase 2 stub ([`timeline_events_tab`]); populated in Phase 3.
+//! - **Rebuild Stats** — Phase 3 ([`rebuild_stats_tab`]); visible only when
+//!   `PerformanceState::rebuild_stats_enabled == true`.
+//! - **Timeline Events** — Phase 3 ([`timeline_events_tab`]).
 //!
-//! Tab cycling is keyboard-only in Phase 2 (`]` / `[`). Mouse clicks on tab
-//! labels are deferred to Phase 3 (mirrors the inspector details TODO).
+//! Tab cycling is keyboard-only (`]` / `[`). The `RebuildStats` tab chip is
+//! conditionally hidden from the strip when rebuild tracking is disabled; if the
+//! currently selected tab is the hidden `RebuildStats`, the dispatcher falls
+//! through to `TimelineEvents`.
 
 use fdemon_app::session::PerformanceState;
 use fdemon_app::state::PerfDetailsTab;
@@ -40,6 +43,32 @@ fn label_for(tab: PerfDetailsTab) -> &'static str {
     }
 }
 
+/// Build the list of tabs visible in the strip given the current state.
+///
+/// `RebuildStats` is included only when `rebuild_stats_enabled == true`.
+/// Order is always `FrameAnalysis → RebuildStats? → TimelineEvents`.
+fn visible_tabs(state: &PerformanceState) -> Vec<PerfDetailsTab> {
+    let mut v = vec![PerfDetailsTab::FrameAnalysis];
+    if state.rebuild_stats_enabled {
+        v.push(PerfDetailsTab::RebuildStats);
+    }
+    v.push(PerfDetailsTab::TimelineEvents);
+    v
+}
+
+/// Resolve the effective tab to dispatch to, applying the selection fall-through.
+///
+/// If `state.details_tab == RebuildStats` but `!state.rebuild_stats_enabled`,
+/// fall through to `TimelineEvents`. This handles the single-frame window
+/// between the disable event and the handler's snap-to-next update.
+fn effective_tab(state: &PerformanceState) -> PerfDetailsTab {
+    if state.details_tab == PerfDetailsTab::RebuildStats && !state.rebuild_stats_enabled {
+        PerfDetailsTab::TimelineEvents
+    } else {
+        state.details_tab
+    }
+}
+
 /// Render the details pane content inside the supplied inner area.
 ///
 /// `area` is the area inside the block — the caller is responsible for the
@@ -49,8 +78,11 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, performance: &PerformanceStat
         return;
     }
 
+    let tabs = visible_tabs(performance);
+    let active = effective_tab(performance);
+
     if area.height <= TAB_STRIP_HEIGHT {
-        render_tab_strip(area, buf, performance.details_tab);
+        render_tab_strip(area, buf, active, &tabs);
         return;
     }
 
@@ -59,40 +91,40 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, performance: &PerformanceStat
     let strip_area = chunks[0];
     let content_area = chunks[1];
 
-    render_tab_strip(strip_area, buf, performance.details_tab);
+    render_tab_strip(strip_area, buf, active, &tabs);
 
-    match performance.details_tab {
+    match active {
         PerfDetailsTab::FrameAnalysis => frame_analysis_tab::render(content_area, buf, performance),
-        PerfDetailsTab::RebuildStats => rebuild_stats_tab::render(content_area, buf),
-        PerfDetailsTab::TimelineEvents => timeline_events_tab::render(content_area, buf),
+        PerfDetailsTab::RebuildStats => rebuild_stats_tab::render(content_area, buf, performance),
+        PerfDetailsTab::TimelineEvents => {
+            timeline_events_tab::render(content_area, buf, performance)
+        }
     }
 }
 
 /// Render the two-row tab strip with the active tab underlined.
 ///
-/// Mirrors the inspector details tab strip pattern — all three Performance
-/// tabs are unconditionally visible in Phase 2 (no `visible_tabs()` predicate).
-/// The active tab is highlighted (bold + accent colour) and has an underline of
-/// `━` characters in the second row. Inactive tabs use `TEXT_MUTED`.
-fn render_tab_strip(area: Rect, buf: &mut Buffer, active: PerfDetailsTab) {
+/// Only tabs in `visible` are rendered. The active tab is highlighted
+/// (bold + accent colour) and has an underline of `━` characters in the
+/// second row. Inactive tabs use `TEXT_MUTED`.
+fn render_tab_strip(
+    area: Rect,
+    buf: &mut Buffer,
+    active: PerfDetailsTab,
+    visible: &[PerfDetailsTab],
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
 
-    let all_tabs = [
-        PerfDetailsTab::FrameAnalysis,
-        PerfDetailsTab::RebuildStats,
-        PerfDetailsTab::TimelineEvents,
-    ];
-
     // ── Row 0: labels ─────────────────────────────────────────────────────────
     let label_y = area.y;
 
-    let mut tab_starts: Vec<u16> = Vec::with_capacity(all_tabs.len());
-    let mut tab_widths: Vec<u16> = Vec::with_capacity(all_tabs.len());
+    let mut tab_starts: Vec<u16> = Vec::with_capacity(visible.len());
+    let mut tab_widths: Vec<u16> = Vec::with_capacity(visible.len());
 
     let mut cursor_x = area.x;
-    for (i, tab) in all_tabs.iter().enumerate() {
+    for (i, tab) in visible.iter().enumerate() {
         if cursor_x >= area.x + area.width {
             break;
         }
@@ -118,7 +150,7 @@ fn render_tab_strip(area: Rect, buf: &mut Buffer, active: PerfDetailsTab) {
         cursor_x += render_len;
 
         // Advance past the gap (unless this is the last tab).
-        if i + 1 < all_tabs.len() {
+        if i + 1 < visible.len() {
             cursor_x += TAB_GAP as u16;
         }
     }
@@ -129,7 +161,7 @@ fn render_tab_strip(area: Rect, buf: &mut Buffer, active: PerfDetailsTab) {
     }
     let underline_y = area.y + 1;
 
-    for (i, (tab, start)) in all_tabs.iter().zip(tab_starts.iter().copied()).enumerate() {
+    for (i, (tab, start)) in visible.iter().zip(tab_starts.iter().copied()).enumerate() {
         if i >= tab_widths.len() {
             break;
         }
@@ -160,8 +192,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
-    use super::render;
-    use super::render_tab_strip;
+    use super::{effective_tab, render, render_tab_strip, visible_tabs};
 
     fn collect_text(buf: &Buffer) -> String {
         let mut s = String::new();
@@ -193,24 +224,129 @@ mod tests {
         }
     }
 
-    // ── Tab strip: label visibility ──────────────────────────────────────────
+    fn make_perf_with_tab_and_rebuild_enabled(
+        tab: PerfDetailsTab,
+        enabled: bool,
+    ) -> PerformanceState {
+        PerformanceState {
+            details_tab: tab,
+            monitoring_active: true,
+            rebuild_stats_enabled: enabled,
+            ..Default::default()
+        }
+    }
+
+    // ── visible_tabs helper ──────────────────────────────────────────────────
 
     #[test]
-    fn tab_strip_renders_all_three_labels() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 2));
-        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis);
+    fn visible_tabs_excludes_rebuild_stats_when_disabled() {
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::FrameAnalysis, false);
+        let tabs = visible_tabs(&state);
+        assert!(
+            !tabs.contains(&PerfDetailsTab::RebuildStats),
+            "RebuildStats should be excluded when disabled"
+        );
+        assert!(tabs.contains(&PerfDetailsTab::FrameAnalysis));
+        assert!(tabs.contains(&PerfDetailsTab::TimelineEvents));
+    }
+
+    #[test]
+    fn visible_tabs_includes_rebuild_stats_when_enabled() {
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::FrameAnalysis, true);
+        let tabs = visible_tabs(&state);
+        assert!(tabs.contains(&PerfDetailsTab::RebuildStats));
+        assert!(tabs.contains(&PerfDetailsTab::FrameAnalysis));
+        assert!(tabs.contains(&PerfDetailsTab::TimelineEvents));
+    }
+
+    // ── effective_tab helper ─────────────────────────────────────────────────
+
+    #[test]
+    fn effective_tab_falls_through_rebuild_stats_when_disabled() {
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::RebuildStats, false);
+        assert_eq!(
+            effective_tab(&state),
+            PerfDetailsTab::TimelineEvents,
+            "RebuildStats selected + disabled should fall through to TimelineEvents"
+        );
+    }
+
+    #[test]
+    fn effective_tab_returns_rebuild_stats_when_enabled() {
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::RebuildStats, true);
+        assert_eq!(effective_tab(&state), PerfDetailsTab::RebuildStats);
+    }
+
+    #[test]
+    fn effective_tab_returns_frame_analysis_unchanged() {
+        let state = make_perf_with_tab(PerfDetailsTab::FrameAnalysis);
+        assert_eq!(effective_tab(&state), PerfDetailsTab::FrameAnalysis);
+    }
+
+    #[test]
+    fn effective_tab_returns_timeline_events_unchanged() {
+        let state = make_perf_with_tab(PerfDetailsTab::TimelineEvents);
+        assert_eq!(effective_tab(&state), PerfDetailsTab::TimelineEvents);
+    }
+
+    // ── Tab strip: label visibility (rebuild_stats_enabled = false) ──────────
+
+    #[test]
+    fn details_mod_hides_rebuild_stats_tab_when_disabled() {
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::FrameAnalysis, false);
+        let tabs = visible_tabs(&state);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 2));
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis, &tabs);
         let text = collect_text(&buf);
         assert!(
             text.contains("Frame Analysis"),
             "expected 'Frame Analysis' label, got:\n{text}"
         );
         assert!(
+            text.contains("Timeline Events"),
+            "expected 'Timeline Events' label, got:\n{text}"
+        );
+        assert!(
+            !text.contains("Rebuild Stats"),
+            "expected NO 'Rebuild Stats' label when disabled, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn details_mod_shows_rebuild_stats_tab_when_enabled() {
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::FrameAnalysis, true);
+        let tabs = visible_tabs(&state);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 2));
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis, &tabs);
+        let text = collect_text(&buf);
+        assert!(
+            text.contains("Frame Analysis"),
+            "expected 'Frame Analysis', got:\n{text}"
+        );
+        assert!(
             text.contains("Rebuild Stats"),
-            "expected 'Rebuild Stats' label, got:\n{text}"
+            "expected 'Rebuild Stats', got:\n{text}"
         );
         assert!(
             text.contains("Timeline Events"),
-            "expected 'Timeline Events' label, got:\n{text}"
+            "expected 'Timeline Events', got:\n{text}"
+        );
+    }
+
+    // ── Dispatch: falls through when selected tab is hidden ──────────────────
+
+    #[test]
+    fn details_mod_dispatch_falls_through_when_selected_tab_hidden() {
+        // details_tab == RebuildStats + rebuild_stats_enabled == false
+        // → dispatcher should render TimelineEvents content.
+        let state = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::RebuildStats, false);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 15));
+        render(buf.area, &mut buf, &state);
+        let text = collect_text(&buf);
+        // Timeline Events renders "Waiting for timeline events…" as empty placeholder.
+        assert!(
+            text.contains("Waiting for timeline events"),
+            "expected Timeline Events content (fall-through), got:\n{text}"
         );
     }
 
@@ -220,8 +356,13 @@ mod tests {
     fn tab_strip_underlines_active_frame_analysis_tab() {
         // "Frame Analysis" is 14 chars. With area width 60 and starting at x=0,
         // the underline row (y=1) should start with 14 '━' characters.
+        let tabs = vec![
+            PerfDetailsTab::FrameAnalysis,
+            PerfDetailsTab::RebuildStats,
+            PerfDetailsTab::TimelineEvents,
+        ];
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 2));
-        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis);
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis, &tabs);
         let underline_row = collect_row(&buf, 1);
         let underline_count = underline_row.chars().filter(|&c| c == '\u{2501}').count();
         let expected = "Frame Analysis".chars().count();
@@ -233,8 +374,13 @@ mod tests {
 
     #[test]
     fn tab_strip_underlines_active_rebuild_stats_tab() {
+        let tabs = vec![
+            PerfDetailsTab::FrameAnalysis,
+            PerfDetailsTab::RebuildStats,
+            PerfDetailsTab::TimelineEvents,
+        ];
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 2));
-        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::RebuildStats);
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::RebuildStats, &tabs);
         let underline_row = collect_row(&buf, 1);
         let underline_count = underline_row.chars().filter(|&c| c == '\u{2501}').count();
         let expected = "Rebuild Stats".chars().count();
@@ -246,8 +392,13 @@ mod tests {
 
     #[test]
     fn tab_strip_underlines_active_timeline_events_tab() {
+        let tabs = vec![
+            PerfDetailsTab::FrameAnalysis,
+            PerfDetailsTab::RebuildStats,
+            PerfDetailsTab::TimelineEvents,
+        ];
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 2));
-        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::TimelineEvents);
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::TimelineEvents, &tabs);
         let underline_row = collect_row(&buf, 1);
         let underline_count = underline_row.chars().filter(|&c| c == '\u{2501}').count();
         let expected = "Timeline Events".chars().count();
@@ -265,38 +416,47 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
         render(buf.area, &mut buf, &perf);
         let text = collect_text(&buf);
-        // No frame selected → shows the no-selection prompt (T05 content).
+        // No frame selected → shows the no-selection prompt.
         assert!(
             text.contains("Select a frame above"),
             "expected frame analysis no-selection prompt, got:\n{text}"
         );
     }
 
-    // ── Dispatch: rebuild_stats tab ──────────────────────────────────────────
+    // ── Dispatch: rebuild_stats tab (disabled — shows placeholder) ───────────
 
     #[test]
-    fn render_dispatches_rebuild_stats_stub() {
-        let perf = make_perf_with_tab(PerfDetailsTab::RebuildStats);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+    fn render_dispatches_rebuild_stats_shows_disabled_placeholder() {
+        // rebuild_stats_enabled must be true so the dispatcher routes to the
+        // RebuildStats tab (otherwise it falls through to TimelineEvents).
+        // With no frames present, it shows the "waiting for first frame" placeholder.
+        let perf = PerformanceState {
+            details_tab: PerfDetailsTab::RebuildStats,
+            rebuild_stats_enabled: true,
+            ..Default::default()
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
         render(buf.area, &mut buf, &perf);
         let text = collect_text(&buf);
+        // rebuild_stats_enabled = true but no frames → "waiting for first frame"
         assert!(
-            text.contains("Coming soon"),
-            "expected 'Coming soon' in rebuild stats stub, got:\n{text}"
+            text.contains("waiting for first frame"),
+            "expected rebuild stats empty placeholder (enabled, no frames), got:\n{text}"
         );
     }
 
     // ── Dispatch: timeline_events tab ────────────────────────────────────────
 
     #[test]
-    fn render_dispatches_timeline_events_stub() {
+    fn render_dispatches_timeline_events_content() {
         let perf = make_perf_with_tab(PerfDetailsTab::TimelineEvents);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
         render(buf.area, &mut buf, &perf);
         let text = collect_text(&buf);
+        // No events → shows empty placeholder.
         assert!(
-            text.contains("Coming soon"),
-            "expected 'Coming soon' in timeline events stub, got:\n{text}"
+            text.contains("Waiting for timeline events"),
+            "expected timeline events empty placeholder, got:\n{text}"
         );
     }
 
@@ -321,7 +481,7 @@ mod tests {
     #[test]
     fn render_no_panic_strip_only_height() {
         // Exactly TAB_STRIP_HEIGHT rows — renders strip only, no dispatch.
-        let perf = make_perf_with_tab(PerfDetailsTab::RebuildStats);
+        let perf = make_perf_with_tab_and_rebuild_enabled(PerfDetailsTab::RebuildStats, true);
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 2));
         render(buf.area, &mut buf, &perf);
         // must not panic
@@ -329,16 +489,21 @@ mod tests {
 
     #[test]
     fn tab_strip_no_panic_zero_height() {
+        let tabs = vec![PerfDetailsTab::FrameAnalysis];
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 0));
-        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis);
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis, &tabs);
         // must not panic
     }
 
     #[test]
     fn tab_strip_no_panic_narrow_width() {
         // 10 columns — labels will be truncated.
+        let tabs = vec![
+            PerfDetailsTab::FrameAnalysis,
+            PerfDetailsTab::TimelineEvents,
+        ];
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis);
+        render_tab_strip(buf.area, &mut buf, PerfDetailsTab::FrameAnalysis, &tabs);
         // must not panic
     }
 }

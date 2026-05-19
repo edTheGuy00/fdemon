@@ -376,8 +376,11 @@ fn collect_full_text(buf: &Buffer) -> String {
 
 #[test]
 fn dual_pane_renders_chart_and_details_at_tall_terminal() {
+    // Phase 3: rebuild_stats_enabled must be true for the Rebuild Stats tab
+    // to appear in the strip (it is conditionally hidden when disabled).
     let mut perf = PerformanceState {
         monitoring_active: true,
+        rebuild_stats_enabled: true,
         ..Default::default()
     };
     perf.frame_history.push(FrameTiming {
@@ -406,7 +409,7 @@ fn dual_pane_renders_chart_and_details_at_tall_terminal() {
     );
     assert!(
         text.contains("Rebuild Stats"),
-        "expected 'Rebuild Stats' tab label, got:\n{text}"
+        "expected 'Rebuild Stats' tab label (rebuild_stats_enabled=true), got:\n{text}"
     );
     assert!(
         text.contains("Timeline Events"),
@@ -444,9 +447,16 @@ fn chart_only_at_short_terminal_below_min_dual_pane() {
 
 #[test]
 fn details_dispatches_rebuild_stats_stub() {
+    // Phase 3: RebuildStats tab is now live. When rebuild_stats_enabled is true
+    // but no frames have arrived yet, it shows the "waiting for first frame"
+    // empty placeholder (the Phase-2 "Coming soon" stub has been removed).
+    // Also: the tab is visible only when rebuild_stats_enabled == true; when
+    // disabled and details_tab == RebuildStats the dispatcher falls through to
+    // TimelineEvents.
     let mut perf = PerformanceState {
         monitoring_active: true,
         details_tab: PerfDetailsTab::RebuildStats,
+        rebuild_stats_enabled: true, // must be true for the tab to be dispatched
         ..Default::default()
     };
     perf.frame_history.push(FrameTiming {
@@ -461,14 +471,18 @@ fn details_dispatches_rebuild_stats_stub() {
 
     let buf = render_panel(&perf, 200, 30);
     let text = collect_full_text(&buf);
+    // No rebuild frames yet → empty-frame placeholder.
     assert!(
-        text.contains("Coming soon"),
-        "rebuild stats stub must say 'Coming soon', got:\n{text}"
+        text.contains("waiting for first frame"),
+        "rebuild stats (enabled, no frames) must show empty placeholder, got:\n{text}"
     );
 }
 
 #[test]
 fn details_dispatches_timeline_events_stub() {
+    // Phase 3: TimelineEvents tab is now live. When no events are present it
+    // shows the "Waiting for timeline events…" empty placeholder (the Phase-2
+    // "Coming soon" stub has been removed).
     let mut perf = PerformanceState {
         monitoring_active: true,
         details_tab: PerfDetailsTab::TimelineEvents,
@@ -486,9 +500,10 @@ fn details_dispatches_timeline_events_stub() {
 
     let buf = render_panel(&perf, 200, 30);
     let text = collect_full_text(&buf);
+    // No timeline events yet → empty-state placeholder.
     assert!(
-        text.contains("Coming soon"),
-        "timeline events stub must say 'Coming soon', got:\n{text}"
+        text.contains("Waiting for timeline events"),
+        "timeline events (no events yet) must show empty placeholder, got:\n{text}"
     );
 }
 
