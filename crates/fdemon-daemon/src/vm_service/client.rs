@@ -801,11 +801,13 @@ impl VmServiceClient {
         Ok(main_isolate.clone())
     }
 
-    /// Subscribe to Flutter streams (Extension, Logging, GC, Debug, and Isolate).
+    /// Subscribe to Flutter streams (Extension, Logging, GC, Debug, and Isolate)
+    /// and enable VM timeline recording.
     ///
     /// Returns a list of human-readable error descriptions for any streams
     /// that could not be subscribed (non-fatal — the app continues without
-    /// them).
+    /// them). Timeline flag failures are also non-fatal: older Dart VMs without
+    /// `setVMTimelineFlags` support will simply not record timeline data.
     pub async fn subscribe_flutter_streams(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
@@ -832,6 +834,22 @@ impl VmServiceClient {
         // Isolate stream: isolate lifecycle events (start, runnable, exit, reload)
         if let Err(e) = self.stream_listen(stream_id::ISOLATE).await {
             errors.push(format!("Isolate stream: {e}"));
+        }
+
+        // Enable VM timeline recording so the Dart VM populates its buffer.
+        // Without this call, `getVMTimeline` always returns an empty traceEvents
+        // array and the Timeline Events tab stays on "Waiting for timeline events…".
+        // Non-fatal: older Dart VMs that do not support setVMTimelineFlags should
+        // still run fdemon without timeline data rather than failing to connect.
+        if let Err(e) = super::timeline::set_vm_timeline_flags(
+            &self.handle,
+            super::timeline::DEFAULT_RECORDED_STREAMS,
+        )
+        .await
+        {
+            warn!(
+                "VM Service: setVMTimelineFlags failed (timeline events may be unavailable): {e}"
+            );
         }
 
         errors

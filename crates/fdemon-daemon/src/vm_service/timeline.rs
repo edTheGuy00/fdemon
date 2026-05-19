@@ -168,6 +168,40 @@ use fdemon_core::timeline::{
 use serde_json::json;
 use std::collections::HashMap;
 
+/// Default set of VM timeline streams to record.
+///
+/// Matches the streams enabled by Flutter DevTools via `setDefaultTimelineStreams()`:
+/// - `"Dart"` — events from `dart:developer Timeline` APIs (Flutter framework emits these)
+/// - `"Embedder"` — additional platform events from the Flutter engine
+/// - `"GC"` — garbage collection events
+///
+/// Passing this list to [`set_vm_timeline_flags`] at VM Service connect time causes
+/// the Dart VM to populate its timeline buffer, which `getVMTimeline` can then return.
+pub const DEFAULT_RECORDED_STREAMS: &[&str] = &["Dart", "Embedder", "GC"];
+
+/// Enable recording of the specified VM timeline streams.
+///
+/// Calls the VM Service `setVMTimelineFlags` RPC to configure which streams the
+/// Dart VM records into its timeline buffer. Without this call, the buffer stays
+/// empty and `getVMTimeline` always returns `traceEvents: []`.
+///
+/// Use [`DEFAULT_RECORDED_STREAMS`] to enable the same streams as Flutter DevTools.
+///
+/// This is a VM-level call (no `isolateId` required).
+///
+/// # Errors
+///
+/// Returns [`Error::ChannelClosed`] if the background WebSocket task has exited.
+/// Returns [`Error::Protocol`] if the VM Service returned a JSON-RPC error.
+pub async fn set_vm_timeline_flags<H: VmRequestApi>(
+    handle: &H,
+    recorded_streams: &[&str],
+) -> Result<()> {
+    let params = json!({ "recordedStreams": recorded_streams });
+    handle.request("setVMTimelineFlags", Some(params)).await?;
+    Ok(())
+}
+
 /// Wrap the VM Service `getVMTimelineMicros` RPC. Returns the current VM
 /// timeline clock value in microseconds.
 ///
@@ -809,5 +843,50 @@ mod tests {
             result.is_err(),
             "errors from the transport must be propagated"
         );
+    }
+
+    // ── set_vm_timeline_flags ─────────────────────────────────────────────────
+
+    /// Verify that `set_vm_timeline_flags` sends the `setVMTimelineFlags` RPC
+    /// with the correct `recordedStreams` parameter.
+    #[tokio::test]
+    async fn set_vm_timeline_flags_sends_correct_method_and_streams() {
+        use crate::vm_service::client::ClientCommand;
+
+        let (handle, mut cmd_rx) = make_mock_handle();
+
+        let responder = tokio::spawn(async move {
+            if let Some(ClientCommand::SendRequest {
+                method,
+                params,
+                response_tx,
+            }) = cmd_rx.recv().await
+            {
+                assert_eq!(method, "setVMTimelineFlags", "must call setVMTimelineFlags");
+                let p = params.expect("params must be present");
+                let streams = p
+                    .get("recordedStreams")
+                    .expect("recordedStreams must be present");
+                let arr: Vec<&str> = streams
+                    .as_array()
+                    .expect("recordedStreams must be an array")
+                    .iter()
+                    .map(|v| v.as_str().expect("each stream must be a string"))
+                    .collect();
+                assert_eq!(
+                    arr,
+                    vec!["Dart", "Embedder", "GC"],
+                    "recordedStreams must match DEFAULT_RECORDED_STREAMS"
+                );
+                // VM Service responds with an empty Success object.
+                let _ = response_tx.send(Ok(json!({ "type": "Success" })));
+            }
+        });
+
+        set_vm_timeline_flags(&handle, DEFAULT_RECORDED_STREAMS)
+            .await
+            .expect("set_vm_timeline_flags must succeed");
+
+        let _ = responder.await;
     }
 }
