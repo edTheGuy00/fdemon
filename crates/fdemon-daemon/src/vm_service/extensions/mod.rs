@@ -36,6 +36,7 @@ pub mod dumps;
 pub mod inspector;
 pub mod layout;
 pub mod overlays;
+pub mod performance;
 pub mod properties;
 
 // Re-export all public items from submodules so the public API is flat.
@@ -74,6 +75,19 @@ pub mod ext {
     /// Toggle the Widget Inspector show mode.
     pub const INSPECTOR_SHOW: &str = "ext.flutter.inspector.show";
 
+    // ── Performance flags ───────────────────────────────────────────────────
+
+    /// Enable or disable widget-rebuild profiling.
+    ///
+    /// When enabled, the engine emits `Flutter.RebuiltWidgets` Extension events
+    /// on the `Extension` stream for every frame that rebuilds at least one
+    /// instrumented widget. Location data for newly-encountered widgets is
+    /// included inline; previously-seen locations are omitted.
+    ///
+    /// Available in debug mode only. Use `set_profile_widget_builds` in
+    /// `extensions::performance` to toggle this extension.
+    pub const PROFILE_WIDGET_BUILDS: &str = "ext.flutter.profileWidgetBuilds";
+
     // ── Widget inspector ────────────────────────────────────────────────────
 
     /// Get the full widget tree from the root.
@@ -102,6 +116,21 @@ pub mod ext {
     /// `getProperties` call on the render object's `valueId` to surface the
     /// render object's own properties (constraints, size, layer, semantics, etc.).
     pub const GET_PROPERTIES: &str = "ext.flutter.inspector.getProperties";
+
+    /// Fetch the engine's complete widget location ID map.
+    ///
+    /// Returns a JSON object whose keys are file URIs and whose values are
+    /// parallel-arrays blocks (`ids`, `lines`, `columns`, `names`) — the same
+    /// shape as the `locations` sub-object inside `Flutter.RebuiltWidgets` events.
+    ///
+    /// Use this as a one-shot fallback to backfill location data when fdemon
+    /// connects after some `Flutter.RebuiltWidgets` events have already been
+    /// emitted. An empty object is returned if no instrumented widgets have
+    /// been built yet.
+    ///
+    /// Available in debug mode only. Use `widget_location_id_map` in
+    /// `extensions::inspector` to call this extension.
+    pub const WIDGET_LOCATION_ID_MAP: &str = "ext.flutter.inspector.widgetLocationIdMap";
 
     // ── Layout explorer ─────────────────────────────────────────────────────
 
