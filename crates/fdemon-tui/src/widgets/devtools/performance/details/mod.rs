@@ -25,6 +25,7 @@ use crate::theme::palette;
 
 mod frame_analysis_tab;
 mod rebuild_stats_tab;
+pub(super) mod text_helpers;
 mod timeline_events_tab;
 
 // ── Layout constants ──────────────────────────────────────────────────────────

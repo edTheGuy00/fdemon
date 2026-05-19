@@ -13,6 +13,7 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
+use super::text_helpers::{pad_left, pad_right, truncate_with_ellipsis};
 use crate::theme::palette;
 
 // ── Thread badge colours ──────────────────────────────────────────────────────
@@ -39,6 +40,10 @@ const DURATION_COL_WIDTH: u16 = 10;
 const TS_REL_COL_WIDTH: u16 = 10;
 /// Separator between columns.
 const COL_SEP: u16 = 1;
+
+/// Height of the empty/waiting placeholder block (single-line message).
+/// Derived from: 1 content line + 1 spacer below = 2.
+const EMPTY_PLACEHOLDER_LINE_COUNT: u16 = 2;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -287,43 +292,13 @@ fn render_empty_placeholder(area: Rect, buf: &mut Buffer, message: &str) {
         .style(Style::default().fg(palette::TEXT_MUTED))
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
-    let y_offset = area.height.saturating_sub(2) / 2;
-    let centered = Rect {
-        y: area.y + y_offset,
-        height: area.height.saturating_sub(y_offset),
-        ..area
-    };
-    p.render(centered, buf);
-}
-
-// ── String formatting helpers ─────────────────────────────────────────────────
-
-fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_owned()
-    } else {
-        let truncated: String = chars[..max_chars.saturating_sub(1)].iter().collect();
-        format!("{truncated}…")
-    }
-}
-
-fn pad_right(s: &str, width: usize) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        s.to_owned()
-    } else {
-        format!("{}{}", s, " ".repeat(width - len))
-    }
-}
-
-fn pad_left(s: &str, width: usize) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        s.to_owned()
-    } else {
-        format!("{}{}", " ".repeat(width - len), s)
-    }
+    let chunks = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(EMPTY_PLACEHOLDER_LINE_COUNT),
+        Constraint::Min(0),
+    ])
+    .split(area);
+    p.render(chunks[1], buf);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

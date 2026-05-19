@@ -13,6 +13,7 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
+use super::text_helpers::{pad_left, pad_right, truncate_with_ellipsis, PLACEHOLDER_LINE_COUNT};
 use crate::theme::palette;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -31,6 +32,10 @@ const WIDGET_NAME_MAX_CHARS: usize = 23;
 /// Maximum number of characters to render in the location column before
 /// truncating with `…`.
 const LOCATION_MAX_CHARS: usize = 42;
+
+/// Height of the empty/waiting placeholder block (single-line message).
+/// Derived from: 1 content line + 1 spacer below = 2.
+const EMPTY_PLACEHOLDER_LINE_COUNT: u16 = 2;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -273,14 +278,13 @@ fn render_disabled_placeholder(area: Rect, buf: &mut Buffer) {
         .style(Style::default().fg(palette::TEXT_MUTED))
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
-    let line_count = 3u16;
-    let y_offset = area.height.saturating_sub(line_count) / 2;
-    let centered = Rect {
-        y: area.y + y_offset,
-        height: area.height.saturating_sub(y_offset),
-        ..area
-    };
-    p.render(centered, buf);
+    let chunks = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(PLACEHOLDER_LINE_COUNT),
+        Constraint::Min(0),
+    ])
+    .split(area);
+    p.render(chunks[1], buf);
 }
 
 fn render_empty_placeholder(area: Rect, buf: &mut Buffer, message: &str) {
@@ -288,49 +292,13 @@ fn render_empty_placeholder(area: Rect, buf: &mut Buffer, message: &str) {
         .style(Style::default().fg(palette::TEXT_MUTED))
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
-    let y_offset = area.height.saturating_sub(2) / 2;
-    let centered = Rect {
-        y: area.y + y_offset,
-        height: area.height.saturating_sub(y_offset),
-        ..area
-    };
-    p.render(centered, buf);
-}
-
-// ── String formatting helpers ─────────────────────────────────────────────────
-
-/// Truncate to `max_chars` Unicode scalar values, appending `…` if truncated.
-fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_owned()
-    } else {
-        let truncated: String = chars[..max_chars.saturating_sub(1)].iter().collect();
-        format!("{truncated}…")
-    }
-}
-
-/// Right-pad `s` with spaces to exactly `width` grapheme positions.
-///
-/// If `s` is already wider than `width`, it is returned unchanged (no
-/// truncation — callers should pre-truncate with [`truncate_with_ellipsis`]).
-fn pad_right(s: &str, width: usize) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        s.to_owned()
-    } else {
-        format!("{}{}", s, " ".repeat(width - len))
-    }
-}
-
-/// Left-pad `s` with spaces to exactly `width` grapheme positions.
-fn pad_left(s: &str, width: usize) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        s.to_owned()
-    } else {
-        format!("{}{}", " ".repeat(width - len), s)
-    }
+    let chunks = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(EMPTY_PLACEHOLDER_LINE_COUNT),
+        Constraint::Min(0),
+    ])
+    .split(area);
+    p.render(chunks[1], buf);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
