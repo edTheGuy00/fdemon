@@ -144,7 +144,7 @@ pub async fn enable_frame_tracking(handle: &VmRequestHandle, isolate_id: &str) -
     // because Flutter.Frame events may still arrive.
     let result = handle
         .call_extension(
-            "ext.flutter.profileWidgetBuilds",
+            crate::vm_service::extensions::ext::PROFILE_WIDGET_BUILDS,
             isolate_id,
             Some([("enabled".to_string(), "true".to_string())].into()),
         )
@@ -202,9 +202,10 @@ pub async fn get_vm_timeline_micros(handle: &VmRequestHandle) -> Result<u64> {
 /// # Cast safety
 ///
 /// `timeOriginMicros` and `timeExtentMicros` use `i64` per the VM Service
-/// protocol. Real timeline values stay well under `i64::MAX` (decades of
-/// microseconds). The `u64 → i64` cast via `as i64` is therefore safe in
-/// practice; the VM clamps internally if an overflow were somehow to occur.
+/// protocol. Values are clamped to `i64::MAX` before the cast — sub-`i64::MAX`
+/// inputs round-trip cleanly; pathological values are silently clamped to the
+/// maximum, which the VM Service will reject as a window-too-large error and
+/// the polling loop will recover on the next tick.
 ///
 /// # Errors
 ///
@@ -218,9 +219,12 @@ pub async fn fetch_timeline_chunk(
     thread_name_map: &mut HashMap<i64, String>,
 ) -> Result<Vec<TimelineEvent>> {
     // VM Service protocol uses i64 for these parameters.
+    // Clamp to i64::MAX before casting to avoid undefined behaviour on
+    // pathological values (see doc comment above).
+    const I64_MAX_AS_U64: u64 = i64::MAX as u64;
     let params = json!({
-        "timeOriginMicros": since_micros as i64,
-        "timeExtentMicros": extent_micros as i64,
+        "timeOriginMicros": since_micros.min(I64_MAX_AS_U64) as i64,
+        "timeExtentMicros": extent_micros.min(I64_MAX_AS_U64) as i64,
     });
     let response = handle.request("getVMTimeline", Some(params)).await?;
     parse_vm_timeline(&response, thread_name_map)

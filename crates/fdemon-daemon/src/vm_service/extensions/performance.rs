@@ -56,6 +56,11 @@ pub async fn get_profile_widget_builds(client: &VmServiceClient, isolate_id: &st
 mod tests {
     use super::super::ext;
 
+    // Note: end-to-end round-trip coverage for `set_profile_widget_builds` is
+    // provided by `toggle_bool_extension`'s tests in the parent module
+    // (`extensions/overlays.rs`).  The tests below verify only the invariants
+    // that are specific to this module.
+
     // Verify that the extension method name constant used by the public
     // functions is exactly what the Flutter engine expects.
     #[test]
@@ -64,48 +69,6 @@ mod tests {
             ext::PROFILE_WIDGET_BUILDS,
             "ext.flutter.profileWidgetBuilds"
         );
-    }
-
-    // Verify that the constant starts with the correct namespace prefix so
-    // any future renames are caught early.
-    #[test]
-    fn profile_widget_builds_constant_starts_with_ext_flutter() {
-        assert!(ext::PROFILE_WIDGET_BUILDS.starts_with("ext.flutter."));
-    }
-
-    // Verify that set_profile_widget_builds passes `Some(true)` — tested by
-    // inspecting toggle_bool_extension behaviour via parse_bool_extension_response.
-    // Since VmServiceClient requires a live WebSocket, we verify the round-trip
-    // via the parse helper used inside toggle_bool_extension.
-    #[test]
-    fn set_profile_widget_builds_passes_enabled_arg_true() {
-        // The `enabled: Some(true)` arm of toggle_bool_extension builds a
-        // HashMap with "enabled" -> "true". Verify the string encoding.
-        let enabled = Some(true);
-        let encoded = enabled.map(|e| e.to_string());
-        assert_eq!(encoded.as_deref(), Some("true"));
-    }
-
-    #[test]
-    fn set_profile_widget_builds_passes_enabled_arg_false() {
-        // The `enabled: Some(false)` arm of toggle_bool_extension builds a
-        // HashMap with "enabled" -> "false".
-        let enabled = Some(false);
-        let encoded = enabled.map(|e| e.to_string());
-        assert_eq!(encoded.as_deref(), Some("false"));
-    }
-
-    #[test]
-    fn set_profile_widget_builds_with_none_passes_no_args() {
-        // `enabled = None` means query-only mode; toggle_bool_extension passes
-        // `args = None` to call_extension so no "enabled" param is sent.
-        let enabled: Option<bool> = None;
-        let args = enabled.map(|e| {
-            let mut m = std::collections::HashMap::new();
-            m.insert("enabled".to_string(), e.to_string());
-            m
-        });
-        assert!(args.is_none(), "None enabled should produce no args map");
     }
 
     // Round-trip: parse_bool_extension_response parses {"enabled": "true"} → true.
