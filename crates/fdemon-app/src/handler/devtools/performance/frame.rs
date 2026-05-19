@@ -30,12 +30,27 @@ pub(crate) fn handle_select_performance_frame(
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         handle.session.performance.selected_frame = index;
-        // When a concrete frame is selected, reset the scroll offset so the
-        // newly-selected frame is visible at the live edge. Deselect (None)
-        // leaves the offset unchanged — the user may have scrolled back
-        // deliberately and pressed Esc only to drop the selection highlight.
-        if index.is_some() {
-            handle.session.performance.frame_chart_scroll_offset = 0;
+        // Viewport-aware scroll: only adjust scroll_offset when the newly-selected
+        // frame falls outside the current viewport. Deselect (None) leaves the
+        // offset unchanged — the user may have scrolled deliberately and pressed
+        // Esc only to drop the selection highlight.
+        if let Some(sel_idx) = index {
+            let total = handle.session.performance.frame_history.len();
+            // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
+            let visible_width = handle.session.performance.frame_chart_visible_width.get();
+            let scroll = &mut handle.session.performance.frame_chart_scroll_offset;
+            // Visible window: [visible_start, visible_end)
+            // Model A: end = total - scroll_offset, start = end - visible_width
+            let visible_end = total.saturating_sub(*scroll);
+            let visible_start = visible_end.saturating_sub(visible_width);
+            if sel_idx < visible_start {
+                // Selection moved off the left edge — scroll left to keep it visible.
+                *scroll = total.saturating_sub(sel_idx + visible_width);
+            } else if sel_idx >= visible_end {
+                // Selection moved off the right edge — scroll right to keep it visible.
+                *scroll = total.saturating_sub(sel_idx + 1);
+            }
+            // Otherwise the selection is within the viewport — leave scroll_offset alone.
         }
     }
     UpdateResult::none()
@@ -997,8 +1012,10 @@ mod tests {
     }
 
     /// Pressing Left arrow when `scroll_offset = 50` and `selected_frame = None`
-    /// selects the live-edge-relative frame and resets `frame_chart_scroll_offset` to 0
-    /// so the newly-selected frame is visible at the live edge.
+    /// selects the most-recent frame (index 199). The new selection is outside
+    /// the current viewport ([100, 150)), so the viewport-aware handler adjusts
+    /// `frame_chart_scroll_offset` to bring index 199 into view (offset → 0,
+    /// i.e. the live edge).
     #[test]
     fn left_right_arrow_clears_scroll_offset() {
         let (mut state, _) = make_state_in_performance_panel();
@@ -1024,12 +1041,115 @@ mod tests {
             "Left from None selects len-1 = 199 (most recent frame)"
         );
 
-        // Selecting a concrete frame must reset the scroll offset to 0 so the
-        // selected frame is visible at the live edge.
+        // Index 199 is right of the old viewport [100, 150) so the handler
+        // viewport-scrolls right: offset = 200 - (199 + 1) = 0 (live edge).
         let offset = perf_frame_scroll(&state);
         assert_eq!(
             offset, 0,
-            "Left arrow selecting a frame must clear frame_chart_scroll_offset to 0"
+            "selecting index 199 from offset=50 should viewport-scroll to live edge (offset=0)"
+        );
+    }
+
+    // ── Task 01, Fix 3: viewport-aware selection scrolling ───────────────────
+    //
+    // Setup: frames=200, visible_width=30, scroll_offset=70
+    //   visible_end   = 200 - 70 = 130
+    //   visible_start = 130 - 30 = 100
+    // Visible range: indices [100, 130).
+
+    /// Selecting a frame that is within the current viewport must leave
+    /// `frame_chart_scroll_offset` unchanged.
+    ///
+    /// Start: offset=70, visible=[100,130). Select index 130 (task says
+    /// selected_frame=130 with this setup is at the right edge, within view).
+    /// Wait — task AC says "selected_frame = 130" is visible_end, i.e. the
+    /// frame at the boundary. Pressing Left → 129 → inside [100, 130) → no scroll.
+    #[test]
+    fn test_select_within_viewport_does_not_scroll() {
+        let (mut state, _) = make_state_in_performance_panel();
+        if let Some(handle) = state.session_manager.selected_mut() {
+            // visible_width=30, scroll_offset=70 → visible=[100,130)
+            handle.session.performance.frame_chart_visible_width.set(30);
+            handle.session.performance.frame_chart_scroll_offset = 70;
+            // Pre-select frame 130 (right edge of viewport, but visible_end = 130,
+            // so frame 130 is actually OUTSIDE [100,130). Use 129 instead —
+            // pressing Left from 130 → 129 which is inside the viewport.
+            handle.session.performance.selected_frame = Some(130);
+        }
+        push_frames(&mut state, 200);
+
+        // Set the selection directly to 129 (within [100, 130)) via the message.
+        use crate::handler::update::update;
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(129) },
+        );
+
+        assert_eq!(
+            perf_frame_scroll(&state),
+            70,
+            "selecting frame 129 (within viewport [100,130)) must leave scroll_offset at 70"
+        );
+    }
+
+    /// Selecting a frame just off the left edge of the viewport must scroll
+    /// the viewport left by one so the frame becomes the leftmost visible item.
+    ///
+    /// Start: offset=70, visible=[100,130). Selecting index 99 (one below
+    /// visible_start=100) should set offset = 200 - (99 + 30) = 71.
+    #[test]
+    fn test_select_at_left_edge_scrolls_viewport_left() {
+        let (mut state, _) = make_state_in_performance_panel();
+        if let Some(handle) = state.session_manager.selected_mut() {
+            handle.session.performance.frame_chart_visible_width.set(30);
+            handle.session.performance.frame_chart_scroll_offset = 70;
+            handle.session.performance.selected_frame = Some(100); // leftmost visible
+        }
+        push_frames(&mut state, 200);
+
+        use crate::handler::update::update;
+        // Select index 99 — one past the left edge of [100, 130)
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(99) },
+        );
+
+        // offset = total - (sel_idx + visible_width) = 200 - (99 + 30) = 71
+        assert_eq!(
+            perf_frame_scroll(&state),
+            71,
+            "selecting frame 99 (left of viewport [100,130)) must scroll left: offset = 71"
+        );
+    }
+
+    /// Selecting a frame just off the right edge of the viewport must scroll
+    /// the viewport right by one so the frame becomes the rightmost visible item.
+    ///
+    /// Start: offset=70, visible=[100,130). Selecting index 130 (equal to
+    /// visible_end=130, i.e. just past the right edge) should set
+    /// offset = 200 - (130 + 1) = 69.
+    #[test]
+    fn test_select_at_right_edge_scrolls_viewport_right() {
+        let (mut state, _) = make_state_in_performance_panel();
+        if let Some(handle) = state.session_manager.selected_mut() {
+            handle.session.performance.frame_chart_visible_width.set(30);
+            handle.session.performance.frame_chart_scroll_offset = 70;
+            handle.session.performance.selected_frame = Some(129); // rightmost visible
+        }
+        push_frames(&mut state, 200);
+
+        use crate::handler::update::update;
+        // Select index 130 — one past the right edge (visible_end = 130)
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(130) },
+        );
+
+        // offset = total - (sel_idx + 1) = 200 - 131 = 69
+        assert_eq!(
+            perf_frame_scroll(&state),
+            69,
+            "selecting frame 130 (right of viewport [100,130)) must scroll right: offset = 69"
         );
     }
 
