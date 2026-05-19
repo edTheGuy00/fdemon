@@ -36,6 +36,7 @@ use fdemon_core::prelude::*;
 
 use super::client::VmRequestHandle;
 use super::protocol::StreamEvent;
+use super::request_api::VmRequestApi;
 
 // ---------------------------------------------------------------------------
 // Parsing
@@ -176,7 +177,7 @@ use std::collections::HashMap;
 /// Returns [`Error::Protocol`] if the response does not contain a `timestamp`
 /// field. Returns [`Error::ChannelClosed`] if the background WebSocket task
 /// has exited.
-pub async fn get_vm_timeline_micros(handle: &VmRequestHandle) -> Result<u64> {
+pub async fn get_vm_timeline_micros<H: VmRequestApi>(handle: &H) -> Result<u64> {
     let response = handle.request("getVMTimelineMicros", None).await?;
     let ts = response
         .get("timestamp")
@@ -212,8 +213,8 @@ pub async fn get_vm_timeline_micros(handle: &VmRequestHandle) -> Result<u64> {
 /// Returns [`Error::Protocol`] if the response is missing the `traceEvents`
 /// field or contains malformed events. Returns [`Error::ChannelClosed`] if
 /// the background WebSocket task has exited.
-pub async fn fetch_timeline_chunk(
-    handle: &VmRequestHandle,
+pub async fn fetch_timeline_chunk<H: VmRequestApi>(
+    handle: &H,
     since_micros: u64,
     extent_micros: u64,
     thread_name_map: &mut HashMap<i64, String>,

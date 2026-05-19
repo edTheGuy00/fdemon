@@ -468,6 +468,31 @@ impl VmRequestHandle {
 }
 
 // ---------------------------------------------------------------------------
+// VmRequestApi impl for VmRequestHandle
+// ---------------------------------------------------------------------------
+
+impl super::request_api::VmRequestApi for VmRequestHandle {
+    fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        // Delegate to the inherent async method.
+        VmRequestHandle::request(self, method, params)
+    }
+
+    fn call_extension(
+        &self,
+        method: &str,
+        isolate_id: &str,
+        args: Option<HashMap<String, String>>,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        // Delegate to the inherent async method.
+        VmRequestHandle::call_extension(self, method, isolate_id, args)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
