@@ -76,3 +76,28 @@ Phase 3 introduces:
 - **Phase 2 introduced a `display_refresh_rate` field** documented as "Phase 3 may extend to parse `Display.Refresh` events" — Phase 3 did NOT do this (deferred per PLAN.md §7.4). Either remove that forward-pointer or rephrase to "still deferred — see PLAN.md §7.4".
 - **`details_pane_visible_height` render-hint** — Phase 2 added the field; Phase 3 first consumer. Note this in the render-hint section if it documents Cell-based hints inventory (per phase-2-followup `04-consolidated-minor-cleanup.md` m1).
 - **No new `// EXCEPTION:` annotations to document beyond what Phase 2 already covers** — Phase 3 reuses the existing render-hint pattern; no new TEA exceptions are introduced.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added `rebuild_stats.rs` and `timeline.rs` to fdemon-core project tree; added `performance.rs` to extensions/ tree; added `rebuild_stats.rs` and `timeline.rs` sub-modules to handler/devtools/performance/; removed "stub" language from TUI widget comments; updated `PerfDetailsTab` table with Phase 3 functional status; replaced "Phase 3 may" `display_refresh_rate` forward-pointer with "still deferred — see PLAN.md §7.4"; added Phase 3 `PerformanceState` field table; added `TimelineFilter` enum description; added Phase 3 `SessionHandle` fields; added 7 new `Message` variants; added VM Service additions (constants, functions); added `spawn_timeline_polling` task description; added `Flutter.RebuiltWidgets` dispatch description; added hot-restart re-enable documentation; added conditional `RebuildStats` tab visibility section; added `details_pane_visible_height` first-consumer note; added 3 new `[devtools]` config keys; added new letter shortcuts; added `fdemon-core` types tables; updated `SessionHandle` diagram; updated monitoring panel-gate list; updated VM Service data flow text; updated API surface section with `rebuild_stats` and `timeline` exports. |
+| `docs/CONFIGURATION.md` | Added `readiness_poll_*` and Phase 3 `[devtools]` keys (`auto_enable_rebuild_tracking`, `rebuild_stats_frame_window`, `timeline_event_buffer_size`) to the DevTools Settings section. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **CONFIGURATION.md update**: The task notes this file is "unmanaged" but instructs updating it when `[devtools]` keys exist. I added the Phase 3 keys alongside existing readiness poll keys (which were already in code but not in the config reference), keeping the config reference complete.
+2. **`display_refresh_rate` forward-pointer**: Changed "Phase 3 may parse `Display.Refresh`…" to "still deferred — see PLAN.md §7.4" per task instructions.
+3. **RebuildStats tab visibility**: Documented the nuance that internal tab cycling doesn't skip the hidden tab, only the TUI tab bar hides the label.

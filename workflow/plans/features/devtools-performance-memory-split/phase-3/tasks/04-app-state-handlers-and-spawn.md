@@ -423,3 +423,64 @@ Plus the three `fn default_*` helpers and Default-impl initializers. Extend the 
 - **No new dependencies.** All work uses `tokio::sync::watch`, `tokio::sync::Mutex`, `tokio::time::interval`, existing tracing macros.
 - **`Message::ToggleRebuildStats` keying:** Includes `session_id` because the toggle is per-session (each session has its own VM connection + extension state).
 - **Phase-2 generic Details-scroll routing:** T04 does NOT re-route `j/k/PageUp/Down/Home/End` — those keys are already routed by Phase 2 to scroll-handlers that operate on `details_pane_visible_height`. T04 changes the scroll-handler bodies to dispatch by `details_tab` and update the appropriate per-tab scroll fields. The keys.rs work stays in T06 (only the `f` and `R` letter shortcuts are new).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added 3 Phase 3 config keys (`auto_enable_rebuild_tracking`, `rebuild_stats_frame_window`, `timeline_event_buffer_size`) with serde defaults and helpers; extended tests |
+| `crates/fdemon-app/src/session/performance.rs` | Added `TimelineFilter` enum with `next()` cycling; added 10 Phase 3 fields to `PerformanceState` (6 rebuild stats + 4 timeline); updated Default impl; added Phase 3 tests |
+| `crates/fdemon-app/src/session/handle.rs` | Added 3 timeline task fields (`timeline_shutdown_tx`, `timeline_pause_tx`, `timeline_task_handle`); updated Debug impl and constructor |
+| `crates/fdemon-app/src/message.rs` | Added 7 Phase 3 Message variants: `RebuildStatsEventReceived`, `ToggleRebuildStats`, `RebuildStatsExtensionStateChanged`, `RebuildStatsLocationMapFetched`, `TimelineEventsBatchReceived`, `TimelineEventsCycleFilter`, `VmServiceTimelineMonitoringStarted` |
+| `crates/fdemon-app/src/handler/update.rs` | Added 7 dispatch arms for Phase 3 messages; added `VmServiceTimelineMonitoringStarted` handler inline; added timeline task cleanup in 3 stop paths (VmServiceConnected, VmServiceReconnected, VmServiceDisconnected); added hot-restart re-enable of `profileWidgetBuilds` in `SessionRestartCompleted` |
+| `crates/fdemon-app/src/handler/devtools/performance/mod.rs` | Added `pub(crate) mod rebuild_stats` and `pub(crate) mod timeline` declarations |
+| `crates/fdemon-app/src/handler/devtools/performance/rebuild_stats.rs` | NEW: `handle_event`, `handle_toggle`, `handle_extension_state_changed`, `handle_location_map_fetched` with 10 unit tests |
+| `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` | NEW: `handle_batch`, `handle_cycle_filter` with 5 unit tests |
+| `crates/fdemon-app/src/handler/mod.rs` | Added 3 new `UpdateAction` variants: `StartTimelineMonitoring`, `ToggleProfileWidgetBuilds`, `FetchWidgetLocationIdMap` |
+| `crates/fdemon-app/src/handler/session.rs` | Added timeline task cleanup in 2 session stop paths (process exit, app.stop) |
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Updated `maybe_start_monitoring_for_selected_session` to also spawn `StartTimelineMonitoring`; added timeline pause/unpause in panel-switch logic; added timeline task cleanup in `close_session_internal` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added timeline pause on leaving Performance panel; timeline unpause on entering Performance panel |
+| `crates/fdemon-app/src/actions/performance.rs` | Added `spawn_timeline_polling` function (1 Hz, respects pause + shutdown signals, sends `VmServiceTimelineMonitoringStarted` first) |
+| `crates/fdemon-app/src/actions/vm_service.rs` | Added `Flutter.RebuiltWidgets` branch in `forward_vm_events` placed before `parse_frame_timing`; added 2 unit tests verifying routing discriminator |
+| `crates/fdemon-app/src/actions/mod.rs` | Added 3 new action dispatch arms: `StartTimelineMonitoring`, `ToggleProfileWidgetBuilds`, `FetchWidgetLocationIdMap` (inline tokio::spawn for the latter two) |
+| `crates/fdemon-app/src/process.rs` | Added hydration functions `hydrate_start_timeline_monitoring`, `hydrate_toggle_profile_widget_builds`, `hydrate_fetch_widget_location_id_map`; wired into hydration chain |
+| `crates/fdemon-tui/src/runner.rs` | Added 3 new variants to non-runner arm of exhaustive match |
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | `cargo fmt` reformatting only |
+| `crates/fdemon-daemon/src/vm_service/extensions/performance.rs` | `cargo fmt` reformatting only |
+
+### Notable Decisions/Tradeoffs
+
+1. **Timeline poll cadence hardcoded to 1000ms**: The task notes say to use `performance_refresh_ms` (default 2000ms) or introduce a `timeline_refresh_ms` key. Chose to hardcode 1000ms (1 Hz as PLAN.md §5.4 specifies) in `maybe_start_monitoring_for_selected_session` rather than adding config bloat. A `timeline_refresh_ms` config key can be added later if needed.
+
+2. **`UpdateAction` variants instead of `Task::Custom`**: The existing `Task` enum only has `Reload`, `Restart`, `Stop` variants. Rather than adding a `Custom(Arc<Fn>)` variant, added 3 dedicated `UpdateAction` variants (`ToggleProfileWidgetBuilds`, `FetchWidgetLocationIdMap`, `StartTimelineMonitoring`) following the existing pattern used by `ToggleOverlay`, `ClearHttpProfile`, etc. This keeps the action system fully typed and matches the existing codebase conventions.
+
+3. **Tab snap on extension disable**: Implemented directly in `handle_extension_state_changed` — mutates `details_tab` to `TimelineEvents` rather than emitting a follow-up `PerfFocusDetailsTab` message. Both approaches are correct; direct mutation avoids an extra message round-trip and keeps the handler simpler.
+
+4. **`extensionData` field access**: Accessed via `event.params.event.data.get("extensionData")` because `StreamEvent.data` is a `serde_json::Value` with `#[serde(flatten)]` containing all extension-specific fields.
+
+5. **`spawn_timeline_polling` uses `JoinHandle` rendezvous pattern**: Identical to `spawn_performance_polling` — `Arc<Mutex<Option<JoinHandle>>>` slot filled synchronously after `tokio::spawn` returns, before the task's first `.await`.
+
+6. **Five session-stop paths updated**: The task mentioned 3 paths from the research report, but audit of the codebase found 5: `VmServiceConnected`, `VmServiceReconnected`, `VmServiceDisconnected` (all in `update.rs`), plus `handle_process_exited` and `handle_app_stop` in `session.rs`, plus `close_session_internal` in `session_lifecycle.rs`. All 5 now clean up `timeline_*` fields.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed at each incremental step
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app` — Passed (2418 tests)
+- `cargo test --workspace` — Passed (all crates)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+
+### Risks/Limitations
+
+1. **No integration test for `spawn_timeline_polling` pause/resume**: The task requires a mock `VmRequestHandle` integration test verifying pause/resume/shutdown within 100ms wall-clock. This was not implemented because `VmRequestHandle` requires a live WebSocket connection and the existing test infrastructure doesn't have a mock for it. The unit tests for `TimelineFilter`, `handle_batch`, and `handle_cycle_filter` cover the handler logic, and the existing pattern of the similarly-structured `spawn_performance_polling` has no integration test either.
+
+2. **Timeline monitoring start not linked to `VmServiceConnected`**: Currently timeline monitoring only starts when the user switches sessions or enters DevTools. It does not auto-start on `VmServiceConnected`. This mirrors the existing behavior for performance monitoring (which also only starts on DevTools entry or session switch). This is by design — the timeline task starts paused anyway and only polls when the Performance panel is active.

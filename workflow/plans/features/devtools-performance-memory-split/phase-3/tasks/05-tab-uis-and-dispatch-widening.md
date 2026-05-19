@@ -175,3 +175,47 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
 - **`Frame: 142` header on Rebuild Stats** — pulls `frame_number` from the latest snapshot. If `state.rebuild_stats_frames` is empty, omit the field from the header.
 - **Selection fall-through is defensive** — T04 handles the snap-to-next on the state-update side; T05's fall-through is for the 1-frame window between disable and re-render. Without it, the dispatcher would render the (now-empty) `RebuildStats` tab for one frame.
 - **Color choices** (`Cyan` UI, `Magenta` Raster, `DarkGray` Other) follow Flutter DevTools' color conventions. If the project has theme constants in `crates/fdemon-tui/src/style.rs`, use those instead of literal `Color::*` — discover during implementation.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/mod.rs` | Widened dispatch to pass `&PerformanceState` to all 3 tabs; added `visible_tabs()` for conditional RebuildStats chip; added `effective_tab()` fall-through; updated `render_tab_strip()` to take `&[PerfDetailsTab]`. 12 new tests. Updated 2 Phase-2 stub dispatch tests to use new function signature. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/rebuild_stats_tab.rs` | Replaced Phase-2 stub. Full Phase-3 implementation: 3-column table (Widget/Location/Count), sorted by count desc, scroll offset clamping, selected-row reverse-video, render-hint write-back, disabled/empty-frame placeholders. 14 unit tests. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events_tab.rs` | Replaced Phase-2 stub. Full Phase-3 implementation: filter strip [All/UI/Raster] with REVERSED active chip, column headers, scrollable event list with thread badge (Cyan/Magenta/DarkGray), duration, and relative ts. Render-hint write-back. 9 unit tests. |
+| `crates/fdemon-app/src/session/mod.rs` | Added `TimelineFilter` to `pub use performance::` re-exports so fdemon-tui can import it. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/tests.rs` | Updated 3 Phase-2 tests that expected stub "Coming soon" messages — now expect Phase-3 content (empty placeholders, conditional tab visibility). |
+
+### Notable Decisions/Tradeoffs
+
+1. **TimelineFilter re-export**: `TimelineFilter` was defined in `fdemon_app::session::performance` but not re-exported at the `session` module level. Added it to the `pub use` line rather than having the TUI use the `pub(crate)` module path directly.
+
+2. **Color choices**: Used `Color::Cyan/Magenta/DarkGray` literal constants for thread badge colors (per task specification). The `crates/fdemon-tui/src/theme/palette.rs` doesn't have matching semantic colors for thread types, so literals match the Flutter DevTools convention directly.
+
+3. **Rebuild Stats sort**: Fixed at "count descending" per task note — no interactive sort toggle (`s` key is reserved for memory tab, Phase-2-followup).
+
+4. **Phase-2 test updates**: Three tests in `performance/tests.rs` expected Phase-2 stub text ("Coming soon"). Updated them to expect Phase-3 content. The `dual_pane` test now sets `rebuild_stats_enabled: true` to make the Rebuild Stats tab chip visible.
+
+5. **Fall-through is defensive**: `effective_tab()` maps `RebuildStats + disabled → TimelineEvents` covering the single frame between a disable event and the handler snap-to-next. The handler (T04) already snaps the selection on the state-update path; this is a TUI safety net only.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui` — Passed (1178 tests, 0 failed)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — Passed (clean)
+- `cargo fmt --all -- --check` — Passed
+- `cargo test --workspace` — Passed (all crates, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No interactive sort toggle for Rebuild Stats**: Fixed at "count descending" per task notes. `s` key is reserved for memory tab.
+2. **No mouse click on filter chips/rows**: Keyboard-only, matching Phase-2 deferral policy.
+3. **Timeline events newest-first display**: Uses `iter().rev()` on the filtered vec. This is O(n) per frame, acceptable for ring buffer sizes ≤1000.

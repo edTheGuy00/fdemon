@@ -278,3 +278,34 @@ fn classify_thread(thread_name: &str) -> TimelineThread {
 - **`RebuildEventPayload::new_locations` is raw JSON** rather than a `Vec<(String, ParallelLocationBlock)>` — defers shape decisions to the app layer and keeps the parser minimal.
 - **No aggregation logic in core** — `RebuildStatsSnapshot` is a passive data shape. The accumulator (lifetime totals + per-frame snapshots, rolling window) lives in `fdemon-app/handler/devtools/performance/rebuild_stats.rs` (T04).
 - **No `is_janky` / display-rate logic in `TimelineEvent`** — frame-budget reasoning stays in `FramePhases` / `frame_hints.rs`. Timeline events are presentational only.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/rebuild_stats.rs` | NEW: Location, LocationMap, RebuildLocation, RebuildStatsSnapshot, RebuildEventPayload, parse_rebuilt_widgets_event + 8 unit tests |
+| `crates/fdemon-core/src/timeline.rs` | NEW: TimelineThread, TimelinePhase, TimelineEvent, parse_vm_timeline, classify_thread + 12 unit tests |
+| `crates/fdemon-core/src/lib.rs` | Added `pub mod rebuild_stats;` and `pub mod timeline;` alphabetically between `performance` and `stack_trace` |
+
+### Notable Decisions/Tradeoffs
+
+1. **classify_thread combines .raster and .platform into one branch**: Clippy `-D warnings` flagged two `if` branches with identical bodies. Combined as `contains(".raster") || contains(".platform")` with an inline comment explaining the macOS fallback. All specified test cases still pass.
+2. **RebuildEventPayload::new_locations kept as raw JSON**: Matches task spec — defers parse decisions to app layer, avoids encoding the parallel-arrays shape in two places.
+3. **parse_phase handles both `i` and `I` for Instant**: The Chrome-trace spec says lowercase `i` but some older implementations emit uppercase — defensive handling costs nothing.
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` - Passed
+- `cargo test -p fdemon-core` - Passed (495 unit tests, 7 doc tests; 20 new tests all green)
+- `cargo clippy -p fdemon-core --all-targets -- -D warnings` - Passed (clean after combining duplicate Raster branches)
+
+### Risks/Limitations
+
+1. **thread_name_map accumulation across calls**: The map is caller-owned and grows unboundedly across `getVMTimeline` polls. The app layer (T02/T04) will need to decide when to clear it (e.g., on session restart). No risk in the core types themselves.

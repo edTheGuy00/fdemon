@@ -65,13 +65,13 @@ Wave 5  │ 06 keybindings-and-footer        │ │ 07 update-architecture-doc 
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [add-phase-3-core-types](tasks/01-add-phase-3-core-types.md) | Not Started | — | 3–4h | implementor | 1 |
-| 02 | [rebuild-stats-vm-service](tasks/02-rebuild-stats-vm-service.md) | Not Started | 01 | 3–4h | implementor | 2 |
-| 03 | [timeline-events-vm-service](tasks/03-timeline-events-vm-service.md) | Not Started | 01 | 3–4h | implementor | 2 |
-| 04 | [app-state-handlers-and-spawn](tasks/04-app-state-handlers-and-spawn.md) | Not Started | 01, 02, 03 | 6–8h | implementor | 3 |
-| 05 | [tab-uis-and-dispatch-widening](tasks/05-tab-uis-and-dispatch-widening.md) | Not Started | 04 | 4–6h | implementor | 4 |
-| 06 | [keybindings-and-footer](tasks/06-keybindings-and-footer.md) | Not Started | 04, 05 | 1–2h | implementor | 5 |
-| 07 | [update-architecture-doc](tasks/07-update-architecture-doc.md) | Not Started | 04, 05 | 2–4h | doc_maintainer | 5 |
+| 01 | [add-phase-3-core-types](tasks/01-add-phase-3-core-types.md) | Done | — | 3–4h | implementor | 1 |
+| 02 | [rebuild-stats-vm-service](tasks/02-rebuild-stats-vm-service.md) | Done | 01 | 3–4h | implementor | 2 |
+| 03 | [timeline-events-vm-service](tasks/03-timeline-events-vm-service.md) | Done | 01 | 3–4h | implementor | 2 |
+| 04 | [app-state-handlers-and-spawn](tasks/04-app-state-handlers-and-spawn.md) | Done (CONCERN) | 01, 02, 03 | 6–8h | implementor | 3 |
+| 05 | [tab-uis-and-dispatch-widening](tasks/05-tab-uis-and-dispatch-widening.md) | Done | 04 | 4–6h | implementor | 4 |
+| 06 | [keybindings-and-footer](tasks/06-keybindings-and-footer.md) | Done (CONCERN) | 04, 05 | 1–2h | implementor | 5 |
+| 07 | [update-architecture-doc](tasks/07-update-architecture-doc.md) | Done (CONCERN) | 04, 05 | 2–4h | doc_maintainer | 5 |
 
 ## File Overlap Analysis
 

@@ -111,3 +111,36 @@ Add to `widgets/devtools/mod.rs` test module (or wherever footer tests live):
 - **Footer hint length budget:** Existing footer is ~60 chars on a 200-col terminal. Adding ~14 chars (`  [R] Rebuild track`) keeps it under 80 chars, well within budget even on narrow terminals (down to ~80 cols).
 - **No mouse region changes** — Phase 2 deferred Performance click regions; Phase 3 stays keyboard-only. If a future phase adds mouse, the `f` and `R` actions become click-action targets on the footer-hint chips and tab chips respectively.
 - **No KEYBINDINGS.md restructure** — append only. Match existing table style (column headers `\| Key \| Context \| Action \|`).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Added `PerfDetailsTab` import; added `Char('f')` and `Char('R')` arms inside `if in_performance` block (before `]`/`[` arms) that early-return contextual messages when `Details` focused and respective tab active; added 8 new regression tests in `performance_sort_key_tests` module |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `PerfDetailsTab` import; changed `hints` variable from `&'static str` to `Cow<'static, str>`; updated `PerfSection::Details` arm to dynamically append `[f] Filter` or `[R] Rebuild track` based on `details_tab`; added 4 new footer tests and a `make_perf_session_handle_with_details_tab` helper |
+| `docs/KEYBINDINGS.md` | Added two new rows to Performance Panel table (`f` and `R (Shift+r)`); added note after global `R` (Hot Restart) row clarifying context-dependent precedence; added notes block under Performance table |
+
+### Notable Decisions/Tradeoffs
+
+1. **`R` in DevTools returns None (not HotRestart)**: The global `R → HotRestart` binding lives in `handle_key_normal`, not `handle_key_devtools`. So pressing `R` in DevTools on FrameAnalysis/Memory returns `None` (no-op), not `HotRestart`. The regression tests were adjusted to assert that `ToggleRebuildStats` is NOT emitted in non-RebuildStats contexts, and the Logs-panel test (Normal mode) correctly verifies HotRestart. This matches existing code behavior and is documented in the test comments.
+
+2. **`Cow<'static, str>` for footer hints**: Changed `hints` from `&'static str` to `std::borrow::Cow<'static, str>` to support both static strings (no allocation) and owned `String` for the dynamic Performance/Details branch. This avoids any new heap allocation for the non-Details branches.
+
+3. **`f` arm inside `if in_performance`**: The `f` key is only intercepted when `in_performance` and `focused_section == Details` and `details_tab == TimelineEvents`. Otherwise it falls through to the outer `match key` block which returns `None` (no DevTools binding for `f` otherwise). This is correct since `f` has no global DevTools binding.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app -p fdemon-tui` — Passed
+- `cargo test -p fdemon-app -p fdemon-tui` — Passed (2424 + 1182 tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Clean
+
+### Risks/Limitations
+
+1. **`R` no-op in DevTools/non-RebuildStats**: Pressing `R` in DevTools mode outside the RebuildStats tab returns `None` (no hot restart). This is pre-existing behavior, not introduced by this task. A future task could add `R → HotRestart` as a DevTools-global fallback.

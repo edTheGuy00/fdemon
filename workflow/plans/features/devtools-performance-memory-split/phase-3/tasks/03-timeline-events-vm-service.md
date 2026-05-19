@@ -141,3 +141,42 @@ pub async fn fetch_timeline_chunk(
 - **Use `json!` macro for params construction** rather than `HashMap<String, String>`. `getVMTimeline` accepts integer params, unlike Flutter extensions which require all-string args. The `VmRequestHandle::request` signature accepts `Option<serde_json::Value>` — pass the `json!({...})` value directly.
 - **No `pub mod` declarations needed** — the additions go into the existing `timeline.rs` module which is already declared in `vm_service/mod.rs`.
 - **`parse_vm_timeline` signature** (from T01): `(response: &serde_json::Value, thread_name_map: &mut HashMap<i64, String>) -> Result<Vec<TimelineEvent>>`. Confirm this matches; if T01 ends up with a different signature, this task adapts the call but keeps `fetch_timeline_chunk`'s public signature unchanged.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/timeline.rs` | Added `get_vm_timeline_micros` and `fetch_timeline_chunk` async functions with full doc comments; added 9 new unit tests using mock VmRequestHandle channel |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Made `ClientCommand` `pub(crate)` (was private); added `VmRequestHandle::new_with_test_channel()` test helper that returns both handle and live command receiver |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `fetch_timeline_chunk` and `get_vm_timeline_micros` to the public re-exports |
+
+### Notable Decisions/Tradeoffs
+
+1. **`ClientCommand` visibility**: Made `pub(crate)` instead of `pub` so tests in `timeline.rs` can reference the type when building the fake responder. Keeps the type private from external crates. A `pub(crate)` method `new_with_test_channel()` was added to `VmRequestHandle` to create a handle with a live receiver — as opposed to `new_for_test()` which drops the receiver immediately.
+
+2. **Test isolation via spawn pattern**: Each async test spawns a `tokio::spawn` task that acts as the fake VM responder. It reads one or more `ClientCommand::SendRequest` messages from the receiver, inspects the method and params, then sends back a canned `Result<serde_json::Value>` through the embedded oneshot sender. This matches the pattern already used in `client.rs` tests.
+
+3. **Preserving existing surface**: All pre-existing functions (`parse_frame_timing`, `enable_frame_tracking`, `flutter_extension_kind`, `is_frame_event`, `parse_str_u64`) are byte-for-byte unchanged (formatting aside — rustfmt reformatted a few lines in `timeline.rs` and `rebuild_stats.rs`).
+
+4. **`u64 → i64` cast**: Documented inline in `fetch_timeline_chunk` per task spec. The VM Service protocol uses `i64` for these parameters; real timeline values (decades of microseconds) stay well below `i64::MAX`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon --lib -- vm_service::timeline` - Passed (24 tests: 15 pre-existing + 9 new)
+- `cargo test -p fdemon-daemon` - Passed (809 tests)
+- `cargo test --workspace` - Passed (all tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **`parse_vm_timeline` error propagation**: If the response has malformed non-metadata events (missing `name` or `ts`), `parse_vm_timeline` returns `Err`. This is the correct behavior; callers should handle it as a protocol violation.
+2. **No streaming / incremental parse**: This is a polling wrapper; T04's spawn loop handles polling cadence and backpressure. No streaming semantics are introduced at this layer.
