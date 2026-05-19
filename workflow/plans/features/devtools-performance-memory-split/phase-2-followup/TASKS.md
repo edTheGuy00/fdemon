@@ -31,10 +31,10 @@ Wave 2      │ 04 consolidated-minor-cleanup  │
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [fix-duplicate-detail-render](tasks/01-fix-duplicate-detail-render.md) | Not Started | — | 1.5–2h | implementor | 1 |
-| 02 | [frame-analysis-tab-cleanup](tasks/02-frame-analysis-tab-cleanup.md) | Not Started | — | 1–1.5h | implementor | 1 |
-| 03 | [fix-architecture-doc-errors](tasks/03-fix-architecture-doc-errors.md) | Not Started | — | 0.5h | doc_maintainer | 1 |
-| 04 | [consolidated-minor-cleanup](tasks/04-consolidated-minor-cleanup.md) | Not Started | 01 | 1.5–2h | implementor | 2 |
+| 01 | [fix-duplicate-detail-render](tasks/01-fix-duplicate-detail-render.md) | Done | — | 1.5–2h | implementor | 1 |
+| 02 | [frame-analysis-tab-cleanup](tasks/02-frame-analysis-tab-cleanup.md) | Done | — | 1–1.5h | implementor | 1 |
+| 03 | [fix-architecture-doc-errors](tasks/03-fix-architecture-doc-errors.md) | Done | — | 0.5h | doc_maintainer | 1 |
+| 04 | [consolidated-minor-cleanup](tasks/04-consolidated-minor-cleanup.md) | Done | 01 | 1.5–2h | implementor | 2 |
 
 ## File Overlap Analysis
 

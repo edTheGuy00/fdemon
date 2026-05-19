@@ -85,3 +85,26 @@ This task's edits are pure name/signature corrections — fully within content b
 - Do NOT rewrite or expand the Performance Panel Interactivity section. Only the two specific errors.
 - Do NOT modify ASCII diagrams. The variant-name fix is sentence-level only.
 - Do NOT rename the `OverBudget` enum field in source code — that field is correctly named in source. Only the doc is wrong.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Fixed `PerfSection` variant name (`DetailsTab` -> `Details`) at line 1044; fixed `OverBudget` field names (`budget_ms, actual_ms` -> `excess_ms, budget_ms`) and clarified description at line 1091 |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **`actual_ms` description updated**: The description column was updated to clarify that `excess_ms` is the overage above budget (not the full elapsed time), which is a necessary clarification given the semantics differ from the stale `actual_ms` name.
+2. **Inspector `DetailsTab` left untouched**: The `DetailsTab` on line 914 refers to the `state::DetailsTab` Inspector type, which is unrelated to `PerfSection`. It is correct and was not modified.

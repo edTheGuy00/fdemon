@@ -292,3 +292,46 @@ fn performance_footer_shows_scroll_keys_when_frame_chart_focused() {
 - Do NOT modify the `OverBudget` or `PerfSection::Details` doc entries in ARCHITECTURE.md — T03 owns those.
 - Do NOT change layout-threshold constant *values* unless m7's derivation strictly requires it. Prefer comment correction.
 - Do NOT bundle M2 (`is_janky` migration) here. That is a Phase 3 prerequisite.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/REVIEW_FOCUS.md` | Added two missing Cell entries: `PerformanceState::frame_chart_visible_width` and `PerformanceState::details_pane_visible_height` (m1) |
+| `crates/fdemon-app/src/handler/devtools/performance/frame.rs` | Replaced stale "Unreachable via Tab" comments with accurate Phase 3 intent (m3); aligned `handle_perf_jump_to_start` fallback to use `DEFAULT_PERF_PAGE_SIZE` like `handle_perf_page` (m13); added regression test for fallback alignment |
+| `crates/fdemon-app/src/session/performance.rs` | Added 2-variant assumption caution doc comments to `PerfSection::next` and `PerfSection::prev` (m12) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Promoted `MIN_PHASE_BAR_WIDTH` to `pub(super)` and removed the `const _: u16 = MIN_PHASE_BAR_WIDTH` workaround (m5); rewrote `MIN_DUAL_PANE_HEIGHT` derivation comment to accurately describe the empirically-tested threshold vs strict calculation (m7) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Made Performance footer section-aware: hides `[j/k] Scroll` and `[←/→] Frames` when `focused_section == Details` (m6); replaced `[]/[] Tabs` with `]/[ Tabs` (m8); added import for `PerfSection`; added two new footer tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **m5 import path unchanged**: `frame_analysis_tab.rs` already used `use super::super::MIN_PHASE_BAR_WIDTH;` which is the correct path. No change needed to that file — the `pub(super)` promotion makes the constant properly visible to the parent (`devtools`) module while children already had access via Rust's private item inheritance.
+
+2. **m7 comment rewrite (not constant bump)**: The strict bottom-up arithmetic yields 20 rows (1 footer + 2 chart borders + 7 chart inner + 2 details borders + 8 details inner). The constant stays at 18 since it is empirically correct — ratatui's `Constraint::Min` makes this work. The comment now honestly describes this empirical basis rather than presenting wrong math.
+
+3. **m6 footer test with SessionHandle**: Built a minimal `SessionHandle` in tests via `Session::new` + `SessionHandle::new` to set `focused_section` for the Details test. This avoids mocking while staying within public API.
+
+4. **m13 regression test clarifies semantics**: The test asserts `page_up` from 0 moves by `DEFAULT_PERF_PAGE_SIZE` and `jump_to_start` uses `buf_len - DEFAULT_PERF_PAGE_SIZE` as its max-back offset, making the shared-fallback semantics explicit.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app handler::devtools::performance` - Passed (36 tests)
+- `cargo test -p fdemon-tui widgets::devtools` - Passed (449 tests)
+- `cargo test -p fdemon-tui performance_footer` - Passed (4 tests including 2 new)
+- `cargo test --workspace` - Passed (all crates, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **m5 pub(super) scope**: The constant is now visible to the parent `devtools` module. No other sibling panels reference it so there is no risk of unintended cross-panel access. If `devtools/mod.rs` ever needs to use it, it can now do so without re-exporting.
+
+2. **m7 threshold unchanged at 18**: If the ratatui version changes its constraint-min behaviour, the 18-row threshold may become incorrect. The updated comment documents this empirical basis so future maintainers know to re-verify.

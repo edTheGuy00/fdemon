@@ -174,3 +174,35 @@ The test guards against regressions in the proportional math (segment widths sum
 - Do NOT touch `frame_chart/*` — that's T01's scope.
 - Do NOT touch `performance/mod.rs` constants or callsites — T01 (dual_pane plumbing) and T04 (const visibility) own that file.
 - Do NOT modify the no-data fallback, no-selection prompt, hint list rendering, or verdict line. M1+m4+m9+m10+m11 only touch the proportional-bar / label-rendering region of this file.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a9cbcbeed3aaa144f
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/frame_analysis_tab.rs` | M1: removed dead `render_width` binding + invariant comment; m4: replaced `&name[..1]` byte-slice with `chars().next().unwrap_or(' ')`; m10: added `distribute_remainder` helper that allocates rounding remainder to the largest segment; m11: replaced `area.y + 1` and `x + dx` patterns with `saturating_add`; m9: added `proportional_bar_segment_widths_match_phase_proportions` test that checks segment widths by background colour |
+
+### Notable Decisions/Tradeoffs
+
+1. **m9 test strategy — checking background colour not character gaps**: The bar renders contiguous `█` with no gaps between segments; segments are distinguished solely by background colour. The helper `count_bar_segments_by_color` reads `cell.style().bg` on bar row y=1 for each of the four phase colours, giving per-segment cell counts without relying on visual breaks that don't exist.
+2. **m10 `distribute_remainder` handles both over- and under-allocation**: `diff` is a signed `i32` so when rounding produces a sum greater than `target_width`, one cell is subtracted from the largest segment — covering both the remainder-to-raster bug and the symmetric over-rounding case.
+3. **m4 `min_label_owned` borrow**: Converting `first_char: char` to a `String` and borrowing as `&str` keeps the fallback chain using `&str` throughout without lifetime issues.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui widgets::devtools::performance::details::frame_analysis_tab` — 13 tests, all passed
+- `cargo test --workspace` — 5,662 unit tests, 0 failed
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean (fixed one `manual_contains` lint)
+- `cargo fmt --all -- --check` — clean after auto-format
+- `cargo check --workspace --all-targets` — clean
+
+### Risks/Limitations
+
+1. **Raster=0 remainder redistribution**: With `raster_micros=0` and three equal phases on a width=80 buffer (round gives 27+27+27=81), `distribute_remainder` subtracts 1 from the largest (any of the three); raster correctly gets 0 cells. Test verifies this.
+2. **Existing tests unaffected**: No existing test asserted exact segment pixel widths, so the switch from integer division to `round()` + `distribute_remainder` caused no failures.
