@@ -59,3 +59,39 @@ Per PLAN.md Design Decision §2, the fix for M4 is **option (i) — relax the ea
 - Removing the `is_busy` check from the global `Char('R')` arm — out of scope; preserve existing busy-state guard semantics.
 - Changing the test naming convention for the existing rebuild-stats tests.
 - Refactoring `PerfDetailsTab` into a different enum shape.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `PerfDetailsTab::next_visible(rebuild_stats_enabled: bool) -> Self` method that skips `RebuildStats` when disabled |
+| `crates/fdemon-app/src/handler/devtools/performance/details.rs` | Updated `handle_perf_cycle_details_tab` to use `next_visible`; updated `cycle_forward_advances_details_tab` test; added `cycle_forward_advances_details_tab_with_rebuild_enabled`, `test_cycle_skips_rebuild_stats_when_disabled`, `test_cycle_includes_rebuild_stats_when_enabled` tests |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `is_busy` binding in `handle_key_devtools`; added `Char('R') if !is_busy => Some(Message::HotRestart)` to main DevTools match; updated `test_capital_r_on_frame_analysis_tab_triggers_hot_restart` and `test_capital_r_on_memory_panel_triggers_hot_restart` assertions; added `test_capital_r_on_inspector_panel_triggers_hot_restart`, `test_capital_r_on_network_panel_triggers_hot_restart`, `test_capital_r_on_frame_chart_focused_triggers_hot_restart`, `test_capital_r_on_timeline_events_tab_triggers_hot_restart` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option (b) for M1**: Used `next_visible` as a parallel method alongside the existing `next`, preserving the unconditional `next()` semantics for any call site that doesn't need visibility awareness. The `handler` is the only forward-cycle call site and now uses `next_visible`.
+
+2. **Pre-existing test update**: `cycle_forward_advances_details_tab` expected `RebuildStats` as the result of cycling forward from `FrameAnalysis`. After the handler change, the default state (`rebuild_stats_enabled = false`) yields `TimelineEvents` instead. Updated the test to document the new default behavior and added a companion `cycle_forward_advances_details_tab_with_rebuild_enabled` to preserve coverage of the `RebuildStats` path.
+
+3. **M4 implementation**: Added `Char('R') if !is_busy => Some(Message::HotRestart)` to the bottom of the main `match key` block in `handle_key_devtools`. The early-return in the `in_performance` block only intercepts `R` when `Details` is focused AND the tab is `RebuildStats`; all other contexts fall through to the new arm.
+
+4. **`assert!` vs `assert_eq!`**: Used `assert!(matches!(...))` throughout since `Message` doesn't implement `PartialEq`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (2445 tests, 0 failed)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Backward tab cycle (`[`) not addressed**: Per the task's "Out of Scope" section, the `prev()` direction is not updated. If `details_tab` is currently `RebuildStats` when rebuild tracking is disabled (e.g., carried over from a session where it was on), backward cycling from `TimelineEvents` would land on `RebuildStats` correctly, but from `FrameAnalysis` backward still wraps through `TimelineEvents` (no skip needed). The `RebuildStats` state when disabled is an edge case noted for follow-up.

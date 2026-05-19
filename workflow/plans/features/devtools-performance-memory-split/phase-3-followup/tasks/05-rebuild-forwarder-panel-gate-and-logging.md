@@ -54,3 +54,48 @@ Per PLAN.md Design Decision §H1, the chosen mitigation is **option (a) — pane
 - Pausing the Dart-side extension itself when leaving Performance. (That would require a daemon-side mechanism and is much heavier; the panel gate is enough.)
 - Buffering events while the panel is inactive to replay on return — explicitly out of scope. The buffer reset is intentional.
 - Coordinating with T01's `timeline_pause_tx` — those signal a spawned task to stop polling; this task gates a different code path (the event forwarder). No interaction.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ae6b494ddbbfc8241
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/vm_service.rs` | Panel gate (H1), log level debug! (L3), try_send migration (L10), 3 new tests |
+| `crates/fdemon-app/src/session/handle.rs` | Added `rebuilt_widgets_gate_tx: Option<Arc<watch::Sender<bool>>>` field |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `rebuilt_widgets_gate_rx: Option<watch::Receiver<bool>>` to `ConnectVmService` variant |
+| `crates/fdemon-app/src/handler/session.rs` | Added `rebuilt_widgets_gate_rx: None` to `ConnectVmService` construction |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_connect_vm_service` that creates gate channel, stores sender in session handle |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Gate updates in `handle_switch_panel` and `handle_exit_devtools_mode` |
+| `crates/fdemon-app/src/actions/mod.rs` | Pass `rebuilt_widgets_gate_rx` through to `spawn_vm_service_connection` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Gate channel via `watch::Receiver<bool>`**: Used `bool` (not `DevToolsPanel`) to keep the forwarder independent of the state crate's type hierarchy and consistent with the existing `perf_pause_tx`/`network_pause_tx` conventions. `true` = gate open (forward), `false` = gate closed (skip).
+
+2. **Hydration in `process.rs`**: Created `hydrate_connect_vm_service` following the established hydration pattern. This runs before all other hydrations, creates the `watch::channel(gate_open)` seeded with the current panel state, stores the sender in `SessionHandle::rebuilt_widgets_gate_tx`, and injects the receiver into the action. Avoids any new `Message` variants.
+
+3. **All sessions updated on panel switch**: `handle_switch_panel` and `handle_exit_devtools_mode` iterate all sessions via `session_manager.iter_mut()` since `devtools_view_state.active_panel` is global, not per-session.
+
+4. **`None` receiver = safe default (always skip)**: If hydration is somehow skipped (e.g., unit tests not calling `process_message`), `forward_vm_events` sees `None` and skips events, which is the conservative behavior.
+
+5. **Tests are logic-level, not integration**: Since `forward_vm_events` requires a live `VmServiceClient` which is hard to mock, the gate tests verify the gate primitive (`watch::Receiver<bool>` channel semantics) in isolation. The `try_send` test exercises `tokio::sync::mpsc::error::TrySendError` variant discrimination.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (2431 tests, 0 failed)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (0 warnings)
+- New tests: `test_rebuilt_widgets_event_skipped_when_panel_not_performance`, `test_rebuilt_widgets_event_dispatched_when_performance_active`, `test_try_send_error_variant_discrimination` — all pass
+
+### Risks/Limitations
+
+1. **Gate seeded at connect time**: The initial gate value is set to the current panel at `ConnectVmService` hydration time. If the user is on the Performance panel when the VM connects (rare — normally the VM connects before the user enters DevTools), the gate starts open, which is correct. The gate then tracks all subsequent panel changes via the watch channel.
+
+2. **`Closed` receiver on `TrySendError::Closed`**: The forwarder exits the loop when the channel is closed, which is correct (session is shutting down). The `VmServiceDisconnected` message is then sent from the loop exit path.

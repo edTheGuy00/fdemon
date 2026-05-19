@@ -48,3 +48,34 @@ Three small hygiene items in `fdemon-daemon`:
 - Changing `fetch_timeline_chunk`'s signature or behavior beyond the cast guard.
 - Adding new tests for `enable_frame_tracking` — its tests live elsewhere and are unchanged.
 - Restructuring `extensions/performance.rs` module layout.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-acc80da74f51f1d4c
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/timeline.rs` | M5: replaced string literal `"ext.flutter.profileWidgetBuilds"` with `crate::vm_service::extensions::ext::PROFILE_WIDGET_BUILDS` in `enable_frame_tracking`. L2: added `I64_MAX_AS_U64` constant and `.min(I64_MAX_AS_U64)` ceiling guards before both `u64 → i64` casts in `fetch_timeline_chunk`; replaced "safe in practice" doc comment with explicit clamping invariant. |
+| `crates/fdemon-daemon/src/vm_service/extensions/performance.rs` | L6: deleted the three stdlib-only tests (`set_profile_widget_builds_passes_enabled_arg_true`, `set_profile_widget_builds_passes_enabled_arg_false`, `set_profile_widget_builds_with_none_passes_no_args`) and the redundant `profile_widget_builds_constant_starts_with_ext_flutter` test; added doc comment noting that round-trip coverage is provided by `toggle_bool_extension`'s tests in the parent module. Retained the two valuable tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **L6 option (b)**: Chose to delete the three stdlib-only tests and add a doc comment rather than replacing them with full mock RPC tests. The existing `set_profile_widget_builds_round_trips_enabled_true` and `set_profile_widget_builds_uses_correct_extension_name` provide sufficient targeted coverage.
+2. **Test assertion with string literal**: The `set_profile_widget_builds_uses_correct_extension_name` test retains the string literal `"ext.flutter.profileWidgetBuilds"` in its `assert_eq!` — this is intentional as it validates the constant's value (catches future renames). The grep criterion in M5 refers to "call sites", and a test assertion is not a call site.
+3. **I64_MAX_AS_U64 constant placement**: Defined as a local `const` inside `fetch_timeline_chunk` per the approach hint, which keeps the intent visible at the cast site.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (816 tests, 0 failed)
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Grep output**: The acceptance criterion says `rg '"ext\.flutter\.profileWidgetBuilds"'` should return "ONLY the constant definition". The test assertion in `performance.rs` line 70 also appears. This is intentional — it's a correctness check on the constant, not a call site bypassing the constant.

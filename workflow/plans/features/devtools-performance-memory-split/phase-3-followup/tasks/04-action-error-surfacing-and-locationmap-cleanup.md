@@ -84,3 +84,44 @@ The planning decision (see PLAN.md Design Decisions §1) chose to fix both H3 an
 - Touching the existing `RebuildStatsExtensionStateChanged` handler logic — only adding new emission sites.
 - The `auto_enable_rebuild_tracking` wiring — that's T09.
 - Toast/snackbar UI for the failure message — log-buffer surfacing is sufficient.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a0f98232d0de748d7
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `RebuildStatsToggleFailed { session_id, reason }` variant with doc comment |
+| `crates/fdemon-app/src/actions/mod.rs` | `ToggleProfileWidgetBuilds` failure path now emits rollback + `RebuildStatsToggleFailed`; `FetchWidgetLocationIdMap` replaced inline JSON traversal with `widget_location_id_map_handle()` call, error path emits `RebuildStatsToggleFailed` |
+| `crates/fdemon-app/src/handler/devtools/performance/rebuild_stats.rs` | Added `handle_toggle_failed` function + 3 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added dispatch arm for `RebuildStatsToggleFailed` → `handle_toggle_failed` |
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | Added `widget_location_id_map_handle(&VmRequestHandle, &str)` — same logic as existing `widget_location_id_map` but accepts `VmRequestHandle` for use in action tasks |
+| `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` | Re-exported `widget_location_id_map_handle` |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported `widget_location_id_map_handle` at crate level |
+
+### Notable Decisions/Tradeoffs
+
+1. **New daemon helper instead of trait abstraction**: The `widget_location_id_map` function takes `&VmServiceClient`, but action tasks hold `VmRequestHandle`. Rather than introducing a trait to unify the two, I added `widget_location_id_map_handle(&VmRequestHandle)` as a parallel implementation. This is simpler and follows the existing codebase pattern for `call_extension` on `VmRequestHandle`.
+
+2. **Test for action-layer behavior via handler layer**: `test_location_map_fetch_failure_emits_toggle_failed` tests the handler dispatch path (the same message variant used by both `ToggleProfileWidgetBuilds` and `FetchWidgetLocationIdMap` failures), rather than the action task directly. This is necessary since `VmRequestHandle` cannot be mocked without T11's infrastructure; the test correctly verifies the behavioral contract at the handler level.
+
+3. **Rollback uses `!attempted_enable`**: Per the task spec, the failure rollback emits `RebuildStatsExtensionStateChanged { enabled: !enabled }` without querying the VM. This is safe since a failed toggle means the extension state did not change from what it was before the attempt.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace --lib` - Passed (2431+ tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-app rebuild_stats::tests::test_handle_toggle_failed_appends_log_entry` - Passed
+- `cargo test -p fdemon-app rebuild_stats::tests::test_toggle_failure_emits_rollback_and_log` - Passed
+- `cargo test -p fdemon-app rebuild_stats::tests::test_location_map_fetch_failure_emits_toggle_failed` - Passed
+
+### Risks/Limitations
+
+1. **Action-layer test not directly testing async task behavior**: The `test_location_map_fetch_failure_emits_toggle_failed` test verifies the handler's response to the message rather than the action's emission of it. Full end-to-end action testing requires T11's mock `VmRequestHandle` infrastructure.

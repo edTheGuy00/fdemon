@@ -48,3 +48,32 @@ These keys were added in an earlier phase (not Phase 3); the Phase 3 doc-maintai
 - Adding `deny_unknown_fields` or any other serde attribute changes.
 - Documenting other config keys (the rest of CONFIGURATION.md is unchanged).
 - Adding `#[serde(alias = "readiness_poll_*")]` back-compat — defer.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Renamed three inspector-readiness poll keys in both the TOML example block (lines 346-348) and the property table (lines 360-362) to use the correct `inspector_` prefix: `readiness_poll_attempts` → `inspector_readiness_poll_attempts`, `readiness_poll_interval_ms` → `inspector_readiness_poll_interval_ms`, `readiness_poll_call_timeout_ms` → `inspector_readiness_poll_call_timeout_ms`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **No source code changes**: Task is docs-only as specified. The actual serde field names (`inspector_readiness_poll_attempts`, `inspector_readiness_poll_interval_ms`, `inspector_readiness_poll_call_timeout_ms`) in `crates/fdemon-app/src/config/types.rs` lines 402-417 were verified to match the corrected doc names exactly.
+2. **Both locations updated**: Fixed the TOML example block and the property reference table consistently. Section ordering and surrounding prose were left unchanged.
+
+### Testing Performed
+
+- `grep -n "readiness_poll" docs/CONFIGURATION.md` — confirmed all 6 occurrences use `inspector_` prefix
+- Verified no bare `readiness_poll_*` keys remain in the docs file
+- Source verified: `types.rs:402,410,417` confirms `inspector_readiness_poll_attempts`, `inspector_readiness_poll_interval_ms`, `inspector_readiness_poll_call_timeout_ms` are the actual serde field names
+- Test `test_old_readiness_poll_key_does_not_silently_override_default` at `types.rs:1985` confirms that the old key names without `inspector_` prefix were silently ignored (taking defaults) — exactly the bug this doc fix addresses
+
+### Risks/Limitations
+
+1. **Docs-only fix**: Users who had previously copied the incorrect key names from the docs will continue to have those wrong keys silently ignored. The fix ensures future users copy the correct names. No migration is needed for existing working configs that never set these keys.

@@ -53,3 +53,34 @@ All three are in `fdemon-core`, no cross-crate impact.
 - Adding a separate "TimelineParseDiagnostic" surface for L7 — debug-level tracing suffices.
 - Refactoring `parse_vm_timeline` into smaller helpers.
 - Adding `Serialize` to other types in `rebuild_stats.rs` that don't have it (they all already do per the L8 note).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a38ba248283e32738
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/timeline.rs` | H2: rewrote module-level docstring and `classify_thread` function doc comment to accurately describe simple containment check and tester case rationale. L7: added `use tracing::debug`, refactored `ph`/`tid` extraction to capture `Option` for absence detection, added `tracing::debug!` log lines (with `event_name` field) when either field defaults, added `## Field tolerance` section to `parse_vm_timeline` doc comment explaining required vs tolerated fields. |
+| `crates/fdemon-core/src/rebuild_stats.rs` | L8: added `PartialEq, Serialize, Deserialize` derives to `RebuildEventPayload`. Added `rebuild_event_payload_serde_round_trip` test that constructs a payload with populated `new_locations` (nested Phase 3 shape), serializes to JSON, deserializes, and asserts equality. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`PartialEq` added alongside `Serialize`/`Deserialize`**: The round-trip test requires equality comparison. `serde_json::Value` implements `PartialEq`, so the derive is valid. This is additive and backward-compatible.
+2. **Debug logs placed after `name` parse**: The task says to log with the event's `name` for context. `name` is parsed after the metadata check (step 2), so the debug lines are placed there. This means a missing-`ph` event that also has a missing `name` will return a protocol error before any debug log is emitted — that's correct behavior since a missing `name` is already an error.
+3. **`ph_opt`/`tid_opt` locals**: Refactored `ph`/`tid` extraction to capture the `Option` so absence can be detected without repeating the `get`/`as_*` chain.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-core` — Passed
+- `cargo test -p fdemon-core` — Passed (496 tests, 0 failed)
+- `cargo clippy -p fdemon-core --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No cross-crate impact**: `RebuildEventPayload` gains new derives but no field or API changes. All sibling crates compile without modification.

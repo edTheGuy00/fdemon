@@ -61,3 +61,35 @@ Per PLAN.md Design Decision §3, M2 is wired (not deleted): on `VmServiceConnect
 - Changing the default value of `auto_enable_rebuild_tracking` from `false`.
 - Wiring the setting to fire on other events (e.g., `SessionStarted` before VM Service is ready). `VmServiceConnected` is the right hook because that's when the toggle can actually succeed.
 - Surfacing the auto-enable result via a log entry. T04's `RebuildStatsToggleFailed` will surface failures; success is silent (consistent with manual toggle).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | `VmServiceConnected` arm reads `auto_enable_rebuild_tracking` setting; if `true` and `rebuild_stats_enabled` is `false` (always true after the per-connect reset), queues `ToggleProfileWidgetBuilds { enabled: true, vm_handle: None }` in `extra_actions`. Comment block updated from "two things" to "three things". |
+| `crates/fdemon-app/src/handler/tests.rs` | Three new tests: `test_auto_enable_rebuild_tracking_queues_toggle_on_vm_service_connected` (positive), `test_auto_enable_skipped_when_already_enabled` (documents the post-reset behaviour), `test_auto_enable_not_queued_when_setting_is_false` (default/negative). |
+| `crates/fdemon-app/src/config/types.rs` | Doc comment on `auto_enable_rebuild_tracking` expanded to specify trigger point (`VmServiceConnected`), note the independence from hot-restart re-enable (`SessionRestartCompleted`), and clarify the hot-restart path takes precedence because they fire at different lifecycle points. |
+
+### Notable Decisions/Tradeoffs
+
+1. **extra_actions slot**: The `VmServiceConnected` arm already uses `action` for `StartPerformanceMonitoring` and `message` for `TriggerDevToolsServeFallback`. The auto-enable goes into `extra_actions` rather than replacing any existing slot, preserving all three concurrent effects cleanly.
+2. **Post-reset idempotency**: `PerformanceState` is unconditionally reset by the handler before the gate check, so `rebuild_stats_enabled` is always `false` at check time. The gate against `!rebuild_stats_enabled` is still correct and forward-safe; if the reset were ever removed or conditioned, the gate would prevent a double-toggle.
+3. **L9 investigation**: Line 177 of `session_lifecycle.rs` is a proper `//` comment ("// Timeline polls at 1 Hz..."). The `grep -n '^/[^/]'` search returned no results — the L9 flag was a false positive by the code-quality agent.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (2441 tests, 0 failed)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Auto-enable fires on every reconnect**: Because `PerformanceState` is reset on `VmServiceConnected`, the auto-enable will fire on every VM reconnect (not just first connect). This is consistent with the existing `auto_repaint_rainbow` / `auto_performance_overlay` behaviour and is the intended design per PLAN.md §3.

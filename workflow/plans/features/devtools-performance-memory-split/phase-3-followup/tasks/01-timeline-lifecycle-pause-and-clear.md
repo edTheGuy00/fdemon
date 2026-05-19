@@ -48,3 +48,32 @@ Both issues share the same call sites (`handle_exit_devtools_mode` for the Esc p
 - Pausing the `Flutter.RebuiltWidgets` event forwarder — that's H1 (T05).
 - Clearing the `rebuild_stats_frames` buffer on panel-leave — not a Phase 3 acceptance criterion; if desired, that's a separate followup.
 - Any change to the 1000-event buffer cap or default size.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `timeline_pause_tx.send(true)` and buffer clear in `handle_exit_devtools_mode`; added buffer clear in the Performance-leave branch of `handle_switch_panel`; added two new tests: `test_exit_devtools_pauses_timeline` and `test_leaving_performance_clears_timeline_buffer` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Buffer clear placement**: The clear is done via `selected_mut()` immediately after the timeline pause signal is sent, in the handler function itself (not in the spawned task). This matches the approach hint in the task and avoids any async timing issues.
+2. **Panel-switch clear is conditional**: The clear only fires when transitioning away from Performance (`old_panel == Performance && panel != Performance`), matching the existing timeline pause logic — no spurious clears on non-Performance panel switches.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (2428 tests, 0 failures)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No risk identified**: This change only adds a new pause signal and buffer clear to already-established lifecycle paths. The watch channel coalesces rapid toggles, so no burst behavior can occur.

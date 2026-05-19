@@ -60,18 +60,18 @@ Wave 5 (sequential after all impl)                                              
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [timeline-lifecycle-pause-and-clear](tasks/01-timeline-lifecycle-pause-and-clear.md) | Not Started | — | 1–2h | implementor | 1 |
-| 02 | [fix-inspector-readiness-config-doc](tasks/02-fix-inspector-readiness-config-doc.md) | Not Started | — | 0.5h | implementor | 1 |
-| 03 | [core-parser-hygiene](tasks/03-core-parser-hygiene.md) | Not Started | — | 1.5–2.5h | implementor | 1 |
-| 04 | [action-error-surfacing-and-locationmap-cleanup](tasks/04-action-error-surfacing-and-locationmap-cleanup.md) | Not Started | 03 | 2–3h | implementor | 2 |
-| 05 | [rebuild-forwarder-panel-gate-and-logging](tasks/05-rebuild-forwarder-panel-gate-and-logging.md) | Not Started | — | 1.5–2h | implementor | 2 |
-| 06 | [timeline-polling-improvements](tasks/06-timeline-polling-improvements.md) | Not Started | — | 1.5–2h | implementor | 2 |
-| 07 | [daemon-vm-service-hygiene](tasks/07-daemon-vm-service-hygiene.md) | Not Started | — | 1–1.5h | implementor | 2 |
-| 08 | [ux-tab-cycle-skip-and-r-key-fallthrough](tasks/08-ux-tab-cycle-skip-and-r-key-fallthrough.md) | Not Started | — | 1.5–2h | implementor | 3 |
-| 09 | [auto-enable-rebuild-wiring-and-typo](tasks/09-auto-enable-rebuild-wiring-and-typo.md) | Not Started | 04 | 1.5–2h | implementor | 3 |
-| 10 | [tui-text-helpers-and-centering](tasks/10-tui-text-helpers-and-centering.md) | Not Started | — | 1–2h | implementor | 3 |
-| 11 | [mock-vmrequesthandle-for-polling-tests](tasks/11-mock-vmrequesthandle-for-polling-tests.md) | Not Started | 06 | 3–5h | implementor | 4 |
-| 12 | [update-arch-and-review-focus-docs](tasks/12-update-arch-and-review-focus-docs.md) | Not Started | 01,04,05,08,09 | 2–3h | doc_maintainer | 5 |
+| 01 | [timeline-lifecycle-pause-and-clear](tasks/01-timeline-lifecycle-pause-and-clear.md) | Done ✅ | — | 1–2h | implementor | 1 |
+| 02 | [fix-inspector-readiness-config-doc](tasks/02-fix-inspector-readiness-config-doc.md) | Done ✅ | — | 0.5h | implementor | 1 |
+| 03 | [core-parser-hygiene](tasks/03-core-parser-hygiene.md) | Done ✅ | — | 1.5–2.5h | implementor | 1 |
+| 04 | [action-error-surfacing-and-locationmap-cleanup](tasks/04-action-error-surfacing-and-locationmap-cleanup.md) | Done ✅ (concern: scope creep into daemon re-exports, justified; M3 test deferred to T11) | 03 | 2–3h | implementor | 2 |
+| 05 | [rebuild-forwarder-panel-gate-and-logging](tasks/05-rebuild-forwarder-panel-gate-and-logging.md) | Done ✅ (concern: gate plumbing required ~6 supporting file edits beyond declared scope, justified) | — | 1.5–2h | implementor | 2 |
+| 06 | [timeline-polling-improvements](tasks/06-timeline-polling-improvements.md) | Done ✅ (concern: widened `ClientCommand`/`new_with_test_channel` visibility behind `test-helpers` feature) | — | 1.5–2h | implementor | 2 |
+| 07 | [daemon-vm-service-hygiene](tasks/07-daemon-vm-service-hygiene.md) | Done ✅ (concern: test-assertion string literal remains, intentional) | — | 1–1.5h | implementor | 2 |
+| 08 | [ux-tab-cycle-skip-and-r-key-fallthrough](tasks/08-ux-tab-cycle-skip-and-r-key-fallthrough.md) | Done ✅ | — | 1.5–2h | implementor | 3 |
+| 09 | [auto-enable-rebuild-wiring-and-typo](tasks/09-auto-enable-rebuild-wiring-and-typo.md) | Done ✅ (concern: `test_auto_enable_skipped_when_already_enabled` semantics inverted; production behavior is correct per implementor's note) | 04 | 1.5–2h | implementor | 3 |
+| 10 | [tui-text-helpers-and-centering](tasks/10-tui-text-helpers-and-centering.md) | Done ✅ | — | 1–2h | implementor | 3 |
+| 11 | [mock-vmrequesthandle-for-polling-tests](tasks/11-mock-vmrequesthandle-for-polling-tests.md) | Done ✅ (concern: shutdown test asserts wall-clock < 500ms instead of joining handle with 100ms timeout; trait is unconditionally pub instead of cfg-gated, justified) | 06 | 3–5h | implementor | 4 |
+| 12 | [update-arch-and-review-focus-docs](tasks/12-update-arch-and-review-focus-docs.md) | Done ✅ | 01,04,05,08,09 | 2–3h | doc_maintainer | 5 |
 
 ## File Overlap Analysis
 

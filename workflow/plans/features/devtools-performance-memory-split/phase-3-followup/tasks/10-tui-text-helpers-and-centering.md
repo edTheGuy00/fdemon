@@ -68,3 +68,38 @@ Three related TUI cleanups in `crates/fdemon-tui/src/widgets/devtools/performanc
 - Refactoring the placeholder content text itself.
 - Changing the placeholder appearance beyond centering.
 - Adding visual tests (snapshot tests) — the existing unit-test patterns suffice.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ab8ae3ffcee2ccbb6
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` | NEW — three shared helpers (`truncate_with_ellipsis`, `pad_right`, `pad_left`) + `PLACEHOLDER_LINE_COUNT` constant + 22 unit tests covering empty input, exact fit, truncation, emoji, CJK |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/mod.rs` | Added `pub(super) mod text_helpers;` declaration |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/rebuild_stats_tab.rs` | Removed 3 local helpers; added `use super::text_helpers::{...}` import; replaced manual `Rect` arithmetic in both `render_disabled_placeholder` and `render_empty_placeholder` with `Layout::vertical([Min(0), Length(N), Min(0)])`; named `PLACEHOLDER_LINE_COUNT` (3) from shared module and `EMPTY_PLACEHOLDER_LINE_COUNT` (2) as local constant |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events_tab.rs` | Same helper removal + import; `render_empty_placeholder` placeholder centering replaced with Layout pattern; `EMPTY_PLACEHOLDER_LINE_COUNT` (2) named constant added |
+
+### Notable Decisions/Tradeoffs
+
+1. **`PLACEHOLDER_LINE_COUNT` in text_helpers vs local**: The 3-line constant is shared from `text_helpers` (via `pub(super)`) only by `rebuild_stats_tab`. The timeline tab doesn't have a 3-line disabled placeholder so it doesn't use `PLACEHOLDER_LINE_COUNT`. The 2-line empty placeholder constant is kept local to each tab file as `EMPTY_PLACEHOLDER_LINE_COUNT`.
+
+2. **`truncate_with_ellipsis` with `max_chars=0`**: The implementation returns `"…"` (ellipsis only) when max_chars=0 and input is non-empty. This is the inherent behavior from `saturating_sub(1)=0` → empty prefix + ellipsis. Test was updated to document this edge case rather than change behavior.
+
+3. **Existing tab tests kept**: The helper unit tests in `rebuild_stats_tab.rs` tests block remain — they reference the helpers via `use super::*` which now imports the helpers from `text_helpers` through the module-level `use` import. Tests are redundant with text_helpers tests but harmless.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui` — Passed (1204 tests, 22 new in text_helpers)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Unicode semantics documented but not changed**: The helpers count Unicode scalar values (chars), not display columns. Wide CJK/emoji characters that occupy 2 terminal columns will be under-padded in fixed-width layout. This was the pre-existing behavior; no change introduced by this task.
