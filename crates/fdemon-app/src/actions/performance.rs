@@ -477,6 +477,35 @@ async fn fetch_and_send_alloc_profile(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Frame-anchor debounce
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Spawn a fire-and-forget debounce task that sends `ApplyFrameAnchor` after
+/// `delay_ms` milliseconds.
+///
+/// No cancellation channel is needed: the handler for `ApplyFrameAnchor`
+/// checks `generation == state.performance.frame_anchor_generation` and
+/// silently drops stale firings from earlier selections.
+pub(super) fn spawn_frame_anchor_debounce(
+    session_id: SessionId,
+    generation: u64,
+    frame_number: Option<u64>,
+    delay_ms: u64,
+    msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        let _ = msg_tx
+            .send(Message::ApplyFrameAnchor {
+                session_id,
+                generation,
+                frame_number,
+            })
+            .await;
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Timeline polling task
 // ─────────────────────────────────────────────────────────────────────────────
 

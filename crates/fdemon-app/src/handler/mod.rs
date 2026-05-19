@@ -721,6 +721,23 @@ pub enum UpdateAction {
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
 
+    // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────────
+    /// Spawn a debounced timer that sends `ApplyFrameAnchor` after `delay_ms`.
+    ///
+    /// No cancellation mechanism is needed — the handler for `ApplyFrameAnchor`
+    /// checks `generation == state.performance.frame_anchor_generation` and
+    /// silently drops stale firings.
+    DebounceFrameAnchor {
+        /// Session the anchor belongs to.
+        session_id: crate::session::SessionId,
+        /// Monotonic generation counter at the time of dispatch.
+        generation: u64,
+        /// Frame number to anchor on, or `None` to clear the anchor.
+        frame_number: Option<u64>,
+        /// Debounce delay in milliseconds (typically 200).
+        delay_ms: u64,
+    },
+
     /// Fetch the one-shot `widgetLocationIdMap` fallback to seed the location map.
     ///
     /// Emits `RebuildStatsLocationMapFetched` on success. Used when early

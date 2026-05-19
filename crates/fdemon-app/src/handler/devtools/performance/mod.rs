@@ -9,12 +9,13 @@
 //! Memory and allocation profile handlers live in [`super::memory`].
 
 mod details;
-mod frame;
+pub(crate) mod frame;
 pub(crate) mod rebuild_stats;
 pub(crate) mod timeline;
 
 pub(crate) use details::{handle_perf_cycle_details_tab, handle_perf_focus_details_tab};
 pub(crate) use frame::{
-    handle_perf_focus_section, handle_perf_jump_to_end, handle_perf_jump_to_start,
-    handle_perf_page, handle_perf_scroll, handle_select_performance_frame,
+    handle_apply_frame_anchor, handle_perf_focus_section, handle_perf_jump_to_end,
+    handle_perf_jump_to_start, handle_perf_page, handle_perf_scroll,
+    handle_select_performance_frame,
 };

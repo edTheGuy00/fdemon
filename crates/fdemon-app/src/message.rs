@@ -1840,4 +1840,19 @@ pub enum Message {
         /// error description. Both variants set `probe_completed = true`.
         result: std::result::Result<FlutterVersionInfo, String>,
     },
+
+    // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────────
+    /// Commit the Timeline Events viewport anchor to the given frame number.
+    ///
+    /// Sent by the 200 ms debounce task spawned on each frame selection change.
+    /// Stale messages (where `generation < state.performance.frame_anchor_generation`)
+    /// are silently dropped; only the most recent debounce wins.
+    ApplyFrameAnchor {
+        /// Session the anchor belongs to.
+        session_id: SessionId,
+        /// Monotonic counter at the time this debounce was created.
+        generation: u64,
+        /// Frame number to anchor on, or `None` to clear the anchor.
+        frame_number: Option<u64>,
+    },
 }

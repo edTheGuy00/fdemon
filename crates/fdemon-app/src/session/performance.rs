@@ -209,6 +209,24 @@ pub struct PerformanceState {
 
     /// Current filter selection — `All`, `Ui`, or `Raster`.
     pub timeline_events_filter: TimelineFilter,
+
+    // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────────
+    /// The frame *number* (from `FrameTiming.number`) currently anchored in
+    /// the Timeline Events Gantt viewport.
+    ///
+    /// `None` — no anchor; show the "Select a frame…" placeholder.
+    /// `Some(N)` — anchor to the frame with `FrameTiming.number == N`.
+    ///
+    /// Set by `handle_apply_frame_anchor` after the 200 ms debounce fires.
+    /// Reset to `None` when leaving the Performance panel.
+    pub committed_frame_anchor: Option<u64>,
+
+    /// Monotonic counter incremented each time the frame selection changes.
+    ///
+    /// `ApplyFrameAnchor` messages carry the generation at which they were
+    /// spawned; handlers silently drop messages whose generation is older than
+    /// the current value (stale debounce firings).
+    pub frame_anchor_generation: u64,
 }
 
 impl Default for PerformanceState {
@@ -237,6 +255,9 @@ impl Default for PerformanceState {
             timeline_thread_scroll_offset: 0,
             timeline_thread_name_map: HashMap::new(),
             timeline_events_filter: TimelineFilter::All,
+            // Phase 5: Frame-anchored viewport — start unanchored
+            committed_frame_anchor: None,
+            frame_anchor_generation: 0,
         }
     }
 }

@@ -7,7 +7,7 @@
 //! Memory and allocation profile handlers live in [`super::super::memory`].
 
 use super::super::scroll_helpers::{clamp_chart_scroll, ScrollDir};
-use crate::handler::UpdateResult;
+use crate::handler::{UpdateAction, UpdateResult};
 use crate::session::performance::PerfSection;
 use crate::state::AppState;
 
@@ -24,37 +24,94 @@ const DEFAULT_PERF_PAGE_SIZE: usize = 10;
 /// This is the single handler for all frame-selection transitions. The key
 /// handler in `keys.rs` computes the target index inline and emits
 /// `SelectPerformanceFrame` — this handler applies the result.
+///
+/// On each call the handler also increments `frame_anchor_generation` and
+/// returns a `DebounceFrameAnchor` action so the Timeline Events Gantt will
+/// update its anchored viewport 200 ms after the user stops navigating.
 pub(crate) fn handle_select_performance_frame(
     state: &mut AppState,
     index: Option<usize>,
 ) -> UpdateResult {
-    if let Some(handle) = state.session_manager.selected_mut() {
-        handle.session.performance.selected_frame = index;
-        // Viewport-aware scroll: only adjust scroll_offset when the newly-selected
-        // frame falls outside the current viewport. Deselect (None) leaves the
-        // offset unchanged — the user may have scrolled deliberately and pressed
-        // Esc only to drop the selection highlight.
-        if let Some(sel_idx) = index {
-            let total = handle.session.performance.frame_history.len();
-            // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
-            let visible_width = handle.session.performance.frame_chart_visible_width.get();
-            let scroll = &mut handle.session.performance.frame_chart_scroll_offset;
-            // Visible window: [visible_start, visible_end)
-            // Model A: end = total - scroll_offset, start = end - visible_width
-            let visible_end = total.saturating_sub(*scroll);
-            let visible_start = visible_end.saturating_sub(visible_width);
-            if sel_idx < visible_start {
-                // Selection moved off the left edge — scroll left to keep it visible.
-                *scroll = total.saturating_sub(sel_idx + visible_width);
-            } else if sel_idx >= visible_end {
-                // Selection moved off the right edge — scroll right to keep it visible.
-                *scroll = total.saturating_sub(sel_idx + 1);
-            }
-            // Otherwise the selection is within the viewport — leave scroll_offset alone.
+    let Some(handle) = state.session_manager.selected_mut() else {
+        return UpdateResult::none();
+    };
+
+    let session_id = handle.session.id;
+
+    handle.session.performance.selected_frame = index;
+    // Viewport-aware scroll: only adjust scroll_offset when the newly-selected
+    // frame falls outside the current viewport. Deselect (None) leaves the
+    // offset unchanged — the user may have scrolled deliberately and pressed
+    // Esc only to drop the selection highlight.
+    if let Some(sel_idx) = index {
+        let total = handle.session.performance.frame_history.len();
+        // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
+        let visible_width = handle.session.performance.frame_chart_visible_width.get();
+        let scroll = &mut handle.session.performance.frame_chart_scroll_offset;
+        // Visible window: [visible_start, visible_end)
+        // Model A: end = total - scroll_offset, start = end - visible_width
+        let visible_end = total.saturating_sub(*scroll);
+        let visible_start = visible_end.saturating_sub(visible_width);
+        if sel_idx < visible_start {
+            // Selection moved off the left edge — scroll left to keep it visible.
+            *scroll = total.saturating_sub(sel_idx + visible_width);
+        } else if sel_idx >= visible_end {
+            // Selection moved off the right edge — scroll right to keep it visible.
+            *scroll = total.saturating_sub(sel_idx + 1);
         }
+        // Otherwise the selection is within the viewport — leave scroll_offset alone.
+    }
+
+    // Increment the monotonic generation counter so that stale ApplyFrameAnchor
+    // messages from previous debounce timers are silently dropped.
+    handle.session.performance.frame_anchor_generation =
+        handle.session.performance.frame_anchor_generation.wrapping_add(1);
+    let generation = handle.session.performance.frame_anchor_generation;
+
+    // Resolve the frame number for the selected index (None when deselecting).
+    let frame_number = index.and_then(|sel_idx| {
+        handle
+            .session
+            .performance
+            .frame_history
+            .iter()
+            .nth(sel_idx)
+            .map(|f| f.number)
+    });
+
+    UpdateResult::action(UpdateAction::DebounceFrameAnchor {
+        session_id,
+        generation,
+        frame_number,
+        delay_ms: FRAME_ANCHOR_DEBOUNCE_MS,
+    })
+}
+
+/// Handler invoked when the debounced `ApplyFrameAnchor` message fires.
+///
+/// Sets `committed_frame_anchor` only when `generation` matches the current
+/// `frame_anchor_generation`; stale firings are silently dropped.
+pub(crate) fn handle_apply_frame_anchor(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+    generation: u64,
+    frame_number: Option<u64>,
+) -> UpdateResult {
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        if handle.session.performance.frame_anchor_generation == generation {
+            handle.session.performance.committed_frame_anchor = frame_number;
+        }
+        // Else: stale generation — drop silently.
     }
     UpdateResult::none()
 }
+
+/// Debounce delay for the frame-anchor commit (milliseconds).
+///
+/// 200 ms is long enough that rapid Left/Right navigation doesn't trigger
+/// layout fetches for every intermediate frame, but short enough that it
+/// feels responsive after a deliberate selection.
+const FRAME_ANCHOR_DEBOUNCE_MS: u64 = 200;
 
 // ── Phase 2 keyboard interactivity handlers ───────────────────────────────────
 
@@ -217,6 +274,118 @@ mod tests {
     use crate::session::SessionId;
     use crate::state::{AppState, DevToolsPanel, UiMode};
     use fdemon_core::performance::FrameTiming;
+
+    // ── Phase 5: frame anchor pipeline tests ────────────────────────────────
+
+    #[test]
+    fn frame_anchor_generation_increments_on_select() {
+        let (mut state, _) = make_state_in_performance_panel();
+        push_frames(&mut state, 5);
+
+        let gen_before = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance
+            .frame_anchor_generation;
+
+        update(&mut state, Message::SelectPerformanceFrame { index: Some(2) });
+
+        let gen_after = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance
+            .frame_anchor_generation;
+
+        assert_eq!(
+            gen_after,
+            gen_before + 1,
+            "frame_anchor_generation must increment by 1 on each selection"
+        );
+    }
+
+    #[test]
+    fn apply_frame_anchor_with_stale_generation_is_dropped() {
+        let (mut state, session_id) = make_state_in_performance_panel();
+        push_frames(&mut state, 5);
+
+        // Advance the generation to 2 by selecting twice.
+        update(&mut state, Message::SelectPerformanceFrame { index: Some(1) });
+        update(&mut state, Message::SelectPerformanceFrame { index: Some(2) });
+
+        let current_gen = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance
+            .frame_anchor_generation;
+        assert_eq!(current_gen, 2);
+
+        // Apply with stale generation 1 — must be ignored.
+        update(
+            &mut state,
+            Message::ApplyFrameAnchor {
+                session_id,
+                generation: 1,
+                frame_number: Some(99),
+            },
+        );
+
+        let anchor = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance
+            .committed_frame_anchor;
+        assert_eq!(
+            anchor, None,
+            "stale ApplyFrameAnchor must not change committed_frame_anchor"
+        );
+    }
+
+    #[test]
+    fn apply_frame_anchor_with_current_generation_commits() {
+        let (mut state, session_id) = make_state_in_performance_panel();
+        push_frames(&mut state, 5);
+
+        update(&mut state, Message::SelectPerformanceFrame { index: Some(3) });
+
+        let current_gen = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance
+            .frame_anchor_generation;
+
+        // Frame at index 3 has number = 4 (1-based in push_test_frames).
+        update(
+            &mut state,
+            Message::ApplyFrameAnchor {
+                session_id,
+                generation: current_gen,
+                frame_number: Some(4),
+            },
+        );
+
+        let anchor = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance
+            .committed_frame_anchor;
+        assert_eq!(
+            anchor,
+            Some(4),
+            "current-generation ApplyFrameAnchor must commit frame_number"
+        );
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

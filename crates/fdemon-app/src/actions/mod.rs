@@ -1148,6 +1148,24 @@ pub fn handle_action(
                 );
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 5: Frame-anchor debounce
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::DebounceFrameAnchor {
+            session_id,
+            generation,
+            frame_number,
+            delay_ms,
+        } => {
+            performance::spawn_frame_anchor_debounce(
+                session_id,
+                generation,
+                frame_number,
+                delay_ms,
+                msg_tx,
+            );
+        }
     }
 }
 

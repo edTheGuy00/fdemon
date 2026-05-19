@@ -2459,6 +2459,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::TimelineEventsCycleFilter { session_id } => {
             devtools::performance::timeline::handle_cycle_filter(state, session_id)
         }
+
+        // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────
+        Message::ApplyFrameAnchor {
+            session_id,
+            generation,
+            frame_number,
+        } => devtools::performance::handle_apply_frame_anchor(
+            state,
+            session_id,
+            generation,
+            frame_number,
+        ),
+
         Message::VmServiceTimelineMonitoringStarted {
             session_id,
             timeline_shutdown_tx,
