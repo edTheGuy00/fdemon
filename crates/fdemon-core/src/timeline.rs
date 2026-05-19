@@ -1377,7 +1377,11 @@ mod tests {
         let (events, _metadata) =
             parse_vm_timeline_with_metadata(&response, &mut map).expect("should parse");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].frame_number, Some(42), "TimelineEvent should carry frame_number");
+        assert_eq!(
+            events[0].frame_number,
+            Some(42),
+            "TimelineEvent should carry frame_number"
+        );
 
         // Run pair_be_events — the single Complete event should produce one node.
         let nodes = pair_be_events(&events);

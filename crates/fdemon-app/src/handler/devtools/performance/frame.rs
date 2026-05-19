@@ -64,8 +64,11 @@ pub(crate) fn handle_select_performance_frame(
 
     // Increment the monotonic generation counter so that stale ApplyFrameAnchor
     // messages from previous debounce timers are silently dropped.
-    handle.session.performance.frame_anchor_generation =
-        handle.session.performance.frame_anchor_generation.wrapping_add(1);
+    handle.session.performance.frame_anchor_generation = handle
+        .session
+        .performance
+        .frame_anchor_generation
+        .wrapping_add(1);
     let generation = handle.session.performance.frame_anchor_generation;
 
     // Resolve the frame number for the selected index (None when deselecting).
@@ -290,7 +293,10 @@ mod tests {
             .performance
             .frame_anchor_generation;
 
-        update(&mut state, Message::SelectPerformanceFrame { index: Some(2) });
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(2) },
+        );
 
         let gen_after = state
             .session_manager
@@ -313,8 +319,14 @@ mod tests {
         push_frames(&mut state, 5);
 
         // Advance the generation to 2 by selecting twice.
-        update(&mut state, Message::SelectPerformanceFrame { index: Some(1) });
-        update(&mut state, Message::SelectPerformanceFrame { index: Some(2) });
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(1) },
+        );
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(2) },
+        );
 
         let current_gen = state
             .session_manager
@@ -353,7 +365,10 @@ mod tests {
         let (mut state, session_id) = make_state_in_performance_panel();
         push_frames(&mut state, 5);
 
-        update(&mut state, Message::SelectPerformanceFrame { index: Some(3) });
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(3) },
+        );
 
         let current_gen = state
             .session_manager
