@@ -1253,6 +1253,41 @@ pub enum Message {
     /// scroll offset to the top.
     TimelineEventsCycleFilter { session_id: SessionId },
 
+    // ── Phase 5 T04: Timeline search ─────────────────────────────────────────
+    /// Open the timeline search input (user pressed `/` on the TimelineEvents tab).
+    ///
+    /// Sets `timeline_search_input_active = true` and
+    /// `timeline_search_query = Some("")`.
+    TimelineSearchOpen { session_id: SessionId },
+
+    /// Append a character to the timeline search query while input is active.
+    TimelineSearchInputChar { session_id: SessionId, ch: char },
+
+    /// Delete the last character from the timeline search query while input is active.
+    TimelineSearchInputBackspace { session_id: SessionId },
+
+    /// Commit the current search query (Enter while input active).
+    ///
+    /// Sets `timeline_search_input_active = false`, keeps the query so
+    /// `n`/`N` navigation can begin.
+    TimelineSearchInputCommit { session_id: SessionId },
+
+    /// Cancel the current search (Esc while input active).
+    ///
+    /// Sets `timeline_search_input_active = false`, clears the query.
+    TimelineSearchInputCancel { session_id: SessionId },
+
+    /// Navigate to the next search match (`n` key, query must be `Some`).
+    ///
+    /// Advances `timeline_search_match_cursor` modulo the match count, pans
+    /// the viewport to center on the match, and updates `timeline_selected_event`.
+    TimelineSearchNextMatch { session_id: SessionId },
+
+    /// Navigate to the previous search match (`N` key, query must be `Some`).
+    ///
+    /// Mirrors `TimelineSearchNextMatch` in the reverse direction.
+    TimelineSearchPrevMatch { session_id: SessionId },
+
     /// The timeline polling task started — carries shutdown/pause/handle refs.
     ///
     /// Modeled on `VmServicePerformanceMonitoringStarted`. The TEA handler

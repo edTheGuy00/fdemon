@@ -2509,6 +2509,29 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             devtools::performance::handle_select_at(state, session_id, cursor)
         }
 
+        // ── Phase 5 T04: Timeline search ─────────────────────────────────────
+        Message::TimelineSearchOpen { session_id } => {
+            devtools::performance::handle_search_open(state, session_id)
+        }
+        Message::TimelineSearchInputChar { session_id, ch } => {
+            devtools::performance::handle_search_input_char(state, session_id, ch)
+        }
+        Message::TimelineSearchInputBackspace { session_id } => {
+            devtools::performance::handle_search_input_backspace(state, session_id)
+        }
+        Message::TimelineSearchInputCommit { session_id } => {
+            devtools::performance::handle_search_input_commit(state, session_id)
+        }
+        Message::TimelineSearchInputCancel { session_id } => {
+            devtools::performance::handle_search_input_cancel(state, session_id)
+        }
+        Message::TimelineSearchNextMatch { session_id } => {
+            devtools::performance::handle_next_match(state, session_id)
+        }
+        Message::TimelineSearchPrevMatch { session_id } => {
+            devtools::performance::handle_prev_match(state, session_id)
+        }
+
         Message::VmServiceTimelineMonitoringStarted {
             session_id,
             timeline_shutdown_tx,

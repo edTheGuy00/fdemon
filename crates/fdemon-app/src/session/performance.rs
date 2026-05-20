@@ -330,6 +330,30 @@ pub struct PerformanceState {
     /// Panning or zooming sets this to `false`. Pressing `g`/`End` sets it to
     /// `true` and resets `viewport_width_micros` to the default 5 s.
     pub timeline_follow_latest: bool,
+
+    // ── Phase 5 T04: Timeline search ─────────────────────────────────────────
+    /// The active search query. `None` = no query / search not open.
+    ///
+    /// `Some("")` = input is open but query is empty (still in input mode).
+    /// `Some(q)` = committed query; `n`/`N` navigation is armed.
+    ///
+    /// Reset to `None` on `Esc` while input is active, and when clearing the
+    /// Performance panel state (e.g. on panel exit).
+    pub timeline_search_query: Option<String>,
+
+    /// `true` while the user is typing in the search input (`/` opened it,
+    /// neither `Enter` nor `Esc` has closed it yet).
+    ///
+    /// When `false`, the query is "committed" and match navigation (`n`/`N`)
+    /// is active (if `timeline_search_query.is_some()`).
+    pub timeline_search_input_active: bool,
+
+    /// Current match index when navigating with `n`/`N`.
+    ///
+    /// Wraps modulo match count. Reset to `0` whenever the query changes
+    /// (char appended or deleted) so the first `n` after a new query always
+    /// selects the chronologically first match.
+    pub timeline_search_match_cursor: usize,
 }
 
 impl Default for PerformanceState {
@@ -371,6 +395,10 @@ impl Default for PerformanceState {
             // cannot import the TUI constant here due to layer boundaries).
             timeline_viewport_width_micros: 5_000_000,
             timeline_follow_latest: true,
+            // Phase 5 T04: Timeline search — all start empty/inactive
+            timeline_search_query: None,
+            timeline_search_input_active: false,
+            timeline_search_match_cursor: 0,
         }
     }
 }
@@ -850,6 +878,25 @@ mod tests {
         assert_eq!(s.timeline_thread_scroll_offset, 0);
         assert!(s.timeline_thread_name_map.is_empty());
         assert_eq!(s.timeline_events_filter, TimelineFilter::All);
+    }
+
+    // ── Phase 5 T04: Timeline search defaults ────────────────────────────────
+
+    #[test]
+    fn performance_state_search_defaults() {
+        let s = PerformanceState::default();
+        assert!(
+            s.timeline_search_query.is_none(),
+            "search query should default to None"
+        );
+        assert!(
+            !s.timeline_search_input_active,
+            "search input should default to inactive"
+        );
+        assert_eq!(
+            s.timeline_search_match_cursor, 0,
+            "search match cursor should default to 0"
+        );
     }
 
     // ── Phase 5: Pan/zoom viewport defaults ──────────────────────────────────

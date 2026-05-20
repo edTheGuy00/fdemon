@@ -24,6 +24,7 @@ mod gantt;
 mod minimap;
 mod palette;
 pub(super) mod popup;
+pub(super) mod search;
 mod viewport;
 
 // Re-export text_helpers from parent module via pub(super) path
@@ -63,20 +64,15 @@ pub(super) const THREAD_ROW_HEIGHT: u16 = 2;
 /// Filter strip height (1 row).
 const FILTER_STRIP_HEIGHT: u16 = 1;
 
-/// Minimum height required to render both the filter strip and the minimap
-/// without truncation.
-///
-/// Derived from: `FILTER_STRIP_HEIGHT` (1) + `MINIMAP_HEIGHT` (1) = 2.
-const MIN_HEIGHT_FOR_MINIMAP: u16 = FILTER_STRIP_HEIGHT + minimap::MINIMAP_HEIGHT;
-
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Render the Timeline Events tab content area.
 ///
 /// Layout (top to bottom):
-/// 1. Filter strip (1 row) — `[All] [UI] [Raster]` selector.
-/// 2. Minimap ribbon (1 row, Phase 5 T02) — compressed history with viewport bracket.
-/// 3. Gantt area (remaining rows) — per-thread event bars and time axis.
+/// 1. Search bar (1 row, Phase 5 T04, optional) — shown when a search query is active.
+/// 2. Filter strip (1 row) — `[All] [UI] [Raster]` selector.
+/// 3. Minimap ribbon (1 row, Phase 5 T02) — compressed history with viewport bracket.
+/// 4. Gantt area (remaining rows) — per-thread event bars and time axis.
 ///
 /// Signature matches the Phase-3 dispatch convention: `(area, buf, state)`.
 pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
@@ -84,8 +80,32 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
         return;
     }
 
-    if area.height <= FILTER_STRIP_HEIGHT {
-        render_filter_strip(area, buf, state);
+    // Determine whether the search bar should be shown and how many header rows
+    // it occupies.
+    let search_visible = search::search_bar_visible(state);
+    let search_height = if search_visible {
+        search::SEARCH_BAR_HEIGHT
+    } else {
+        0
+    };
+
+    // Total header rows: search bar (optional) + filter strip.
+    let header_height = search_height + FILTER_STRIP_HEIGHT;
+
+    if area.height <= header_height {
+        // Not enough room for the header rows — render what fits.
+        if search_visible && area.height >= 1 {
+            let search_area = Rect { height: 1, ..area };
+            search::render_search_bar(search_area, buf, state);
+        }
+        if area.height > search_height {
+            let filter_area = Rect {
+                y: area.y + search_height,
+                height: area.height - search_height,
+                ..area
+            };
+            render_filter_strip(filter_area, buf, state);
+        }
         return;
     }
 
@@ -93,36 +113,57 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
     // use the same (viewport_start, viewport_end) without duplicating logic.
     let (vp_start, vp_end) = viewport::compute_active_viewport(state);
 
-    if area.height <= MIN_HEIGHT_FOR_MINIMAP {
-        // Not enough room for the minimap — just filter strip + Gantt.
-        let chunks = Layout::vertical([
-            Constraint::Length(FILTER_STRIP_HEIGHT),
-            Constraint::Min(0), // gantt area
-        ])
-        .split(area);
-        render_filter_strip(chunks[0], buf, state);
-        gantt::render_gantt(chunks[1], buf, state);
-    } else {
-        let chunks = Layout::vertical([
-            Constraint::Length(FILTER_STRIP_HEIGHT),
-            Constraint::Length(minimap::MINIMAP_HEIGHT), // Phase 5 T02 — minimap ribbon
-            Constraint::Min(0),                          // gantt area
-        ])
-        .split(area);
+    // Build layout with optional search bar, filter strip, optional minimap, gantt.
+    let remaining_after_header = area.height - header_height;
+    if remaining_after_header <= minimap::MINIMAP_HEIGHT {
+        // Not enough room for the minimap — search bar + filter strip + Gantt.
+        let mut constraints = Vec::new();
+        if search_visible {
+            constraints.push(Constraint::Length(search::SEARCH_BAR_HEIGHT));
+        }
+        constraints.push(Constraint::Length(FILTER_STRIP_HEIGHT));
+        constraints.push(Constraint::Min(0)); // gantt area
 
-        render_filter_strip(chunks[0], buf, state);
+        let chunks = Layout::vertical(constraints).split(area);
+        let mut idx = 0;
+        if search_visible {
+            search::render_search_bar(chunks[idx], buf, state);
+            idx += 1;
+        }
+        render_filter_strip(chunks[idx], buf, state);
+        idx += 1;
+        gantt::render_gantt(chunks[idx], buf, state);
+    } else {
+        // Full layout: search bar + filter strip + minimap + gantt.
+        let mut constraints = Vec::new();
+        if search_visible {
+            constraints.push(Constraint::Length(search::SEARCH_BAR_HEIGHT));
+        }
+        constraints.push(Constraint::Length(FILTER_STRIP_HEIGHT));
+        constraints.push(Constraint::Length(minimap::MINIMAP_HEIGHT)); // Phase 5 T02
+        constraints.push(Constraint::Min(0)); // gantt area
+
+        let chunks = Layout::vertical(constraints).split(area);
+        let mut idx = 0;
+        if search_visible {
+            search::render_search_bar(chunks[idx], buf, state);
+            idx += 1;
+        }
+        render_filter_strip(chunks[idx], buf, state);
+        idx += 1;
 
         // Minimap: pass resolved viewport bounds; minimap itself is stateless.
         minimap::render(
-            chunks[1],
+            chunks[idx],
             buf,
             &state.timeline_tracks,
             vp_start,
             vp_end,
             state.timeline_events_filter,
         );
+        idx += 1;
 
-        gantt::render_gantt(chunks[2], buf, state);
+        gantt::render_gantt(chunks[idx], buf, state);
     }
 
     // Render the event details popup last (on top of everything).

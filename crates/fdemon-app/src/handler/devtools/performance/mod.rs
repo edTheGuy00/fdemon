@@ -21,6 +21,8 @@ pub(crate) use frame::{
 };
 pub(crate) use timeline::{
     handle_clear_selection, handle_close_popup, handle_follow_latest, handle_move_selection,
-    handle_open_popup, handle_pan_left, handle_pan_right, handle_select_at,
-    handle_select_first_visible, handle_zoom_in, handle_zoom_out,
+    handle_next_match, handle_open_popup, handle_pan_left, handle_pan_right, handle_prev_match,
+    handle_search_input_backspace, handle_search_input_cancel, handle_search_input_char,
+    handle_search_input_commit, handle_search_open, handle_select_at, handle_select_first_visible,
+    handle_zoom_in, handle_zoom_out,
 };

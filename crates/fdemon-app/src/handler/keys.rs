@@ -480,6 +480,20 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             .selected()
             .map(|h| h.session.performance.timeline_details_popup_open)
             .unwrap_or(false);
+    // Phase 5 T04: Timeline search — pre-computed for the input-intercept and
+    // the `n`/`N` arms below.
+    let has_query = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_search_query.is_some())
+            .unwrap_or(false);
+    let search_input_active = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_search_input_active)
+            .unwrap_or(false);
 
     // ── Network filter input mode ─────────────────────────────────────────────
     // When filter input is active, route keys to the filter buffer before any
@@ -512,6 +526,27 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     // Left/Right (frame selection) and `s` (sort toggle) remain in the main
     // match below with their `in_performance` guards — they are not moved here.
     if in_performance {
+        // ── Phase 5 T04: Timeline search input mode ───────────────────────────
+        //
+        // When the search input is active, ALL keys are intercepted here so that
+        // regular character keys cannot dispatch unintended actions (e.g. `j`
+        // scrolling while typing). Mirrors the Network filter input pattern above.
+        if search_input_active {
+            if let Some(session_id) = active_id {
+                return match key {
+                    InputKey::Char(c) => {
+                        Some(Message::TimelineSearchInputChar { session_id, ch: c })
+                    }
+                    InputKey::Backspace => {
+                        Some(Message::TimelineSearchInputBackspace { session_id })
+                    }
+                    InputKey::Enter => Some(Message::TimelineSearchInputCommit { session_id }),
+                    InputKey::Esc => Some(Message::TimelineSearchInputCancel { session_id }),
+                    _ => None,
+                };
+            }
+        }
+
         // ── Timeline popup-first Esc handling ─────────────────────────────────
         //
         // Intercept Esc when the popup is open so the popup closes before the
@@ -719,6 +754,36 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     .is_some_and(|h| h.session.performance.focused_section == PerfSection::Details);
                 if in_details {
                     return Some(Message::PerfCycleDetailsTab { forward: false });
+                }
+            }
+
+            // ── Phase 5 T04: Timeline search open (`/`) ──────────────────────
+            //
+            // On the TimelineEvents tab, `/` opens the search input rather than
+            // falling through to the Network panel's `/` → NetworkEnterFilterMode.
+            // Placed here (inside `if in_performance`) so it fires before the
+            // main match arms.
+            InputKey::Char('/') if on_timeline_tab => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineSearchOpen { session_id });
+                }
+            }
+
+            // ── Phase 5 T04: Timeline search navigation (`n` / `N`) ──────────
+            //
+            // Drift #5 — these arms MUST appear before the global `n` →
+            // SwitchDevToolsPanel(Network) arm in the main match below.
+            // The guards ensure that when no query is active OR the user is not
+            // on the TimelineEvents tab, the `n` key falls through to the global
+            // Network arm (no regression).
+            InputKey::Char('n') if has_query && on_timeline_tab => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineSearchNextMatch { session_id });
+                }
+            }
+            InputKey::Char('N') if has_query && on_timeline_tab => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineSearchPrevMatch { session_id });
                 }
             }
 
@@ -3246,6 +3311,151 @@ mod timeline_pan_zoom_key_tests {
         assert!(
             matches!(msg, Some(Message::TimelineOpenPopup { .. })),
             "Enter on TimelineEvents with selection should emit TimelineOpenPopup, got: {msg:?}"
+        );
+    }
+
+    // ── Phase 5 T04: Timeline search key binding tests (Drift #5) ────────────
+
+    /// Build a Timeline Events state with a search query set (committed, not active).
+    fn make_perf_timeline_events_with_query(query: &str) -> AppState {
+        let mut state = make_perf_timeline_events();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.timeline_search_query = Some(query.to_string());
+            h.session.performance.timeline_search_input_active = false;
+        }
+        state
+    }
+
+    /// Build a Timeline Events state with search input active.
+    fn make_perf_timeline_events_search_input_active() -> AppState {
+        let mut state = make_perf_timeline_events();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.timeline_search_query = Some(String::new());
+            h.session.performance.timeline_search_input_active = true;
+        }
+        state
+    }
+
+    /// AC2: `/` on TimelineEvents tab → TimelineSearchOpen.
+    #[test]
+    fn test_slash_on_timeline_events_opens_search() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Char('/'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchOpen { .. })),
+            "'/' on TimelineEvents tab should emit TimelineSearchOpen, got: {msg:?}"
+        );
+    }
+
+    /// AC8 / Drift #5: `n` with no query on TimelineEvents tab → SwitchDevToolsPanel(Network).
+    #[test]
+    fn test_n_with_no_query_on_timeline_tab_switches_to_network() {
+        let state = make_perf_timeline_events(); // no query
+        let msg = handle_key_devtools(&state, InputKey::Char('n'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+            ),
+            "'n' with no query on TimelineEvents should switch to Network, got: {msg:?}"
+        );
+    }
+
+    /// AC6 / Drift #5: `n` with query on TimelineEvents tab → TimelineSearchNextMatch.
+    #[test]
+    fn test_n_with_query_on_timeline_tab_next_match() {
+        let state = make_perf_timeline_events_with_query("foo");
+        let msg = handle_key_devtools(&state, InputKey::Char('n'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchNextMatch { .. })),
+            "'n' with query on TimelineEvents should emit TimelineSearchNextMatch, got: {msg:?}"
+        );
+    }
+
+    /// AC8 / Drift #5: `n` with query but on FrameChart section → SwitchDevToolsPanel(Network).
+    /// The `on_timeline_tab` guard must defeat the search arm when not on TimelineEvents.
+    #[test]
+    fn test_n_with_query_on_frame_chart_switches_to_network() {
+        let mut state = make_perf_frame_chart();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            // Set a query, but the user is on FrameChart (not TimelineEvents).
+            h.session.performance.timeline_search_query = Some("foo".to_string());
+            h.session.performance.timeline_search_input_active = false;
+        }
+        let msg = handle_key_devtools(&state, InputKey::Char('n'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+            ),
+            "'n' with query on FrameChart should still switch to Network, got: {msg:?}"
+        );
+    }
+
+    /// AC7: `N` with query on TimelineEvents tab → TimelineSearchPrevMatch.
+    #[test]
+    fn test_shift_n_with_query_on_timeline_tab_prev_match() {
+        let state = make_perf_timeline_events_with_query("foo");
+        let msg = handle_key_devtools(&state, InputKey::Char('N'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchPrevMatch { .. })),
+            "'N' with query on TimelineEvents should emit TimelineSearchPrevMatch, got: {msg:?}"
+        );
+    }
+
+    /// AC3: Char keys while search input active → TimelineSearchInputChar.
+    #[test]
+    fn test_char_while_search_input_active_appends() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputChar { ch: 'R', .. })),
+            "Char while search input active should emit TimelineSearchInputChar, got: {msg:?}"
+        );
+    }
+
+    /// AC3: Backspace while search input active → TimelineSearchInputBackspace.
+    #[test]
+    fn test_backspace_while_search_input_active_deletes() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Backspace);
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputBackspace { .. })),
+            "Backspace while search input active should emit TimelineSearchInputBackspace, got: {msg:?}"
+        );
+    }
+
+    /// AC4: Enter while search input active → TimelineSearchInputCommit.
+    #[test]
+    fn test_enter_while_search_input_active_commits() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputCommit { .. })),
+            "Enter while search input active should emit TimelineSearchInputCommit, got: {msg:?}"
+        );
+    }
+
+    /// AC5: Esc while search input active → TimelineSearchInputCancel.
+    #[test]
+    fn test_esc_while_search_input_active_cancels() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputCancel { .. })),
+            "Esc while search input active should emit TimelineSearchInputCancel, got: {msg:?}"
         );
     }
 }

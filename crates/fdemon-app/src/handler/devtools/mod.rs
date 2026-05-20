@@ -397,7 +397,8 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
     // Clear the timeline tracks and thread-name map so the next DevTools entry
     // shows fresh data rather than stale accumulated events.  Also reset the
     // frame anchor and persistent anchor map so the user always starts fresh
-    // when re-entering DevTools.
+    // when re-entering DevTools. Clear search state so a stale query does not
+    // survive a buffer reset.
     if let Some(handle) = state.session_manager.selected_mut() {
         let perf = &mut handle.session.performance;
         perf.timeline_tracks.clear();
@@ -405,6 +406,10 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
         perf.timeline_thread_scroll_offset = 0;
         perf.committed_frame_anchor = None;
         perf.frame_anchor_map.clear();
+        // Phase 5 T04: clear search state on panel exit.
+        perf.timeline_search_query = None;
+        perf.timeline_search_input_active = false;
+        perf.timeline_search_match_cursor = 0;
     }
 
     // Close the Flutter.RebuiltWidgets gate for all sessions: exiting DevTools
@@ -464,6 +469,7 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
         // Clear accumulated timeline tracks, reset scroll, and clear the
         // frame anchor and persistent anchor map so that re-entry to the
         // Performance panel always starts from a clean (unanchored) state.
+        // Also clear search state so a stale query does not survive a panel switch.
         if let Some(handle) = state.session_manager.selected_mut() {
             let perf = &mut handle.session.performance;
             perf.timeline_tracks.clear();
@@ -471,6 +477,10 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
             perf.timeline_thread_scroll_offset = 0;
             perf.committed_frame_anchor = None;
             perf.frame_anchor_map.clear();
+            // Phase 5 T04: clear search state on Performance panel leave.
+            perf.timeline_search_query = None;
+            perf.timeline_search_input_active = false;
+            perf.timeline_search_match_cursor = 0;
         }
     }
 

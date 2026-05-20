@@ -726,6 +726,221 @@ fn ensure_selection_visible(
     }
 }
 
+// ── Phase 5 T04: Timeline search handlers ────────────────────────────────────
+
+/// Handle `TimelineSearchOpen`: open the search input on the TimelineEvents tab.
+///
+/// Sets `timeline_search_input_active = true` and `timeline_search_query = Some("")`.
+/// Resets the match cursor to 0.
+pub(crate) fn handle_search_open(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    perf.timeline_search_input_active = true;
+    perf.timeline_search_query = Some(String::new());
+    perf.timeline_search_match_cursor = 0;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSearchInputChar`: append `ch` to the query while input is active.
+///
+/// Resets `match_cursor` to 0 since the match set changed.
+pub(crate) fn handle_search_input_char(
+    state: &mut AppState,
+    session_id: SessionId,
+    ch: char,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    if !perf.timeline_search_input_active {
+        return UpdateResult::none();
+    }
+    if let Some(ref mut q) = perf.timeline_search_query {
+        q.push(ch);
+    }
+    perf.timeline_search_match_cursor = 0;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSearchInputBackspace`: delete the last character from the query.
+///
+/// Resets `match_cursor` to 0 since the match set changed.
+pub(crate) fn handle_search_input_backspace(
+    state: &mut AppState,
+    session_id: SessionId,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    if !perf.timeline_search_input_active {
+        return UpdateResult::none();
+    }
+    if let Some(ref mut q) = perf.timeline_search_query {
+        q.pop();
+    }
+    perf.timeline_search_match_cursor = 0;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSearchInputCommit` (Enter): close input, keep query.
+///
+/// Sets `timeline_search_input_active = false`, keeps `timeline_search_query`
+/// so `n`/`N` navigation can begin.
+pub(crate) fn handle_search_input_commit(
+    state: &mut AppState,
+    session_id: SessionId,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    perf.timeline_search_input_active = false;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSearchInputCancel` (Esc): close input, clear query.
+///
+/// Sets `timeline_search_input_active = false`, clears `timeline_search_query`
+/// so the search bar disappears.
+pub(crate) fn handle_search_input_cancel(
+    state: &mut AppState,
+    session_id: SessionId,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    perf.timeline_search_input_active = false;
+    perf.timeline_search_query = None;
+    perf.timeline_search_match_cursor = 0;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSearchNextMatch` (`n`): advance to the next match.
+///
+/// Collects all matching cursors, advances `match_cursor` (wraps), pans the
+/// viewport to center on the match, and updates `timeline_selected_event`.
+pub(crate) fn handle_next_match(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    let query = match perf.timeline_search_query.as_ref() {
+        Some(q) if !q.is_empty() => q.clone(),
+        _ => return UpdateResult::none(),
+    };
+    let filter = perf.timeline_events_filter;
+    let matches = collect_matches(&perf.timeline_tracks, &query, filter);
+    if matches.is_empty() {
+        return UpdateResult::none();
+    }
+    perf.timeline_search_match_cursor =
+        perf.timeline_search_match_cursor.wrapping_add(1) % matches.len();
+    let cursor = matches[perf.timeline_search_match_cursor];
+    perf.timeline_selected_event = Some(cursor);
+    // Pan viewport to center on the matched event.
+    let (vp_start, vp_end) = materialize_viewport(perf);
+    let width = vp_end.saturating_sub(vp_start);
+    perf.timeline_viewport_start_micros = (cursor.ts as u64).saturating_sub(width / 2);
+    perf.timeline_viewport_width_micros = width;
+    perf.timeline_follow_latest = false;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSearchPrevMatch` (`N`): move to the previous match.
+///
+/// Mirrors `handle_next_match` in the reverse direction (wraps modulo count).
+pub(crate) fn handle_prev_match(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    let query = match perf.timeline_search_query.as_ref() {
+        Some(q) if !q.is_empty() => q.clone(),
+        _ => return UpdateResult::none(),
+    };
+    let filter = perf.timeline_events_filter;
+    let matches = collect_matches(&perf.timeline_tracks, &query, filter);
+    if matches.is_empty() {
+        return UpdateResult::none();
+    }
+    let len = matches.len();
+    // Wrap backwards: saturating_sub avoids underflow, then modulo wraps from 0 → last.
+    perf.timeline_search_match_cursor = (perf.timeline_search_match_cursor + len - 1) % len;
+    let cursor = matches[perf.timeline_search_match_cursor];
+    perf.timeline_selected_event = Some(cursor);
+    // Pan viewport to center on the matched event.
+    let (vp_start, vp_end) = materialize_viewport(perf);
+    let width = vp_end.saturating_sub(vp_start);
+    perf.timeline_viewport_start_micros = (cursor.ts as u64).saturating_sub(width / 2);
+    perf.timeline_viewport_width_micros = width;
+    perf.timeline_follow_latest = false;
+    UpdateResult::none()
+}
+
+// ── Match collection helper ───────────────────────────────────────────────────
+
+/// Collect all timeline event cursors whose event name contains `query`
+/// (case-insensitive), across all tracks that pass the current `filter`.
+///
+/// Results are sorted by `ts` ascending (chronological order) so `n`/`N`
+/// navigation moves through matches in time order.
+///
+/// Empty `query` always returns an empty match list — empty-string search is
+/// treated as "no matches" (not "all events") to avoid noise during input.
+///
+/// Cost: `O(events × query.len)` per call — acceptable for manual keypresses
+/// with typical event counts (≤ 10 000 events × 10-char query ≈ 100 k char
+/// comparisons). Cache invalidation is therefore unnecessary for MVP.
+pub(crate) fn collect_matches(
+    tracks: &BTreeMap<i64, fdemon_core::timeline::TimelineTrack>,
+    query: &str,
+    filter: crate::session::performance::TimelineFilter,
+) -> Vec<TimelineEventCursor> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let query_lower = query.to_lowercase();
+    let mut matches: Vec<TimelineEventCursor> = Vec::new();
+
+    for (&tid, track) in tracks {
+        if !timeline_filter_matches(track.thread, filter) {
+            continue;
+        }
+        collect_matches_in_nodes(&track.root_events, tid, 0, &query_lower, &mut matches);
+    }
+
+    // Sort by timestamp ascending for deterministic n/N navigation order.
+    matches.sort_by_key(|c| c.ts);
+    matches
+}
+
+/// Recursively collect matching cursors from a node slice.
+fn collect_matches_in_nodes(
+    nodes: &[fdemon_core::timeline::TimelineNode],
+    tid: i64,
+    depth: u8,
+    query_lower: &str,
+    out: &mut Vec<TimelineEventCursor>,
+) {
+    for node in nodes {
+        if node.name.to_lowercase().contains(query_lower) {
+            out.push(TimelineEventCursor {
+                tid,
+                depth,
+                ts: node.ts,
+            });
+        }
+        if depth + 1 < u8::MAX {
+            collect_matches_in_nodes(&node.children, tid, depth + 1, query_lower, out);
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1795,5 +2010,352 @@ mod tests {
         let perf = crate::session::performance::PerformanceState::default();
         assert!(perf.timeline_selected_event.is_none());
         assert!(!perf.timeline_details_popup_open);
+    }
+
+    // ── Phase 5 T04: Search handler tests ────────────────────────────────────
+
+    /// AC2: TimelineSearchOpen sets input_active=true and query=Some("").
+    #[test]
+    fn test_search_open_activates_input() {
+        let (mut state, session_id) = make_state_with_session();
+        update(&mut state, Message::TimelineSearchOpen { session_id });
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_search_input_active,
+            "search input should be active after open"
+        );
+        assert_eq!(
+            perf.timeline_search_query,
+            Some(String::new()),
+            "query should be Some(\"\") after open"
+        );
+        assert_eq!(perf.timeline_search_match_cursor, 0);
+    }
+
+    /// AC3: TimelineSearchInputChar appends characters to the query.
+    #[test]
+    fn test_search_input_char_appends() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_search_query = Some("Ra".to_string());
+            h.session.performance.timeline_search_input_active = true;
+        }
+        update(
+            &mut state,
+            Message::TimelineSearchInputChar {
+                session_id,
+                ch: 's',
+            },
+        );
+        let query = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance
+            .timeline_search_query
+            .clone();
+        assert_eq!(
+            query,
+            Some("Ras".to_string()),
+            "char should append to query"
+        );
+    }
+
+    /// AC3: TimelineSearchInputBackspace removes last character.
+    #[test]
+    fn test_search_input_backspace_removes_last_char() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_search_query = Some("Ras".to_string());
+            h.session.performance.timeline_search_input_active = true;
+        }
+        update(
+            &mut state,
+            Message::TimelineSearchInputBackspace { session_id },
+        );
+        let query = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance
+            .timeline_search_query
+            .clone();
+        assert_eq!(
+            query,
+            Some("Ra".to_string()),
+            "backspace should remove last char"
+        );
+    }
+
+    /// AC4: TimelineSearchInputCommit closes input, keeps query.
+    #[test]
+    fn test_search_input_commit_closes_input_keeps_query() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_search_query = Some("Raster".to_string());
+            h.session.performance.timeline_search_input_active = true;
+        }
+        update(
+            &mut state,
+            Message::TimelineSearchInputCommit { session_id },
+        );
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            !perf.timeline_search_input_active,
+            "input should be inactive after commit"
+        );
+        assert_eq!(
+            perf.timeline_search_query,
+            Some("Raster".to_string()),
+            "query should be preserved after commit"
+        );
+    }
+
+    /// AC5: TimelineSearchInputCancel closes input, clears query.
+    #[test]
+    fn test_search_input_cancel_clears_query() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_search_query = Some("Raster".to_string());
+            h.session.performance.timeline_search_input_active = true;
+        }
+        update(
+            &mut state,
+            Message::TimelineSearchInputCancel { session_id },
+        );
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            !perf.timeline_search_input_active,
+            "input should be inactive after cancel"
+        );
+        assert!(
+            perf.timeline_search_query.is_none(),
+            "query should be cleared after cancel"
+        );
+    }
+
+    /// AC6: TimelineSearchNextMatch advances match_cursor, updates selection, pans viewport.
+    #[test]
+    fn test_search_next_match_advances_cursor_and_updates_selection() {
+        let (mut state, session_id) = make_state_with_session();
+        // Populate two events with matching names.
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(
+                    1,
+                    vec![
+                        make_node("Raster1", 1_000),
+                        make_node("Raster2", 2_000),
+                        make_node("Other", 3_000),
+                    ],
+                ),
+            );
+            h.session.performance.timeline_search_query = Some("Raster".to_string());
+            h.session.performance.timeline_search_input_active = false;
+            h.session.performance.timeline_search_match_cursor = 0;
+            // match cursor starts at 0; next match advances to 1 (index wraps: (0+1)%2 = 1)
+        }
+        update(&mut state, Message::TimelineSearchNextMatch { session_id });
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        // match_cursor should have advanced: (0+1) % 2 = 1
+        assert_eq!(
+            perf.timeline_search_match_cursor, 1,
+            "match_cursor should advance to 1"
+        );
+        // selected_event should be Some (the second match, ts=2_000)
+        assert!(
+            perf.timeline_selected_event.is_some(),
+            "selection should be set"
+        );
+        // follow_latest should be false (viewport was panned)
+        assert!(
+            !perf.timeline_follow_latest,
+            "follow_latest should be false after pan"
+        );
+    }
+
+    /// AC7: TimelineSearchPrevMatch wraps backwards.
+    #[test]
+    fn test_search_prev_match_wraps_backward() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(
+                    1,
+                    vec![make_node("Raster1", 1_000), make_node("Raster2", 2_000)],
+                ),
+            );
+            h.session.performance.timeline_search_query = Some("Raster".to_string());
+            h.session.performance.timeline_search_input_active = false;
+            h.session.performance.timeline_search_match_cursor = 0;
+        }
+        // Prev from 0 should wrap to last match (1)
+        update(&mut state, Message::TimelineSearchPrevMatch { session_id });
+        let match_cursor = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance
+            .timeline_search_match_cursor;
+        assert_eq!(
+            match_cursor, 1,
+            "prev from 0 should wrap to last match (index 1)"
+        );
+    }
+
+    /// AC6: TimelineSearchNextMatch with empty query does nothing.
+    #[test]
+    fn test_search_next_match_noop_with_empty_query() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_search_query = Some(String::new());
+            h.session.performance.timeline_search_input_active = false;
+        }
+        update(&mut state, Message::TimelineSearchNextMatch { session_id });
+        // No crash, no selection change.
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_selected_event.is_none(),
+            "next match with empty query should not update selection"
+        );
+    }
+
+    /// AC16: Selection sync — n/N updates timeline_selected_event.
+    #[test]
+    fn test_next_match_updates_timeline_selected_event() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(1, vec![make_node("RasterDraw", 1_000)]),
+            );
+            h.session.performance.timeline_search_query = Some("Raster".to_string());
+            h.session.performance.timeline_search_input_active = false;
+            h.session.performance.timeline_search_match_cursor = usize::MAX; // pre-set to wrap
+        }
+        update(&mut state, Message::TimelineSearchNextMatch { session_id });
+        let selected = state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance
+            .timeline_selected_event;
+        assert!(
+            selected.is_some(),
+            "next match should set timeline_selected_event"
+        );
+        assert_eq!(
+            selected.unwrap().ts,
+            1_000,
+            "selected event ts should match the only match"
+        );
+    }
+
+    /// AC14 (case-insensitive): Lowercase query matches mixed-case event name.
+    #[test]
+    fn test_collect_matches_is_case_insensitive() {
+        use crate::session::performance::TimelineFilter;
+        use std::collections::BTreeMap;
+
+        let mut tracks = BTreeMap::new();
+        tracks.insert(
+            1,
+            make_track_with_nodes(1, vec![make_node("GPURasterizer::Draw", 1_000)]),
+        );
+
+        let matches = super::collect_matches(&tracks, "raster", TimelineFilter::All);
+        assert_eq!(
+            matches.len(),
+            1,
+            "lowercase 'raster' should match 'GPURasterizer::Draw'"
+        );
+    }
+
+    /// AC15 (empty query returns no matches).
+    #[test]
+    fn test_collect_matches_empty_query_returns_no_matches() {
+        use crate::session::performance::TimelineFilter;
+        use std::collections::BTreeMap;
+
+        let mut tracks = BTreeMap::new();
+        tracks.insert(
+            1,
+            make_track_with_nodes(1, vec![make_node("Raster", 1_000)]),
+        );
+
+        let matches = super::collect_matches(&tracks, "", TimelineFilter::All);
+        assert!(matches.is_empty(), "empty query should return no matches");
+    }
+
+    /// AC13: Filter interaction — matches on hidden threads excluded.
+    #[test]
+    fn test_collect_matches_respects_filter() {
+        use crate::session::performance::TimelineFilter;
+        use fdemon_core::timeline::{TimelineThread, TimelineTrack};
+        use std::collections::BTreeMap;
+
+        let mut tracks = BTreeMap::new();
+        tracks.insert(
+            1,
+            TimelineTrack {
+                tid: 1,
+                name: None,
+                thread: TimelineThread::Ui,
+                root_events: vec![make_node("Raster", 1_000)],
+            },
+        );
+        tracks.insert(
+            2,
+            TimelineTrack {
+                tid: 2,
+                name: None,
+                thread: TimelineThread::Raster,
+                root_events: vec![make_node("Raster", 2_000)],
+            },
+        );
+
+        // UI filter: only tid=1 passes → 1 match
+        let matches_ui = super::collect_matches(&tracks, "Raster", TimelineFilter::Ui);
+        assert_eq!(
+            matches_ui.len(),
+            1,
+            "Ui filter should only match UI thread events"
+        );
+        assert_eq!(matches_ui[0].tid, 1);
+
+        // All filter: both threads → 2 matches
+        let matches_all = super::collect_matches(&tracks, "Raster", TimelineFilter::All);
+        assert_eq!(matches_all.len(), 2, "All filter should match both threads");
     }
 }

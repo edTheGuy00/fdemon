@@ -155,6 +155,28 @@ pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceStat
         render_paused_indicator(chunks[0], buf);
     }
 
+    // Pre-compute the search query (lowercased) for the highlight overlay.
+    // Empty query → no highlights.
+    let search_query_lower: Option<String> = state
+        .timeline_search_query
+        .as_deref()
+        .filter(|q| !q.is_empty())
+        .map(|q| q.to_lowercase());
+
+    // Pre-compute the "current-match cursor" for additional emphasis.
+    // When navigating with n/N, handle_next_match / handle_prev_match update
+    // `timeline_selected_event` to the matched cursor. We use that cursor to
+    // emphasize the *current* match differently from other matches — but only
+    // when a non-empty query is present (so the cursor is driven by search,
+    // not by a plain Enter-selection).
+    let current_match_cursor: Option<TimelineEventCursor> =
+        if search_query_lower.is_some() && !state.timeline_search_input_active {
+            // current-match == selected event when a search query is active
+            state.timeline_selected_event
+        } else {
+            None
+        };
+
     // Render each thread row
     for (row_idx, (tid, track)) in visible_tracks.iter().enumerate() {
         let row_area = chunks[row_idx + 1]; // offset by 1 (time axis)
@@ -167,6 +189,8 @@ pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceStat
             vp_start,
             vp_end,
             state.timeline_selected_event,
+            search_query_lower.as_deref(),
+            current_match_cursor,
         );
     }
 
@@ -205,6 +229,8 @@ fn render_thread_row(
     vp_start: u64,
     vp_end: u64,
     selected: Option<TimelineEventCursor>,
+    search_query_lower: Option<&str>,
+    current_match_cursor: Option<TimelineEventCursor>,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -244,6 +270,8 @@ fn render_thread_row(
             canvas_width,
             track.tid,
             selected,
+            search_query_lower,
+            current_match_cursor,
         );
     }
 }
@@ -260,14 +288,21 @@ fn render_thread_row(
 /// is rendered with a selection highlight: reverse-video `▏` markers on the
 /// leftmost and rightmost cells, and bold/reversed modifier on the label.
 ///
+/// When `search_query_lower` is `Some(q)` and the node name contains `q`, the
+/// bar receives a **match highlight** (bold + underlined modifier). When the bar
+/// is also the current match cursor (`current_match_cursor`), an additional
+/// reverse-video emphasis is applied to distinguish it from other matches.
+///
 /// # Arguments
-/// * `area`          — full thread row area (all THREAD_ROW_HEIGHT lines)
-/// * `vp_start/end`  — viewport bounds in microseconds
-/// * `depth`         — nesting depth (0 = root)
-/// * `canvas_x`      — x offset of the time canvas (= area.x + THREAD_LABEL_WIDTH)
-/// * `canvas_width`  — width of the time canvas in columns
-/// * `tid`           — thread id of the owning track (for selection matching)
-/// * `selected`      — currently selected event cursor, if any
+/// * `area`                 — full thread row area (all THREAD_ROW_HEIGHT lines)
+/// * `vp_start/end`         — viewport bounds in microseconds
+/// * `depth`                — nesting depth (0 = root)
+/// * `canvas_x`             — x offset of the time canvas (= area.x + THREAD_LABEL_WIDTH)
+/// * `canvas_width`         — width of the time canvas in columns
+/// * `tid`                  — thread id of the owning track (for selection matching)
+/// * `selected`             — currently selected event cursor, if any
+/// * `search_query_lower`   — lowercased search query for match highlighting
+/// * `current_match_cursor` — the match at `timeline_search_match_cursor`, if any
 #[allow(clippy::too_many_arguments)]
 fn render_bar(
     area: Rect,
@@ -280,6 +315,8 @@ fn render_bar(
     canvas_width: u16,
     tid: i64,
     selected: Option<TimelineEventCursor>,
+    search_query_lower: Option<&str>,
+    current_match_cursor: Option<TimelineEventCursor>,
 ) {
     if depth >= MAX_DEPTH {
         return;
@@ -303,6 +340,8 @@ fn render_bar(
                     canvas_width,
                     tid,
                     selected,
+                    search_query_lower,
+                    current_match_cursor,
                 );
             }
         }
@@ -320,6 +359,15 @@ fn render_bar(
     let color = palette::bar_color(node.thread, depth);
     let x = canvas_x + col_off;
     let bar_width = col_width.max(MIN_BAR_WIDTH);
+
+    // Determine if this bar matches the search query.
+    let is_search_match =
+        search_query_lower.is_some_and(|q| !q.is_empty() && node.name.to_lowercase().contains(q));
+
+    // Determine if this bar is the *current* search match cursor.
+    let is_current_match = is_search_match
+        && current_match_cursor
+            .is_some_and(|c| c.tid == tid && c.depth == depth && c.ts == node.ts);
 
     // Fill the bar background.
     let (fg_color, bg_color, extra_modifier) = if is_selected {
@@ -365,6 +413,29 @@ fn render_bar(
         }
     }
 
+    // Search match highlight overlay (applied after base color and selection).
+    //
+    // All matching bars receive BOLD | UNDERLINED to visually distinguish them
+    // from non-matching bars. The current-match bar additionally gets REVERSED
+    // to mark it as the target of the `n`/`N` cursor.
+    if is_search_match && !is_selected {
+        let search_modifier = if is_current_match {
+            Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED
+        } else {
+            Modifier::BOLD | Modifier::UNDERLINED
+        };
+        for dx in 0..bar_width {
+            let bx = x + dx;
+            if bx >= area.x + area.width {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut((bx, y)) {
+                let existing = cell.style();
+                cell.set_style(existing.add_modifier(search_modifier));
+            }
+        }
+    }
+
     // Render label inside the bar if at least 4 columns wide.
     // Both selected and unselected bars use the same label start and width logic.
     let label_start = x + 1;
@@ -406,6 +477,8 @@ fn render_bar(
                 canvas_width,
                 tid,
                 selected,
+                search_query_lower,
+                current_match_cursor,
             );
         }
     }

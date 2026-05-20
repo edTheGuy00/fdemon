@@ -918,3 +918,222 @@ fn gantt_no_paused_indicator_when_follow_latest() {
         "expected NO 'PAUSED' indicator when follow_latest=true, got:\n{text}"
     );
 }
+
+// ── Phase 5 T04: Search match highlight tests ─────────────────────────────────
+
+/// AC9 (match highlight): A bar whose name matches the search query should have
+/// BOLD | UNDERLINED modifiers applied to its cells.
+///
+/// We render a wide viewport with a matching event and a non-matching event,
+/// then verify the matching bar has BOLD+UNDERLINED and the non-matching bar
+/// does NOT.
+#[test]
+fn gantt_matching_bar_has_bold_underlined_modifier() {
+    use ratatui::style::Modifier;
+
+    let ts_match = 1_000_000i64;
+    let ts_other = 2_000_000i64;
+    let dur = 500_000i64;
+
+    let mut state = make_anchored_state();
+    // Wide viewport so both events are visible.
+    state.frame_anchor_map.insert(1u64, (0u64, 5_000_000u64));
+    // Set search query that matches "Raster" but not "UIFrame"
+    state.timeline_search_query = Some("Raster".to_string());
+    state.timeline_search_input_active = false;
+
+    let mut tracks = BTreeMap::new();
+    tracks.insert(
+        1,
+        make_track(
+            1,
+            TimelineThread::Ui,
+            vec![
+                make_complete_node("RasterDraw", TimelineThread::Ui, ts_match, dur),
+                make_complete_node("UIFrame", TimelineThread::Ui, ts_other, dur),
+            ],
+        ),
+    );
+    state.timeline_tracks = tracks;
+    // No selection (search-only, not navigating yet)
+    state.timeline_selected_event = None;
+
+    let area = Rect::new(0, 0, 200, 10);
+    let mut buf = Buffer::empty(area);
+    render_gantt(area, &mut buf, &state);
+
+    // At least one cell should have BOLD | UNDERLINED (the matching bar).
+    let has_bold_underlined = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            if let Some(cell) = buf.cell((x, y)) {
+                cell.style().add_modifier.contains(Modifier::BOLD)
+                    && cell.style().add_modifier.contains(Modifier::UNDERLINED)
+            } else {
+                false
+            }
+        });
+
+    assert!(
+        has_bold_underlined,
+        "expected at least one cell with BOLD|UNDERLINED modifier for matching bar"
+    );
+}
+
+/// AC10 (current-match emphasis): The current-match bar (match_cursor matches
+/// selected event) should additionally have REVERSED modifier.
+#[test]
+fn gantt_current_match_bar_has_reversed_modifier() {
+    use ratatui::style::Modifier;
+
+    let ts_match = 1_000_000i64;
+    let dur = 500_000i64;
+
+    let mut state = make_anchored_state();
+    state.frame_anchor_map.insert(1u64, (0u64, 5_000_000u64));
+    // Set query that matches the event
+    state.timeline_search_query = Some("Raster".to_string());
+    state.timeline_search_input_active = false;
+    // Set selected_event to match the bar (simulating n/N navigation)
+    state.timeline_selected_event = Some(TimelineEventCursor {
+        tid: 1,
+        depth: 0,
+        ts: ts_match,
+    });
+
+    let mut tracks = BTreeMap::new();
+    tracks.insert(
+        1,
+        make_track(
+            1,
+            TimelineThread::Ui,
+            vec![make_complete_node(
+                "RasterDraw",
+                TimelineThread::Ui,
+                ts_match,
+                dur,
+            )],
+        ),
+    );
+    state.timeline_tracks = tracks;
+
+    let area = Rect::new(0, 0, 200, 10);
+    let mut buf = Buffer::empty(area);
+    render_gantt(area, &mut buf, &state);
+
+    // The current-match bar should have REVERSED modifier (in addition to BOLD|UNDERLINED).
+    let has_reversed = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            if let Some(cell) = buf.cell((x, y)) {
+                cell.style().add_modifier.contains(Modifier::REVERSED)
+            } else {
+                false
+            }
+        });
+
+    assert!(
+        has_reversed,
+        "expected current-match bar to have REVERSED modifier for emphasis"
+    );
+}
+
+/// AC14 (case-insensitive): A query "raster" should match an event named
+/// "GPURasterizer::Draw" (case-insensitive substring match).
+#[test]
+fn gantt_search_is_case_insensitive() {
+    use ratatui::style::Modifier;
+
+    let ts = 1_000_000i64;
+    let dur = 500_000i64;
+
+    let mut state = make_anchored_state();
+    state.frame_anchor_map.insert(1u64, (0u64, 5_000_000u64));
+    // Lowercase query, mixed-case event name
+    state.timeline_search_query = Some("raster".to_string());
+    state.timeline_search_input_active = false;
+
+    let mut tracks = BTreeMap::new();
+    tracks.insert(
+        1,
+        make_track(
+            1,
+            TimelineThread::Raster,
+            // "GPURasterizer::Draw" contains "Raster" case-insensitively
+            vec![make_complete_node(
+                "GPURasterizer::Draw",
+                TimelineThread::Raster,
+                ts,
+                dur,
+            )],
+        ),
+    );
+    state.timeline_tracks = tracks;
+
+    let area = Rect::new(0, 0, 200, 10);
+    let mut buf = Buffer::empty(area);
+    render_gantt(area, &mut buf, &state);
+
+    let has_bold_underlined = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            if let Some(cell) = buf.cell((x, y)) {
+                cell.style().add_modifier.contains(Modifier::BOLD)
+                    && cell.style().add_modifier.contains(Modifier::UNDERLINED)
+            } else {
+                false
+            }
+        });
+
+    assert!(
+        has_bold_underlined,
+        "expected case-insensitive match to produce BOLD|UNDERLINED highlight"
+    );
+}
+
+/// AC9 (non-matching bar): A bar that does NOT match the query should NOT have
+/// the BOLD|UNDERLINED modifier applied.
+#[test]
+fn gantt_non_matching_bar_has_no_search_modifier() {
+    use ratatui::style::Modifier;
+
+    let ts = 1_000_000i64;
+    let dur = 500_000i64;
+
+    let mut state = make_anchored_state();
+    state.frame_anchor_map.insert(1u64, (0u64, 5_000_000u64));
+    // Query that does NOT match the event name
+    state.timeline_search_query = Some("zzz_no_match".to_string());
+    state.timeline_search_input_active = false;
+
+    let mut tracks = BTreeMap::new();
+    tracks.insert(
+        1,
+        make_track(
+            1,
+            TimelineThread::Ui,
+            vec![make_complete_node("UIFrame", TimelineThread::Ui, ts, dur)],
+        ),
+    );
+    state.timeline_tracks = tracks;
+
+    let area = Rect::new(0, 0, 200, 10);
+    let mut buf = Buffer::empty(area);
+    render_gantt(area, &mut buf, &state);
+
+    // UNDERLINED should NOT appear (no match → no highlight overlay)
+    let has_underlined = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            if let Some(cell) = buf.cell((x, y)) {
+                cell.style().add_modifier.contains(Modifier::UNDERLINED)
+            } else {
+                false
+            }
+        });
+
+    assert!(
+        !has_underlined,
+        "expected NO UNDERLINED modifier for a non-matching bar, but found one"
+    );
+}
