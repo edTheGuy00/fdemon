@@ -132,3 +132,39 @@ Walk only `root_events` (depth 0) for the minimap — child events don't influen
 - Bracket coloring: use `Color::White` + `Modifier::BOLD` to ensure visibility over any background palette.
 - The 30s default history span is a soft target — if the buffer has older events, minimap auto-extends to include them; if newer, minimap compresses. The viewport bracket always reflects T01's `(viewport_start, viewport_end)`.
 - Dominant-thread cost is `O(columns × root_events)`. With 100 columns and 1000 events, that's 100k iterations per frame at most — acceptable for TUI. If profiling shows it as a hot path, switch to a pre-binned histogram updated on batch-receive.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a050a56ae30ae0b26
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/minimap.rs` | NEW — pure minimap renderer with `render`, `compute_history_bounds`, `dominant_thread_in_range`, `column_to_micros` helpers and 16 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/mod.rs` | Added `mod minimap` declaration, `MIN_HEIGHT_FOR_MINIMAP` constant, updated `render()` to insert `Constraint::Length(MINIMAP_HEIGHT)` layout slot and call `minimap::render` with resolved viewport bounds |
+
+### Notable Decisions/Tradeoffs
+
+1. **Viewport resolved once in `mod.rs`**: `compute_active_viewport` is called in the top-level `render` function and the resulting `(vp_start, vp_end)` is passed to both minimap and Gantt. This avoids calling the function twice per frame while keeping minimap.rs stateless (no `PerformanceState` import).
+
+2. **Graceful fallback when too short**: When `area.height <= MIN_HEIGHT_FOR_MINIMAP` (2 rows), the minimap slot is dropped and only the filter strip + Gantt are rendered. This prevents layout corruption on very small terminal windows.
+
+3. **AC10 (mouse stretch goal) skipped**: Adding click-to-pan on the minimap requires `MouseCtx` plumbing from T03/T04 which hasn't landed yet. A `TODO` comment with the exact implementation path is left in `minimap.rs`.
+
+4. **`set_char` + `set_style` dual call for brackets**: The `set_fg` call on `cell` before `set_style` is intentionally redundant — `set_style` already sets `fg(Color::White)`. This matches the task's pseudocode pattern and is harmless.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-tui --all-targets` - Passed
+- `cargo test -p fdemon-tui` - Passed (1277 tests + 7 doc-tests; 16 new minimap tests)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **No mouse interaction**: AC10 skipped per task guidance ("skip if scope tight"). The TODO comment in minimap.rs describes the full implementation path for when T03/T04 mouse plumbing lands.
+2. **Bracket overlap on width=1**: When `area.width == 1`, both `[` and `]` land on column 0 and `]` overwrites `[`. This is the expected behavior as noted in the test `minimap_width_one_no_panic`.

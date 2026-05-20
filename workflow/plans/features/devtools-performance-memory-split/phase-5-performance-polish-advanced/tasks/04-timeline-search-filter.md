@@ -193,3 +193,53 @@ If the bar is **also** the current match cursor (`matches[match_cursor] == bar_c
 - **Stretch goal — incremental search:** highlight matches in real-time as the user types. Recommend enabling by default since match collection is cheap.
 - **Mouse:** clicking the search bar (`/` glyph area) opens the input. Stretch goal — defer if scope tight.
 - **Search persists across panel switches?** When the user leaves the Performance panel and returns, should the query survive? **Recommend yes** — preserves UX flow. Phase 3-followup's pause-and-clear logic (T01 there) clears `timeline_tracks` and `timeline_thread_name_map`; **add `timeline_search_*` fields to that clear list** so a stale query doesn't survive a buffer reset. Update `handler/devtools/mod.rs::handle_exit_devtools_mode` and `handle_switch_panel` accordingly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Added 3 search state fields: `timeline_search_query`, `timeline_search_input_active`, `timeline_search_match_cursor` with defaults and tests |
+| `crates/fdemon-app/src/message.rs` | Added 7 new Message variants: `TimelineSearchOpen`, `TimelineSearchInputChar`, `TimelineSearchInputBackspace`, `TimelineSearchInputCommit`, `TimelineSearchInputCancel`, `TimelineSearchNextMatch`, `TimelineSearchPrevMatch` |
+| `crates/fdemon-app/src/handler/keys.rs` | Added search input intercept (early-return in `if in_performance`), `/` open key, `n`/`N` match nav arms (ordered before global `n` → Network per Drift #5), and comprehensive tests |
+| `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` | Added 7 handler functions (`handle_search_open`, `handle_search_input_char`, `handle_search_input_backspace`, `handle_search_input_commit`, `handle_search_input_cancel`, `handle_next_match`, `handle_prev_match`) plus `collect_matches` helper; added AC tests |
+| `crates/fdemon-app/src/handler/devtools/performance/mod.rs` | Exported all 9 new handler functions from the timeline sub-module |
+| `crates/fdemon-app/src/handler/update.rs` | Dispatched all 7 new Message variants to the correct handler functions |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Extended `handle_exit_devtools_mode` and `handle_switch_panel` to clear `timeline_search_*` fields on Performance panel leave/exit |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/search.rs` | NEW — search bar widget with `render_search_bar`, `search_bar_visible`, internal `count_matches_in_tracks`, and tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` | Added search query/current-match parameters to `render_thread_row` and `render_bar`; BOLD+UNDERLINED overlay for matches, REVERSED for current match |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt_tests.rs` | Added 5 match-overlay tests: `gantt_matching_bar_has_bold_underlined_modifier`, `gantt_current_match_bar_has_reversed_modifier`, `gantt_search_is_case_insensitive`, `gantt_non_matching_bar_has_no_search_modifier` |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/mod.rs` | Declared `pub(super) mod search`, integrated optional search bar row into the layout (above filter strip), removed now-unused `MIN_HEIGHT_FOR_MINIMAP` constant |
+
+### Notable Decisions/Tradeoffs
+
+1. **Match counting at render time (not cached)**: The search bar recomputes the match count on every render pass (`count_matches_in_tracks`). This is O(events × query.len) per render, but fast enough at TUI render rates (~30 Hz) with typical event counts. Avoids TEA state mutation at render time.
+
+2. **Separate TUI-side match counter**: Rather than re-using `collect_matches` from the app handler layer (which would require making it `pub`), the search bar module has its own `count_matches_in_tracks` function that mirrors the logic. This keeps layer boundaries clean.
+
+3. **`wrapping_add` for match cursor advancement**: Used `wrapping_add(1)` in `handle_next_match` to avoid integer overflow when `match_cursor` is at `usize::MAX` (edge case in tests).
+
+4. **Search cleared on panel leave**: Both `handle_exit_devtools_mode` and `handle_switch_panel` clear the three search fields so a stale query does not survive DevTools re-entry (matches task spec).
+
+5. **Incremental search implemented**: Highlights are applied at every render for the current `timeline_search_query` (even while input is active), so matches appear in real-time as the user types. This was the stretch goal in the task spec.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2516 fdemon-app + 1299 fdemon-tui + all other crates, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added: 23 handler tests in `timeline.rs`, 15 key binding tests in `keys.rs`, 8 search bar tests in `search.rs`, 5 match-overlay tests in `gantt_tests.rs`, 1 state defaults test in `performance.rs`.
+
+### Risks/Limitations
+
+1. **Match cursor wraps at boundaries**: `n` from the last match wraps to index 0; `N` from index 0 wraps to the last. This matches standard search UX (vim, browser).
+2. **No persistence across DevTools exit**: Query is cleared on exit/panel-switch (per spec). Users who want to resume a search must re-type the query.
+3. **`current_match_cursor` conflates search and selection**: When `timeline_search_query.is_some()` and `timeline_selected_event.is_some()`, the selected event gets the REVERSED emphasis. If the user selects an event via Enter (not via `n`/`N`), it will also get REVERSED if a query happens to be committed. This is acceptable UX for MVP.

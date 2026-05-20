@@ -49,11 +49,11 @@ Wave 3 (doc_maintainer)
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Wave |
 |---|------|--------|------------|------------|-------|------|
-| 01 | [timeline-viewport-pan-zoom](tasks/01-timeline-viewport-pan-zoom.md) | Not Started | Phase 4 complete | 5–7h | implementor | 1 |
-| 02 | [timeline-minimap-ribbon](tasks/02-timeline-minimap-ribbon.md) | Not Started | 01 | 3–4h | implementor | 2 |
-| 03 | [timeline-event-selection-and-details](tasks/03-timeline-event-selection-and-details.md) | Not Started | 01 | 5–7h | implementor | 2 |
-| 04 | [timeline-search-filter](tasks/04-timeline-search-filter.md) | Not Started | 01, 03 | 3–5h | implementor | 2 |
-| 05 | [update-arch-and-review-focus-docs](tasks/05-update-arch-and-review-focus-docs.md) | Not Started | 01,02,03,04 | 2h | doc_maintainer | 3 |
+| 01 | [timeline-viewport-pan-zoom](tasks/01-timeline-viewport-pan-zoom.md) | Done ✅ | Phase 4 complete | 5–7h | implementor | 1 |
+| 02 | [timeline-minimap-ribbon](tasks/02-timeline-minimap-ribbon.md) | Done ✅ | 01 | 3–4h | implementor | 2 |
+| 03 | [timeline-event-selection-and-details](tasks/03-timeline-event-selection-and-details.md) | Done ⚠️ CONCERN | 01 | 5–7h | implementor | 2 |
+| 04 | [timeline-search-filter](tasks/04-timeline-search-filter.md) | Done ✅ | 01, 03 | 3–5h | implementor | 2 |
+| 05 | [update-arch-and-review-focus-docs](tasks/05-update-arch-and-review-focus-docs.md) | Done ✅ | 01,02,03,04 | 2h | doc_maintainer | 3 |
 
 ## File Overlap Analysis
 

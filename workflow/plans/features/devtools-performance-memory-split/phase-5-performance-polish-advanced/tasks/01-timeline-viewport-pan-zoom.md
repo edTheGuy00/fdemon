@@ -241,3 +241,49 @@ When `!follow_latest`, render a small "PAUSED" indicator (e.g., 1-cell `⏸` gly
 - `End` key — confirmed bound to `PerfJumpToEnd` in the `in_performance` block (Drift #4). T01 uses `g` as primary follow-latest key; `End` as a tab-guarded alias inserted **before** `PerfJumpToEnd`. On terminals where `End` is unreliable, `g` continues to work.
 - Zoom factor 2.0 means 4 keypresses cover the full 100ms → 60s range. If users want finer granularity, defer to a Phase 6 setting.
 - **Frame anchor interaction:** When `committed_frame_anchor.is_some()` and the user starts panning/zooming, the frame anchor is **preserved** (not cleared). Pressing `g`/`End` returns to the frame-anchored viewport, not live-edge. This is the intent of PLAN D2 mode 2 having priority over mode 3. If the user wants live-edge regardless of frame anchor, they can clear the frame chart selection (existing Phase 4 behavior); T01 should not invent a new "clear anchor" key.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/devtools-inspector-parity
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Added `timeline_viewport_start_micros`, `timeline_viewport_width_micros`, `timeline_follow_latest` fields + defaults + tests |
+| `crates/fdemon-app/src/message.rs` | Added 5 new Message variants: TimelineZoomIn/Out, TimelinePanLeft/Right, TimelineFollowLatest |
+| `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` | Added Phase 5 constants + handle_zoom_in/out, handle_pan_left/right, handle_follow_latest + tests |
+| `crates/fdemon-app/src/handler/devtools/performance/mod.rs` | Re-exported the 5 new handler functions |
+| `crates/fdemon-app/src/handler/update.rs` | Wired 5 new Message variants to their handlers |
+| `crates/fdemon-app/src/handler/keys.rs` | Added +/-/g/End zoom+follow-latest bindings in in_performance block (before Home/End, Drift #4); added Left/Right pan guards before SelectPerformanceFrame (Drift #3); added 5 keybinding conflict tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/viewport.rs` | Added compute_active_viewport (3-mode PLAN D2), zoom_viewport, pan_viewport, PanDirection, viewport constants; removed #[allow(dead_code)] from compute_viewport |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` | Updated to use compute_active_viewport; added anchor gate for follow_latest=true; added PAUSED indicator; extracted tests to gantt_tests.rs; added render_time_axis_pub shim |
+| `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt_tests.rs` | NEW — extracted Phase 4 gantt tests + added PAUSED indicator tests (gantt.rs down to 533 lines) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test extraction via `#[path]`**: Used `#[cfg(test)] #[path = "gantt_tests.rs"] mod tests;` (external module declaration) rather than an inline module. `gantt_tests.rs` imports `super::*` where `super` is the `gantt` module; `THREAD_LABEL_WIDTH` uses `super::super::` to reach the parent `timeline_events` module.
+
+2. **Viewport constants duplicated in app crate**: `TIMELINE_VIEWPORT_MIN/MAX_MICROS`, `TIMELINE_ZOOM_FACTOR`, `TIMELINE_PAN_FRACTION` are defined in both `fdemon-tui/viewport.rs` and `fdemon-app/timeline.rs` to respect layer boundaries (app cannot depend on tui). The values must stay in sync; doc comments note this.
+
+3. **Gantt anchor gate restructured**: In Phase 4, the gantt always showed a placeholder when `committed_frame_anchor == None`. Phase 5 preserves this behavior: the anchor gate now reads `if state.timeline_follow_latest { check anchor }` so that the manual-viewport mode (`!follow_latest`) bypasses the anchor check entirely and renders the Gantt with the manual window.
+
+4. **Transitional `←`/`→` behavior (T03 note)**: On the TimelineEvents tab, `←`/`→` UNCONDITIONALLY pan the Gantt viewport. T03 will refine this to `if selected_event.is_none() { pan } else { move_selection }`. T03's implementor should add a guard check before the `TimelinePanLeft`/`TimelinePanRight` emission.
+
+5. **materialize_viewport in app crate**: The handler functions call a local `materialize_viewport(perf)` that returns `(start, start+width)` even when `follow_latest=true`. This is an approximation for the handler context — the TUI's `compute_active_viewport` is the authoritative 3-mode resolver. The handler only needs the current effective window to compute zoom/pan deltas.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2480 fdemon-app, 1261 fdemon-tui, 817 fdemon-daemon, etc.)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Mouse scroll (AC12 stretch goal)**: Not implemented. Mouse wheel zoom requires a `Mouse(MouseInput)` handler that maps scroll-up/down on the Gantt canvas area to `TimelineZoomIn`/`TimelineZoomOut`. Deferred per task instructions ("if scope tight, skip and add a TODO"). Added TODO comment in `gantt.rs`.
+
+2. **`←`/`→` always pan (transitional)**: On the TimelineEvents tab, Left/Right pan regardless of whether an event is selected. T03 will fix this; documented in Completion Summary for T03 implementor.
