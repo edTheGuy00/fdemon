@@ -25,7 +25,9 @@ pub use memory::{AllocationSortColumn, MemorySection, MemoryState};
 pub use native_tags::NativeTagState;
 pub use network::{NetworkDetailTab, NetworkState};
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
-pub use performance::{PerfSection, PerformanceState, TimelineFilter};
+pub use performance::{
+    PerfSection, PerformanceState, SelectionDirection, TimelineEventCursor, TimelineFilter,
+};
 pub use session::{DevToolsEndpoint, Session};
 
 // SessionId and next_session_id live here in mod.rs

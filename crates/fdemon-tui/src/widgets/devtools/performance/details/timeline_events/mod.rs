@@ -23,6 +23,7 @@ use ratatui::{
 mod gantt;
 mod minimap;
 mod palette;
+pub(super) mod popup;
 mod viewport;
 
 // Re-export text_helpers from parent module via pub(super) path
@@ -101,29 +102,35 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
         .split(area);
         render_filter_strip(chunks[0], buf, state);
         gantt::render_gantt(chunks[1], buf, state);
-        return;
+    } else {
+        let chunks = Layout::vertical([
+            Constraint::Length(FILTER_STRIP_HEIGHT),
+            Constraint::Length(minimap::MINIMAP_HEIGHT), // Phase 5 T02 — minimap ribbon
+            Constraint::Min(0),                          // gantt area
+        ])
+        .split(area);
+
+        render_filter_strip(chunks[0], buf, state);
+
+        // Minimap: pass resolved viewport bounds; minimap itself is stateless.
+        minimap::render(
+            chunks[1],
+            buf,
+            &state.timeline_tracks,
+            vp_start,
+            vp_end,
+            state.timeline_events_filter,
+        );
+
+        gantt::render_gantt(chunks[2], buf, state);
     }
 
-    let chunks = Layout::vertical([
-        Constraint::Length(FILTER_STRIP_HEIGHT),
-        Constraint::Length(minimap::MINIMAP_HEIGHT), // Phase 5 T02 — minimap ribbon
-        Constraint::Min(0),                          // gantt area
-    ])
-    .split(area);
-
-    render_filter_strip(chunks[0], buf, state);
-
-    // Minimap: pass resolved viewport bounds; minimap itself is stateless.
-    minimap::render(
-        chunks[1],
-        buf,
-        &state.timeline_tracks,
-        vp_start,
-        vp_end,
-        state.timeline_events_filter,
-    );
-
-    gantt::render_gantt(chunks[2], buf, state);
+    // Render the event details popup last (on top of everything).
+    // When `timeline_details_popup_open == true`, this overlays the entire
+    // tab area (dims background, draws centered popup).
+    if state.timeline_details_popup_open {
+        popup::render(area, buf, state);
+    }
 }
 
 // ── Filter strip ──────────────────────────────────────────────────────────────

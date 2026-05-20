@@ -20,5 +20,7 @@ pub(crate) use frame::{
     handle_select_performance_frame,
 };
 pub(crate) use timeline::{
-    handle_follow_latest, handle_pan_left, handle_pan_right, handle_zoom_in, handle_zoom_out,
+    handle_clear_selection, handle_close_popup, handle_follow_latest, handle_move_selection,
+    handle_open_popup, handle_pan_left, handle_pan_right, handle_select_at,
+    handle_select_first_visible, handle_zoom_in, handle_zoom_out,
 };

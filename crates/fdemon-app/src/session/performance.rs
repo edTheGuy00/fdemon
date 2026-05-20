@@ -12,6 +12,46 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::PerfDetailsTab;
 
+// ── TimelineEventCursor ───────────────────────────────────────────────────────
+
+/// Identifies a single event in the timeline tree.
+///
+/// Stable across batches as long as the event survives the ring-buffer eviction
+/// policy (oldest root events are evicted first, by `ts`). When eviction removes
+/// the pointed-to event, the selection is cleared and a debug log entry is
+/// emitted.
+///
+/// The triple `(tid, depth, ts)` uniquely identifies an event because:
+/// - `tid` identifies the thread track.
+/// - `depth` is the nesting level within the root event subtree.
+/// - `ts` (start timestamp in micros) disambiguates siblings at the same depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimelineEventCursor {
+    /// Thread id of the track that owns this event.
+    pub tid: i64,
+    /// Nesting depth (0 = root event, 1 = direct child, …).
+    pub depth: u8,
+    /// Event start timestamp in microseconds. Disambiguates siblings.
+    pub ts: i64,
+}
+
+// ── SelectionDirection ────────────────────────────────────────────────────────
+
+/// Direction for moving the timeline event selection cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionDirection {
+    /// Move to the previous sibling at the same depth; wraps to last if at first.
+    PrevSibling,
+    /// Move to the next sibling at the same depth; wraps to first if at last.
+    NextSibling,
+    /// Move to the parent event. If at depth 0, move to the previous thread's
+    /// first root event.
+    ParentOrUpThread,
+    /// Move to the first child. If no children, move to the next thread's first
+    /// root event.
+    FirstChildOrDownThread,
+}
+
 // ── TimelineFilter ────────────────────────────────────────────────────────────
 
 /// Filter controlling which timeline threads are shown in the Timeline Events tab.
@@ -242,6 +282,26 @@ pub struct PerformanceState {
     /// (oldest frame numbers evicted first when full).
     pub frame_anchor_map: BTreeMap<u64, (u64, u64)>,
 
+    // ── Phase 5: Timeline event selection ────────────────────────────────────
+    /// Currently selected event in the Timeline Events Gantt.
+    ///
+    /// `None` — no event is selected (normal pan/zoom mode).
+    /// `Some(cursor)` — the event identified by `cursor` is highlighted.
+    ///
+    /// Cleared when:
+    /// - The user presses `Esc` (with popup closed).
+    /// - The identified event is evicted from the ring buffer.
+    /// - The user switches away from the Timeline Events tab.
+    pub timeline_selected_event: Option<TimelineEventCursor>,
+
+    /// Whether the event details popup is currently open.
+    ///
+    /// When `true`, the popup overlays the Gantt and intercepts `Esc`
+    /// (to close the popup) before the selection-clear arm fires.
+    ///
+    /// Default: `false`.
+    pub timeline_details_popup_open: bool,
+
     // ── Phase 5: Pan/zoom viewport state ─────────────────────────────────────
     /// Manual viewport start in microseconds.
     ///
@@ -302,6 +362,9 @@ impl Default for PerformanceState {
             committed_frame_anchor: None,
             frame_anchor_generation: 0,
             frame_anchor_map: BTreeMap::new(),
+            // Phase 5: Timeline event selection — start with nothing selected
+            timeline_selected_event: None,
+            timeline_details_popup_open: false,
             // Phase 5: Pan/zoom viewport — start in follow-latest mode
             timeline_viewport_start_micros: 0,
             // Default width = 5 s (matches TIMELINE_VIEWPORT_MICROS in the TUI crate;

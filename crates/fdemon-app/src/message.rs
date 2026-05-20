@@ -5,7 +5,7 @@ use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::memory::MemorySection;
-use crate::session::performance::PerfSection;
+use crate::session::performance::{PerfSection, SelectionDirection, TimelineEventCursor};
 use crate::session::{NetworkDetailTab, SessionId};
 use crate::state::{DevToolsPanel, PerfDetailsTab};
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
@@ -1887,4 +1887,46 @@ pub enum Message {
     /// the next render will return to the frame-anchored viewport (PLAN D2 mode 2)
     /// rather than the live-edge fallback.
     TimelineFollowLatest { session_id: SessionId },
+
+    // ── Phase 5 T03: Timeline event selection ─────────────────────────────────
+    /// Select the first visible event in the Timeline Events Gantt.
+    ///
+    /// Selects the first root event of the first visible thread (in `tid` ascending
+    /// order, filter-respected). Emitted by `Enter` when no event is currently selected.
+    TimelineSelectFirstVisible { session_id: SessionId },
+
+    /// Move the timeline event selection in the given direction.
+    ///
+    /// Emitted by `←`/`→` (sibling nav) and `↑`/`↓`/`j`/`k` (depth/thread nav)
+    /// when an event is selected.
+    TimelineMoveSelection {
+        session_id: SessionId,
+        dir: SelectionDirection,
+    },
+
+    /// Open the event details popup for the currently selected event.
+    ///
+    /// Emitted by `Enter` when an event is already selected and the popup is
+    /// not open. No-op if no event is selected.
+    TimelineOpenPopup { session_id: SessionId },
+
+    /// Close the event details popup without clearing the selection.
+    ///
+    /// Emitted by `Esc` when the popup is open.
+    TimelineClosePopup { session_id: SessionId },
+
+    /// Clear the timeline event selection.
+    ///
+    /// Emitted by `Esc` when the popup is closed but an event is selected.
+    TimelineClearSelection { session_id: SessionId },
+
+    /// Select a specific event by cursor (mouse-driven).
+    ///
+    /// Emitted when the user clicks on a Gantt bar. The handler sets
+    /// `timeline_selected_event = Some(cursor)` without opening the popup
+    /// (a second click or `Enter` opens the popup).
+    TimelineSelectAt {
+        session_id: SessionId,
+        cursor: TimelineEventCursor,
+    },
 }

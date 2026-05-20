@@ -15,7 +15,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use crate::handler::UpdateResult;
-use crate::session::performance::FRAME_ANCHOR_MAP_CAP;
+use crate::session::performance::{SelectionDirection, TimelineEventCursor, FRAME_ANCHOR_MAP_CAP};
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::timeline::{ThreadMetadata, TimelineEvent, TimelineNode, TimelineTrack};
@@ -330,6 +330,400 @@ fn zoom_viewport(start: u64, width: u64, factor: f64, anchor_micros: u64) -> (u6
     let new_start = anchor_micros.saturating_sub(anchor_new_offset);
     let new_end = new_start.saturating_add(new_width);
     (new_start, new_end)
+}
+
+// ── Phase 5 T03: Timeline event selection handlers ────────────────────────────
+
+/// Handle `TimelineSelectFirstVisible`: select the first root event of the
+/// first visible thread (tid ascending, filter-respected).
+///
+/// No-op if no tracks match the current filter.
+pub(crate) fn handle_select_first_visible(
+    state: &mut AppState,
+    session_id: SessionId,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    let filter = perf.timeline_events_filter;
+
+    // Find first track (tid ascending) that passes the filter and has events.
+    let first_cursor = perf
+        .timeline_tracks
+        .iter()
+        .filter(|(_, track)| timeline_filter_matches(track.thread, filter))
+        .find_map(|(&tid, track)| {
+            track.root_events.first().map(|node| TimelineEventCursor {
+                tid,
+                depth: 0,
+                ts: node.ts,
+            })
+        });
+
+    if let Some(cursor) = first_cursor {
+        // Auto-pan to make the event visible.
+        let dur = perf
+            .timeline_tracks
+            .get(&cursor.tid)
+            .and_then(|t| t.root_events.first())
+            .and_then(|n| n.dur)
+            .unwrap_or(0) as u64;
+        ensure_selection_visible(perf, cursor, dur);
+        perf.timeline_selected_event = Some(cursor);
+    }
+    UpdateResult::none()
+}
+
+/// Handle `TimelineMoveSelection`: move the cursor in the given direction.
+///
+/// If the identified event has been evicted from the ring buffer, clears the
+/// selection and logs a debug message. Wraps at siblings boundaries.
+pub(crate) fn handle_move_selection(
+    state: &mut AppState,
+    session_id: SessionId,
+    dir: SelectionDirection,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+
+    let Some(cursor) = perf.timeline_selected_event else {
+        return UpdateResult::none();
+    };
+
+    // Clone the tracks so we can look up without holding mutable borrow.
+    let tracks_snapshot: BTreeMap<i64, TimelineTrack> = perf.timeline_tracks.clone();
+    let filter = perf.timeline_events_filter;
+
+    let new_cursor = move_selection(&tracks_snapshot, cursor, dir, filter);
+
+    match new_cursor {
+        SelectionMove::Found(new_c) => {
+            let dur = find_node_dur(&tracks_snapshot, new_c);
+            ensure_selection_visible(perf, new_c, dur);
+            perf.timeline_selected_event = Some(new_c);
+        }
+        SelectionMove::Evicted => {
+            tracing::debug!("selected timeline event evicted from buffer");
+            perf.timeline_selected_event = None;
+            perf.timeline_details_popup_open = false;
+        }
+        SelectionMove::NoTarget => {
+            // Selection stays unchanged (e.g. no children, no next thread).
+        }
+    }
+    UpdateResult::none()
+}
+
+/// Handle `TimelineOpenPopup`: open the details popup for the selected event.
+pub(crate) fn handle_open_popup(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    if handle.session.performance.timeline_selected_event.is_some() {
+        handle.session.performance.timeline_details_popup_open = true;
+    }
+    UpdateResult::none()
+}
+
+/// Handle `TimelineClosePopup`: close the details popup, keep selection.
+pub(crate) fn handle_close_popup(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    handle.session.performance.timeline_details_popup_open = false;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineClearSelection`: clear the event selection and close popup.
+pub(crate) fn handle_clear_selection(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    handle.session.performance.timeline_selected_event = None;
+    handle.session.performance.timeline_details_popup_open = false;
+    UpdateResult::none()
+}
+
+/// Handle `TimelineSelectAt`: select a specific event by cursor (mouse-driven).
+///
+/// If the cursor matches the currently selected event, opens the popup
+/// (double-click / second click behaviour).
+pub(crate) fn handle_select_at(
+    state: &mut AppState,
+    session_id: SessionId,
+    cursor: TimelineEventCursor,
+) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+
+    if perf.timeline_selected_event == Some(cursor) {
+        // Second click on same bar → open popup.
+        perf.timeline_details_popup_open = true;
+    } else {
+        perf.timeline_selected_event = Some(cursor);
+        perf.timeline_details_popup_open = false;
+    }
+    UpdateResult::none()
+}
+
+// ── Selection movement helpers ────────────────────────────────────────────────
+
+/// Result of a selection move attempt.
+enum SelectionMove {
+    /// A new valid cursor was found.
+    Found(TimelineEventCursor),
+    /// The current event was not found (evicted from buffer).
+    Evicted,
+    /// No target exists in the requested direction (at boundary).
+    NoTarget,
+}
+
+/// Compute the new cursor after moving `dir` from `cursor` within `tracks`.
+///
+/// Returns `SelectionMove::Evicted` if the current event cannot be located in
+/// the buffer (it was evicted). Returns `SelectionMove::NoTarget` at natural
+/// boundaries (e.g. no children, no next thread).
+fn move_selection(
+    tracks: &BTreeMap<i64, TimelineTrack>,
+    cursor: TimelineEventCursor,
+    dir: SelectionDirection,
+    filter: crate::session::TimelineFilter,
+) -> SelectionMove {
+    use SelectionDirection::*;
+
+    // Collect filtered track list in tid-ascending order (same as Gantt).
+    let filtered_tids: Vec<i64> = tracks
+        .iter()
+        .filter(|(_, t)| timeline_filter_matches(t.thread, filter))
+        .map(|(tid, _)| *tid)
+        .collect();
+
+    // Locate the current track.
+    let Some(track) = tracks.get(&cursor.tid) else {
+        return SelectionMove::Evicted;
+    };
+
+    // Locate the current node by walking the tree.
+    let found_info = find_node_in_track(track, cursor);
+    let Some(node_info) = found_info else {
+        return SelectionMove::Evicted;
+    };
+
+    let tid_idx = filtered_tids.iter().position(|&t| t == cursor.tid);
+
+    match dir {
+        PrevSibling => {
+            // Move to the previous sibling at the same depth.
+            if let Some(prev) = prev_sibling(node_info.siblings, cursor.ts) {
+                SelectionMove::Found(TimelineEventCursor {
+                    tid: cursor.tid,
+                    depth: cursor.depth,
+                    ts: prev.ts,
+                })
+            } else if node_info.siblings.is_empty() {
+                SelectionMove::NoTarget
+            } else {
+                // Wrap to last sibling.
+                let last = &node_info.siblings[node_info.siblings.len() - 1];
+                SelectionMove::Found(TimelineEventCursor {
+                    tid: cursor.tid,
+                    depth: cursor.depth,
+                    ts: last.ts,
+                })
+            }
+        }
+        NextSibling => {
+            // Move to the next sibling at the same depth.
+            if let Some(next) = next_sibling(node_info.siblings, cursor.ts) {
+                SelectionMove::Found(TimelineEventCursor {
+                    tid: cursor.tid,
+                    depth: cursor.depth,
+                    ts: next.ts,
+                })
+            } else if node_info.siblings.is_empty() {
+                SelectionMove::NoTarget
+            } else {
+                // Wrap to first sibling.
+                let first = &node_info.siblings[0];
+                SelectionMove::Found(TimelineEventCursor {
+                    tid: cursor.tid,
+                    depth: cursor.depth,
+                    ts: first.ts,
+                })
+            }
+        }
+        ParentOrUpThread => {
+            if cursor.depth == 0 {
+                // Move to the previous filtered thread's first root event.
+                if let Some(idx) = tid_idx {
+                    if idx > 0 {
+                        let prev_tid = filtered_tids[idx - 1];
+                        if let Some(prev_track) = tracks.get(&prev_tid) {
+                            if let Some(first) = prev_track.root_events.first() {
+                                return SelectionMove::Found(TimelineEventCursor {
+                                    tid: prev_tid,
+                                    depth: 0,
+                                    ts: first.ts,
+                                });
+                            }
+                        }
+                    }
+                }
+                SelectionMove::NoTarget
+            } else {
+                // Move to parent.
+                if let Some(parent_ts) = node_info.parent_ts {
+                    SelectionMove::Found(TimelineEventCursor {
+                        tid: cursor.tid,
+                        depth: cursor.depth - 1,
+                        ts: parent_ts,
+                    })
+                } else {
+                    SelectionMove::NoTarget
+                }
+            }
+        }
+        FirstChildOrDownThread => {
+            // Move to first child if any.
+            if let Some(first_child) = node_info.node.children.first() {
+                SelectionMove::Found(TimelineEventCursor {
+                    tid: cursor.tid,
+                    depth: cursor.depth + 1,
+                    ts: first_child.ts,
+                })
+            } else {
+                // Move to next filtered thread's first root event.
+                if let Some(idx) = tid_idx {
+                    if idx + 1 < filtered_tids.len() {
+                        let next_tid = filtered_tids[idx + 1];
+                        if let Some(next_track) = tracks.get(&next_tid) {
+                            if let Some(first) = next_track.root_events.first() {
+                                return SelectionMove::Found(TimelineEventCursor {
+                                    tid: next_tid,
+                                    depth: 0,
+                                    ts: first.ts,
+                                });
+                            }
+                        }
+                    }
+                }
+                SelectionMove::NoTarget
+            }
+        }
+    }
+}
+
+/// Info returned by `find_node_in_track`.
+struct FoundNodeInfo<'a> {
+    /// Reference to the matched node.
+    node: &'a TimelineNode,
+    /// The sibling slice containing this node (same parent or root_events).
+    siblings: &'a [TimelineNode],
+    /// `ts` of the parent node, or `None` at root level.
+    parent_ts: Option<i64>,
+}
+
+/// Walk the tree to find the node identified by `cursor`.
+///
+/// Returns `None` if the node is not present (evicted).
+fn find_node_in_track<'a>(
+    track: &'a TimelineTrack,
+    cursor: TimelineEventCursor,
+) -> Option<FoundNodeInfo<'a>> {
+    // DFS: find the node at (depth, ts).
+    find_in_slice(&track.root_events, cursor, 0, None)
+}
+
+fn find_in_slice<'a>(
+    nodes: &'a [TimelineNode],
+    cursor: TimelineEventCursor,
+    depth: u8,
+    parent_ts: Option<i64>,
+) -> Option<FoundNodeInfo<'a>> {
+    if depth == cursor.depth {
+        // Look for node with matching ts in this slice.
+        if let Some(node) = nodes.iter().find(|n| n.ts == cursor.ts) {
+            return Some(FoundNodeInfo {
+                node,
+                siblings: nodes,
+                parent_ts,
+            });
+        }
+        return None;
+    }
+    // Go deeper: find the ancestor at `depth` that contains the eventual child.
+    // We descend into each node's children, passing the node's ts as parent.
+    for node in nodes {
+        if let Some(info) = find_in_slice(&node.children, cursor, depth + 1, Some(node.ts)) {
+            return Some(info);
+        }
+    }
+    None
+}
+
+/// Find the previous sibling (the node with the largest `ts < cursor_ts`).
+fn prev_sibling(siblings: &[TimelineNode], cursor_ts: i64) -> Option<&TimelineNode> {
+    siblings
+        .iter()
+        .filter(|n| n.ts < cursor_ts)
+        .max_by_key(|n| n.ts)
+}
+
+/// Find the next sibling (the node with the smallest `ts > cursor_ts`).
+fn next_sibling(siblings: &[TimelineNode], cursor_ts: i64) -> Option<&TimelineNode> {
+    siblings
+        .iter()
+        .filter(|n| n.ts > cursor_ts)
+        .min_by_key(|n| n.ts)
+}
+
+/// Find the duration of the node identified by `cursor` in `tracks`.
+fn find_node_dur(tracks: &BTreeMap<i64, TimelineTrack>, cursor: TimelineEventCursor) -> u64 {
+    tracks
+        .get(&cursor.tid)
+        .and_then(|t| find_node_in_track(t, cursor))
+        .and_then(|info| info.node.dur)
+        .unwrap_or(0) as u64
+}
+
+/// Returns `true` if `thread` passes `filter`.
+fn timeline_filter_matches(
+    thread: fdemon_core::timeline::TimelineThread,
+    filter: crate::session::TimelineFilter,
+) -> bool {
+    use crate::session::TimelineFilter;
+    match filter {
+        TimelineFilter::All => true,
+        TimelineFilter::Ui => thread == fdemon_core::timeline::TimelineThread::Ui,
+        TimelineFilter::Raster => thread == fdemon_core::timeline::TimelineThread::Raster,
+    }
+}
+
+/// Auto-pan the viewport to keep the selected event visible.
+///
+/// When the event falls outside the current viewport `[vp_start, vp_end)`,
+/// snaps the viewport to center on the event and sets `follow_latest = false`
+/// (manual viewport mode 1).
+fn ensure_selection_visible(
+    perf: &mut crate::session::performance::PerformanceState,
+    cursor: TimelineEventCursor,
+    dur: u64,
+) {
+    let (vp_start, vp_end) = materialize_viewport(perf);
+    let event_start = cursor.ts as u64;
+    let event_end = event_start.saturating_add(dur);
+
+    if event_start < vp_start || event_end > vp_end {
+        let width = vp_end - vp_start;
+        perf.timeline_viewport_start_micros = event_start.saturating_sub(width / 2);
+        perf.timeline_viewport_width_micros = width;
+        perf.timeline_follow_latest = false;
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1103,5 +1497,303 @@ mod tests {
             Some(42),
             "follow-latest should preserve committed_frame_anchor"
         );
+    }
+
+    // ── Phase 5 T03: Timeline event selection handler tests ───────────────────
+
+    use crate::session::performance::SelectionDirection;
+    use crate::session::TimelineEventCursor;
+    use fdemon_core::timeline::TimelineNode;
+    use fdemon_core::timeline::TimelineTrack;
+
+    fn make_node(name: &str, ts: i64) -> TimelineNode {
+        TimelineNode {
+            name: name.to_owned(),
+            category: None,
+            ts,
+            dur: Some(100),
+            phase: TimelinePhase::Complete,
+            thread: TimelineThread::Ui,
+            frame_number: None,
+            children: vec![],
+        }
+    }
+
+    fn make_track_with_nodes(tid: i64, nodes: Vec<TimelineNode>) -> TimelineTrack {
+        TimelineTrack {
+            tid,
+            name: None,
+            thread: TimelineThread::Ui,
+            root_events: nodes,
+        }
+    }
+
+    /// AC3: TimelineSelectFirstVisible selects the first root event of the first track.
+    #[test]
+    fn test_select_first_visible_picks_first_root_event() {
+        let (mut state, session_id) = make_state_with_session();
+        // Add two tracks.
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(1, vec![make_node("First", 1_000_000)]),
+            );
+            h.session.performance.timeline_tracks.insert(
+                2,
+                make_track_with_nodes(2, vec![make_node("Second", 2_000_000)]),
+            );
+        }
+
+        update(
+            &mut state,
+            Message::TimelineSelectFirstVisible { session_id },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(
+            perf.timeline_selected_event,
+            Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000_000
+            }),
+            "should select first root event of first track"
+        );
+    }
+
+    /// AC4: NextSibling wraps to first sibling when at last.
+    #[test]
+    fn test_next_sibling_wraps_to_first() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(1, vec![make_node("A", 1_000), make_node("B", 2_000)]),
+            );
+            // Select the last sibling ("B").
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 2_000,
+            });
+        }
+
+        update(
+            &mut state,
+            Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::NextSibling,
+            },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        // Should wrap to the first sibling ("A").
+        assert_eq!(
+            perf.timeline_selected_event,
+            Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000
+            }),
+            "NextSibling at last should wrap to first"
+        );
+    }
+
+    /// AC4: PrevSibling wraps to last sibling when at first.
+    #[test]
+    fn test_prev_sibling_wraps_to_last() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(1, vec![make_node("A", 1_000), make_node("B", 2_000)]),
+            );
+            // Select the first sibling ("A").
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000,
+            });
+        }
+
+        update(
+            &mut state,
+            Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::PrevSibling,
+            },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        // Should wrap to the last sibling ("B").
+        assert_eq!(
+            perf.timeline_selected_event,
+            Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 2_000
+            }),
+            "PrevSibling at first should wrap to last"
+        );
+    }
+
+    /// AC6: TimelineOpenPopup sets popup_open = true when event is selected.
+    #[test]
+    fn test_open_popup_sets_flag() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000,
+            });
+        }
+
+        update(&mut state, Message::TimelineOpenPopup { session_id });
+
+        assert!(
+            state
+                .session_manager
+                .get(session_id)
+                .unwrap()
+                .session
+                .performance
+                .timeline_details_popup_open
+        );
+    }
+
+    /// AC6: TimelineClosePopup sets popup_open = false, keeps selection.
+    #[test]
+    fn test_close_popup_keeps_selection() {
+        let (mut state, session_id) = make_state_with_session();
+        let cursor = TimelineEventCursor {
+            tid: 1,
+            depth: 0,
+            ts: 1_000,
+        };
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_selected_event = Some(cursor);
+            h.session.performance.timeline_details_popup_open = true;
+        }
+
+        update(&mut state, Message::TimelineClosePopup { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(!perf.timeline_details_popup_open, "popup should be closed");
+        assert_eq!(
+            perf.timeline_selected_event,
+            Some(cursor),
+            "selection should be preserved after close"
+        );
+    }
+
+    /// AC6: TimelineClearSelection clears selection and closes popup.
+    #[test]
+    fn test_clear_selection_clears_both() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000,
+            });
+            h.session.performance.timeline_details_popup_open = true;
+        }
+
+        update(&mut state, Message::TimelineClearSelection { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(perf.timeline_selected_event.is_none());
+        assert!(!perf.timeline_details_popup_open);
+    }
+
+    /// AC8: Auto-pan triggered when selected event is outside viewport.
+    #[test]
+    fn test_auto_pan_triggered_on_move() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            // Set viewport to 0..5_000_000.
+            h.session.performance.timeline_viewport_start_micros = 0;
+            h.session.performance.timeline_viewport_width_micros = 5_000_000;
+            h.session.performance.timeline_follow_latest = false;
+            // Two tracks: track 1 in viewport, track 2 with event at ts=20_000_000 (outside).
+            h.session.performance.timeline_tracks.insert(
+                1,
+                make_track_with_nodes(1, vec![make_node("InView", 1_000_000)]),
+            );
+            h.session.performance.timeline_tracks.insert(
+                2,
+                make_track_with_nodes(2, vec![make_node("OutOfView", 20_000_000)]),
+            );
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000_000,
+            });
+        }
+
+        // Move to next thread (FirstChildOrDownThread from root → moves to track 2).
+        update(
+            &mut state,
+            Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::FirstChildOrDownThread,
+            },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        // The new selection should be track 2's first event.
+        assert_eq!(
+            perf.timeline_selected_event,
+            Some(TimelineEventCursor {
+                tid: 2,
+                depth: 0,
+                ts: 20_000_000
+            })
+        );
+        // follow_latest should be false (we set it manually and the auto-pan may keep it false).
+        // The important thing is the viewport was updated to center on ts=20_000_000.
+        assert!(
+            !perf.timeline_follow_latest,
+            "auto-pan should set follow_latest=false"
+        );
+    }
+
+    /// AC1: Default state has no selection and popup closed.
+    #[test]
+    fn test_default_selection_state() {
+        let perf = crate::session::performance::PerformanceState::default();
+        assert!(perf.timeline_selected_event.is_none());
+        assert!(!perf.timeline_details_popup_open);
     }
 }

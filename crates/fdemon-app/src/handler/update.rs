@@ -2489,6 +2489,26 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             devtools::performance::handle_follow_latest(state, session_id)
         }
 
+        // ── Phase 5 T03: Timeline event selection ─────────────────────────────
+        Message::TimelineSelectFirstVisible { session_id } => {
+            devtools::performance::handle_select_first_visible(state, session_id)
+        }
+        Message::TimelineMoveSelection { session_id, dir } => {
+            devtools::performance::handle_move_selection(state, session_id, dir)
+        }
+        Message::TimelineOpenPopup { session_id } => {
+            devtools::performance::handle_open_popup(state, session_id)
+        }
+        Message::TimelineClosePopup { session_id } => {
+            devtools::performance::handle_close_popup(state, session_id)
+        }
+        Message::TimelineClearSelection { session_id } => {
+            devtools::performance::handle_clear_selection(state, session_id)
+        }
+        Message::TimelineSelectAt { session_id, cursor } => {
+            devtools::performance::handle_select_at(state, session_id, cursor)
+        }
+
         Message::VmServiceTimelineMonitoringStarted {
             session_id,
             timeline_shutdown_tx,

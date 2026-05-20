@@ -19,7 +19,7 @@
 use super::{matches_filter, render_gantt, render_time_axis_pub};
 // THREAD_LABEL_WIDTH is defined in the parent timeline_events module (super::super)
 use super::super::THREAD_LABEL_WIDTH;
-use fdemon_app::session::{PerformanceState, TimelineFilter};
+use fdemon_app::session::{PerformanceState, TimelineEventCursor, TimelineFilter};
 use fdemon_core::timeline::{TimelineNode, TimelinePhase, TimelineThread, TimelineTrack};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -787,6 +787,105 @@ fn gantt_renders_paused_indicator_when_not_follow_latest() {
     assert!(
         text.contains("PAUSED"),
         "expected 'PAUSED' indicator in the buffer when follow_latest=false, got:\n{text}"
+    );
+}
+
+// ── Phase 5 T03: Selection highlight tests ────────────────────────────────────
+
+/// AC10: When an event is selected, the corresponding bar uses a visually
+/// distinct style. We verify the REVERSED modifier appears in the selected bar's
+/// cells, and does NOT appear in an unselected bar's cells.
+#[test]
+fn gantt_selected_bar_has_reversed_modifier() {
+    use ratatui::style::Modifier;
+
+    let ts_selected = 1_000_000i64;
+    let ts_other = 2_000_000i64;
+    let dur = 500_000i64;
+
+    let mut state = make_anchored_state();
+    // Wide viewport so both events are visible.
+    state.frame_anchor_map.insert(1u64, (0u64, 5_000_000u64));
+
+    let mut tracks = BTreeMap::new();
+    tracks.insert(
+        1,
+        make_track(
+            1,
+            TimelineThread::Ui,
+            vec![
+                make_complete_node("Selected", TimelineThread::Ui, ts_selected, dur),
+                make_complete_node("NotSelected", TimelineThread::Ui, ts_other, dur),
+            ],
+        ),
+    );
+    state.timeline_tracks = tracks;
+    state.timeline_selected_event = Some(TimelineEventCursor {
+        tid: 1,
+        depth: 0,
+        ts: ts_selected,
+    });
+
+    let area = Rect::new(0, 0, 200, 10);
+    let mut buf = Buffer::empty(area);
+    render_gantt(area, &mut buf, &state);
+
+    // Find at least one cell with REVERSED modifier (from the selected bar).
+    let has_reversed = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            if let Some(cell) = buf.cell((x, y)) {
+                cell.style().add_modifier.contains(Modifier::REVERSED)
+            } else {
+                false
+            }
+        });
+
+    assert!(
+        has_reversed,
+        "expected at least one cell with REVERSED modifier for selected bar"
+    );
+}
+
+/// AC10 complement: When no event is selected, no bar has the REVERSED modifier.
+#[test]
+fn gantt_no_reversed_modifier_without_selection() {
+    use ratatui::style::Modifier;
+
+    let ts = 1_000_000i64;
+    let dur = 500_000i64;
+
+    let mut state = make_anchored_state();
+    let mut tracks = BTreeMap::new();
+    tracks.insert(
+        1,
+        make_track(
+            1,
+            TimelineThread::Ui,
+            vec![make_complete_node("NormalBar", TimelineThread::Ui, ts, dur)],
+        ),
+    );
+    state.timeline_tracks = tracks;
+    // No selection.
+    assert!(state.timeline_selected_event.is_none());
+
+    let area = Rect::new(0, 0, 200, 10);
+    let mut buf = Buffer::empty(area);
+    render_gantt(area, &mut buf, &state);
+
+    let has_reversed = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            if let Some(cell) = buf.cell((x, y)) {
+                cell.style().add_modifier.contains(Modifier::REVERSED)
+            } else {
+                false
+            }
+        });
+
+    assert!(
+        !has_reversed,
+        "expected NO REVERSED modifier when no event is selected"
     );
 }
 

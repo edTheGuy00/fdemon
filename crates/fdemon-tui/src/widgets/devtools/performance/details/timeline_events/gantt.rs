@@ -9,7 +9,7 @@
 //! keeping this file under the 800-line ceiling so Phase 5 overlay additions
 //! can land in T03/T04.
 
-use fdemon_app::session::{PerformanceState, TimelineFilter};
+use fdemon_app::session::{PerformanceState, TimelineEventCursor, TimelineFilter};
 use fdemon_core::timeline::{TimelineNode, TimelineThread, TimelineTrack};
 use ratatui::{
     buffer::Buffer,
@@ -159,7 +159,15 @@ pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceStat
     for (row_idx, (tid, track)) in visible_tracks.iter().enumerate() {
         let row_area = chunks[row_idx + 1]; // offset by 1 (time axis)
         let label = build_thread_label(**tid, track, &state.timeline_thread_name_map);
-        render_thread_row(row_area, buf, track, &label, vp_start, vp_end);
+        render_thread_row(
+            row_area,
+            buf,
+            track,
+            &label,
+            vp_start,
+            vp_end,
+            state.timeline_selected_event,
+        );
     }
 
     // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
@@ -188,6 +196,7 @@ fn build_thread_label(
 // ── Thread row renderer ───────────────────────────────────────────────────────
 
 /// Render a single thread row: label column on the left, event bars on the right.
+#[allow(clippy::too_many_arguments)]
 fn render_thread_row(
     area: Rect,
     buf: &mut Buffer,
@@ -195,6 +204,7 @@ fn render_thread_row(
     label: &str,
     vp_start: u64,
     vp_end: u64,
+    selected: Option<TimelineEventCursor>,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -232,6 +242,8 @@ fn render_thread_row(
             0,
             canvas_start_x,
             canvas_width,
+            track.tid,
+            selected,
         );
     }
 }
@@ -244,12 +256,18 @@ fn render_thread_row(
 /// below their parent (y += depth + 1). Rendering stops when `depth >= MAX_DEPTH`
 /// or `y >= area.bottom()`.
 ///
+/// When `selected` matches this node (same `tid`, `depth`, and `ts`), the bar
+/// is rendered with a selection highlight: reverse-video `▏` markers on the
+/// leftmost and rightmost cells, and bold/reversed modifier on the label.
+///
 /// # Arguments
 /// * `area`          — full thread row area (all THREAD_ROW_HEIGHT lines)
 /// * `vp_start/end`  — viewport bounds in microseconds
 /// * `depth`         — nesting depth (0 = root)
 /// * `canvas_x`      — x offset of the time canvas (= area.x + THREAD_LABEL_WIDTH)
 /// * `canvas_width`  — width of the time canvas in columns
+/// * `tid`           — thread id of the owning track (for selection matching)
+/// * `selected`      — currently selected event cursor, if any
 #[allow(clippy::too_many_arguments)]
 fn render_bar(
     area: Rect,
@@ -260,6 +278,8 @@ fn render_bar(
     depth: u8,
     canvas_x: u16,
     canvas_width: u16,
+    tid: i64,
+    selected: Option<TimelineEventCursor>,
 ) {
     if depth >= MAX_DEPTH {
         return;
@@ -269,6 +289,23 @@ fn render_bar(
     let dur = node.dur.unwrap_or(0) as u64;
 
     let Some((col_off, col_width)) = clip_bar(ts, dur, vp_start, vp_end, canvas_width) else {
+        // Even if this bar is clipped, recurse into children (they may be visible).
+        if depth + 1 < MAX_DEPTH {
+            for child in &node.children {
+                render_bar(
+                    area,
+                    buf,
+                    child,
+                    vp_start,
+                    vp_end,
+                    depth + 1,
+                    canvas_x,
+                    canvas_width,
+                    tid,
+                    selected,
+                );
+            }
+        }
         return;
     };
 
@@ -277,27 +314,72 @@ fn render_bar(
         return;
     }
 
+    // Determine whether this bar is selected.
+    let is_selected = selected.is_some_and(|c| c.tid == tid && c.depth == depth && c.ts == node.ts);
+
     let color = palette::bar_color(node.thread, depth);
     let x = canvas_x + col_off;
     let bar_width = col_width.max(MIN_BAR_WIDTH);
 
-    // Fill the bar background
+    // Fill the bar background.
+    let (fg_color, bg_color, extra_modifier) = if is_selected {
+        // Selection highlight: bright white fg on the bar's color + reversed.
+        (
+            Color::White,
+            Color::White,
+            Modifier::REVERSED | Modifier::BOLD,
+        )
+    } else {
+        (Color::White, color, Modifier::empty())
+    };
+
     for dx in 0..bar_width {
         let bx = x + dx;
         if bx >= area.x + area.width {
             break;
         }
         if let Some(cell) = buf.cell_mut((bx, y)) {
-            cell.set_bg(color);
-            cell.set_fg(Color::White);
+            cell.set_bg(bg_color);
+            cell.set_fg(fg_color);
+            if !extra_modifier.is_empty() {
+                let existing = cell.style();
+                cell.set_style(existing.add_modifier(extra_modifier));
+            }
         }
     }
 
-    // Render label inside the bar if at least 4 columns wide
+    // Selection markers: `▏` at left edge and `▕` at right edge of bar.
+    if is_selected {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_symbol("\u{258f}"); // ▏ (thin left block)
+            cell.set_fg(Color::White);
+            cell.set_bg(color);
+        }
+        let right_x = (x + bar_width).saturating_sub(1);
+        if right_x > x && right_x < area.x + area.width {
+            if let Some(cell) = buf.cell_mut((right_x, y)) {
+                cell.set_symbol("\u{2595}"); // ▕ (thin right block)
+                cell.set_fg(Color::White);
+                cell.set_bg(color);
+            }
+        }
+    }
+
+    // Render label inside the bar if at least 4 columns wide.
+    // Both selected and unselected bars use the same label start and width logic.
+    let label_start = x + 1;
+    let label_max_width = bar_width.saturating_sub(2);
     if bar_width >= 4 {
-        let label = truncate_with_ellipsis(&node.name, bar_width.saturating_sub(2) as usize);
-        let label_style = Style::default().fg(Color::White).bg(color);
-        let mut lx = x + 1;
+        let label = truncate_with_ellipsis(&node.name, label_max_width as usize);
+        let label_style = if is_selected {
+            Style::default()
+                .fg(color)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            Style::default().fg(Color::White).bg(color)
+        };
+        let mut lx = label_start;
         for ch in label.chars() {
             if lx >= x + bar_width || lx >= area.x + area.width {
                 break;
@@ -310,7 +392,7 @@ fn render_bar(
         }
     }
 
-    // Recurse into children (one row down)
+    // Recurse into children (one row down).
     if depth + 1 < MAX_DEPTH {
         for child in &node.children {
             render_bar(
@@ -322,6 +404,8 @@ fn render_bar(
                 depth + 1,
                 canvas_x,
                 canvas_width,
+                tid,
+                selected,
             );
         }
     }

@@ -2,7 +2,7 @@
 
 use crate::input_key::InputKey;
 use crate::message::{InspectorNav, Message, NetworkNav};
-use crate::session::performance::PerfSection;
+use crate::session::performance::{PerfSection, SelectionDirection};
 use crate::session::NetworkDetailTab;
 use crate::state::{AppState, DevToolsPanel, PerfDetailsTab, UiMode};
 
@@ -456,6 +456,31 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let active_id = state.session_manager.selected().map(|h| h.session.id);
     let is_busy = state.session_manager.any_session_busy();
 
+    // ── Phase 5 T03: Timeline Events tab selection context ────────────────────
+    //
+    // Pre-computed at function entry so they are available in both the
+    // `if in_performance` early-return block AND the main `match key` block.
+    // Guards in the performance block AND in the final match reference these.
+    let on_timeline_tab = in_performance
+        && state
+            .session_manager
+            .selected()
+            .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+            .map(|h| h.session.performance.details_tab)
+            .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+    let has_selection = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_selected_event.is_some())
+            .unwrap_or(false);
+    let popup_open = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_details_popup_open)
+            .unwrap_or(false);
+
     // ── Network filter input mode ─────────────────────────────────────────────
     // When filter input is active, route keys to the filter buffer before any
     // other Network panel binding so no regular network key leaks through.
@@ -487,6 +512,39 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     // Left/Right (frame selection) and `s` (sort toggle) remain in the main
     // match below with their `in_performance` guards — they are not moved here.
     if in_performance {
+        // ── Timeline popup-first Esc handling ─────────────────────────────────
+        //
+        // Intercept Esc when the popup is open so the popup closes before the
+        // outer Esc handler (deselect frame / DevToolsEscape) fires.
+        if matches!(key, InputKey::Esc) {
+            if popup_open {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineClosePopup { session_id });
+                }
+            } else if has_selection {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineClearSelection { session_id });
+                }
+            }
+            // Falls through to the outer Esc handler (deselect frame / DevToolsEscape).
+        }
+
+        // ── Timeline Enter handling ────────────────────────────────────────────
+        //
+        // When on the Timeline Events tab:
+        //   - With selection and popup closed → open popup.
+        //   - Without selection → select first visible event.
+        // Falls through to the outer Enter handler when not on TimelineEvents tab.
+        if matches!(key, InputKey::Enter) && on_timeline_tab {
+            if let Some(session_id) = active_id {
+                if has_selection && !popup_open {
+                    return Some(Message::TimelineOpenPopup { session_id });
+                } else if !has_selection {
+                    return Some(Message::TimelineSelectFirstVisible { session_id });
+                }
+            }
+        }
+
         // Ctrl+C and Esc must NOT be intercepted here — they are global and
         // handled by the main match below.
         match key {
@@ -506,6 +564,28 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     .map(|h| h.session.performance.focused_section.prev())
                     .unwrap_or_default();
                 return Some(Message::PerfFocusSection(prev));
+            }
+
+            // ── Selection depth/thread nav (Drift #6: MUST appear before PerfScrollUp/Down) ──
+            //
+            // When on the Timeline Events tab with an event selected, ↑/↓/j/k move
+            // the selection cursor (parent/child/thread). Without a selection, these
+            // fall through to the PerfScrollUp/PerfScrollDown arms below.
+            InputKey::Up | InputKey::Char('k') if has_selection => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineMoveSelection {
+                        session_id,
+                        dir: SelectionDirection::ParentOrUpThread,
+                    });
+                }
+            }
+            InputKey::Down | InputKey::Char('j') if has_selection => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineMoveSelection {
+                        session_id,
+                        dir: SelectionDirection::FirstChildOrDownThread,
+                    });
+                }
             }
 
             // ── Row / bar scroll ──────────────────────────────────────────────
@@ -868,41 +948,42 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // ── Performance panel frame navigation ────────────────────────────────
         //
-        // Left and Right navigate between frames in the bar chart OR pan the
-        // Timeline Events Gantt, depending on which tab is focused. (Drift #3)
+        // Left and Right navigate the Timeline Events Gantt depending on selection
+        // state (T03), pan the Gantt without selection (T01), or navigate frames
+        // in the bar chart when not on the TimelineEvents tab. (Drift #3 + T03)
         //
-        // Priority order (both arms share the `in_performance` guard):
-        //   1. If `Details/TimelineEvents` tab is focused → pan the Gantt.
-        //      T03 will refine this to gate on `selected_event.is_none()` so
-        //      that ←/→ moves event selection instead of panning when an event
-        //      is selected. Until T03 lands, ←/→ always pans on TimelineEvents.
-        //   2. Otherwise → navigate frame selection (SelectPerformanceFrame).
+        // Priority order (all arms share the `in_performance` guard, evaluated
+        // in order by Rust):
+        //   1. `has_selection && on_timeline_tab` → sibling selection nav (T03).
+        //   2. `!has_selection && on_timeline_tab` → pan the Gantt (T01).
+        //   3. Otherwise → navigate frame selection (SelectPerformanceFrame).
         //
-        // The `Left`/`Right` arms for the Timeline-Events tab MUST appear BEFORE
-        // the unconditional `SelectPerformanceFrame` arm so the tab guard fires
-        // first. Rust match arms are evaluated in order. (Drift #3)
-        InputKey::Left
-            if in_performance
-                && state
-                    .session_manager
-                    .selected()
-                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
-                    .map(|h| h.session.performance.details_tab)
-                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents) =>
-        {
+        // `has_selection` and `on_timeline_tab` were computed before this match
+        // block and are captured by the arm guards.
+
+        // 1a. Left with selection → PrevSibling.
+        InputKey::Left if in_performance && has_selection => {
+            active_id.map(|session_id| Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::PrevSibling,
+            })
+        }
+        // 1b. Right with selection → NextSibling.
+        InputKey::Right if in_performance && has_selection => {
+            active_id.map(|session_id| Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::NextSibling,
+            })
+        }
+        // 2a. Left without selection on TimelineEvents tab → pan left.
+        InputKey::Left if in_performance && on_timeline_tab => {
             active_id.map(|session_id| Message::TimelinePanLeft { session_id })
         }
-        InputKey::Right
-            if in_performance
-                && state
-                    .session_manager
-                    .selected()
-                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
-                    .map(|h| h.session.performance.details_tab)
-                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents) =>
-        {
+        // 2b. Right without selection on TimelineEvents tab → pan right.
+        InputKey::Right if in_performance && on_timeline_tab => {
             active_id.map(|session_id| Message::TimelinePanRight { session_id })
         }
+        // 3. Left/Right on other Performance tabs → frame selection.
         InputKey::Left if in_performance => Some(Message::SelectPerformanceFrame {
             index: state
                 .session_manager
@@ -3064,6 +3145,107 @@ mod timeline_pan_zoom_key_tests {
         assert!(
             matches!(msg, Some(Message::TimelineFollowLatest { .. })),
             "End on TimelineEvents should emit TimelineFollowLatest, got: {msg:?}"
+        );
+    }
+
+    // ── Phase 5 T03: Key ordering tests (Drift #6) ───────────────────────────
+
+    /// Build a Timeline Events state where `timeline_selected_event` is set.
+    fn make_perf_timeline_events_with_selection() -> AppState {
+        use crate::session::TimelineEventCursor;
+        let mut state = make_perf_timeline_events();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000_000,
+            });
+        }
+        state
+    }
+
+    /// Drift #6: Down on Details/TimelineEvents WITHOUT selection → PerfScrollDown.
+    #[test]
+    fn test_down_on_timeline_events_without_selection_scrolls() {
+        let state = make_perf_timeline_events();
+        // No selection — Down should scroll.
+        let msg = handle_key_devtools(&state, InputKey::Down);
+        assert!(
+            matches!(msg, Some(Message::PerfScrollDown)),
+            "Down on TimelineEvents without selection should emit PerfScrollDown, got: {msg:?}"
+        );
+    }
+
+    /// Drift #6: Down on Details/TimelineEvents WITH selection → TimelineMoveSelection.
+    #[test]
+    fn test_down_on_timeline_events_with_selection_moves_cursor() {
+        use crate::session::performance::SelectionDirection;
+        let state = make_perf_timeline_events_with_selection();
+        let msg = handle_key_devtools(&state, InputKey::Down);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::TimelineMoveSelection {
+                    dir: SelectionDirection::FirstChildOrDownThread,
+                    ..
+                })
+            ),
+            "Down on TimelineEvents with selection should emit TimelineMoveSelection(FirstChildOrDownThread), got: {msg:?}"
+        );
+    }
+
+    /// T03: Left on TimelineEvents WITH selection → TimelineMoveSelection(PrevSibling).
+    #[test]
+    fn test_left_on_timeline_events_with_selection_moves_prev_sibling() {
+        use crate::session::performance::SelectionDirection;
+        let state = make_perf_timeline_events_with_selection();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::TimelineMoveSelection {
+                    dir: SelectionDirection::PrevSibling,
+                    ..
+                })
+            ),
+            "Left on TimelineEvents with selection should emit TimelineMoveSelection(PrevSibling), got: {msg:?}"
+        );
+    }
+
+    /// T03: Left on TimelineEvents WITHOUT selection → TimelinePanLeft.
+    #[test]
+    fn test_left_on_timeline_events_without_selection_pans() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::TimelinePanLeft { .. })),
+            "Left on TimelineEvents without selection should emit TimelinePanLeft, got: {msg:?}"
+        );
+    }
+
+    /// T03: Enter on TimelineEvents WITHOUT selection → TimelineSelectFirstVisible.
+    #[test]
+    fn test_enter_on_timeline_events_without_selection_selects_first() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::TimelineSelectFirstVisible { .. })),
+            "Enter on TimelineEvents without selection should emit TimelineSelectFirstVisible, got: {msg:?}"
+        );
+    }
+
+    /// T03: Enter on TimelineEvents WITH selection (popup closed) → TimelineOpenPopup.
+    #[test]
+    fn test_enter_on_timeline_events_with_selection_opens_popup() {
+        let state = make_perf_timeline_events_with_selection();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::TimelineOpenPopup { .. })),
+            "Enter on TimelineEvents with selection should emit TimelineOpenPopup, got: {msg:?}"
         );
     }
 }
