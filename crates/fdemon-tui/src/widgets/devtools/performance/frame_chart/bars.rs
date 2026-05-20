@@ -71,30 +71,44 @@ impl FrameChart<'_> {
             .take(end_idx - start_idx)
             .collect();
 
-        // Compute y-axis scale based on max elapsed_ms in visible frames
-        let max_ms = visible
+        // Compute y-axis scale: scale to ~1.5× the slowest visible frame so
+        // bars use the chart's full vertical range, with a small floor
+        // (MIN_Y_RANGE_MS) to avoid flat charts when the visible frames are
+        // uniformly tiny. Picking the rounding unit by magnitude keeps axis
+        // labels readable across very different frame rates.
+        let max_ms_observed = visible
             .iter()
             .map(|f| f.elapsed_ms())
-            .fold(MIN_Y_RANGE_MS, f64::max);
-
-        // Round up to nearest 10ms boundary for a clean axis
-        let y_range_ms = (max_ms / 10.0).ceil() * 10.0;
+            .fold(0.0_f64, f64::max);
+        let target = (max_ms_observed * 1.5).max(MIN_Y_RANGE_MS);
+        let unit = if target <= 5.0 {
+            1.0
+        } else if target <= 20.0 {
+            2.0
+        } else {
+            10.0
+        };
+        let y_range_ms = (target / unit).ceil() * unit;
 
         // Each character row represents 2 "half-block" units.
         // Total half-block units available = chart_height * 2.
         let total_half_blocks = (area.height as f64) * 2.0;
 
-        // Budget line y position (in chart row coordinates from top)
-        let budget_frac = BUDGET_LINE_MS / y_range_ms;
-        let budget_row_from_bottom = (budget_frac * total_half_blocks / 2.0).round() as u16;
-        let budget_y = area
-            .bottom()
-            .saturating_sub(1)
-            .saturating_sub(budget_row_from_bottom);
-        let budget_y = budget_y.clamp(area.y, area.bottom().saturating_sub(1));
-
-        // Draw budget dashed line
-        self.render_budget_line(area, buf, budget_y);
+        // Budget line: only render when 16.667ms falls inside the visible range.
+        // When all visible frames are well under the 60-FPS budget (fast app on
+        // a fast device), the line would sit above the chart and just clutter
+        // the view; suppressing it makes more vertical space available for the
+        // bars.
+        if BUDGET_LINE_MS <= y_range_ms {
+            let budget_frac = BUDGET_LINE_MS / y_range_ms;
+            let budget_row_from_bottom = (budget_frac * total_half_blocks / 2.0).round() as u16;
+            let budget_y = area
+                .bottom()
+                .saturating_sub(1)
+                .saturating_sub(budget_row_from_bottom);
+            let budget_y = budget_y.clamp(area.y, area.bottom().saturating_sub(1));
+            self.render_budget_line(area, buf, budget_y);
+        }
 
         // Render each visible frame as a pair of bars
         for (slot, frame) in visible.iter().enumerate() {

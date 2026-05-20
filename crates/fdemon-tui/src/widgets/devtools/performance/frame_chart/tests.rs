@@ -157,16 +157,19 @@ fn test_shader_frame_uses_magenta() {
 
 #[test]
 fn test_budget_line_label_drawn() {
+    // Use a frame whose elapsed_ms is above the 60 FPS budget so the
+    // adaptive y_range_ms expands past BUDGET_LINE_MS (16.667ms) and the
+    // budget line is rendered.
     let mut history = RingBuffer::new(100);
-    history.push(make_frame(1, 5_000, 3_000));
-    let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
+    history.push(make_frame(1, 12_000, 6_000)); // 18ms total — over budget
+    let stats = make_stats(Some(55.0), 1, Some(18.0), 1);
     let hint_cell = Cell::new(0);
     let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
         text.contains("16ms"),
-        "Budget line should contain '16ms' label; buffer: {text:?}"
+        "Budget line should contain '16ms' label when frames exceed budget; buffer: {text:?}"
     );
 }
 
@@ -264,9 +267,11 @@ fn test_frame_count_fits_width() {
 }
 
 #[test]
-fn test_auto_scaling_minimum_range() {
-    // All frames are very short (< 5ms each), y-axis should still be >= 20ms range
-    // The budget line at 16ms should still appear even when all frames are < 5ms
+fn test_auto_scaling_hides_budget_line_for_fast_frames() {
+    // When all visible frames are well under the 60 FPS budget the adaptive
+    // y_range shrinks below BUDGET_LINE_MS, and the budget line is
+    // suppressed so the bars use the full chart height instead of
+    // clustering at the bottom.
     let mut history = RingBuffer::new(100);
     for i in 0..10u64 {
         history.push(make_frame(i, 2_000, 1_000)); // 3ms total
@@ -276,10 +281,9 @@ fn test_auto_scaling_minimum_range() {
     let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
-    // Budget line should still appear because MIN_Y_RANGE_MS = 20ms > 3ms frame time
     assert!(
-        text.contains("16ms"),
-        "Budget line should appear even when all frames are below 16ms; text: {text:?}"
+        !text.contains("16ms"),
+        "Budget line should be suppressed when y_range_ms < BUDGET_LINE_MS; text: {text:?}"
     );
 }
 
@@ -482,9 +486,9 @@ fn frame_chart_in_compact_mode_records_no_regions() {
     let hint_cell = Cell::new(0);
     let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
-    // Compact: height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT (= 4 + 3 = 7).
+    // Compact: height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT (= 2 + 3 = 5).
     let mut regions = MouseRegions::default();
-    let area = Rect::new(0, 0, 80, 5);
+    let area = Rect::new(0, 0, 80, 4);
     let mut buf = Buffer::empty(area);
     {
         let builder = regions.builder();

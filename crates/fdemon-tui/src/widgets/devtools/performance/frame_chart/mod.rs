@@ -35,10 +35,13 @@ pub(super) const DETAIL_PANEL_HEIGHT: u16 = 3;
 pub(super) const CHARS_PER_FRAME: u16 = 3;
 
 /// Minimum bar chart area height below which we skip the bar chart entirely.
-pub(super) const MIN_CHART_HEIGHT: u16 = 4;
+pub(super) const MIN_CHART_HEIGHT: u16 = 2;
 
-/// Minimum y-axis range in milliseconds — prevents flat charts for fast apps.
-pub(super) const MIN_Y_RANGE_MS: f64 = 20.0;
+/// Minimum y-axis range in milliseconds — prevents flat charts when one
+/// outlier frame is much faster than the rest, but small enough that fast apps
+/// (1–3 ms frames) fill the chart proportionally rather than rendering as a
+/// thin strip at the bottom.
+pub(super) const MIN_Y_RANGE_MS: f64 = 4.0;
 
 /// 16.667ms frame budget line (60 FPS).
 pub(super) const BUDGET_LINE_MS: f64 = 16.667;
@@ -131,13 +134,22 @@ impl Widget for FrameChart<'_> {
 
         let total_h = area.height;
 
+        // In dual-pane mode the bottom strip just shows the 1-line aggregate
+        // summary (per-frame detail lives in the Details pane below); reserving
+        // 3 rows for it wastes 2 lines of usable chart space.
+        let detail_h = if self.dual_pane {
+            1
+        } else {
+            DETAIL_PANEL_HEIGHT
+        };
+
         // Compact mode: area is too small for chart + detail panel
-        if total_h < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT {
+        if total_h < MIN_CHART_HEIGHT + detail_h {
             self.render_summary_line(area, buf);
             return;
         }
 
-        let chart_h = total_h - DETAIL_PANEL_HEIGHT;
+        let chart_h = total_h - detail_h;
         let chart_area = Rect {
             x: area.x,
             y: area.y,
@@ -148,7 +160,7 @@ impl Widget for FrameChart<'_> {
             x: area.x,
             y: area.y + chart_h,
             width: area.width,
-            height: DETAIL_PANEL_HEIGHT,
+            height: detail_h,
         };
 
         self.render_bar_chart(chart_area, buf, None);
@@ -175,13 +187,21 @@ impl FrameChart<'_> {
 
         let total_h = area.height;
 
+        // In dual-pane mode the bottom strip just shows the 1-line aggregate
+        // summary; see Widget::render for rationale.
+        let detail_h = if self.dual_pane {
+            1
+        } else {
+            DETAIL_PANEL_HEIGHT
+        };
+
         // Compact mode: area is too small for chart + detail panel — no regions
-        if total_h < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT {
+        if total_h < MIN_CHART_HEIGHT + detail_h {
             self.render_summary_line(area, buf);
             return;
         }
 
-        let chart_h = total_h - DETAIL_PANEL_HEIGHT;
+        let chart_h = total_h - detail_h;
         let chart_area = Rect {
             x: area.x,
             y: area.y,
@@ -192,7 +212,7 @@ impl FrameChart<'_> {
             x: area.x,
             y: area.y + chart_h,
             width: area.width,
-            height: DETAIL_PANEL_HEIGHT,
+            height: detail_h,
         };
 
         // Forward ctx into the bar chart; detail panel is not clickable in v1.
