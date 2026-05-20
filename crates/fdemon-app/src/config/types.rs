@@ -449,7 +449,7 @@ pub struct DevToolsSettings {
     /// The timeline polling task (1 Hz) appends all new Chrome-trace events
     /// from `getVMTimeline` to a `VecDeque` capped at this size. Oldest events
     /// are evicted from the front when the buffer is full.
-    /// Default: 1000 events.
+    /// Default: 10 000 events (~33 seconds of events at 60 FPS).
     #[serde(default = "default_timeline_event_buffer_size")]
     pub timeline_event_buffer_size: usize,
 
@@ -500,7 +500,7 @@ fn default_rebuild_stats_frame_window() -> u32 {
 }
 
 fn default_timeline_event_buffer_size() -> usize {
-    1000
+    10_000
 }
 
 fn default_devtools_panel() -> String {
@@ -1881,7 +1881,7 @@ theme = "default"
         // Phase 3 defaults
         assert!(!settings.auto_enable_rebuild_tracking);
         assert_eq!(settings.rebuild_stats_frame_window, 30);
-        assert_eq!(settings.timeline_event_buffer_size, 1000);
+        assert_eq!(settings.timeline_event_buffer_size, 10_000);
     }
 
     #[test]
