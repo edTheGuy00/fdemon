@@ -43,6 +43,13 @@ impl TimelineFilter {
 /// 30 seconds at 60 FPS — enables meaningful scroll-back.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 1800;
 
+/// Maximum number of entries in [`PerformanceState::frame_anchor_map`].
+///
+/// 2 000 frames ≈ 33 seconds at 60 FPS — enough to cover all frame history
+/// while keeping memory overhead in the tens of KB.  Oldest frame numbers
+/// (smallest keys) are evicted first when the map reaches this cap.
+pub(crate) const FRAME_ANCHOR_MAP_CAP: usize = 2_000;
+
 /// Active section within the Performance DevTools panel.
 ///
 /// Used for `Tab`/`Shift+Tab` navigation between the two sub-sections.
@@ -227,6 +234,13 @@ pub struct PerformanceState {
     /// spawned; handlers silently drop messages whose generation is older than
     /// the current value (stale debounce firings).
     pub frame_anchor_generation: u64,
+
+    /// Persistent map of `frame_number → (vm_ts_start, vm_ts_end)` populated by
+    /// the timeline ingest handler. Survives `timeline_tracks` eviction so that
+    /// anchoring on an older frame still works even after its raw events have
+    /// dropped out of the event buffer. Capped at [`FRAME_ANCHOR_MAP_CAP`] entries
+    /// (oldest frame numbers evicted first when full).
+    pub frame_anchor_map: BTreeMap<u64, (u64, u64)>,
 }
 
 impl Default for PerformanceState {
@@ -258,6 +272,7 @@ impl Default for PerformanceState {
             // Phase 5: Frame-anchored viewport — start unanchored
             committed_frame_anchor: None,
             frame_anchor_generation: 0,
+            frame_anchor_map: BTreeMap::new(),
         }
     }
 }

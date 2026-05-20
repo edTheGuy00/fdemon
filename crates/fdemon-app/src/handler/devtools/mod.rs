@@ -396,13 +396,15 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
 
     // Clear the timeline tracks and thread-name map so the next DevTools entry
     // shows fresh data rather than stale accumulated events.  Also reset the
-    // frame anchor so the user always starts fresh when re-entering DevTools.
+    // frame anchor and persistent anchor map so the user always starts fresh
+    // when re-entering DevTools.
     if let Some(handle) = state.session_manager.selected_mut() {
         let perf = &mut handle.session.performance;
         perf.timeline_tracks.clear();
         perf.timeline_thread_name_map.clear();
         perf.timeline_thread_scroll_offset = 0;
         perf.committed_frame_anchor = None;
+        perf.frame_anchor_map.clear();
     }
 
     // Close the Flutter.RebuiltWidgets gate for all sessions: exiting DevTools
@@ -460,14 +462,15 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
             }
         }
         // Clear accumulated timeline tracks, reset scroll, and clear the
-        // frame anchor so that re-entry to the Performance panel always starts
-        // from a clean (unanchored) state.
+        // frame anchor and persistent anchor map so that re-entry to the
+        // Performance panel always starts from a clean (unanchored) state.
         if let Some(handle) = state.session_manager.selected_mut() {
             let perf = &mut handle.session.performance;
             perf.timeline_tracks.clear();
             perf.timeline_thread_name_map.clear();
             perf.timeline_thread_scroll_offset = 0;
             perf.committed_frame_anchor = None;
+            perf.frame_anchor_map.clear();
         }
     }
 

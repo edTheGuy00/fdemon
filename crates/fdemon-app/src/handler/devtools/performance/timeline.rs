@@ -2,12 +2,15 @@
 //!
 //! Handles the 1-Hz timeline polling event pipeline:
 //! - [`handle_batch`] — build per-thread event trees from the incoming batch,
-//!   merge into existing tracks, update thread-name map, enforce buffer cap.
+//!   merge into existing tracks, update thread-name map, enforce buffer cap,
+//!   and update the persistent `frame_anchor_map`.
 //! - [`handle_cycle_filter`] — cycle the `TimelineFilter` and reset scroll.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use crate::handler::UpdateResult;
+use crate::session::performance::FRAME_ANCHOR_MAP_CAP;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::timeline::{ThreadMetadata, TimelineEvent, TimelineNode, TimelineTrack};
@@ -47,6 +50,33 @@ pub(crate) fn handle_batch(
 
     // 2. Build incremental tracks from this batch.
     let new_tracks = fdemon_core::timeline::build_tracks(&events);
+
+    // 2b. Scan new_tracks for root events with frame_number and update the
+    //     persistent frame_anchor_map before merging (avoids re-scanning the
+    //     entire accumulated buffer).
+    let anchor_map = &mut handle.session.performance.frame_anchor_map;
+    for new_track in new_tracks.values() {
+        for node in &new_track.root_events {
+            if let Some(n) = node.frame_number {
+                let ts = node.ts as u64;
+                let end = (node.ts + node.dur.unwrap_or(0)) as u64;
+                match anchor_map.entry(n) {
+                    Entry::Occupied(mut e) => {
+                        let (s, ee) = e.get_mut();
+                        *s = (*s).min(ts);
+                        *ee = (*ee).max(end);
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert((ts, end));
+                    }
+                }
+            }
+        }
+    }
+    // Cap the anchor map: evict oldest frame numbers (smallest keys) first.
+    while anchor_map.len() > FRAME_ANCHOR_MAP_CAP {
+        anchor_map.pop_first();
+    }
 
     // 3. Merge into existing tracks (append root_events, update thread names).
     let tracks = &mut handle.session.performance.timeline_tracks;
@@ -135,10 +165,11 @@ pub(crate) fn handle_cycle_filter(
 
 #[cfg(test)]
 mod tests {
+    use crate::handler::devtools::handle_switch_panel;
     use crate::handler::update::update;
     use crate::message::Message;
-    use crate::session::performance::TimelineFilter;
-    use crate::state::AppState;
+    use crate::session::performance::{TimelineFilter, FRAME_ANCHOR_MAP_CAP};
+    use crate::state::{AppState, DevToolsPanel};
     use fdemon_core::timeline::{ThreadMetadata, TimelineEvent, TimelinePhase, TimelineThread};
 
     fn test_device() -> fdemon_daemon::Device {
@@ -173,6 +204,26 @@ mod tests {
             ts,
             dur: Some(100),
             frame_number: None,
+        }
+    }
+
+    fn make_frame_event(
+        name: &str,
+        tid: i64,
+        ts: u64,
+        dur: u64,
+        frame_number: u64,
+        thread: TimelineThread,
+    ) -> TimelineEvent {
+        TimelineEvent {
+            name: name.to_string(),
+            category: "Embedder".to_string(),
+            thread,
+            tid,
+            phase: TimelinePhase::Complete,
+            ts,
+            dur: Some(dur),
+            frame_number: Some(frame_number),
         }
     }
 
@@ -452,5 +503,199 @@ mod tests {
             .performance
             .timeline_thread_scroll_offset;
         assert_eq!(offset, 0);
+    }
+
+    // ── frame_anchor_map: population ─────────────────────────────────────────
+
+    /// Task AC: A batch with a Complete event carrying frame_number must populate
+    /// `frame_anchor_map` with the correct `(ts, ts+dur)` range.
+    #[test]
+    fn handle_batch_populates_frame_anchor_map_for_events_with_frame_number() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Frame event: frame_number=7, ts=1_000_000, dur=16_000
+        let events = vec![make_frame_event(
+            "Frame",
+            1,
+            1_000_000,
+            16_000,
+            7,
+            TimelineThread::Ui,
+        )];
+        update(
+            &mut state,
+            Message::TimelineEventsBatchReceived {
+                session_id,
+                events,
+                metadata: vec![],
+            },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.frame_anchor_map.contains_key(&7),
+            "frame_anchor_map should have an entry for frame 7"
+        );
+        let &(ts_start, ts_end) = perf.frame_anchor_map.get(&7).unwrap();
+        assert_eq!(ts_start, 1_000_000, "ts_start should equal event ts");
+        assert_eq!(ts_end, 1_016_000, "ts_end should equal event ts + dur");
+    }
+
+    /// Task AC: Two batches for the same frame_number with different ranges must
+    /// produce a map entry whose range is the union (min ts_start, max ts_end).
+    #[test]
+    fn handle_batch_extends_existing_frame_anchor_range() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // First batch: ts=1_000_000, dur=8_000 → range [1_000_000, 1_008_000]
+        update(
+            &mut state,
+            Message::TimelineEventsBatchReceived {
+                session_id,
+                events: vec![make_frame_event(
+                    "Ui",
+                    1,
+                    1_000_000,
+                    8_000,
+                    42,
+                    TimelineThread::Ui,
+                )],
+                metadata: vec![],
+            },
+        );
+        // Second batch: ts=999_000, dur=20_000 → range [999_000, 1_019_000]
+        // After union: [min(1_000_000, 999_000), max(1_008_000, 1_019_000)] = [999_000, 1_019_000]
+        update(
+            &mut state,
+            Message::TimelineEventsBatchReceived {
+                session_id,
+                events: vec![make_frame_event(
+                    "Raster",
+                    2,
+                    999_000,
+                    20_000,
+                    42,
+                    TimelineThread::Raster,
+                )],
+                metadata: vec![],
+            },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        let &(ts_start, ts_end) = perf
+            .frame_anchor_map
+            .get(&42)
+            .expect("frame 42 must exist in map");
+        assert_eq!(ts_start, 999_000, "ts_start should be the minimum seen");
+        assert_eq!(ts_end, 1_019_000, "ts_end should be the maximum seen");
+    }
+
+    /// Task AC: After inserting FRAME_ANCHOR_MAP_CAP + 5 distinct frames, the map
+    /// must remain at most CAP entries and the oldest (smallest) frame numbers must
+    /// have been evicted.
+    #[test]
+    fn frame_anchor_map_is_capped_at_max() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Send CAP + 5 distinct frame numbers in a single large batch.
+        let total = FRAME_ANCHOR_MAP_CAP + 5;
+        let events: Vec<TimelineEvent> = (0u64..total as u64)
+            .map(|i| make_frame_event("Frame", 1, i * 1_000, 500, i, TimelineThread::Ui))
+            .collect();
+        update(
+            &mut state,
+            Message::TimelineEventsBatchReceived {
+                session_id,
+                events,
+                metadata: vec![],
+            },
+        );
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.frame_anchor_map.len() <= FRAME_ANCHOR_MAP_CAP,
+            "frame_anchor_map must not exceed FRAME_ANCHOR_MAP_CAP={FRAME_ANCHOR_MAP_CAP}, \
+             got {}",
+            perf.frame_anchor_map.len()
+        );
+        // Oldest frames (0..5) should have been evicted; newest (5..total) survive.
+        for i in 0..5u64 {
+            assert!(
+                !perf.frame_anchor_map.contains_key(&i),
+                "oldest frame {i} should have been evicted from the map"
+            );
+        }
+        assert!(
+            perf.frame_anchor_map.contains_key(&(total as u64 - 1)),
+            "most recent frame should still be in the map"
+        );
+    }
+
+    /// Task AC: Leaving the Performance panel (via handle_switch_panel) must clear
+    /// `frame_anchor_map`.
+    #[test]
+    fn frame_anchor_map_resets_on_performance_leave() {
+        let (mut state, session_id) = make_state_with_session();
+
+        // Populate the map with a frame event.
+        update(
+            &mut state,
+            Message::TimelineEventsBatchReceived {
+                session_id,
+                events: vec![make_frame_event(
+                    "Frame",
+                    1,
+                    1_000_000,
+                    16_000,
+                    5,
+                    TimelineThread::Ui,
+                )],
+                metadata: vec![],
+            },
+        );
+
+        // Switch to Performance to simulate being on that panel.
+        // (We need to set the active_panel to Performance first so the leave-logic fires.)
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        assert!(
+            !state
+                .session_manager
+                .get(session_id)
+                .unwrap()
+                .session
+                .performance
+                .frame_anchor_map
+                .is_empty(),
+            "frame_anchor_map should be non-empty before leaving"
+        );
+
+        // Leave Performance — switch to Inspector triggers the clear.
+        handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.frame_anchor_map.is_empty(),
+            "frame_anchor_map must be cleared when leaving the Performance panel"
+        );
     }
 }

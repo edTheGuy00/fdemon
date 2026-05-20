@@ -220,13 +220,17 @@ mod tests {
 
     #[test]
     fn timeline_events_render_hint_updated() {
+        let ts = 1_000_000i64;
+        let dur = 500_000i64;
         let mut state = PerformanceState {
             // Set anchor = 1 so the Gantt renders (not placeholder)
             committed_frame_anchor: Some(1),
             ..Default::default()
         };
-        let ts = 1_000_000i64;
-        let dur = 500_000i64;
+        // Populate frame_anchor_map so the viewport resolves for frame 1.
+        state
+            .frame_anchor_map
+            .insert(1u64, (ts as u64, (ts + dur) as u64));
         let mut tracks = BTreeMap::new();
         tracks.insert(
             1,

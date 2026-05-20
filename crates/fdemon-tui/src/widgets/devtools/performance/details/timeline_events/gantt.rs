@@ -70,14 +70,16 @@ pub(super) fn render_gantt(area: Rect, buf: &mut Buffer, state: &PerformanceStat
         Some(n) => n,
     };
 
-    // Compute the anchored viewport — fails gracefully when the frame was evicted.
+    // Compute the anchored viewport from the persistent frame_anchor_map.
+    // This map survives timeline_tracks eviction so older frames still resolve.
     let (vp_start, vp_end) =
-        match compute_frame_anchored_viewport(&state.timeline_tracks, frame_number) {
+        match compute_frame_anchored_viewport(&state.frame_anchor_map, frame_number) {
             Some(vp) => vp,
             None => {
                 let msg = format!(
-                    "Timeline data not available for frame #{frame_number} \
-                     (may have been evicted from the 1000-event buffer)"
+                    "No timeline data recorded for frame #{frame_number} \
+                     (the frame may pre-date the Performance panel opening, or its \
+                     anchor events lacked args.frame_number — try a more recent frame)"
                 );
                 render_empty_placeholder(area, buf, &msg);
                 // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
@@ -509,13 +511,20 @@ mod tests {
         }
     }
 
-    /// Return a `PerformanceState` with `committed_frame_anchor = Some(1)`.
+    /// Return a `PerformanceState` with `committed_frame_anchor = Some(1)` and a
+    /// pre-populated `frame_anchor_map` entry for frame 1.
     ///
+    /// The map entry covers a wide range [0, 10_000_000) so that tests using any
+    /// reasonable ts/dur values will successfully resolve the anchor viewport.
     /// All test tracks built via `make_complete_node` / `make_track` carry
-    /// `frame_number = Some(1)`, so anchor `1` always resolves to a node.
+    /// `frame_number = Some(1)`, matching this anchor.
     fn make_anchored_state() -> PerformanceState {
+        let mut map = std::collections::BTreeMap::new();
+        // Broad range: ts_start=0, ts_end=10_000_000 (10 seconds)
+        map.insert(1u64, (0u64, 10_000_000u64));
         PerformanceState {
             committed_frame_anchor: Some(1),
+            frame_anchor_map: map,
             ..Default::default()
         }
     }
@@ -695,11 +704,8 @@ mod tests {
 
     #[test]
     fn gantt_filter_ui_hides_raster_rows() {
-        let mut state = PerformanceState {
-            timeline_events_filter: TimelineFilter::Ui,
-            committed_frame_anchor: Some(1),
-            ..Default::default()
-        };
+        let mut state = make_anchored_state();
+        state.timeline_events_filter = TimelineFilter::Ui;
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -749,11 +755,8 @@ mod tests {
 
     #[test]
     fn gantt_filter_raster_hides_ui_rows() {
-        let mut state = PerformanceState {
-            timeline_events_filter: TimelineFilter::Raster,
-            committed_frame_anchor: Some(1),
-            ..Default::default()
-        };
+        let mut state = make_anchored_state();
+        state.timeline_events_filter = TimelineFilter::Raster;
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -803,11 +806,8 @@ mod tests {
 
     #[test]
     fn gantt_filter_all_shows_all_threads() {
-        let mut state = PerformanceState {
-            timeline_events_filter: TimelineFilter::All,
-            committed_frame_anchor: Some(1),
-            ..Default::default()
-        };
+        let mut state = make_anchored_state();
+        state.timeline_events_filter = TimelineFilter::All;
         let ts = 1_000_000i64;
         let dur = 500_000i64;
         let mut tracks = BTreeMap::new();
@@ -1155,19 +1155,17 @@ mod tests {
         );
     }
 
-    /// AC5: When committed_frame_anchor == Some(N) but no matching event exists
-    /// in the tracks, the Gantt should show the "not available" placeholder.
+    /// AC5: When committed_frame_anchor == Some(N) but no entry exists in the
+    /// `frame_anchor_map`, the Gantt should show the "no timeline data recorded"
+    /// placeholder.
     #[test]
     fn render_gantt_shows_not_available_placeholder_when_anchor_missing_from_tracks() {
-        let mut state = PerformanceState::default();
-        // Tracks contain frame 1 but not frame 99.
-        let mut tracks = BTreeMap::new();
-        tracks.insert(
-            1,
-            make_track_with_frame(1, TimelineThread::Ui, 1_000_000, 16_000, Some(1)),
-        );
-        state.timeline_tracks = tracks;
-        state.committed_frame_anchor = Some(99);
+        // frame_anchor_map is empty (default); committed_frame_anchor == Some(99)
+        // means the anchor map has no entry for frame 99.
+        let state = PerformanceState {
+            committed_frame_anchor: Some(99),
+            ..Default::default()
+        };
 
         let area = Rect::new(0, 0, 120, 10);
         let mut buf = Buffer::empty(area);
@@ -1175,8 +1173,8 @@ mod tests {
         let text = collect_text(&buf);
 
         assert!(
-            text.contains("not available") || text.contains("Timeline data"),
-            "expected 'not available' placeholder for missing frame, got:\n{text}"
+            text.contains("No timeline data recorded") || text.contains("timeline data"),
+            "expected 'no timeline data' placeholder for missing frame, got:\n{text}"
         );
     }
 

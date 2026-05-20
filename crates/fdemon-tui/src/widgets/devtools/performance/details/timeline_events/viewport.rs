@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use fdemon_core::timeline::{TimelineNode, TimelineThread, TimelineTrack};
+use fdemon_core::timeline::TimelineTrack;
 
 use super::TIMELINE_VIEWPORT_MICROS;
 
@@ -25,62 +25,35 @@ const ANCHOR_PADDING_MIN_MICROS: u64 = 2_000;
 /// long frame with excessive whitespace.
 const ANCHOR_PADDING_MAX_MICROS: u64 = 50_000;
 
-/// Compute a viewport anchored to the events belonging to `frame_number`.
+/// Compute a viewport anchored to the recorded range for `frame_number`.
 ///
-/// Searches all tracks (UI thread first for stability, then others) for any
-/// root-level [`TimelineNode`] whose `frame_number == Some(frame_number)`.
-/// Uses the first match found.
+/// Looks up `frame_number` in the persistent `frame_anchor_map` which is
+/// populated during timeline event ingestion. Unlike the previous
+/// track-scanning approach, this map survives `timeline_tracks` eviction, so
+/// anchoring on older frames works even after their raw events have aged out
+/// of the event buffer.
 ///
 /// Returns `(vp_start_micros, vp_end_micros)` where:
-/// - `vp_start = ts - padding`
-/// - `vp_end   = ts + dur + padding`
-/// - `padding ≈ 20% of dur`, clamped to [`ANCHOR_PADDING_MIN_MICROS`] ..=
-///   [`ANCHOR_PADDING_MAX_MICROS`].
+/// - `vp_start = ts_start - padding`
+/// - `vp_end   = ts_end   + padding`
+/// - `padding ≈ 20% of (ts_end - ts_start)`, clamped to
+///   [`ANCHOR_PADDING_MIN_MICROS`] ..= [`ANCHOR_PADDING_MAX_MICROS`].
 ///
-/// Returns `None` when no node carrying `frame_number` exists in `tracks`.
+/// Returns `None` when `frame_number` has no entry in `frame_anchor_map`
+/// (the frame pre-dates the Performance panel opening, or its anchor events
+/// lacked `args.frame_number`).
 pub(super) fn compute_frame_anchored_viewport(
-    tracks: &BTreeMap<i64, TimelineTrack>,
+    frame_anchor_map: &BTreeMap<u64, (u64, u64)>,
     frame_number: u64,
 ) -> Option<(u64, u64)> {
-    // Search UI thread first for a stable, canonical frame boundary.
-    let node = find_node_with_frame_number(tracks, frame_number, true)
-        .or_else(|| find_node_with_frame_number(tracks, frame_number, false))?;
-
-    let ts = node.ts as u64;
-    let dur = node.dur.unwrap_or(0) as u64;
-
+    let &(ts_start, ts_end) = frame_anchor_map.get(&frame_number)?;
+    let dur = ts_end.saturating_sub(ts_start);
     let raw_padding = (dur as f64 * ANCHOR_PADDING_FRACTION) as u64;
     let padding = raw_padding.clamp(ANCHOR_PADDING_MIN_MICROS, ANCHOR_PADDING_MAX_MICROS);
-
-    let vp_start = ts.saturating_sub(padding);
-    let vp_end = ts.saturating_add(dur).saturating_add(padding);
-
-    Some((vp_start, vp_end))
-}
-
-/// Walk `tracks` looking for a root-level `TimelineNode` whose
-/// `frame_number == Some(target)`.
-///
-/// When `ui_only` is `true` only tracks classified as [`TimelineThread::Ui`]
-/// are searched; when `false` all tracks (excluding Ui) are searched.
-/// Children are not searched — frame numbers appear on root nodes.
-fn find_node_with_frame_number(
-    tracks: &BTreeMap<i64, TimelineTrack>,
-    target: u64,
-    ui_only: bool,
-) -> Option<&TimelineNode> {
-    for track in tracks.values() {
-        let is_ui = track.thread == TimelineThread::Ui;
-        if ui_only != is_ui {
-            continue;
-        }
-        for node in &track.root_events {
-            if node.frame_number == Some(target) {
-                return Some(node);
-            }
-        }
-    }
-    None
+    Some((
+        ts_start.saturating_sub(padding),
+        ts_end.saturating_add(padding),
+    ))
 }
 
 /// Returns the `(start_micros, end_micros)` viewport bounds based on the
@@ -209,86 +182,48 @@ mod tests {
 
     // ── compute_frame_anchored_viewport ──────────────────────────────────────
 
-    fn make_track_with_frame_event(
-        tid: i64,
-        ts: i64,
-        dur: i64,
-        thread: TimelineThread,
-        frame_number: Option<u64>,
-    ) -> TimelineTrack {
-        TimelineTrack {
-            tid,
-            name: None,
-            thread,
-            root_events: vec![TimelineNode {
-                name: "Frame".to_owned(),
-                category: None,
-                ts,
-                dur: Some(dur),
-                phase: TimelinePhase::Complete,
-                thread,
-                frame_number,
-                children: vec![],
-            }],
-        }
+    /// Helper: build a frame_anchor_map entry `frame_number → (ts, ts+dur)`.
+    fn make_anchor_map(entries: &[(u64, u64, u64)]) -> BTreeMap<u64, (u64, u64)> {
+        entries
+            .iter()
+            .map(|&(frame, ts, dur)| (frame, (ts, ts + dur)))
+            .collect()
     }
 
+    /// Task-specified test: map with `{42: (1_000_000, 1_016_000)}` must produce
+    /// a viewport that covers the frame with padding.
     #[test]
-    fn compute_frame_anchored_viewport_finds_event_by_frame_number() {
-        let mut tracks = BTreeMap::new();
-        // UI thread event at ts=1_000_000, dur=16_000, frame_number=42
-        tracks.insert(
-            1,
-            make_track_with_frame_event(1, 1_000_000, 16_000, TimelineThread::Ui, Some(42)),
-        );
+    fn compute_frame_anchored_viewport_reads_from_map() {
+        // frame 42: ts_start=1_000_000, ts_end=1_016_000, dur=16_000
+        let map = make_anchor_map(&[(42, 1_000_000, 16_000)]);
 
-        let result = compute_frame_anchored_viewport(&tracks, 42);
-        assert!(result.is_some(), "should find frame 42");
+        let result = compute_frame_anchored_viewport(&map, 42);
+        assert!(result.is_some(), "should find frame 42 in the map");
         let (start, end) = result.unwrap();
 
-        // Duration = 16_000µs, padding = max(16_000 * 0.2, 2_000) = max(3_200, 2_000) = 3_200
+        // dur = 16_000µs, padding = max(16_000 * 0.2, 2_000) = max(3_200, 2_000) = 3_200
         // vp_start = 1_000_000 - 3_200 = 996_800
-        // vp_end   = 1_000_000 + 16_000 + 3_200 = 1_019_200
-        assert_eq!(start, 996_800, "start should be ts minus padding");
-        assert_eq!(end, 1_019_200, "end should be ts+dur plus padding");
+        // vp_end   = 1_016_000 + 3_200 = 1_019_200
+        assert_eq!(start, 996_800, "start should be ts_start minus padding");
+        assert_eq!(end, 1_019_200, "end should be ts_end plus padding");
+    }
+
+    /// Task-specified test: empty map → None for any frame.
+    #[test]
+    fn compute_frame_anchored_viewport_returns_none_for_missing_frame() {
+        let map: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+        let result = compute_frame_anchored_viewport(&map, 42);
+        assert!(result.is_none(), "empty map should return None");
     }
 
     #[test]
-    fn compute_frame_anchored_viewport_returns_none_if_frame_not_in_tracks() {
-        let mut tracks = BTreeMap::new();
-        tracks.insert(
-            1,
-            make_track_with_frame_event(1, 1_000_000, 16_000, TimelineThread::Ui, Some(1)),
-        );
-
-        let result = compute_frame_anchored_viewport(&tracks, 99);
+    fn compute_frame_anchored_viewport_returns_none_if_frame_not_in_map() {
+        let map = make_anchor_map(&[(1, 1_000_000, 16_000)]);
+        let result = compute_frame_anchored_viewport(&map, 99);
         assert!(
             result.is_none(),
-            "should return None for a frame number not in any track"
+            "should return None for a frame number not in the map"
         );
-    }
-
-    #[test]
-    fn compute_frame_anchored_viewport_prefers_ui_thread() {
-        let mut tracks = BTreeMap::new();
-        // UI thread event for frame 7 at ts=2_000_000
-        tracks.insert(
-            1,
-            make_track_with_frame_event(1, 2_000_000, 8_000, TimelineThread::Ui, Some(7)),
-        );
-        // Raster thread event for frame 7 at ts=2_010_000
-        tracks.insert(
-            2,
-            make_track_with_frame_event(2, 2_010_000, 8_000, TimelineThread::Raster, Some(7)),
-        );
-
-        let result = compute_frame_anchored_viewport(&tracks, 7);
-        assert!(result.is_some());
-        let (start, _end) = result.unwrap();
-
-        // UI thread ts=2_000_000 should be preferred; padding = max(8000*0.2, 2000) = 2000
-        // vp_start = 2_000_000 - 2_000 = 1_998_000
-        assert_eq!(start, 1_998_000, "UI thread event should be preferred");
     }
 
     // ── compute_viewport ──────────────────────────────────────────────────────
