@@ -8,6 +8,7 @@
 //!
 //! - [`mod.rs`] (this file) — public `render` entry, filter strip orchestration
 //! - [`gantt`] — thread-row layout, bar rendering, depth stacking
+//! - [`minimap`] — 1-row compressed history ribbon with viewport bracket overlay
 //! - [`palette`] — color constants per `TimelineThread` and nesting depth
 //! - [`viewport`] — pure math helpers: viewport bounds, column mapping, bar clipping
 
@@ -20,6 +21,7 @@ use ratatui::{
 };
 
 mod gantt;
+mod minimap;
 mod palette;
 mod viewport;
 
@@ -60,9 +62,20 @@ pub(super) const THREAD_ROW_HEIGHT: u16 = 2;
 /// Filter strip height (1 row).
 const FILTER_STRIP_HEIGHT: u16 = 1;
 
+/// Minimum height required to render both the filter strip and the minimap
+/// without truncation.
+///
+/// Derived from: `FILTER_STRIP_HEIGHT` (1) + `MINIMAP_HEIGHT` (1) = 2.
+const MIN_HEIGHT_FOR_MINIMAP: u16 = FILTER_STRIP_HEIGHT + minimap::MINIMAP_HEIGHT;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Render the Timeline Events tab content area.
+///
+/// Layout (top to bottom):
+/// 1. Filter strip (1 row) — `[All] [UI] [Raster]` selector.
+/// 2. Minimap ribbon (1 row, Phase 5 T02) — compressed history with viewport bracket.
+/// 3. Gantt area (remaining rows) — per-thread event bars and time axis.
 ///
 /// Signature matches the Phase-3 dispatch convention: `(area, buf, state)`.
 pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
@@ -75,14 +88,42 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
         return;
     }
 
+    // Resolve the active viewport once here so both the minimap and the Gantt
+    // use the same (viewport_start, viewport_end) without duplicating logic.
+    let (vp_start, vp_end) = viewport::compute_active_viewport(state);
+
+    if area.height <= MIN_HEIGHT_FOR_MINIMAP {
+        // Not enough room for the minimap — just filter strip + Gantt.
+        let chunks = Layout::vertical([
+            Constraint::Length(FILTER_STRIP_HEIGHT),
+            Constraint::Min(0), // gantt area
+        ])
+        .split(area);
+        render_filter_strip(chunks[0], buf, state);
+        gantt::render_gantt(chunks[1], buf, state);
+        return;
+    }
+
     let chunks = Layout::vertical([
         Constraint::Length(FILTER_STRIP_HEIGHT),
-        Constraint::Min(0), // gantt area
+        Constraint::Length(minimap::MINIMAP_HEIGHT), // Phase 5 T02 — minimap ribbon
+        Constraint::Min(0),                          // gantt area
     ])
     .split(area);
 
     render_filter_strip(chunks[0], buf, state);
-    gantt::render_gantt(chunks[1], buf, state);
+
+    // Minimap: pass resolved viewport bounds; minimap itself is stateless.
+    minimap::render(
+        chunks[1],
+        buf,
+        &state.timeline_tracks,
+        vp_start,
+        vp_end,
+        state.timeline_events_filter,
+    );
+
+    gantt::render_gantt(chunks[2], buf, state);
 }
 
 // ── Filter strip ──────────────────────────────────────────────────────────────
