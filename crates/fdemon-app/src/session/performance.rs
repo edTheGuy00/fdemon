@@ -241,6 +241,35 @@ pub struct PerformanceState {
     /// dropped out of the event buffer. Capped at [`FRAME_ANCHOR_MAP_CAP`] entries
     /// (oldest frame numbers evicted first when full).
     pub frame_anchor_map: BTreeMap<u64, (u64, u64)>,
+
+    // ── Phase 5: Pan/zoom viewport state ─────────────────────────────────────
+    /// Manual viewport start in microseconds.
+    ///
+    /// Honored only when `timeline_follow_latest == false`. When `follow_latest`
+    /// is true, the active viewport is computed from the frame anchor (mode 2)
+    /// or the live-edge fallback (mode 3) per PLAN D2.
+    pub timeline_viewport_start_micros: u64,
+
+    /// Viewport width in microseconds.
+    ///
+    /// Default: [`TIMELINE_VIEWPORT_MICROS`] (5 s). Bounded by
+    /// [`TIMELINE_VIEWPORT_MIN_MICROS`] (100 ms) ..= [`TIMELINE_VIEWPORT_MAX_MICROS`] (60 s).
+    /// This field is always updated together with `timeline_viewport_start_micros`
+    /// by the zoom handler; both fields are logically irrelevant when
+    /// `timeline_follow_latest == true`.
+    pub timeline_viewport_width_micros: u64,
+
+    /// When `true` (default), `compute_active_viewport` returns the live-edge or
+    /// frame-anchored window (PLAN D2 modes 2 & 3).
+    ///
+    /// When `false`, the Gantt is pinned to the manual
+    /// `[viewport_start_micros, viewport_start_micros + viewport_width_micros]`
+    /// window (PLAN D2 mode 1). The Gantt renders a "PAUSED" indicator while in
+    /// this state; press `g` or `End` to resume follow-latest.
+    ///
+    /// Panning or zooming sets this to `false`. Pressing `g`/`End` sets it to
+    /// `true` and resets `viewport_width_micros` to the default 5 s.
+    pub timeline_follow_latest: bool,
 }
 
 impl Default for PerformanceState {
@@ -273,6 +302,12 @@ impl Default for PerformanceState {
             committed_frame_anchor: None,
             frame_anchor_generation: 0,
             frame_anchor_map: BTreeMap::new(),
+            // Phase 5: Pan/zoom viewport — start in follow-latest mode
+            timeline_viewport_start_micros: 0,
+            // Default width = 5 s (matches TIMELINE_VIEWPORT_MICROS in the TUI crate;
+            // cannot import the TUI constant here due to layer boundaries).
+            timeline_viewport_width_micros: 5_000_000,
+            timeline_follow_latest: true,
         }
     }
 }
@@ -752,5 +787,29 @@ mod tests {
         assert_eq!(s.timeline_thread_scroll_offset, 0);
         assert!(s.timeline_thread_name_map.is_empty());
         assert_eq!(s.timeline_events_filter, TimelineFilter::All);
+    }
+
+    // ── Phase 5: Pan/zoom viewport defaults ──────────────────────────────────
+
+    #[test]
+    fn performance_state_phase5_viewport_defaults() {
+        let s = PerformanceState::default();
+        // New Phase 5 fields — verify defaults without redeclaring Phase 4 fields
+        assert_eq!(
+            s.timeline_viewport_start_micros, 0,
+            "viewport start should default to 0"
+        );
+        assert_eq!(
+            s.timeline_viewport_width_micros, 5_000_000,
+            "viewport width should default to 5s (5_000_000 µs)"
+        );
+        assert!(
+            s.timeline_follow_latest,
+            "follow_latest should default to true"
+        );
+        // Verify Phase 4 frame-anchor fields are NOT redeclared (still present)
+        assert!(s.committed_frame_anchor.is_none());
+        assert_eq!(s.frame_anchor_generation, 0);
+        assert!(s.frame_anchor_map.is_empty());
     }
 }

@@ -19,3 +19,6 @@ pub(crate) use frame::{
     handle_perf_jump_to_start, handle_perf_page, handle_perf_scroll,
     handle_select_performance_frame,
 };
+pub(crate) use timeline::{
+    handle_follow_latest, handle_pan_left, handle_pan_right, handle_zoom_in, handle_zoom_out,
+};

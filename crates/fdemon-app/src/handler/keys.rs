@@ -516,9 +516,75 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             InputKey::PageUp => return Some(Message::PerfPageUp),
             InputKey::PageDown => return Some(Message::PerfPageDown),
 
+            // ── Phase 5: Timeline pan/zoom — inserted BEFORE Home/End (Drift #4) ──
+            //
+            // `+`/`=` zoom in, `-`/`_` zoom out, `g` follow-latest (primary).
+            // `End` is a tab-guarded alias for follow-latest; it must appear here
+            // BEFORE the unconditional `InputKey::End => PerfJumpToEnd` arm so that
+            // pressing End on the TimelineEvents tab emits `TimelineFollowLatest`
+            // instead of `PerfJumpToEnd`. The fall-through `_ => {}` lets the End
+            // key reach the `PerfJumpToEnd` arm when on other tabs. (Drift #4)
+            InputKey::Char('+') | InputKey::Char('=') => {
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineZoomIn { session_id });
+                    }
+                }
+            }
+            InputKey::Char('-') | InputKey::Char('_') => {
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineZoomOut { session_id });
+                    }
+                }
+            }
+            InputKey::Char('g') => {
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineFollowLatest { session_id });
+                    }
+                }
+            }
+            InputKey::End => {
+                // Tab-guarded `End` alias for follow-latest (Drift #4).
+                // On the TimelineEvents tab: emit TimelineFollowLatest.
+                // On other tabs: fall through to the PerfJumpToEnd arm below.
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineFollowLatest { session_id });
+                    }
+                }
+                // Not on TimelineEvents tab — fall through to PerfJumpToEnd.
+                return Some(Message::PerfJumpToEnd);
+            }
+
             // ── Jump to oldest / live edge ────────────────────────────────────
             InputKey::Home => return Some(Message::PerfJumpToStart),
-            InputKey::End => return Some(Message::PerfJumpToEnd),
+            // Note: InputKey::End is handled above with the TimelineEvents guard.
 
             // ── Phase-3 contextual bindings (Details section only) ───────────
             //
@@ -802,10 +868,41 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // ── Performance panel frame navigation ────────────────────────────────
         //
-        // Left and Right navigate between frames in the bar chart. The guards
-        // are exclusive with the Inspector panel guards above, so there is no
-        // conflict: Inspector uses Left/Right for tree collapse/expand, and
-        // Performance uses them for frame prev/next.
+        // Left and Right navigate between frames in the bar chart OR pan the
+        // Timeline Events Gantt, depending on which tab is focused. (Drift #3)
+        //
+        // Priority order (both arms share the `in_performance` guard):
+        //   1. If `Details/TimelineEvents` tab is focused → pan the Gantt.
+        //      T03 will refine this to gate on `selected_event.is_none()` so
+        //      that ←/→ moves event selection instead of panning when an event
+        //      is selected. Until T03 lands, ←/→ always pans on TimelineEvents.
+        //   2. Otherwise → navigate frame selection (SelectPerformanceFrame).
+        //
+        // The `Left`/`Right` arms for the Timeline-Events tab MUST appear BEFORE
+        // the unconditional `SelectPerformanceFrame` arm so the tab guard fires
+        // first. Rust match arms are evaluated in order. (Drift #3)
+        InputKey::Left
+            if in_performance
+                && state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents) =>
+        {
+            active_id.map(|session_id| Message::TimelinePanLeft { session_id })
+        }
+        InputKey::Right
+            if in_performance
+                && state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents) =>
+        {
+            active_id.map(|session_id| Message::TimelinePanRight { session_id })
+        }
         InputKey::Left if in_performance => Some(Message::SelectPerformanceFrame {
             index: state
                 .session_manager
@@ -2841,6 +2938,132 @@ mod memory_panel_key_tests {
                 Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory))
             ),
             "'m' in DevTools mode should emit SwitchDevToolsPanel(Memory), got: {msg:?}"
+        );
+    }
+}
+
+// ── Phase 5: Timeline pan/zoom keybinding conflict guard tests ────────────────
+//
+// Validates Drift #3 and #4: ←/→ pan only on TimelineEvents tab; Left/Right
+// still emit SelectPerformanceFrame on other tabs/sections. `End` emits
+// TimelineFollowLatest on TimelineEvents tab and PerfJumpToEnd elsewhere.
+
+#[cfg(test)]
+mod timeline_pan_zoom_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Performance panel state with FrameChart section focused (default).
+    fn make_perf_frame_chart() -> AppState {
+        let mut state = AppState::new();
+        let _id = state
+            .session_manager
+            .create_session(&test_device())
+            .unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        // Default: focused_section = FrameChart
+        state
+    }
+
+    /// Performance panel state with Details/TimelineEvents focused.
+    fn make_perf_timeline_events() -> AppState {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device())
+            .unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+            h.session.performance.details_tab = PerfDetailsTab::TimelineEvents;
+        }
+        state
+    }
+
+    /// Performance panel state with Details/FrameAnalysis focused.
+    fn make_perf_frame_analysis() -> AppState {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device())
+            .unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+            h.session.performance.details_tab = PerfDetailsTab::FrameAnalysis;
+        }
+        state
+    }
+
+    /// Drift #3: Left on FrameChart section → SelectPerformanceFrame (not pan).
+    #[test]
+    fn test_left_on_frame_chart_still_selects_frame() {
+        let state = make_perf_frame_chart();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::SelectPerformanceFrame { .. })),
+            "Left on FrameChart should emit SelectPerformanceFrame, got: {msg:?}"
+        );
+    }
+
+    /// Drift #3: Left on Details/FrameAnalysis tab → SelectPerformanceFrame (not pan).
+    #[test]
+    fn test_left_on_frame_analysis_tab_still_selects_frame() {
+        let state = make_perf_frame_analysis();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::SelectPerformanceFrame { .. })),
+            "Left on Details/FrameAnalysis should emit SelectPerformanceFrame, got: {msg:?}"
+        );
+    }
+
+    /// Drift #3: Left on Details/TimelineEvents tab → TimelinePanLeft (not frame select).
+    #[test]
+    fn test_left_on_timeline_events_tab_pans() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::TimelinePanLeft { .. })),
+            "Left on TimelineEvents should emit TimelinePanLeft, got: {msg:?}"
+        );
+    }
+
+    /// Drift #4: End on FrameChart section → PerfJumpToEnd (not follow-latest).
+    #[test]
+    fn test_end_on_frame_chart_jumps_to_end() {
+        let state = make_perf_frame_chart();
+        let msg = handle_key_devtools(&state, InputKey::End);
+        assert!(
+            matches!(msg, Some(Message::PerfJumpToEnd)),
+            "End on FrameChart should emit PerfJumpToEnd, got: {msg:?}"
+        );
+    }
+
+    /// Drift #4: End on Details/TimelineEvents tab → TimelineFollowLatest (not jump).
+    #[test]
+    fn test_end_on_timeline_events_follow_latest() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::End);
+        assert!(
+            matches!(msg, Some(Message::TimelineFollowLatest { .. })),
+            "End on TimelineEvents should emit TimelineFollowLatest, got: {msg:?}"
         );
     }
 }

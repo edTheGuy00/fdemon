@@ -1,10 +1,15 @@
-//! Timeline Events tab handlers — Phase 4.
+//! Timeline Events tab handlers — Phase 4 + Phase 5.
 //!
-//! Handles the 1-Hz timeline polling event pipeline:
+//! Phase 4 pipeline:
 //! - [`handle_batch`] — build per-thread event trees from the incoming batch,
 //!   merge into existing tracks, update thread-name map, enforce buffer cap,
 //!   and update the persistent `frame_anchor_map`.
 //! - [`handle_cycle_filter`] — cycle the `TimelineFilter` and reset scroll.
+//!
+//! Phase 5 pan/zoom:
+//! - [`handle_zoom_in`] / [`handle_zoom_out`] — halve/double the viewport width.
+//! - [`handle_pan_left`] / [`handle_pan_right`] — pan by 10% of viewport width.
+//! - [`handle_follow_latest`] — reset to live-edge/frame-anchored follow mode.
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -14,6 +19,27 @@ use crate::session::performance::FRAME_ANCHOR_MAP_CAP;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::timeline::{ThreadMetadata, TimelineEvent, TimelineNode, TimelineTrack};
+
+// ── Phase 5: Viewport constants (mirrors TUI crate's viewport.rs) ─────────────
+//
+// These are defined separately from the TUI crate to respect layer boundaries
+// (fdemon-app must not depend on fdemon-tui). The values must remain in sync.
+
+/// Default timeline viewport width (5 s) — same as `TIMELINE_VIEWPORT_MICROS`
+/// in the TUI crate.
+const DEFAULT_VIEWPORT_MICROS: u64 = 5_000_000;
+
+/// Minimum viewport width (100 ms) — prevents over-zoom.
+const TIMELINE_VIEWPORT_MIN_MICROS: u64 = 100_000;
+
+/// Maximum viewport width (60 s) — prevents over-zoom out.
+const TIMELINE_VIEWPORT_MAX_MICROS: u64 = 60_000_000;
+
+/// Zoom factor per `+`/`-` keypress (2× = 4 keypresses span 100 ms → 60 s).
+const TIMELINE_ZOOM_FACTOR: f64 = 2.0;
+
+/// Pan fraction per `←`/`→` keypress (10% of viewport width per keypress).
+const TIMELINE_PAN_FRACTION: f64 = 0.10;
 
 // ── handle_batch ──────────────────────────────────────────────────────────────
 
@@ -159,6 +185,151 @@ pub(crate) fn handle_cycle_filter(
         handle.session.performance.timeline_thread_scroll_offset = 0;
     }
     UpdateResult::none()
+}
+
+// ── Phase 5: Pan/zoom viewport handlers ──────────────────────────────────────
+
+/// Zoom in: halve the viewport width, centered on the current midpoint.
+///
+/// Sets `timeline_follow_latest = false` (manual-viewport mode).
+/// Width is clamped at [`TIMELINE_VIEWPORT_MIN_MICROS`].
+pub(crate) fn handle_zoom_in(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+
+    // Materialize the current viewport before mutating.
+    let (cur_start, cur_end) = materialize_viewport(perf);
+    let cur_width = cur_end.saturating_sub(cur_start);
+    let anchor = (cur_start + cur_end) / 2;
+
+    let (new_start, _new_end) =
+        zoom_viewport(cur_start, cur_width, 1.0 / TIMELINE_ZOOM_FACTOR, anchor);
+    let new_width =
+        (cur_width / 2).clamp(TIMELINE_VIEWPORT_MIN_MICROS, TIMELINE_VIEWPORT_MAX_MICROS);
+
+    perf.timeline_viewport_start_micros = new_start;
+    perf.timeline_viewport_width_micros = new_width;
+    perf.timeline_follow_latest = false;
+    UpdateResult::none()
+}
+
+/// Zoom out: double the viewport width, centered on the current midpoint.
+///
+/// Sets `timeline_follow_latest = false` (manual-viewport mode).
+/// Width is clamped at [`TIMELINE_VIEWPORT_MAX_MICROS`].
+pub(crate) fn handle_zoom_out(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+
+    let (cur_start, cur_end) = materialize_viewport(perf);
+    let cur_width = cur_end.saturating_sub(cur_start);
+    let anchor = (cur_start + cur_end) / 2;
+
+    let (new_start, _new_end) = zoom_viewport(cur_start, cur_width, TIMELINE_ZOOM_FACTOR, anchor);
+    let new_width = cur_width
+        .saturating_mul(2)
+        .clamp(TIMELINE_VIEWPORT_MIN_MICROS, TIMELINE_VIEWPORT_MAX_MICROS);
+
+    perf.timeline_viewport_start_micros = new_start;
+    perf.timeline_viewport_width_micros = new_width;
+    perf.timeline_follow_latest = false;
+    UpdateResult::none()
+}
+
+/// Pan left: decrease `viewport_start_micros` by 10% of current width.
+///
+/// Sets `timeline_follow_latest = false`. Start saturates at 0.
+pub(crate) fn handle_pan_left(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+
+    let (cur_start, cur_end) = materialize_viewport(perf);
+    let cur_width = cur_end.saturating_sub(cur_start);
+    let delta = (cur_width as f64 * TIMELINE_PAN_FRACTION).round() as u64;
+
+    perf.timeline_viewport_start_micros = cur_start.saturating_sub(delta);
+    perf.timeline_viewport_width_micros = cur_width;
+    perf.timeline_follow_latest = false;
+    UpdateResult::none()
+}
+
+/// Pan right: increase `viewport_start_micros` by 10% of current width.
+///
+/// Sets `timeline_follow_latest = false`.
+pub(crate) fn handle_pan_right(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+
+    let (cur_start, cur_end) = materialize_viewport(perf);
+    let cur_width = cur_end.saturating_sub(cur_start);
+    let delta = (cur_width as f64 * TIMELINE_PAN_FRACTION).round() as u64;
+
+    perf.timeline_viewport_start_micros = cur_start.saturating_add(delta);
+    perf.timeline_viewport_width_micros = cur_width;
+    perf.timeline_follow_latest = false;
+    UpdateResult::none()
+}
+
+/// Resume follow-latest mode.
+///
+/// Sets `timeline_follow_latest = true` and resets the viewport width to the
+/// default 5 s. The `committed_frame_anchor` is preserved so the next render
+/// returns to the frame-anchored viewport (PLAN D2 mode 2) if one was set.
+pub(crate) fn handle_follow_latest(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    let Some(handle) = state.session_manager.get_mut(session_id) else {
+        return UpdateResult::none();
+    };
+    let perf = &mut handle.session.performance;
+    perf.timeline_follow_latest = true;
+    perf.timeline_viewport_width_micros = DEFAULT_VIEWPORT_MICROS;
+    // timeline_viewport_start_micros becomes irrelevant in follow_latest mode;
+    // reset it to 0 for cleanliness.
+    perf.timeline_viewport_start_micros = 0;
+    UpdateResult::none()
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Materialize the current effective viewport `(start, end)` from state.
+///
+/// This is a simplified version of `compute_active_viewport` from the TUI crate,
+/// inlined here to avoid cross-crate dependency. It resolves the same 3-mode
+/// priority (PLAN D2) but without the frame-anchor rendering math (which lives
+/// in the TUI crate).
+///
+/// Mode 1: manual (`!follow_latest`) → `(start, start + width)`.
+/// Mode 2/3: follow-latest → use stored start/width as best approximation
+///           (the TUI render will recompute from frame anchor / live edge).
+fn materialize_viewport(perf: &crate::session::performance::PerformanceState) -> (u64, u64) {
+    let start = perf.timeline_viewport_start_micros;
+    let width = perf
+        .timeline_viewport_width_micros
+        .clamp(TIMELINE_VIEWPORT_MIN_MICROS, TIMELINE_VIEWPORT_MAX_MICROS);
+    (start, start.saturating_add(width))
+}
+
+/// Pure zoom computation (mirrors viewport.rs `zoom_viewport`).
+fn zoom_viewport(start: u64, width: u64, factor: f64, anchor_micros: u64) -> (u64, u64) {
+    let new_width_f = width as f64 * factor;
+    let new_width = (new_width_f.round() as u64).max(1);
+    let anchor_fraction = if width == 0 {
+        0.5
+    } else {
+        let offset = anchor_micros.saturating_sub(start);
+        (offset as f64 / width as f64).clamp(0.0, 1.0)
+    };
+    let anchor_new_offset = (anchor_fraction * new_width as f64).round() as u64;
+    let new_start = anchor_micros.saturating_sub(anchor_new_offset);
+    let new_end = new_start.saturating_add(new_width);
+    (new_start, new_end)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -696,6 +867,241 @@ mod tests {
         assert!(
             perf.frame_anchor_map.is_empty(),
             "frame_anchor_map must be cleared when leaving the Performance panel"
+        );
+    }
+
+    // ── Phase 5: handle_zoom_in ───────────────────────────────────────────────
+
+    /// AC3: TimelineZoomIn halves the viewport width and sets follow_latest=false.
+    #[test]
+    fn test_zoom_in_halves_viewport() {
+        let (mut state, session_id) = make_state_with_session();
+        // Set up: width=2_000_000 (2s), start=0, follow_latest=true
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_width_micros = 2_000_000;
+            h.session.performance.timeline_viewport_start_micros = 0;
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelineZoomIn { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            !perf.timeline_follow_latest,
+            "zoom-in should set follow_latest=false"
+        );
+        assert_eq!(
+            perf.timeline_viewport_width_micros, 1_000_000,
+            "zoom-in should halve the 2s viewport to 1s"
+        );
+    }
+
+    /// AC3: Zooming in when already at MIN does not go below MIN.
+    #[test]
+    fn test_zoom_in_clamps_at_min() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_width_micros = 100_000; // at MIN
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelineZoomIn { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(
+            perf.timeline_viewport_width_micros, 100_000,
+            "zooming in at MIN should stay at MIN"
+        );
+    }
+
+    // ── Phase 5: handle_zoom_out ──────────────────────────────────────────────
+
+    /// AC4: TimelineZoomOut doubles the viewport width and sets follow_latest=false.
+    #[test]
+    fn test_zoom_out_doubles_viewport() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_width_micros = 2_000_000;
+            h.session.performance.timeline_viewport_start_micros = 0;
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelineZoomOut { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            !perf.timeline_follow_latest,
+            "zoom-out should set follow_latest=false"
+        );
+        assert_eq!(
+            perf.timeline_viewport_width_micros, 4_000_000,
+            "zoom-out should double the 2s viewport to 4s"
+        );
+    }
+
+    /// AC4: Zooming out when already at MAX does not exceed MAX.
+    #[test]
+    fn test_zoom_out_doubles_viewport_to_max() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_width_micros = 60_000_000; // at MAX
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelineZoomOut { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(
+            perf.timeline_viewport_width_micros, 60_000_000,
+            "zooming out at MAX should stay at MAX"
+        );
+    }
+
+    // ── Phase 5: handle_pan_left / handle_pan_right ───────────────────────────
+
+    /// AC5: TimelinePanLeft decreases start by 10% of width.
+    #[test]
+    fn test_pan_left_decreases_start() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_start_micros = 5_000_000;
+            h.session.performance.timeline_viewport_width_micros = 5_000_000;
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelinePanLeft { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            !perf.timeline_follow_latest,
+            "pan should set follow_latest=false"
+        );
+        // delta = 5_000_000 * 0.10 = 500_000
+        assert_eq!(
+            perf.timeline_viewport_start_micros, 4_500_000,
+            "pan-left should decrease start by 10% of width"
+        );
+    }
+
+    /// AC5: TimelinePanRight increases start by 10% of width.
+    #[test]
+    fn test_pan_right_increases_start() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_start_micros = 5_000_000;
+            h.session.performance.timeline_viewport_width_micros = 5_000_000;
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelinePanRight { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            !perf.timeline_follow_latest,
+            "pan should set follow_latest=false"
+        );
+        assert_eq!(
+            perf.timeline_viewport_start_micros, 5_500_000,
+            "pan-right should increase start by 10% of width"
+        );
+    }
+
+    /// AC5: TimelinePanLeft saturates at 0.
+    #[test]
+    fn test_pan_left_saturates_at_zero() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_viewport_start_micros = 100; // less than delta
+            h.session.performance.timeline_viewport_width_micros = 5_000_000;
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelinePanLeft { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(
+            perf.timeline_viewport_start_micros, 0,
+            "pan-left should saturate at 0"
+        );
+    }
+
+    // ── Phase 5: handle_follow_latest ────────────────────────────────────────
+
+    /// AC6: TimelineFollowLatest sets follow_latest=true and resets width to default.
+    #[test]
+    fn test_follow_latest_resets_to_live_edge() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_follow_latest = false;
+            h.session.performance.timeline_viewport_width_micros = 1_000_000;
+            h.session.performance.timeline_viewport_start_micros = 9_000_000;
+        }
+        update(&mut state, Message::TimelineFollowLatest { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_follow_latest,
+            "follow-latest should set follow_latest=true"
+        );
+        assert_eq!(
+            perf.timeline_viewport_width_micros, 5_000_000,
+            "follow-latest should reset width to default 5s"
+        );
+    }
+
+    /// AC6: TimelineFollowLatest preserves committed_frame_anchor.
+    #[test]
+    fn test_follow_latest_preserves_frame_anchor() {
+        let (mut state, session_id) = make_state_with_session();
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.committed_frame_anchor = Some(42);
+            h.session.performance.timeline_follow_latest = false;
+        }
+        update(&mut state, Message::TimelineFollowLatest { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(
+            perf.committed_frame_anchor,
+            Some(42),
+            "follow-latest should preserve committed_frame_anchor"
         );
     }
 }

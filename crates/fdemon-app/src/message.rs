@@ -1855,4 +1855,36 @@ pub enum Message {
         /// Frame number to anchor on, or `None` to clear the anchor.
         frame_number: Option<u64>,
     },
+
+    // ── Phase 5: Timeline pan/zoom viewport ───────────────────────────────────
+    /// Zoom in on the Timeline Events Gantt (halve the viewport width).
+    ///
+    /// Sets `timeline_follow_latest = false` and halves `timeline_viewport_width_micros`,
+    /// clamped at [`TIMELINE_VIEWPORT_MIN_MICROS`]. The anchor point is the
+    /// current viewport center.
+    TimelineZoomIn { session_id: SessionId },
+
+    /// Zoom out on the Timeline Events Gantt (double the viewport width).
+    ///
+    /// Sets `timeline_follow_latest = false` and doubles `timeline_viewport_width_micros`,
+    /// clamped at [`TIMELINE_VIEWPORT_MAX_MICROS`].
+    TimelineZoomOut { session_id: SessionId },
+
+    /// Pan the Timeline Events Gantt left by 10% of the current viewport width.
+    ///
+    /// Sets `timeline_follow_latest = false`; saturates at 0.
+    TimelinePanLeft { session_id: SessionId },
+
+    /// Pan the Timeline Events Gantt right by 10% of the current viewport width.
+    ///
+    /// Sets `timeline_follow_latest = false`.
+    TimelinePanRight { session_id: SessionId },
+
+    /// Resume follow-latest mode on the Timeline Events Gantt.
+    ///
+    /// Sets `timeline_follow_latest = true` and resets `viewport_width_micros` to
+    /// the default 5 s window. The `committed_frame_anchor` (if any) is preserved —
+    /// the next render will return to the frame-anchored viewport (PLAN D2 mode 2)
+    /// rather than the live-edge fallback.
+    TimelineFollowLatest { session_id: SessionId },
 }

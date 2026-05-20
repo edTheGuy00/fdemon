@@ -2472,6 +2472,23 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             frame_number,
         ),
 
+        // ── Phase 5: Timeline pan/zoom viewport ───────────────────────────────
+        Message::TimelineZoomIn { session_id } => {
+            devtools::performance::handle_zoom_in(state, session_id)
+        }
+        Message::TimelineZoomOut { session_id } => {
+            devtools::performance::handle_zoom_out(state, session_id)
+        }
+        Message::TimelinePanLeft { session_id } => {
+            devtools::performance::handle_pan_left(state, session_id)
+        }
+        Message::TimelinePanRight { session_id } => {
+            devtools::performance::handle_pan_right(state, session_id)
+        }
+        Message::TimelineFollowLatest { session_id } => {
+            devtools::performance::handle_follow_latest(state, session_id)
+        }
+
         Message::VmServiceTimelineMonitoringStarted {
             session_id,
             timeline_shutdown_tx,
