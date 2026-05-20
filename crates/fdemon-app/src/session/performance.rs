@@ -234,7 +234,7 @@ pub struct PerformanceState {
     /// `tid` ascending so the renderer produces stable thread-row ordering.
     ///
     /// Total node count across all tracks is capped by
-    /// `Settings::devtools::timeline_event_buffer_size` (default 1000). Eviction
+    /// `Settings::devtools::timeline_event_buffer_size` (default 10_000). Eviction
     /// drops the oldest root events globally (by `ts`) until under the cap.
     pub timeline_tracks: BTreeMap<i64, TimelineTrack>,
 

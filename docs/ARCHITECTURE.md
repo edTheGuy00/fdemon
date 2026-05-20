@@ -1239,7 +1239,7 @@ Three new keys are added to the `DevToolsSettings` struct (`fdemon-app/src/confi
 |---|---|---|---|
 | `auto_enable_rebuild_tracking` | `bool` | `false` | When `true`, `ext.flutter.profileWidgetBuilds` is enabled automatically on VM Service connect. |
 | `rebuild_stats_frame_window` | `u32` | `30` | Number of frames retained in the Rebuild Stats ring buffer. |
-| `timeline_event_buffer_size` | `usize` | `1000` | Maximum total node count retained across all `timeline_tracks`. Eviction drops the oldest root event globally (by `ts`) until the total is within the cap. |
+| `timeline_event_buffer_size` | `usize` | `10000` | Maximum total node count retained across all `timeline_tracks`. Eviction drops the oldest root event globally (by `ts`) until the total is within the cap. Raised from 1000 to 10_000 in Phase 5. |
 
 **Phase 3: new letter shortcuts (architecturally relevant):**
 
@@ -1292,16 +1292,20 @@ Timeline events are stored per-thread as trees of `TimelineNode` instances rathe
 
 **Phase 4: Gantt Timeline Widget (`fdemon-tui`):**
 
-The Timeline Events tab renders as a Gantt chart. The subdirectory `widgets/devtools/performance/details/timeline_events/` contains four modules:
+The Timeline Events tab renders as a Gantt chart. The subdirectory `widgets/devtools/performance/details/timeline_events/` contains these modules:
 
 | Module | Role |
 |---|---|
-| `mod.rs` | Entry point: filter strip, thread-filter display, dispatch to Gantt renderer |
-| `gantt.rs` | Thread rows with left-column labels, colored event bars across a time canvas, depth-stacked children, time axis |
+| `mod.rs` | Entry point: search bar slot, filter strip, minimap slot, dispatch to Gantt renderer |
+| `gantt.rs` | Thread rows with left-column labels, colored event bars across a time canvas, depth-stacked children, time axis, PAUSED indicator |
+| `gantt_tests.rs` | External test module for `gantt.rs` (extracted Phase 5 T01 to keep `gantt.rs` manageable) |
 | `palette.rs` | Two-color depth-alternating palette per `TimelineThread` (`Ui`=LightBlue/Blue, `Raster`=Blue/DarkGray, `Other`=Magenta/LightMagenta) |
-| `viewport.rs` | Pure math helpers: `compute_viewport`, `micros_to_column`, `clip_bar` |
+| `viewport.rs` | Pure math helpers: `compute_active_viewport` (3-mode), `zoom_viewport`, `pan_viewport`, `micros_to_column`, `clip_bar` |
+| `minimap.rs` | 1-row minimap ribbon with dominant-thread coloring and viewport bracket overlay (Phase 5 T02) |
+| `popup.rs` | Modal event details popup with parent-chain breadcrumb (Phase 5 T03) |
+| `search.rs` | Search bar widget with match count and hotkey hints (Phase 5 T04) |
 
-The viewport is fixed at the most recent `TIMELINE_VIEWPORT_MICROS` (5 s) and auto-scrolls forward as new events arrive. Each thread row is `THREAD_ROW_HEIGHT` (6) lines tall, accommodating up to `MAX_DEPTH` (5) depth-stacked child bars. Thread rows are vertically scrollable via `↑/↓` using `timeline_thread_scroll_offset`; the Gantt renderer writes the actual visible row count back to `timeline_visible_row_count` each frame. Thread filtering (`T` key — `All → UI → Raster → All`) is preserved. Pan, zoom, event-level selection, minimap, and search are deferred to Phase 5.
+Each thread row is `THREAD_ROW_HEIGHT` (6) lines tall, accommodating up to `MAX_DEPTH` (5) depth-stacked child bars. Thread rows are vertically scrollable via `↑/↓` using `timeline_thread_scroll_offset`; the Gantt renderer writes the actual visible row count back to `timeline_visible_row_count` each frame. Thread filtering (`f` key — `All → Ui → Raster → All`) is preserved.
 
 **Phase 4: Immediate Timeline Fetch on Unpause:**
 
@@ -1310,6 +1314,62 @@ The viewport is fixed at the most recent `TIMELINE_VIEWPORT_MICROS` (5 s) and au
 **Phase 4: Frame-Chart Selection and Bar-Height Fixes:**
 
 `compute_visible_range` in `frame_chart/bars.rs` now uses `frame_chart_scroll_offset` as the sole viewport authority — the selected frame is no longer anchored to the right edge. `handle_select_performance_frame` only adjusts `scroll_offset` when the selection moves outside the visible viewport (selection within viewport leaves the offset unchanged). `ms_to_half_blocks` clamps nonzero `ms` values to at least `MIN_BAR_HALF_BLOCKS = 1` half-block, preventing fast frames from disappearing in shallow terminal windows. The selection highlight is a full-column Option-A side-marker overlay (`▏` left-eighth / `▕` right-eighth) spanning every chart row, replacing the previous single-`▔` top-row indicator.
+
+**Phase 5: Three-Mode Viewport State Machine:**
+
+`compute_active_viewport` (in `viewport.rs`) resolves the Gantt viewport in priority order: (1) **manual** — `!follow_latest` returns `(viewport_start_micros, viewport_start_micros + viewport_width_micros)`; (2) **frame-anchored** — `follow_latest && committed_frame_anchor.is_some()` returns `compute_frame_anchored_viewport(frame_anchor_map, frame)` (introduced Phase 4); (3) **live-edge** — fallback returns the latest `TIMELINE_VIEWPORT_MICROS` (5 s) window. Pan (`←`/`→` on TimelineEvents tab, no selection active) and zoom (`+`/`-`) set `timeline_follow_latest = false`, promoting to manual mode; the frame anchor is preserved so `g` (primary) or `End` (TimelineEvents-tab guarded alias) restores the frame-anchored view rather than falling through to live-edge. A "PAUSED" indicator renders in the time-axis row whenever `!follow_latest`. Viewport constants (`TIMELINE_VIEWPORT_MIN_MICROS`, `TIMELINE_VIEWPORT_MAX_MICROS`, `TIMELINE_ZOOM_FACTOR`, `TIMELINE_PAN_FRACTION`) are duplicated in both `fdemon-tui/viewport.rs` and `fdemon-app/timeline.rs` to respect layer boundaries; doc comments require the values to stay in sync.
+
+**Phase 5: Minimap Ribbon:**
+
+A 1-row minimap above the time axis compresses the full event history to canvas width. Each column is colored by the dominant thread in its time slice — the thread whose root events have the largest total duration in that column's range. A `[...]` overlay marks the current viewport position. The minimap walks only depth-0 root events for dominance computation so cost is bounded at `O(columns × root_events_count)`. When `area.height <= MIN_HEIGHT_FOR_MINIMAP`, the minimap slot is dropped gracefully. The minimap is a pure read-only consumer of `PerformanceState`; no new state fields were introduced in T02.
+
+**Phase 5: Selection Cursor:**
+
+`PerformanceState::timeline_selected_event: Option<TimelineEventCursor>` identifies the focused event by `(tid, depth, ts)`. The triple is stable as long as the event survives the ring-buffer eviction policy; when eviction removes the pointed-to event the selection is cleared and a `tracing::debug!` entry is emitted. Arrow keys traverse the per-thread tree: `←`/`→` for previous/next sibling at the same depth (wraps), `↑`/`↓` for parent/first-child or cross-thread navigation. Selection auto-pans the viewport to keep the selected event visible, setting `timeline_follow_latest = false` as a side effect. Pan/zoom `←`/`→` keys are gated: they fire only when `timeline_selected_event.is_none()`; when a selection is active, the same keys move the cursor instead. `Enter` with no selection active selects the first root event of the first visible thread (in `tid` ascending order, filter-respected).
+
+**Phase 5: Details Popup:**
+
+`PerformanceState::timeline_details_popup_open: bool` controls a modal overlay. Pressing `Enter` on a selected event opens the popup, which shows the event's full name, category, thread label, `ts` (µs + human-readable relative offset), `dur`, parent chain breadcrumb (max 4 ancestors with `…` truncation), and direct-children count. The popup uses `widgets/devtools/performance/details/timeline_events/popup.rs` with standard `modal_overlay` chrome. Modal-precedence: while the popup is open, `Esc` closes the popup first; a second `Esc` clears the selection; a third falls through to the existing DevTools-exit behavior.
+
+**Phase 5: Search-and-Jump:**
+
+`/` opens a search input on the Timeline Events tab, setting `timeline_search_input_active = true` and `timeline_search_query = Some("")`. Typed characters append to the query; matches are highlighted in real-time (BOLD + UNDERLINED on matching bars). `Enter` commits the query (`search_input_active = false`), arming `n`/`N` for next/previous match cycling. `n`/`N` pan the viewport to center on the next/previous match and update `timeline_selected_event` to the matched cursor; the current match bar receives an additional REVERSED modifier. `Esc` while input is active cancels, setting `timeline_search_query = None`; the search bar disappears. Search is case-insensitive substring matching; an empty committed query matches nothing. `n` falls through to the Network panel handler when `timeline_search_query.is_none()`, preserving the global `n` → Network shortcut. The search state fields (`timeline_search_query`, `timeline_search_input_active`, `timeline_search_match_cursor`) are cleared by both `handle_exit_devtools_mode` and `handle_switch_panel` to prevent stale queries surviving panel re-entry.
+
+**Phase 5: new `PerformanceState` fields:**
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `timeline_viewport_start_micros` | `u64` | `0` | Manual viewport start; honored only when `timeline_follow_latest == false`. |
+| `timeline_viewport_width_micros` | `u64` | `5_000_000` | Viewport width in microseconds (default 5 s). Bounded by `TIMELINE_VIEWPORT_MIN_MICROS` (100 ms) to `TIMELINE_VIEWPORT_MAX_MICROS` (60 s). |
+| `timeline_follow_latest` | `bool` | `true` | When `true`, `compute_active_viewport` uses frame-anchored or live-edge mode; when `false`, uses manual window. |
+| `timeline_selected_event` | `Option<TimelineEventCursor>` | `None` | Currently focused event identified by `(tid, depth, ts)`. |
+| `timeline_details_popup_open` | `bool` | `false` | Whether the event details modal is open. |
+| `timeline_search_query` | `Option<String>` | `None` | Active search query; `None` = search closed; `Some("")` = input open but empty. |
+| `timeline_search_input_active` | `bool` | `false` | `true` while user is typing in the search input (before `Enter`/`Esc`). |
+| `timeline_search_match_cursor` | `usize` | `0` | Current match index for `n`/`N` navigation; reset to `0` on query change. |
+
+**Phase 5: new `Message` variants:**
+
+| Variant | Source | Handler |
+|---|---|---|
+| `TimelineZoomIn { session_id }` | `+` key | `handler/devtools/performance/timeline.rs::handle_zoom_in` |
+| `TimelineZoomOut { session_id }` | `-` key | `handler/devtools/performance/timeline.rs::handle_zoom_out` |
+| `TimelinePanLeft { session_id }` | `←` key (no selection) | `handler/devtools/performance/timeline.rs::handle_pan_left` |
+| `TimelinePanRight { session_id }` | `→` key (no selection) | `handler/devtools/performance/timeline.rs::handle_pan_right` |
+| `TimelineFollowLatest { session_id }` | `g` / `End` key | `handler/devtools/performance/timeline.rs::handle_follow_latest` |
+| `TimelineSelectFirstVisible { session_id }` | `Enter` (no selection) | `handler/devtools/performance/timeline.rs::handle_select_first_visible` |
+| `TimelineMoveSelection { session_id, direction }` | Arrow keys (selection active) | `handler/devtools/performance/timeline.rs::handle_move_selection` |
+| `TimelineOpenPopup { session_id }` | `Enter` (selection active) | `handler/devtools/performance/timeline.rs::handle_open_popup` |
+| `TimelineClosePopup { session_id }` | `Esc` (popup open) | `handler/devtools/performance/timeline.rs::handle_close_popup` |
+| `TimelineClearSelection { session_id }` | `Esc` (popup closed, selection active) | `handler/devtools/performance/timeline.rs::handle_clear_selection` |
+| `TimelineSelectAt { session_id, cursor }` | Mouse click on event bar | `handler/devtools/performance/timeline.rs::handle_select_at` |
+| `TimelineSearchOpen { session_id }` | `/` key | `handler/devtools/performance/timeline.rs::handle_search_open` |
+| `TimelineSearchInputChar { session_id, ch }` | Char key (input active) | `handler/devtools/performance/timeline.rs::handle_search_input_char` |
+| `TimelineSearchInputBackspace { session_id }` | Backspace (input active) | `handler/devtools/performance/timeline.rs::handle_search_input_backspace` |
+| `TimelineSearchInputCommit { session_id }` | `Enter` (input active) | `handler/devtools/performance/timeline.rs::handle_search_input_commit` |
+| `TimelineSearchInputCancel { session_id }` | `Esc` (input active) | `handler/devtools/performance/timeline.rs::handle_search_input_cancel` |
+| `TimelineSearchNextMatch { session_id }` | `n` (query committed) | `handler/devtools/performance/timeline.rs::handle_next_match` |
+| `TimelineSearchPrevMatch { session_id }` | `N` (query committed) | `handler/devtools/performance/timeline.rs::handle_prev_match` |
 
 ### Memory Panel Interactivity
 

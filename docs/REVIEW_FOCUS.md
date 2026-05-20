@@ -124,15 +124,43 @@ Phase 4: depth-stacked timeline event rendering follows DevTools' legacy `FlameC
 
 ### Thread-Row Scroll Offset Semantics
 
-Phase 4: `timeline_thread_scroll_offset` measures scroll position in **thread rows**, not event lines. The Gantt has no event-level selection in Phase 4, so the scroll target is the thread row itself. Phase 5 may add event-level selection within rows.
+Phase 4: `timeline_thread_scroll_offset` measures scroll position in **thread rows**, not event lines. The Gantt has no event-level selection in Phase 4, so the scroll target is the thread row itself. Phase 5 adds event-level selection within rows via `TimelineEventCursor`.
 
 ### Full-Column Frame-Chart Selection Overlay
 
 Phase 4: the frame chart's selected bar is rendered with a full-column overlay (side-marker characters `▏`/`▕` across every chart row), not a single-character tip. This is an approved replacement for the Phase 1 single-`▔` highlight, which was visually invisible.
 
-### Phase 5 Deferred Scope (Timeline Gantt)
+### Viewport State in `PerformanceState` (not widget-local)
 
-Pan/zoom, minimap, event-level selection, search/filter by name, and CPU sample overlays in the Timeline Gantt view are deferred to Phase 5. Reviewers seeing PRs touching `timeline_events/` should expect a fixed-viewport rendering in Phase 4 and a configurable viewport in Phase 5. Absence of these features is intentional and should not be flagged.
+Phase 5: pan/zoom state (`timeline_viewport_start_micros`, `timeline_viewport_width_micros`, `timeline_follow_latest`) lives in `PerformanceState`, not as widget-internal mutable state. This preserves unidirectional data flow (TEA) — keybindings dispatch messages, handlers mutate state, the renderer is a pure function of state. Reviewers should not refactor these into widget-local fields.
+
+### Three-Mode Viewport Priority Order
+
+Phase 5: `compute_active_viewport` in `viewport.rs` resolves the Gantt window in this exact priority order: (1) manual (`!follow_latest`) → uses stored `(viewport_start_micros, viewport_start_micros + viewport_width_micros)`; (2) frame-anchored (`follow_latest && committed_frame_anchor.is_some()`) → uses `compute_frame_anchored_viewport`; (3) live-edge fallback. The order is intentional and reviewers should not reorder the arms.
+
+### Selection Cursor by `(tid, depth, ts)` not Index
+
+Phase 5: `TimelineEventCursor = { tid, depth, ts }` is chosen over an index-based path because tracks mutate between batches (new roots appended, oldest evicted). The triple is stable as long as the underlying event survives the ring-buffer eviction policy. When the event ages out, the cursor is cleared with a `tracing::debug!` entry. Reviewers should expect and approve this defensive eviction handling.
+
+### Search as Highlight, not Filter
+
+Phase 5: search highlights matching bars (BOLD + UNDERLINED) but does not hide non-matching events. This matches DevTools' search-and-jump UX. Reviewers should not propose filter-by-name behavior — that is the role of the existing `f`-key thread filter (`All → Ui → Raster → All`), which Phase 5 preserves untouched.
+
+### `n`/`N` Fallthrough Pattern (Timeline Search)
+
+Phase 5: `n` on the TimelineEvents tab dispatches `TimelineSearchNextMatch` only when `timeline_search_query.is_some()`; otherwise falls through to the global `n` → Network panel handler. Mirrors the Phase 3-followup `R`-key fallthrough for HotRestart. Reviewers should approve this pattern wherever a context-specific binding might conflict with a global one.
+
+### Minimap Dominant-Thread Coloring
+
+Phase 5: each minimap column's background color is determined by the thread with the largest total root-event duration in that column's time slice. Only depth-0 root events are walked for dominance computation (bounded cost). Reviewers should not propose per-event coloring — the macro-view's purpose is thread-balance visibility, not event identification.
+
+### `Left`/`Right` Tab-Guard Pattern (TimelineEvents)
+
+Phase 5: `←`/`→` on the TimelineEvents tab are guarded at two levels — (a) the key arm fires only `if on_timeline_tab`, and (b) within that arm, if a selection is active they dispatch `TimelineMoveSelection`; otherwise they dispatch `TimelinePanLeft`/`TimelinePanRight`. This two-level guard prevents the pan keys from conflating with the frame-chart left/right selection advance on other tabs. Reviewers should preserve both guards.
+
+### Phase 6 Deferred Scope
+
+Phase 5 closes the interactive-Gantt scope. Phase 6 will add: CPU sampling via `getCpuSamples`, cross-thread async connector lines, per-frame zoom-to-frame coupling, event annotation/pinning, and trace export. Reviewers seeing Phase 5 PRs should not expect these features.
 
 ## Performance Concerns
 
