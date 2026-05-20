@@ -3,8 +3,10 @@
 **Status:** Not Started
 **Wave:** 1
 **Agent:** implementor
-**Estimated Effort:** 4–6 hours
+**Estimated Effort:** 5–7 hours (includes pre-flight test extraction)
 **Depends On:** Phase 4 fully merged
+
+> **Read first:** PLAN.md's "Codebase Verification (2026-05-20)" drift table — five of its ten entries (#1, #2, #3, #4, #7) materially shape this task.
 
 ## Problem
 
@@ -15,16 +17,17 @@ The Phase 4 Gantt has a fixed 5s viewport that auto-scrolls forward as new event
 3. **Pan** to a specific time range
 4. **Hold the viewport still** while observing a specific event window
 
-Phase 5 introduces a manual-viewport mode toggled by user pan/zoom, with a one-key reset (`End`) back to live-follow.
+Phase 5 introduces a manual-viewport mode toggled by user pan/zoom, with a one-key reset (`g`, with `End` as a guarded alias on the TimelineEvents tab) back to live-follow.
 
 ## Files (Write)
 
-- `crates/fdemon-app/src/session/performance.rs` — new viewport state fields
-- `crates/fdemon-app/src/handler/keys.rs` — new arms for `+`/`-`/`←`/`→`/`End`/`g` on TimelineEvents tab
+- `crates/fdemon-app/src/session/performance.rs` — new viewport state fields **only** (the frame-anchor fields `committed_frame_anchor`, `frame_anchor_generation`, `frame_anchor_map` already exist — Drift #1, do not redeclare)
+- `crates/fdemon-app/src/handler/keys.rs` — new arms for `+`/`-`/`←`/`→`/`g`/`End` on TimelineEvents tab, with the **conflict guards documented below** (Drift #3 + #4)
 - `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` — new handlers
 - `crates/fdemon-app/src/message.rs` — new `Message` variants
-- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/viewport.rs` — extend with pan/zoom math
-- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` — consume new state, render "PAUSED" indicator
+- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/viewport.rs` — add `compute_active_viewport` composer (3-mode priority), `pan_viewport`, `zoom_viewport`
+- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` — call `compute_active_viewport`, render "PAUSED" indicator
+- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt_tests.rs` — **NEW** (pre-flight test extraction, Drift #7) — move inline `#[cfg(test)] mod tests` block out of `gantt.rs`. Refactor-only step with no behavior change; do this **first** before adding viewport composition
 
 ## Files (Read)
 
@@ -66,15 +69,34 @@ pub(super) const TIMELINE_PAN_FRACTION: f64 = 0.10;
 
 ### Viewport math (`viewport.rs` extensions)
 
+The existing `viewport.rs` has these functions (verified 2026-05-20):
+- `compute_frame_anchored_viewport(frame_anchor_map: &BTreeMap<u64, (u64, u64)>, frame_number: u64) -> Option<(u64, u64)>` — **active** function, used by gantt.rs today
+- `compute_viewport(tracks: &BTreeMap<i64, TimelineTrack>) -> (u64, u64)` — marked `#[allow(dead_code)]`, returns live-edge window of exactly `TIMELINE_VIEWPORT_MICROS`
+- `micros_to_column`, `clip_bar` — keep as-is
+
+**Add a new top-level composer that resolves PLAN D2's 3-mode priority order:**
+
 ```rust
-/// Returns the (start, end) viewport bounds. Honors manual viewport when
-/// `!follow_latest`; otherwise returns the live-follow window.
-pub(super) fn compute_viewport(
-    tracks: &BTreeMap<i64, TimelineTrack>,
-    viewport_start_micros: u64,
-    viewport_width_micros: u64,
-    follow_latest: bool,
-) -> (u64, u64) { ... }
+/// Returns the (start, end) viewport bounds for the Gantt canvas.
+/// Resolution priority (PLAN D2):
+///   1. `!follow_latest` → manual viewport `(start, start + width)`
+///   2. `follow_latest && committed_frame_anchor.is_some()`
+///        → `compute_frame_anchored_viewport(frame_anchor_map, frame)`
+///   3. `follow_latest && no frame anchor` → live-edge from `timeline_tracks`
+pub(super) fn compute_active_viewport(perf: &PerformanceState) -> (u64, u64) {
+    if !perf.timeline_follow_latest {
+        let start = perf.timeline_viewport_start_micros;
+        let width = perf.timeline_viewport_width_micros.max(TIMELINE_VIEWPORT_MIN_MICROS);
+        return (start, start.saturating_add(width));
+    }
+    if let Some(frame) = perf.committed_frame_anchor {
+        if let Some((s, e)) = compute_frame_anchored_viewport(&perf.frame_anchor_map, frame) {
+            return (s, e);
+        }
+    }
+    // Live-edge fallback. Reuse the existing dead-code function as the live-edge math.
+    compute_viewport(&perf.timeline_tracks)
+}
 
 /// Pure: compute new viewport bounds after a zoom action.
 /// `factor < 1.0` zooms in; `factor > 1.0` zooms out.
@@ -97,6 +119,8 @@ pub(super) fn pan_viewport(
 pub(super) enum PanDirection { Left, Right }
 ```
 
+**Remove `#[allow(dead_code)]` from `compute_viewport(tracks)`** once `compute_active_viewport` uses it as the live-edge branch.
+
 ### New Message variants
 
 ```rust
@@ -109,19 +133,50 @@ TimelineFollowLatest { session_id: SessionId },
 
 ### Keybinding arms (in `handler/keys.rs`)
 
-Add inside the existing `in_performance && active_details_tab == TimelineEvents` branch:
+**Drift #3, #4 — conflict resolution required.** The Performance handler's `in_performance` early-return block (around lines 489–582) already binds:
+- `Left` / `Right` (at the **outer** `match key` block, around lines 809–820) → `SelectPerformanceFrame` — fires for **any** focused section while `in_performance`
+- `End` → `PerfJumpToEnd` (in the `in_performance` block)
+- `Home` → `PerfJumpToStart` (in the `in_performance` block)
+
+The new arms must be inserted with a tab guard **inside the `in_performance` block, ordered before the existing `End`/`Home` arms, and a `Left`/`Right` tab guard inserted into the outer block before `SelectPerformanceFrame`**. The fast path checks `focused_section == FocusedSection::Details && details_tab == DetailsTab::TimelineEvents`.
 
 ```rust
-InputKey::Char('+') | InputKey::Char('=') => Some(Message::TimelineZoomIn { session_id }),
-InputKey::Char('-') | InputKey::Char('_') => Some(Message::TimelineZoomOut { session_id }),
-// Pan only when no selection is active (Phase 5 T03 will gate this further).
-// For T01, assume no selection — T03 will refine.
-InputKey::Left  => Some(Message::TimelinePanLeft { session_id }),
-InputKey::Right => Some(Message::TimelinePanRight { session_id }),
-InputKey::End | InputKey::Char('g') => Some(Message::TimelineFollowLatest { session_id }),
+// Inside in_performance block, BEFORE the existing PerfJumpToEnd / PerfJumpToStart arms:
+match key {
+    InputKey::Char('+') | InputKey::Char('=')
+        if active_details_tab_is(TimelineEvents) =>
+            return Some(Message::TimelineZoomIn { session_id }),
+    InputKey::Char('-') | InputKey::Char('_')
+        if active_details_tab_is(TimelineEvents) =>
+            return Some(Message::TimelineZoomOut { session_id }),
+    InputKey::Char('g')
+        if active_details_tab_is(TimelineEvents) =>
+            return Some(Message::TimelineFollowLatest { session_id }),
+    InputKey::End
+        if active_details_tab_is(TimelineEvents) =>
+            return Some(Message::TimelineFollowLatest { session_id }),
+    _ => {}  // fall through to existing PerfJumpToEnd/etc.
+}
+
+// In the outer match block, BEFORE the existing `Left`/`Right` → SelectPerformanceFrame arm:
+InputKey::Left
+    if active_details_tab_is(TimelineEvents) =>
+        Some(Message::TimelinePanLeft { session_id }),
+InputKey::Right
+    if active_details_tab_is(TimelineEvents) =>
+        Some(Message::TimelinePanRight { session_id }),
 ```
 
-**Pre-emptive note for T03 implementor:** when selection is active, `←`/`→` will mean "navigate selection." T03 will replace the unconditional pan with a guard `if selected_event.is_none() { pan } else { move_selection }`.
+`active_details_tab_is(...)` is a local helper closure that reads `state.session_manager.active_session().map(|h| h.session.performance.focused_section)` and `details_tab`. Choose whatever shape fits the existing pattern in `keys.rs`.
+
+**Pre-emptive note for T03 implementor:** when selection is active, `←`/`→` will mean "navigate selection." T03 will refine the unconditional pan with a guard `if selected_event.is_none() { pan } else { move_selection }`. Land this transitional behavior in T01 and document it in the Completion Summary.
+
+**Tests for the conflict resolution:**
+- `test_left_on_frame_chart_still_selects_frame` — focus FrameChart, press Left → `SelectPerformanceFrame { index: prev }`. No `TimelinePanLeft` dispatched.
+- `test_left_on_frame_analysis_tab_still_selects_frame` — focus Details/FrameAnalysis, press Left → `SelectPerformanceFrame`. Same.
+- `test_left_on_timeline_events_tab_pans` — focus Details/TimelineEvents, press Left → `TimelinePanLeft`. No frame change.
+- `test_end_on_frame_chart_jumps_to_end` — focus FrameChart, press End → `PerfJumpToEnd`. No `TimelineFollowLatest`.
+- `test_end_on_timeline_events_follow_latest` — focus Details/TimelineEvents, press End → `TimelineFollowLatest`. No frame chart jump.
 
 ### Handler logic
 
@@ -129,13 +184,8 @@ InputKey::End | InputKey::Char('g') => Some(Message::TimelineFollowLatest { sess
 pub fn handle_zoom_in(state: &mut AppState, session_id: SessionId) -> UpdateResult {
     let Some(handle) = state.session_manager.get_mut(session_id) else { return UpdateResult::none() };
     let perf = &mut handle.session.performance;
-    // Materialize current viewport before mutating
-    let (cur_start, cur_end) = compute_viewport(
-        &perf.timeline_tracks,
-        perf.timeline_viewport_start_micros,
-        perf.timeline_viewport_width_micros,
-        perf.timeline_follow_latest,
-    );
+    // Materialize current viewport before mutating — composes 3 modes per PLAN D2.
+    let (cur_start, cur_end) = compute_active_viewport(perf);
     let (new_start, new_end) = zoom_viewport(
         cur_start,
         cur_end - cur_start,
@@ -145,7 +195,7 @@ pub fn handle_zoom_in(state: &mut AppState, session_id: SessionId) -> UpdateResu
     let new_width = (new_end - new_start).clamp(TIMELINE_VIEWPORT_MIN_MICROS, TIMELINE_VIEWPORT_MAX_MICROS);
     perf.timeline_viewport_start_micros = new_start;
     perf.timeline_viewport_width_micros = new_width;
-    perf.timeline_follow_latest = false;  // pin viewport
+    perf.timeline_follow_latest = false;  // pin viewport (frame anchor preserved for `g`/End restore)
     UpdateResult::none()
 }
 
@@ -154,7 +204,8 @@ pub fn handle_follow_latest(state: &mut AppState, session_id: SessionId) -> Upda
     let perf = &mut handle.session.performance;
     perf.timeline_follow_latest = true;
     perf.timeline_viewport_width_micros = TIMELINE_VIEWPORT_MICROS;  // reset to default 5s
-    // start_micros becomes irrelevant when follow_latest = true
+    // start_micros becomes irrelevant when follow_latest = true; frame_anchor still wins
+    // if `committed_frame_anchor.is_some()` per PLAN D2.
     UpdateResult::none()
 }
 ```
@@ -165,22 +216,28 @@ When `!follow_latest`, render a small "PAUSED" indicator (e.g., 1-cell `⏸` gly
 
 ## Acceptance Criteria
 
-1. **State fields added** — `PerformanceState::timeline_viewport_start_micros`, `timeline_viewport_width_micros`, `timeline_follow_latest` exist with documented defaults. `Default::default()` returns `(0, TIMELINE_VIEWPORT_MICROS, true)`. Field-presence tests in `session/performance.rs::tests` updated.
-2. **Zoom in** — `TimelineZoomIn` halves `viewport_width_micros` (clamped at `MIN`) and sets `follow_latest = false`. New test `test_zoom_in_halves_viewport`.
-3. **Zoom out** — `TimelineZoomOut` doubles `viewport_width_micros` (clamped at `MAX`) and sets `follow_latest = false`. New test `test_zoom_out_doubles_viewport_to_max`.
-4. **Pan left/right** — `TimelinePanLeft` decreases `viewport_start_micros` by `width * TIMELINE_PAN_FRACTION` (clamped at 0); `TimelinePanRight` increases it. Both set `follow_latest = false`. New tests.
-5. **Follow latest** — `TimelineFollowLatest` sets `follow_latest = true` and resets `width` to default. New test.
-6. **`compute_viewport` respects `follow_latest`** — When `true`, returns latest-window. When `false`, returns `(start, start+width)`. Existing Phase 4 tests still pass because Phase 4 default is `follow_latest = true`.
-7. **Zoom anchor preserves center** — Zooming in from `(start=1000, width=4000)` with anchor 3000 produces `(start=2000, width=2000)`. Center column stays at the same ts.
-8. **"PAUSED" indicator** — When `!follow_latest`, the renderer paints a visible indicator. New test inspects the buffer for the indicator glyph + text.
-9. **Mouse interaction** — Scroll wheel on the Gantt canvas can also drive zoom (mouse wheel up = zoom in, down = zoom out). Stretch goal; if scope tight, skip and add a TODO.
-10. **All existing Phase 4 Gantt tests pass** — viewport contract is backward-compatible when `follow_latest = true` (the default).
-11. **Quality gate** — `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` all pass.
+1. **Test extraction landed (Drift #7)** — The `#[cfg(test)] mod tests` block inside `gantt.rs` has been moved to a new sibling file `gantt_tests.rs` declared from `mod.rs` (or via `#[path]` in `gantt.rs` per workspace convention). `gantt.rs` is under 800 lines after the move. All extracted tests still pass without modification. This is a **refactor-only** commit / first sub-step; review separately if convenient.
+2. **State fields added (only the new ones, Drift #1)** — `PerformanceState::timeline_viewport_start_micros`, `timeline_viewport_width_micros`, `timeline_follow_latest` exist with documented defaults `(0, TIMELINE_VIEWPORT_MICROS, true)`. **Do NOT redeclare `committed_frame_anchor`, `frame_anchor_generation`, `frame_anchor_map`** — verify they remain untouched. Field-presence tests updated.
+3. **Zoom in** — `TimelineZoomIn` halves `viewport_width_micros` (clamped at `MIN`) and sets `follow_latest = false`. New test `test_zoom_in_halves_viewport`.
+4. **Zoom out** — `TimelineZoomOut` doubles `viewport_width_micros` (clamped at `MAX`) and sets `follow_latest = false`. New test `test_zoom_out_doubles_viewport_to_max`.
+5. **Pan left/right** — `TimelinePanLeft` decreases `viewport_start_micros` by `width * TIMELINE_PAN_FRACTION` (clamped at 0); `TimelinePanRight` increases it. Both set `follow_latest = false`. New tests.
+6. **Follow latest** — `TimelineFollowLatest` sets `follow_latest = true` and resets `width` to default. Frame anchor (if any) is preserved. New test `test_follow_latest_preserves_frame_anchor`.
+7. **`compute_active_viewport` honors PLAN D2 priority order (Drift #2)** — three new tests:
+   - `test_compute_active_viewport_manual_overrides_anchor` — `!follow_latest` returns manual `(start, start+width)` regardless of `committed_frame_anchor` value.
+   - `test_compute_active_viewport_frame_anchor_when_follow_latest` — `follow_latest && Some(frame)` returns the frame-anchored window from `frame_anchor_map`.
+   - `test_compute_active_viewport_live_edge_fallback` — `follow_latest && None` returns the live-edge window from `compute_viewport(tracks)`.
+8. **All existing Phase 4 Gantt tests pass** — viewport contract is backward-compatible: default `follow_latest = true` + no frame anchor + Phase 4 fixture tracks → matches Phase 4 expected viewport.
+9. **Keybinding conflict guards work (Drift #3, #4)** — five new tests as enumerated in the "Keybinding arms" section (`test_left_on_frame_chart_still_selects_frame`, etc.).
+10. **Zoom anchor preserves center** — Zooming in from `(start=1000, width=4000)` with anchor 3000 produces `(start=2000, width=2000)`. Center column stays at the same ts.
+11. **"PAUSED" indicator** — When `!follow_latest`, the renderer paints a visible indicator. New test inspects the buffer for the indicator glyph + text.
+12. **Mouse interaction** — Scroll wheel on the Gantt canvas can also drive zoom (mouse wheel up = zoom in, down = zoom out). Stretch goal; if scope tight, skip and add a TODO.
+13. **Quality gate** — `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` all pass.
 
 ## Notes
 
-- This task is **foundational** — every other Phase 5 task reads `timeline_viewport_*` state. Gate Wave 2 on T01 fully landing.
+- This task is **foundational** — every other Phase 5 task reads `timeline_viewport_*` state and depends on `compute_active_viewport`. Gate Wave 2 on T01 fully landing.
 - Pan/zoom does **not** modify `timeline_thread_scroll_offset` (vertical thread-row scroll from Phase 4). Pan is horizontal-only.
-- The `InputKey::Left`/`Right` arms in T01 unconditionally pan — T03 will refine this to gate on `selected_event.is_none()`. Document this transitional behavior in the Completion Summary so T03's implementor doesn't get surprised.
-- `End` key — check `crossterm::event::KeyCode::End` is supported on macOS terminals; some terminals require modifier remapping. If `End` is unreliable, prefer `g` as the primary key with `End` as alternate.
+- The `InputKey::Left`/`Right` arms in T01 unconditionally pan **on the TimelineEvents tab** (with the tab guard from Drift #3). T03 will refine this to gate on `selected_event.is_none()`. Document this transitional behavior in the Completion Summary so T03's implementor doesn't get surprised.
+- `End` key — confirmed bound to `PerfJumpToEnd` in the `in_performance` block (Drift #4). T01 uses `g` as primary follow-latest key; `End` as a tab-guarded alias inserted **before** `PerfJumpToEnd`. On terminals where `End` is unreliable, `g` continues to work.
 - Zoom factor 2.0 means 4 keypresses cover the full 100ms → 60s range. If users want finer granularity, defer to a Phase 6 setting.
+- **Frame anchor interaction:** When `committed_frame_anchor.is_some()` and the user starts panning/zooming, the frame anchor is **preserved** (not cleared). Pressing `g`/`End` returns to the frame-anchored viewport, not live-edge. This is the intent of PLAN D2 mode 2 having priority over mode 3. If the user wants live-edge regardless of frame anchor, they can clear the frame chart selection (existing Phase 4 behavior); T01 should not invent a new "clear anchor" key.

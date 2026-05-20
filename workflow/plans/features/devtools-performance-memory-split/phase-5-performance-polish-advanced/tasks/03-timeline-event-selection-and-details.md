@@ -4,7 +4,9 @@
 **Wave:** 2
 **Agent:** implementor
 **Estimated Effort:** 5–7 hours
-**Depends On:** T01 (viewport state)
+**Depends On:** T01 (viewport state + `compute_active_viewport` + `gantt_tests.rs` extraction)
+
+> **Read first:** PLAN.md's "Codebase Verification (2026-05-20)" drift table — entries #6 (j/k/Up/Down scroll-vs-selection ordering) and #9 (modal_overlay availability) directly shape this task.
 
 ## Problem
 
@@ -20,11 +22,12 @@ Phase 5 adds:
 ## Files (Write)
 
 - `crates/fdemon-app/src/session/performance.rs` — new fields
-- `crates/fdemon-app/src/handler/keys.rs` — new arms for Enter, arrow nav when selection active, Esc fallthrough
+- `crates/fdemon-app/src/handler/keys.rs` — new arms for Enter, arrow nav when selection active, Esc fallthrough. **Ordering matters (Drift #6):** the selection-nav arms for `↑`/`↓`/`j`/`k` must be inserted **before** the existing `PerfScrollUp`/`PerfScrollDown` arms, gated by `has_selection`. The `←`/`→` arms refine T01's TimelineEvents-tab pan arms with `if selected_event.is_none()` guards
 - `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` — new handlers
 - `crates/fdemon-app/src/message.rs` — new Message variants
 - `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/popup.rs` (NEW)
-- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` — selection-overlay highlight
+- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` — selection-overlay highlight (note: T01 extracted inline tests to `gantt_tests.rs`, so test additions go there)
+- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt_tests.rs` — extend with selection-overlay tests
 - `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/mod.rs` — declare `pub(super) mod popup;`, conditionally render popup last
 
 ## Files (Read)
@@ -88,44 +91,67 @@ Given `cursor = (tid, depth, ts)` and tree `tracks[tid].root_events`:
 
 ### Keyboard arms (in `handler/keys.rs`)
 
-Augment T01's TimelineEvents-tab branch:
+Augment T01's TimelineEvents-tab branch. **Critical ordering (Drift #6):** The `Up`/`Down`/`j`/`k` selection-nav arms must be inserted **before** the existing `PerfScrollUp`/`PerfScrollDown` arms in the `in_performance` block. Without `has_selection` guards on the new arms (and ordering before the existing scroll arms), Up/Down will scroll the chart instead of moving selection.
 
 ```rust
 let has_selection = perf.timeline_selected_event.is_some();
 let popup_open = perf.timeline_details_popup_open;
+let on_timeline_tab = active_details_tab_is(TimelineEvents);  // helper from T01
 
 match key {
     // Popup-first: when popup is open, Esc closes it before falling through.
     InputKey::Esc if popup_open => Some(Message::TimelineClosePopup { session_id }),
-    InputKey::Esc if has_selection => Some(Message::TimelineClearSelection { session_id }),
-    // Selection-first nav:
-    InputKey::Enter if has_selection && !popup_open => Some(Message::TimelineOpenPopup { session_id }),
-    InputKey::Enter => Some(Message::TimelineSelectFirstVisible { session_id }),
-    InputKey::Left  if has_selection => Some(Message::TimelineMoveSelection { session_id, dir: PrevSibling }),
-    InputKey::Right if has_selection => Some(Message::TimelineMoveSelection { session_id, dir: NextSibling }),
-    InputKey::Up    if has_selection => Some(Message::TimelineMoveSelection { session_id, dir: ParentOrUpThread }),
-    InputKey::Down  if has_selection => Some(Message::TimelineMoveSelection { session_id, dir: FirstChildOrDownThread }),
-    // ... (T01's pan/zoom arms now guarded by `!has_selection`)
-    InputKey::Left  if !has_selection => Some(Message::TimelinePanLeft { session_id }),
-    InputKey::Right if !has_selection => Some(Message::TimelinePanRight { session_id }),
-    // ... rest of T01 keys ...
+    InputKey::Esc if has_selection && on_timeline_tab
+        => Some(Message::TimelineClearSelection { session_id }),
+    // Selection entry:
+    InputKey::Enter if has_selection && !popup_open && on_timeline_tab
+        => Some(Message::TimelineOpenPopup { session_id }),
+    InputKey::Enter if on_timeline_tab
+        => Some(Message::TimelineSelectFirstVisible { session_id }),
+    // Sibling nav (refines T01's tab-guarded pan arms with selection check):
+    InputKey::Left  if has_selection && on_timeline_tab
+        => Some(Message::TimelineMoveSelection { session_id, dir: PrevSibling }),
+    InputKey::Right if has_selection && on_timeline_tab
+        => Some(Message::TimelineMoveSelection { session_id, dir: NextSibling }),
+    // Depth/thread nav — MUST be ordered BEFORE the existing PerfScrollUp/PerfScrollDown arms.
+    // When no selection, these fall through to the existing scroll behavior.
+    InputKey::Up    if has_selection && on_timeline_tab
+        => Some(Message::TimelineMoveSelection { session_id, dir: ParentOrUpThread }),
+    InputKey::Down  if has_selection && on_timeline_tab
+        => Some(Message::TimelineMoveSelection { session_id, dir: FirstChildOrDownThread }),
+    InputKey::Char('k') if has_selection && on_timeline_tab
+        => Some(Message::TimelineMoveSelection { session_id, dir: ParentOrUpThread }),
+    InputKey::Char('j') if has_selection && on_timeline_tab
+        => Some(Message::TimelineMoveSelection { session_id, dir: FirstChildOrDownThread }),
+    // T01's pan arms are already in place with `on_timeline_tab` guard. Refine them
+    // to add `!has_selection`:
+    InputKey::Left  if !has_selection && on_timeline_tab
+        => Some(Message::TimelinePanLeft { session_id }),
+    InputKey::Right if !has_selection && on_timeline_tab
+        => Some(Message::TimelinePanRight { session_id }),
+    // ... falls through to existing PerfScrollUp / PerfScrollDown / SelectPerformanceFrame
 }
 ```
 
-This refines T01's unconditional pan arms.
+This refines T01's pan arms with selection awareness and adds Up/Down/j/k handling that respects existing scroll behavior when no selection is active.
+
+**Required test added to T01's conflict-resolution suite:**
+- `test_down_on_timeline_events_without_selection_scrolls` — focus Details/TimelineEvents, no selection, press Down → `PerfScrollDown` fires (no `TimelineMoveSelection`).
+- `test_down_on_timeline_events_with_selection_moves_cursor` — same focus, with selection → `TimelineMoveSelection { dir: FirstChildOrDownThread }`.
 
 ### Auto-pan to keep selection visible
 
-When the selection moves outside the current viewport, snap the viewport to center on the selected event:
+When the selection moves outside the current viewport, snap the viewport to center on the selected event. Use T01's `compute_active_viewport` to get the **current effective** viewport (which may be manual, frame-anchored, or live-edge per PLAN D2):
 
 ```rust
-fn ensure_selection_visible(perf: &mut PerformanceState, cursor: TimelineEventCursor) {
-    let (vp_start, vp_end) = compute_viewport(/* args */);
-    let event_end = cursor.ts as u64 + /* dur */;
+fn ensure_selection_visible(perf: &mut PerformanceState, cursor: TimelineEventCursor, dur: u64) {
+    let (vp_start, vp_end) = compute_active_viewport(perf);
+    let event_end = (cursor.ts as u64).saturating_add(dur);
     if (cursor.ts as u64) < vp_start || event_end > vp_end {
         let width = vp_end - vp_start;
         perf.timeline_viewport_start_micros = (cursor.ts as u64).saturating_sub(width / 2);
-        perf.timeline_follow_latest = false;
+        perf.timeline_viewport_width_micros = width;
+        perf.timeline_follow_latest = false;  // promotes to manual viewport (mode 1)
     }
 }
 ```

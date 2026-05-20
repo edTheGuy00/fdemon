@@ -21,6 +21,8 @@ These need documentation in `docs/ARCHITECTURE.md` (DevTools Subsystem → Perfo
 
 - `docs/ARCHITECTURE.md`
 - `docs/REVIEW_FOCUS.md`
+- `crates/fdemon-app/src/session/performance.rs` (doc-string-only fix — Drift #10 — update the `timeline_tracks` doc comment "default 1000" → "default 10_000" to match the actual `default_timeline_event_buffer_size()` in `config/types.rs`)
+- `docs/CONFIGURATION.md` (if it references the 1000 default for `performance.timeline_event_buffer_size`, update to 10000 and add a one-line note about the increase)
 
 ## Files (Read)
 
@@ -34,9 +36,9 @@ These need documentation in `docs/ARCHITECTURE.md` (DevTools Subsystem → Perfo
 
 Append the following Phase-5 paragraphs at appropriate insertion points within the existing "DevTools Subsystem → Performance Panel → Timeline Events" section:
 
-**1. Manual-Viewport State Machine**
+**1. Three-Mode Viewport State Machine**
 
-> Phase 5: the Gantt viewport has two modes — `follow_latest = true` (Phase 4 default; window is the latest `viewport_width_micros` of events) and `follow_latest = false` (pinned to `viewport_start_micros`). Pan (`←`/`→` with no selection) and zoom (`+`/`-`) actions both set `follow_latest = false`. The `End` (or `g`) key resets to live-follow and snaps the width back to `TIMELINE_VIEWPORT_MICROS` (5s default). A "PAUSED" indicator renders in the time-axis row whenever `!follow_latest`.
+> Phase 5: `compute_active_viewport` resolves the Gantt viewport in priority order: (1) **manual** — `!follow_latest` returns `(viewport_start_micros, viewport_start_micros + viewport_width_micros)`; (2) **frame-anchored** — `follow_latest && committed_frame_anchor.is_some()` returns `compute_frame_anchored_viewport(frame_anchor_map, frame)` (Phase 4); (3) **live-edge** — fallback returns the latest `TIMELINE_VIEWPORT_MICROS` window. Pan (`←`/`→` on TimelineEvents tab, no selection) and zoom (`+`/`-`) set `follow_latest = false`, promoting to manual; the frame anchor is preserved so `g` (primary) or `End` (TimelineEvents-tab guarded alias) returns to the frame-anchored view rather than live-edge. A "PAUSED" indicator renders in the time-axis row whenever `!follow_latest`.
 
 **2. Minimap Ribbon**
 
@@ -92,11 +94,12 @@ Under "Approved Optimizations" / "Approved Patterns":
 
 ## Acceptance Criteria
 
-1. **ARCHITECTURE.md documents** all five Phase 5 mechanisms: viewport state machine, minimap, selection cursor, details popup, search-and-jump.
-2. **REVIEW_FOCUS.md adds** six approved-pattern entries covering: viewport state placement, cursor type choice, search-as-highlight, `n`/`N` fallthrough, minimap dominance, and Phase 6 deferral.
-3. **No content boundary violations** — no code blocks > 4 lines, no tutorial content, no edits to off-limits files.
-4. **Cross-references valid** — any links to Phase 4 or Phase 5 task files are correct.
-5. **Quality gate (light)** — markdown-lint sanity: no broken headers, no malformed tables, no dangling refs.
+1. **ARCHITECTURE.md documents** all five Phase 5 mechanisms: three-mode viewport composition, minimap, selection cursor, details popup, search-and-jump. The viewport section explicitly covers the priority order (manual / frame-anchored / live-edge).
+2. **REVIEW_FOCUS.md adds** approved-pattern entries covering: viewport state placement, three-mode priority order, cursor type choice, search-as-highlight, `n`/`N` fallthrough, the `Left`/`Right` tab-guard pattern, and minimap dominance. Also documents the deferred-Phase-6 scope.
+3. **Doc-string drift fix (Drift #10)** — `PerformanceState::timeline_tracks` doc comment updated from "default 1000" to "default 10_000". If `docs/CONFIGURATION.md` mentions the 1000 figure, update it too.
+4. **No content boundary violations** — no code blocks > 4 lines in core docs, no tutorial content, no edits to off-limits files.
+5. **Cross-references valid** — any links to Phase 4 or Phase 5 task files are correct.
+6. **Quality gate (light)** — markdown-lint sanity: no broken headers, no malformed tables, no dangling refs.
 
 ## Notes
 

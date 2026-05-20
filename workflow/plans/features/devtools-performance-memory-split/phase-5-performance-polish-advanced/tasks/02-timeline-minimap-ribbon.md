@@ -19,7 +19,7 @@ Phase 5 adds a 1-row **minimap ribbon** above the time axis: a horizontally-comp
 
 ## Files (Read)
 
-- T01 outputs: viewport state in `PerformanceState`
+- T01 outputs: viewport state in `PerformanceState` + `compute_active_viewport` (use this to source the bracket overlay's start/end — do **not** read `timeline_viewport_*` fields directly so frame-anchored viewport is respected)
 - `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/palette.rs` — reuse `bar_color`
 - Phase 4 outputs: `TimelineTrack`, `TimelineNode`
 
@@ -50,6 +50,8 @@ pub(super) const MINIMAP_DEFAULT_HISTORY_MICROS: u64 = 30_000_000; // 30 s
 ```
 
 ### Renderer signature
+
+The caller (in `mod.rs`) computes `(viewport_start, viewport_end) = compute_active_viewport(perf)` and passes them in. The minimap itself stays pure — no `PerformanceState` access.
 
 ```rust
 pub(super) fn render(

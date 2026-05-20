@@ -4,7 +4,9 @@
 **Wave:** 2 (sequential after T03 — shared write files)
 **Agent:** implementor
 **Estimated Effort:** 3–5 hours
-**Depends On:** T01 (viewport state), T03 (selection cursor — `n`/`N` selects-and-pans to next match)
+**Depends On:** T01 (viewport state + `compute_active_viewport` + `gantt_tests.rs` extraction), T03 (selection cursor — `n`/`N` selects-and-pans to next match)
+
+> **Read first:** PLAN.md's "Codebase Verification (2026-05-20)" drift table — entry #5 (`n` fallthrough to Network) is load-bearing for this task's keybinding correctness.
 
 ## Problem
 
@@ -15,11 +17,13 @@ Search is **highlighting + navigation**, not filtering — matching bars are vis
 ## Files (Write)
 
 - `crates/fdemon-app/src/session/performance.rs` — new search-state fields
-- `crates/fdemon-app/src/handler/keys.rs` — new arms: `/` opens input, `n`/`N` jump to match, char input while active, `Esc` clears
+- `crates/fdemon-app/src/handler/keys.rs` — new arms: `/` opens input, `n`/`N` jump to match (ordered before global `n` → Network per Drift #5), char input while active, `Esc` clears
 - `crates/fdemon-app/src/handler/devtools/performance/timeline.rs` — new handlers
+- `crates/fdemon-app/src/handler/devtools/mod.rs` — extend Performance-leave clear list to include the new search fields (so a stale query doesn't survive panel switch)
 - `crates/fdemon-app/src/message.rs` — new variants
 - `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/search.rs` (NEW)
 - `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt.rs` — match highlight overlay
+- `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/gantt_tests.rs` — extend with match-overlay tests (file extracted by T01)
 - `crates/fdemon-tui/src/widgets/devtools/performance/details/timeline_events/mod.rs` — declare `pub(super) mod search;`, insert search bar above filter strip when active
 
 ## Files (Read)
@@ -60,22 +64,41 @@ TimelineSearchPrevMatch { session_id: SessionId },        // N
 
 ### Keybinding arms
 
-```rust
-// On TimelineEvents tab, when NOT in search input mode:
-InputKey::Char('/') => Some(Message::TimelineSearchOpen { session_id }),
-InputKey::Char('n') if perf.timeline_search_query.is_some() => Some(Message::TimelineSearchNextMatch { session_id }),
-InputKey::Char('N') if perf.timeline_search_query.is_some() => Some(Message::TimelineSearchPrevMatch { session_id }),
-// CRITICAL: `n` falls through to the top-level Network panel shortcut when
-// no search query is active. Confirm against the existing `n` handler in keys.rs.
+**Drift #5 — `n` global conflict.** The existing top-level DevTools key handler binds `n` → `SwitchDevToolsPanel(Network)`. The new `n`/`N` arms below must be inserted **before** the global `n` arm (the global one already lives at the DevTools-mode scope, not inside `in_performance`), with the guard `perf.timeline_search_query.is_some() && active_details_tab_is(TimelineEvents)` so non-search `n` falls through to Network unchanged.
 
-// When `timeline_search_input_active == true`:
-InputKey::Char(c)        => Some(Message::TimelineSearchInputChar { session_id, ch: c }),
-InputKey::Backspace      => Some(Message::TimelineSearchInputBackspace { session_id }),
-InputKey::Enter          => Some(Message::TimelineSearchInputCommit { session_id }),
-InputKey::Esc            => Some(Message::TimelineSearchInputCancel { session_id }),
+```rust
+let on_timeline_tab = active_details_tab_is(TimelineEvents);  // helper from T01
+let has_query = perf.timeline_search_query.is_some();
+let input_active = perf.timeline_search_input_active;
+
+// Search input mode comes FIRST — when typing, char keys must not dispatch
+// other actions. Mirror logs-view search-input pattern at keys.rs lines 105–138.
+if input_active {
+    return match key {
+        InputKey::Char(c)        => Some(Message::TimelineSearchInputChar { session_id, ch: c }),
+        InputKey::Backspace      => Some(Message::TimelineSearchInputBackspace { session_id }),
+        InputKey::Enter          => Some(Message::TimelineSearchInputCommit { session_id }),
+        InputKey::Esc            => Some(Message::TimelineSearchInputCancel { session_id }),
+        _ => None,
+    };
+}
+
+// Non-input-mode arms, must be ordered BEFORE the global `n` → Network arm:
+match key {
+    InputKey::Char('/') if on_timeline_tab
+        => Some(Message::TimelineSearchOpen { session_id }),
+    InputKey::Char('n') if has_query && on_timeline_tab
+        => Some(Message::TimelineSearchNextMatch { session_id }),
+    InputKey::Char('N') if has_query && on_timeline_tab
+        => Some(Message::TimelineSearchPrevMatch { session_id }),
+    // ... falls through to existing `n` → Network when guards fail.
+}
 ```
 
-The `timeline_search_input_active` check must happen **before** the general DevTools tab dispatch — when the search input is active, all character input goes to the query, not to tab navigation. Mirror the pattern from `keys.rs` lines 105–138 (existing search-input mode for logs view).
+**Required tests for the conflict resolution (Drift #5):**
+- `test_n_with_no_query_on_timeline_tab_switches_to_network` — `query.is_none()`, focus TimelineEvents, press `n` → `SwitchDevToolsPanel(Network)`.
+- `test_n_with_query_on_timeline_tab_next_match` — `query = Some("foo")`, focus TimelineEvents, press `n` → `TimelineSearchNextMatch`.
+- `test_n_with_query_on_frame_chart_switches_to_network` — `query = Some("foo")` but focus FrameChart, press `n` → `SwitchDevToolsPanel(Network)` (the `on_timeline_tab` guard must defeat the search arm).
 
 ### Match collection
 
@@ -96,9 +119,12 @@ pub fn handle_next_match(state: &mut AppState, session_id: SessionId) -> UpdateR
     let cursor = matches[perf.timeline_search_match_cursor];
     // Update selection (depends on T03 having landed)
     perf.timeline_selected_event = Some(cursor);
-    // Pan viewport to center on match
-    let width = perf.timeline_viewport_width_micros;
+    // Pan viewport to center on match. Use compute_active_viewport to honor
+    // current effective width (which may have been zoomed by the user).
+    let (vp_start, vp_end) = compute_active_viewport(perf);
+    let width = vp_end - vp_start;
     perf.timeline_viewport_start_micros = (cursor.ts as u64).saturating_sub(width / 2);
+    perf.timeline_viewport_width_micros = width;
     perf.timeline_follow_latest = false;
     UpdateResult::none()
 }
