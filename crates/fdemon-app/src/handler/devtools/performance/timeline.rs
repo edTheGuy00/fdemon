@@ -41,6 +41,12 @@ const TIMELINE_ZOOM_FACTOR: f64 = 2.0;
 /// Pan fraction per `←`/`→` keypress (10% of viewport width per keypress).
 const TIMELINE_PAN_FRACTION: f64 = 0.10;
 
+/// Frame-anchor padding constants — must stay in sync with `viewport.rs`
+/// in the TUI crate (PLAN D2 mode 2 padding).
+const ANCHOR_PADDING_FRACTION: f64 = 0.20;
+const ANCHOR_PADDING_MIN_MICROS: u64 = 2_000;
+const ANCHOR_PADDING_MAX_MICROS: u64 = 50_000;
+
 // ── handle_batch ──────────────────────────────────────────────────────────────
 
 /// Handle a batch of timeline events from the 1-Hz poll.
@@ -300,20 +306,50 @@ pub(crate) fn handle_follow_latest(state: &mut AppState, session_id: SessionId) 
 
 /// Materialize the current effective viewport `(start, end)` from state.
 ///
-/// This is a simplified version of `compute_active_viewport` from the TUI crate,
-/// inlined here to avoid cross-crate dependency. It resolves the same 3-mode
-/// priority (PLAN D2) but without the frame-anchor rendering math (which lives
-/// in the TUI crate).
+/// Mirrors the 3-mode priority of `compute_active_viewport` in the TUI crate
+/// (PLAN D2). Inlined here to respect layer boundaries (fdemon-app must not
+/// depend on fdemon-tui). When the first pan/zoom is invoked from follow-latest
+/// mode, this resolves the actual on-screen viewport so the new manual bounds
+/// continue from where the user was looking rather than jumping to `(0, +5s)`.
 ///
-/// Mode 1: manual (`!follow_latest`) → `(start, start + width)`.
-/// Mode 2/3: follow-latest → use stored start/width as best approximation
-///           (the TUI render will recompute from frame anchor / live edge).
+/// Mode 1: manual (`!follow_latest`)            → stored `(start, start + width)`.
+/// Mode 2: follow-latest + committed frame      → padded frame-anchored bounds.
+/// Mode 3: follow-latest + no anchor (or miss)  → live-edge from `timeline_tracks`.
 fn materialize_viewport(perf: &crate::session::performance::PerformanceState) -> (u64, u64) {
-    let start = perf.timeline_viewport_start_micros;
-    let width = perf
-        .timeline_viewport_width_micros
-        .clamp(TIMELINE_VIEWPORT_MIN_MICROS, TIMELINE_VIEWPORT_MAX_MICROS);
-    (start, start.saturating_add(width))
+    if !perf.timeline_follow_latest {
+        let start = perf.timeline_viewport_start_micros;
+        let width = perf
+            .timeline_viewport_width_micros
+            .clamp(TIMELINE_VIEWPORT_MIN_MICROS, TIMELINE_VIEWPORT_MAX_MICROS);
+        return (start, start.saturating_add(width));
+    }
+    if let Some(frame) = perf.committed_frame_anchor {
+        if let Some(&(ts_start, ts_end)) = perf.frame_anchor_map.get(&frame) {
+            let dur = ts_end.saturating_sub(ts_start);
+            let raw_padding = (dur as f64 * ANCHOR_PADDING_FRACTION) as u64;
+            let padding = raw_padding.clamp(ANCHOR_PADDING_MIN_MICROS, ANCHOR_PADDING_MAX_MICROS);
+            return (
+                ts_start.saturating_sub(padding),
+                ts_end.saturating_add(padding),
+            );
+        }
+    }
+    // Mode 3 — live-edge sliding window ending at the latest event timestamp.
+    let latest_ts: u64 = perf
+        .timeline_tracks
+        .values()
+        .flat_map(|track| track.root_events.iter())
+        .map(|node| {
+            let end = node.ts + node.dur.unwrap_or(0);
+            end.max(node.ts) as u64
+        })
+        .max()
+        .unwrap_or(0);
+    if latest_ts == 0 {
+        return (0, DEFAULT_VIEWPORT_MICROS);
+    }
+    let end = latest_ts.max(DEFAULT_VIEWPORT_MICROS);
+    (end - DEFAULT_VIEWPORT_MICROS, end)
 }
 
 /// Pure zoom computation (mirrors viewport.rs `zoom_viewport`).
@@ -1485,11 +1521,11 @@ mod tests {
     #[test]
     fn test_zoom_in_halves_viewport() {
         let (mut state, session_id) = make_state_with_session();
-        // Set up: width=2_000_000 (2s), start=0, follow_latest=true
+        // Set up manual mode with a known viewport so the math is observable.
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_width_micros = 2_000_000;
             h.session.performance.timeline_viewport_start_micros = 0;
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelineZoomIn { session_id });
 
@@ -1515,7 +1551,7 @@ mod tests {
         let (mut state, session_id) = make_state_with_session();
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_width_micros = 100_000; // at MIN
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelineZoomIn { session_id });
 
@@ -1540,7 +1576,7 @@ mod tests {
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_width_micros = 2_000_000;
             h.session.performance.timeline_viewport_start_micros = 0;
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelineZoomOut { session_id });
 
@@ -1566,7 +1602,7 @@ mod tests {
         let (mut state, session_id) = make_state_with_session();
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_width_micros = 60_000_000; // at MAX
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelineZoomOut { session_id });
 
@@ -1591,7 +1627,7 @@ mod tests {
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_start_micros = 5_000_000;
             h.session.performance.timeline_viewport_width_micros = 5_000_000;
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelinePanLeft { session_id });
 
@@ -1619,7 +1655,7 @@ mod tests {
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_start_micros = 5_000_000;
             h.session.performance.timeline_viewport_width_micros = 5_000_000;
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelinePanRight { session_id });
 
@@ -1646,7 +1682,7 @@ mod tests {
         if let Some(h) = state.session_manager.get_mut(session_id) {
             h.session.performance.timeline_viewport_start_micros = 100; // less than delta
             h.session.performance.timeline_viewport_width_micros = 5_000_000;
-            h.session.performance.timeline_follow_latest = true;
+            h.session.performance.timeline_follow_latest = false;
         }
         update(&mut state, Message::TimelinePanLeft { session_id });
 
@@ -1660,6 +1696,54 @@ mod tests {
             perf.timeline_viewport_start_micros, 0,
             "pan-left should saturate at 0"
         );
+    }
+
+    /// Regression: pan from follow_latest=true with live events should anchor the
+    /// new viewport at the live-edge bounds, not at the stored defaults `(0, 5s)`.
+    /// Without this fix the user pans into a region with no events and the Gantt
+    /// renders empty rows while the minimap still shows activity.
+    #[test]
+    fn test_pan_right_from_follow_latest_uses_live_edge() {
+        let (mut state, session_id) = make_state_with_session();
+        // App has been running ~30s; the latest root event is at ts=30s.
+        if let Some(h) = state.session_manager.get_mut(session_id) {
+            h.session.performance.timeline_tracks.insert(
+                1,
+                TimelineTrack {
+                    tid: 1,
+                    name: None,
+                    thread: TimelineThread::Ui,
+                    root_events: vec![TimelineNode {
+                        name: "Frame".to_owned(),
+                        category: None,
+                        ts: 30_000_000,
+                        dur: Some(16_000),
+                        phase: TimelinePhase::Complete,
+                        thread: TimelineThread::Ui,
+                        frame_number: None,
+                        children: vec![],
+                    }],
+                },
+            );
+            h.session.performance.timeline_follow_latest = true;
+        }
+        update(&mut state, Message::TimelinePanRight { session_id });
+
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        // Live-edge mode 3 returns `(end - DEFAULT_VIEWPORT_MICROS, end)`
+        // where end = max(latest_ts, DEFAULT_VIEWPORT_MICROS) = 30_016_000.
+        // Pan right by 10% of 5s = 500_000 → new start = 25_516_000.
+        assert!(
+            !perf.timeline_follow_latest,
+            "pan should exit follow_latest"
+        );
+        assert_eq!(perf.timeline_viewport_start_micros, 25_516_000);
+        assert_eq!(perf.timeline_viewport_width_micros, 5_000_000);
     }
 
     // ── Phase 5: handle_follow_latest ────────────────────────────────────────
