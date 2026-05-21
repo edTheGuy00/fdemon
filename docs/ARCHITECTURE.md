@@ -553,7 +553,7 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 ### `fdemon-app` — Application State and Orchestration
 
 **Location**: `crates/fdemon-app/`
-**Dependencies**: `fdemon-core`, `fdemon-daemon`
+**Dependencies**: `fdemon-core`, `fdemon-daemon`; `reqwest` (rustls-tls) for the GitHub version check HTTP call
 **Purpose**: TEA pattern implementation, Engine orchestration, services, config, watcher
 
 **Core Modules:**
@@ -572,6 +572,7 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 | `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `MemoryState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
+| `version_check.rs` | GitHub releases API client; queries the latest fdemon release at TUI startup and returns `Some(version)` when a newer release is available. Errors and non-newer releases collapse silently to `None` (fire-and-forget — this is a developer convenience, not a security channel). |
 
 **Configuration (`config/`):**
 
@@ -1998,11 +1999,15 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
 5. app::run_with_project(): Initialize logging
 6. tui::run_with_project(): Initialize terminal
 7. tui::run_with_project(): Load settings (config.toml + launch.toml + settings.local.toml)
-8. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
+8. tui::run_with_project(): Spawn background startup tasks (fire-and-forget, non-blocking):
+   - spawn_tool_availability_check — detect adb, xcrun simctl, idevicesyslog
+   - spawn_bootable_device_discovery — list iOS simulators and Android AVDs
+   - spawn_version_check — query GitHub releases API; sends Message::NewVersionAvailable if a newer release exists
+9. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
    OR when [behavior] auto_launch=true AND a valid last_device is cached.
    Otherwise: show New Session dialog. (See docs/CONFIGURATION.md for the full priority table.)
-9. tui::run_with_project(): Spawn Flutter process (if auto-launch fired)
-10. tui::run_loop(): Enter main event loop
+10. tui::run_with_project(): Spawn Flutter process (if auto-launch fired)
+11. tui::run_loop(): Enter main event loop
 ```
 
 ### Hot Reload Flow
@@ -2158,6 +2163,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 **Internal** (`pub(crate)`):
 - TEA handler implementation (`handler/`)
 - Process spawning logic (`process.rs`, `spawn.rs`)
+- Version check (`version_check.rs`) — GitHub releases API call; exposed only via `spawn_version_check` in `spawn.rs`
 - Signal handling (`signals.rs`)
 - Action dispatching (`actions/` — modular directory with `mod.rs`, `session.rs`, `vm_service.rs`, `performance.rs`, `inspector/`, `network.rs`)
 
