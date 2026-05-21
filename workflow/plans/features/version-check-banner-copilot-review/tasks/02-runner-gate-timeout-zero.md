@@ -163,3 +163,33 @@ choosing Option B.
 - Do NOT add a runtime warning or toast when `timeout_secs = 0` — the user explicitly chose that value, and the docs explicitly call it out as a way to disable.
 - Recommend **Option B**. The shared helper makes the intent explicit, removes duplication, and gives a place to hang a regression test. Option A is a fine fallback if the implementor wants to keep the diff micro.
 - Do NOT add an integration test that asserts no network call happens. A unit test on the predicate is sufficient; the integration path is exercised by the existing wiremock suite which already covers the spawn-and-respond loop.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/version-check-banner
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `impl BehaviorSettings` with `pub fn should_run_version_check(&self) -> bool` helper; added three unit tests |
+| `crates/fdemon-tui/src/runner.rs` | Updated both `run_with_project` and `run_with_project_and_dap` to use `should_run_version_check()` instead of the bare `version_check` bool |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option B chosen**: Implemented the shared `should_run_version_check()` helper on `BehaviorSettings` rather than Option A (inline gate). The visibility is `pub` (not `pub(crate)`) so the `fdemon-tui` crate can call it across the crate boundary, as noted in the task's visibility note.
+2. **No doc change needed**: Existing docs in `config/types.rs` and `docs/CONFIGURATION.md` already correctly describe the `timeout_secs = 0` semantics; the fix makes the code match the docs.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo test --workspace` - Passed (all 3 new tests + full suite: zero failures across all crates)
+
+### Risks/Limitations
+
+1. **None**: The change is a pure gate addition. When `version_check_timeout_secs > 0` and `version_check = true` (the defaults), behavior is identical to before. Only the `timeout_secs = 0` edge case is now handled correctly.
