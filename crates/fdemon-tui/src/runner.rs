@@ -75,7 +75,7 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
-    if engine.settings.behavior.version_check {
+    if engine.settings.behavior.should_run_version_check() {
         spawn::spawn_version_check(
             engine.msg_sender(),
             std::time::Duration::from_secs(
@@ -205,7 +205,7 @@ pub async fn run_with_project_and_dap(
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
-    if engine.settings.behavior.version_check {
+    if engine.settings.behavior.should_run_version_check() {
         spawn::spawn_version_check(
             engine.msg_sender(),
             std::time::Duration::from_secs(

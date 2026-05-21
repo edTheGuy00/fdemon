@@ -186,6 +186,18 @@ impl Default for BehaviorSettings {
     }
 }
 
+impl BehaviorSettings {
+    /// Returns `true` when the startup version check should run.
+    ///
+    /// Both the explicit `version_check` bool and a non-zero
+    /// `version_check_timeout_secs` are required. A zero timeout is
+    /// documented as equivalent to disabling the check, so we honor
+    /// that at the call site (no outbound HTTP attempt at all).
+    pub fn should_run_version_check(&self) -> bool {
+        self.version_check && self.version_check_timeout_secs > 0
+    }
+}
+
 /// File watcher settings
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WatcherSettings {
@@ -3735,5 +3747,35 @@ sdk_path = "/Users/me/flutter"
             deserialized.flutter.sdk_path,
             Some(PathBuf::from("/opt/flutter"))
         );
+    }
+
+    #[test]
+    fn should_run_version_check_when_enabled_with_positive_timeout() {
+        let s = BehaviorSettings {
+            version_check: true,
+            version_check_timeout_secs: 3,
+            ..Default::default()
+        };
+        assert!(s.should_run_version_check());
+    }
+
+    #[test]
+    fn should_not_run_version_check_when_disabled() {
+        let s = BehaviorSettings {
+            version_check: false,
+            version_check_timeout_secs: 3,
+            ..Default::default()
+        };
+        assert!(!s.should_run_version_check());
+    }
+
+    #[test]
+    fn should_not_run_version_check_when_timeout_is_zero() {
+        let s = BehaviorSettings {
+            version_check: true,
+            version_check_timeout_secs: 0,
+            ..Default::default()
+        };
+        assert!(!s.should_run_version_check());
     }
 }
