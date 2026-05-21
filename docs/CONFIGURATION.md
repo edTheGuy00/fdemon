@@ -252,12 +252,14 @@ Control general application behavior.
 [behavior]
 confirm_quit = true     # Show confirmation dialog when quitting with active sessions
 auto_launch = false     # Set true to auto-launch on the device cached in settings.local.toml
+version_check = true    # Set false to disable startup version check (no outbound HTTP)
 ```
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `confirm_quit` | `boolean` | `true` | If `true`, shows confirmation dialog when quitting with running apps. If `false`, quits immediately. |
 | `auto_launch` | `boolean` | `false` | When `true`, fdemon auto-launches the cached `last_device` from `settings.local.toml` on startup if no `launch.toml` configuration has `auto_start = true`. When `false` (default), the cache is preserved across runs but only used to pre-select a default in the New Session dialog. Per-config `auto_start = true` always wins regardless of this flag. Has no effect in headless mode. |
+| `version_check` | `boolean` | `true` | When `true` (default), fdemon queries the GitHub releases API on startup and displays a banner above the New Session Dialog if a newer version is available. Set to `false` to disable entirely — no outbound HTTP requests are made and no banner is shown. Network failures are always silent regardless of this setting. |
 
 **Example:**
 
@@ -265,11 +267,26 @@ auto_launch = false     # Set true to auto-launch on the device cached in settin
 [behavior]
 confirm_quit = true
 auto_launch = false   # set true to auto-launch on cached last_device
+version_check = true  # set false to disable startup version check
 ```
 
 > **Removed in v0.5.0:** `[behavior] auto_start` — it was redundant with per-config `auto_start` in `launch.toml`, and its documented semantics never matched the code. Existing configs with the flag load cleanly but the flag has no effect; fdemon logs a one-time deprecation warning. Use per-config `auto_start = true` on the launch configuration you want to auto-launch, or `[behavior] auto_launch = true` to opt into cache-based auto-launch.
 
-> **Behavior change (post-v0.5.0):** Cache-driven auto-launch is now opt-in via `[behavior] auto_launch = true`. If you were relying on `settings.local.toml` to silently auto-launch on each run (the behavior introduced by commit `c5879fa`), add `auto_launch = true` to `[behavior]` in your `config.toml`. This change does **not** affect users who use per-config `auto_start = true` — that path is unchanged.
+#### `version_check`
+
+- **Type:** boolean
+- **Default:** `true`
+
+On startup, fdemon queries the GitHub releases API for the latest `fdemon` release and, if a newer version is available, displays a one-line banner above the New Session Dialog: `⬆ New version available: v<latest> (current v<current>)`.
+
+Set to `false` to disable the check entirely:
+
+```toml
+[behavior]
+version_check = false
+```
+
+When disabled, no outbound HTTP requests are made on startup. Network failures during the check are silent — no banner appears and no error is logged at user-visible levels.
 
 ### Watcher Settings
 
