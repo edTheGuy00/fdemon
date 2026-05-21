@@ -1466,9 +1466,13 @@ mod tests {
 
     #[tokio::test]
     async fn persist_settings_action_sends_failed_message_on_error() {
-        // Use a path that cannot be written to (non-existent parent).
-        let project_path =
-            std::path::PathBuf::from("/nonexistent/path/that/cannot/be/created/12345");
+        // Use a regular file as the project path so `save_settings` fails when
+        // it tries to `create_dir_all(<file>/.fdemon)` — a non-directory
+        // ancestor is rejected on every platform (the prior approach used a
+        // Unix-style absolute path that succeeded on Windows by resolving
+        // against the writable drive root).
+        let temp_file = tempfile::NamedTempFile::new().expect("create temp file");
+        let project_path = temp_file.path().to_path_buf();
 
         let settings = crate::config::Settings::default();
 
