@@ -171,25 +171,31 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `Cargo.toml` (workspace) | Added `reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }` under `[workspace.dependencies]` |
+| `crates/fdemon-app/Cargo.toml` | Added `reqwest.workspace = true` under `[dependencies]` |
+| `crates/fdemon-app/src/version_check.rs` | New module: `check_for_newer_release()` async function + `parse_semver()` helper + 6 unit tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub mod version_check;` |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Clippy `nonminimal_bool` fix in tests**: The task spec used `assert!(!((0,5,4) > (0,5,4)))` but clippy -D warnings rejects negated boolean comparisons. Changed to equivalent `assert!((0,5,4) <= (0,5,4))` — semantically identical, clippy-clean.
+2. **`reqwest` 0.12 pinned in workspace**: Using `default-features = false` with `rustls-tls` + `json` avoids pulling in native OpenSSL and limits feature surface to what the module needs.
 
 ### Testing Performed
 
-- `cargo build -p fdemon-app` — Pending
-- `cargo test -p fdemon-app version_check` — Pending
-- `cargo clippy -p fdemon-app` — Pending
+- `cargo build -p fdemon-app` — Passed
+- `cargo test -p fdemon-app version_check` — Passed (6 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **No live network test**: `check_for_newer_release` is not covered by unit tests — only `parse_semver` and tuple comparison are tested. This matches the task spec: "Deliberately not tested: the live network path."

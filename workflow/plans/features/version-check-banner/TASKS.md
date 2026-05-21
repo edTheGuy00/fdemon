@@ -39,12 +39,14 @@ Wave 3 (parallel)
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Modules |
 |---|------|--------|------------|------------|-------|---------|
-| 1 | [01-version-check-module](tasks/01-version-check-module.md) | Not Started | - | 2-3h | implementor | `fdemon-app/version_check.rs`, Cargo.toml |
-| 2 | [02-config-key](tasks/02-config-key.md) | Not Started | - | 0.5-1h | implementor | `fdemon-app/config/types.rs` |
-| 3 | [03-banner-refactor](tasks/03-banner-refactor.md) | Not Started | - | 3-4h | implementor | state.rs, message.rs, handler, config/mod.rs, startup.rs, widget, render, headless |
-| 4 | [04-spawn-and-wire](tasks/04-spawn-and-wire.md) | Not Started | 1, 2, 3 | 1-2h | implementor | `fdemon-app/spawn.rs`, `fdemon-tui/runner.rs` |
-| 5 | [05a-update-config-docs](tasks/05a-update-config-docs.md) | Not Started | 2, 3 | 0.5-1h | implementor | `docs/CONFIGURATION.md` |
-| 6 | [05b-update-architecture-doc](tasks/05b-update-architecture-doc.md) | Not Started | 1, 4 | 0.5-1h | doc_maintainer | `docs/ARCHITECTURE.md` |
+| 1 | [01-version-check-module](tasks/01-version-check-module.md) | Done | - | 2-3h | implementor | `fdemon-app/version_check.rs`, Cargo.toml |
+| 2 | [02-config-key](tasks/02-config-key.md) | Done | - | 0.5-1h | implementor | `fdemon-app/config/types.rs` |
+| 3 | [03-banner-refactor](tasks/03-banner-refactor.md) | Done ⚠ | - | 3-4h | implementor | state.rs, message.rs, handler, config/mod.rs, startup.rs, widget, render, headless |
+| 4 | [04-spawn-and-wire](tasks/04-spawn-and-wire.md) | Done ⚠ | 1, 2, 3 | 1-2h | implementor | `fdemon-app/spawn.rs`, `fdemon-tui/runner.rs` |
+| 5 | [05a-update-config-docs](tasks/05a-update-config-docs.md) | Done | 2, 3 | 0.5-1h | implementor | `docs/CONFIGURATION.md` |
+| 6 | [05b-update-architecture-doc](tasks/05b-update-architecture-doc.md) | Done | 1, 4 | 0.5-1h | doc_maintainer | `docs/ARCHITECTURE.md` |
+
+**Concern (Task 03):** `has_cached_last_device` was retained (not deleted) because it has live call sites in `startup.rs` and `headless/runner.rs` for the cache-gate logic. The plan's acceptance criterion 3 grouped it with the nudge-specific symbols incorrectly; the implementor's decision is correct. Plan-author note for future: this function is unrelated to the migration nudge and should not have been listed in the grep-must-be-empty set.
 
 ## File Overlap Analysis
 

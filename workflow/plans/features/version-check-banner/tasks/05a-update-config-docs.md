@@ -69,24 +69,28 @@ Adapt heading depth (`###` vs `####` etc.) and styling to match whatever convent
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/CONFIGURATION.md` | Removed stale "Behavior change (post-v0.5.0)" blockquote; added `version_check` to property table, example code block, and `#### version_check` subsection under Behavior Settings |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Heading depth `####` not `###`**: The existing `[behavior]` keys (`confirm_quit`, `auto_launch`) are documented only via the property table with no individual sub-headings. Using `####` keeps `version_check` as a subsection of `### Behavior Settings` rather than a peer section alongside `### Watcher Settings`, which better reflects the document's existing style.
+
+2. **Table row added in addition to subsection**: The subsection provides narrative context while the table row gives the same quick-reference format as the other two keys — consistent with how readers scan the reference.
 
 ### Testing Performed
 
-- Visual review of rendered markdown — Pending
-- `grep -n "Cache-driven" docs/CONFIGURATION.md` — Pending (should be empty)
+- `grep -n "Cache-driven" docs/CONFIGURATION.md` — Empty (PASS)
+- `grep -n "version_check" docs/CONFIGURATION.md` — 5 matches in [behavior] section (PASS)
+- `grep -c "auto_launch" docs/CONFIGURATION.md` — 9 occurrences preserved (PASS)
+- Visual review of surrounding headings and document flow — Clean, no orphaned headings
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **No code changes**: This is a pure documentation edit; no compilation or test verification needed.

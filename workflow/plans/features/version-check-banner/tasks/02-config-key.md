@@ -102,24 +102,26 @@ If a similar test already exists for `confirm_quit`, add the new assertions ther
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/config/types.rs` | Added `version_check: bool` field to `BehaviorSettings` struct with `#[serde(default = "default_true")]`, updated `Default` impl to set `version_check: true`, added two new tests: `behavior_version_check_defaults_to_true_when_table_missing` and `behavior_version_check_can_be_opted_out` |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Used `default_true` serde helper (not `#[serde(default)]`)**: Ensures that users with an existing `config.toml` that omits the key are opted-in by default. This matches the task rationale: the version check is harmless and useful, so silent opt-out on upgrade would be surprising.
 
 ### Testing Performed
 
-- `cargo build -p fdemon-app` — Pending
-- `cargo test -p fdemon-app config` — Pending
+- `cargo build -p fdemon-app` — Passed
+- `cargo test -p fdemon-app config` — Passed (539 tests, 0 failed; both new tests confirmed passing)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **No call sites yet**: As specified, no code reads `version_check` yet. Task 04 (spawn-and-wire) is responsible for that wiring.

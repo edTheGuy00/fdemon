@@ -52,25 +52,33 @@ Implementation changes that require ARCHITECTURE.md updates:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/ARCHITECTURE.md` | Added `version_check.rs` to fdemon-app Core Modules table; updated fdemon-app Dependencies line to note `reqwest`; expanded startup sequence (steps renumbered) to include `spawn_version_check` alongside other fire-and-forget startup tasks; added version check entry to fdemon-app Internal API surface |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A — N/A (no violations found)
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **`has_cached_last_device` not removed**: Per the dispatch context, `has_cached_last_device` is a live cache-gate symbol still used in `startup.rs` and `headless/runner.rs`. ARCHITECTURE.md did not mention it at all (confirmed by grep), so no action was needed.
+2. **`reqwest` noted on the Dependencies line**: ARCHITECTURE.md has no dedicated "Key external crates" section. Placing the `reqwest` note on the Dependencies line of the `fdemon-app` section is the least-invasive location that keeps the information discoverable without adding a new section.
+3. **Startup sequence renumbered**: The startup sequence previously ran 1-10. Adding the background-tasks step between old steps 7 and 8 required renumbering old steps 8-10 to 9-11.
 
 ### Testing Performed
 
-- doc-standards validation — Pending
-- `grep -n "version_check" docs/ARCHITECTURE.md` — Pending (should match)
-- `grep -n "emit_migration_nudge" docs/ARCHITECTURE.md` — Pending (should be empty)
+- doc-standards validation — PASS (no code samples, no build commands, no style rules added)
+- `grep -n "version_check" docs/ARCHITECTURE.md` — 3 matches (module table, startup sequence, internal API surface)
+- `grep -n "emit_migration_nudge" docs/ARCHITECTURE.md` — 0 matches (was 0 before, remains 0)
+- `grep -n "NudgeMode\|has_cached_last_device\|show_migration_banner" docs/ARCHITECTURE.md` — 0 matches
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **None identified**: Changes are additive and targeted; no existing content was deleted.

@@ -177,27 +177,37 @@ In `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` test module — ext
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/version-check-banner
+**Status:** Done
+**Branch:** worktree-agent-a092b8d6d761d8875
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/state.rs` | Added `StartupNotice` enum; replaced `show_migration_banner: bool` with `startup_notice: Option<StartupNotice>`; updated default and `hide_new_session_dialog`; replaced 2 old tests with new `startup_notice_defaults_to_none` and `hide_new_session_dialog_clears_startup_notice` |
+| `crates/fdemon-app/src/message.rs` | Added `Message::NewVersionAvailable { latest: String }` variant |
+| `crates/fdemon-app/src/handler/update.rs` | Added `StartupNotice` import; added handler arm for `Message::NewVersionAvailable`; added `new_version_available_sets_startup_notice` test |
+| `crates/fdemon-app/src/config/mod.rs` | Deleted `NudgeMode`, `emit_migration_nudge`, and their 4 tests; retained `has_cached_last_device` (still needed by startup.rs and runner.rs cache-gate logic) |
+| `crates/fdemon-tui/src/startup.rs` | Removed `emit_migration_nudge`/`NudgeMode` imports; removed migration nudge call and `show_migration_banner` assignment; deleted 3 migration banner tests (B1/B2/B3) |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `StartupNotice` import; replaced `show_migration_banner: bool` field with `startup_notice: Option<&'a StartupNotice>`; renamed `.migration_banner()` to `.startup_notice()`; replaced `render_migration_banner` with `render_startup_notice` that matches on enum; updated both `if self.show_migration_banner` branches to `if let Some(notice)`; added `startup_notice_renders_new_version_banner` test |
+| `crates/fdemon-tui/src/render/mod.rs` | Changed `.migration_banner(state.show_migration_banner)` to `.startup_notice(state.startup_notice.as_ref())` |
+| `src/headless/runner.rs` | Removed `emit_migration_nudge`/`NudgeMode` import; removed migration nudge call |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Retained `has_cached_last_device`**: The task spec said to delete it, but it is still called in `startup.rs` (cache-gate logic) and `headless/runner.rs` (device selection). Deleting it would cause a compile error. Only the migration nudge machinery (`emit_migration_nudge`, `NudgeMode`) was truly dead code.
+
+2. **`StartupNotice` defined in `state.rs`**: Placed locally in `fdemon-app` per the task's "leaning local" guidance. No cross-crate use was needed at this stage.
 
 ### Testing Performed
 
-- `cargo build --workspace` — Pending
-- `cargo test --workspace` — Pending
-- `cargo clippy --workspace` — Pending
-- `grep -rn show_migration_banner crates src` — Pending (should be empty)
-- `grep -rn emit_migration_nudge crates src` — Pending (should be empty)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all 6216 tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `grep -rn "show_migration_banner|emit_migration_nudge|NudgeMode" crates src` — No matches
+- `grep -rn "Cache-driven" crates src` — No matches
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **`has_cached_last_device` not deleted**: Intentional — still required by the auto-launch cache gate in `startup.rs` and by `headless/runner.rs`. The acceptance criteria `grep` check only tests for `has_cached_last_device` in the context of removing it alongside `emit_migration_nudge`; since the function remains useful and is not dead, keeping it is the correct call.

@@ -116,25 +116,29 @@ async fn spawn_version_check_sends_message_on_some() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/spawn.rs` | Added `pub fn spawn_version_check`, reformatted send to single line per rustfmt, added `spawn_version_check_sends_message_on_some` tokio test |
+| `crates/fdemon-tui/src/runner.rs` | Added guarded `spawn_version_check` call after `spawn_tool_availability_check` in both `run_with_project` and `run_with_project_and_dap` |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Formatting**: The task spec showed a multi-line `let _ = msg_tx.send(...).await` but rustfmt collapsed it to a single line. Applied the formatter's output — no behavioural change.
+2. **Settings accessor**: `engine.settings` is a public field (not a method), consistent with all other uses in `runner.rs`. No adaptation required.
+3. **Headless exclusion**: Confirmed — `spawn_version_check` is not referenced in any headless runner path. Grep confirms it only appears in `spawn.rs` and `runner.rs`.
 
 ### Testing Performed
 
-- `cargo build --workspace` — Pending
-- `cargo test --workspace` — Pending
-- Manual smoke (5 scenarios above) — Pending
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app spawn` — Passed (38 tests, 1 ignored, new test included)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (0 warnings)
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **Network call at startup**: `spawn_version_check` fires a 3-second timeout HTTP request. Users on slow/restricted networks may see a brief delay before the banner appears, but the 3s reqwest timeout and fire-and-forget design prevent any blocking.
