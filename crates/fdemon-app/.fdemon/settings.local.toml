@@ -1,5 +1,4 @@
 # User-specific preferences (not tracked in git)
 # These override values from config.toml
 
-last_device = "emulator-5554"
-last_config = "Session"
+last_device = "test-device"
