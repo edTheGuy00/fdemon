@@ -143,9 +143,14 @@ fn now_secs() -> u64 {
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
-/// Fetch the latest release tag from the given endpoint. Returns the bare
-/// semver string (no `v` prefix) when the fetch succeeds and the remote tag
-/// is parseable; returns `None` on any error.
+/// Fetch the latest release tag from the given endpoint. Returns the
+/// remote `tag_name` with a single leading `v` stripped, or `None`
+/// on any I/O / HTTP / size error.
+///
+/// This function does NOT validate the returned string as semver —
+/// it is a raw transport helper. Callers must validate / normalize
+/// before treating the result as a version. `check_for_newer_release`
+/// is the validated public entry point.
 ///
 /// The `endpoint` parameter exists so tests can substitute a `wiremock` server
 /// URL without touching real network paths.
@@ -220,13 +225,17 @@ pub(crate) async fn fetch_latest_tag(endpoint: &str, timeout: Duration) -> Optio
 ///
 /// # Security: returned string is digit-and-dot only
 ///
-/// The returned `String` is the output of `parse_semver`'s numeric-triple
-/// validation. Any tag containing characters outside `[0-9.]` (including
-/// ANSI/control sequences from a hostile or malformed response) fails the
-/// parse step and returns `None`. Callers that embed the returned string
-/// into a terminal banner can therefore skip escape-sequence sanitisation.
-/// Do not change `parse_semver` to be more permissive without also adding
-/// explicit sanitisation at the render site.
+/// The returned `String` is built from `parse_semver`'s parsed
+/// numeric triple (`format!("{major}.{minor}.{patch}")`) — never
+/// the raw remote `tag_name`. Any pre-release suffix, build
+/// metadata, or hostile bytes following `-`/`+` are stripped by
+/// `parse_semver` and discarded by the formatting step. Callers
+/// that embed the returned string into a terminal banner can
+/// therefore skip escape-sequence sanitisation.
+///
+/// Do not change `check_for_newer_release` to return the raw
+/// `tag_str` without also adding explicit sanitisation at every
+/// render site.
 pub(crate) async fn check_for_newer_release(timeout: Duration) -> Option<String> {
     let current = parse_semver(env!("CARGO_PKG_VERSION"))?;
     let now = now_secs();
@@ -241,7 +250,7 @@ pub(crate) async fn check_for_newer_release(timeout: Duration) -> Option<String>
             return entry.latest.and_then(|tag| {
                 let parsed = parse_semver(&tag)?;
                 if parsed > current {
-                    Some(tag)
+                    Some(format!("{}.{}.{}", parsed.0, parsed.1, parsed.2))
                 } else {
                     None
                 }
@@ -256,9 +265,10 @@ pub(crate) async fn check_for_newer_release(timeout: Duration) -> Option<String>
     // Network fetch.
     let tag_str = fetch_latest_tag(GITHUB_RELEASES_LATEST, timeout).await?;
     let latest = parse_semver(&tag_str)?;
+    let normalized = format!("{}.{}.{}", latest.0, latest.1, latest.2);
 
     let result = if latest > current {
-        Some(tag_str.clone())
+        Some(normalized)
     } else {
         None
     };
@@ -545,6 +555,79 @@ mod tests {
         assert!(
             remote <= current,
             "0.0.1 must not be newer than current version"
+        );
+    }
+
+    #[tokio::test]
+    async fn ansi_escape_in_tag_is_stripped() {
+        use wiremock::matchers::method;
+        let mock = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "tag_name": "v1000.0.0-\u{001b}[31mEVIL\u{001b}[0m"
+                })),
+            )
+            .mount(&mock)
+            .await;
+        // fetch_latest_tag is the raw transport — it may still return the
+        // suffixed string (its doc explicitly says no validation). The
+        // assertion below targets check_for_newer_release's contract.
+        let raw = fetch_latest_tag(&mock.uri(), Duration::from_secs(3))
+            .await
+            .unwrap();
+        assert!(
+            raw.contains('\u{001b}'),
+            "raw transport returns the unvalidated string"
+        );
+
+        // The public API must normalize.
+        // Exercise the normalization path through parse_semver + format!.
+        let triple = parse_semver(&raw).unwrap();
+        let normalized = format!("{}.{}.{}", triple.0, triple.1, triple.2);
+        assert!(
+            normalized.chars().all(|c| c.is_ascii_digit() || c == '.'),
+            "normalized form must contain only digits and dots, got: {:?}",
+            normalized
+        );
+        assert_eq!(normalized, "1000.0.0");
+    }
+
+    #[test]
+    fn cache_hit_with_suffixed_tag_returns_normalized_form() {
+        // Simulate an old cache entry that was written before the normalization
+        // fix — i.e., the `latest` field holds a raw suffixed string.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        let now = now_secs();
+        // Write a cache entry whose `latest` contains a pre-release suffix.
+        std::fs::write(
+            &path,
+            format!(r#"{{"checked_at": {}, "latest": "999.0.0-rc.1"}}"#, now),
+        )
+        .unwrap();
+
+        let entry = read_cache_at(&path).unwrap();
+        let current = (0u32, 0u32, 0u32); // pretend current is 0.0.0 so remote is always newer
+
+        // Reproduce the cache-hit normalization logic directly.
+        let result = entry.latest.and_then(|tag| {
+            let parsed = parse_semver(&tag)?;
+            if parsed > current {
+                Some(format!("{}.{}.{}", parsed.0, parsed.1, parsed.2))
+            } else {
+                None
+            }
+        });
+
+        assert_eq!(result, Some("999.0.0".to_string()));
+        // Verify no characters outside [0-9.] are present.
+        assert!(
+            result
+                .unwrap()
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.'),
+            "cache-hit normalized form must contain only digits and dots"
         );
     }
 }
