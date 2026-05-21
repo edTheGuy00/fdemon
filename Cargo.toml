@@ -71,6 +71,7 @@ mockall = "0.13"
 serial_test = "3"
 expectrl = "0.7"
 insta = { version = "1.41", features = ["filters"] }
+wiremock = "0.6"
 
 # Root package (binary + lib during transition)
 [package]

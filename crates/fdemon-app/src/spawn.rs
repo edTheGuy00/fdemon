@@ -354,9 +354,17 @@ fn bare_flutter_run(devices: &[Device]) -> Option<AutoLaunchSuccess> {
 /// Silent: any failure (network, parse, version-not-newer) drops the
 /// task without sending a Message — no banner is rendered in that case.
 /// The check is fire-and-forget and never blocks startup.
-pub fn spawn_version_check(msg_tx: mpsc::Sender<Message>) {
+///
+/// The `timeout` parameter controls the per-request network timeout.
+/// Call sites should source it from `engine.settings.behavior` (or pass
+/// a sensible default) so the value is visible to readers.
+pub fn spawn_version_check(msg_tx: mpsc::Sender<Message>, timeout: Duration) {
+    // The JoinHandle is intentionally dropped: the version check is
+    // fire-and-forget. Any result (including errors) is delivered via the
+    // message channel, not the handle. Dropping the handle does NOT cancel
+    // the spawned task — Tokio detaches it instead.
     tokio::spawn(async move {
-        if let Some(latest) = crate::version_check::check_for_newer_release().await {
+        if let Some(latest) = crate::version_check::check_for_newer_release(timeout).await {
             let _ = msg_tx.send(Message::NewVersionAvailable { latest }).await;
         }
     });
@@ -777,14 +785,16 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// Verify the `NewVersionAvailable` message shape is correct.
+    /// Verify the `NewVersionAvailable` message round-trips correctly through
+    /// the channel.
     ///
-    /// We cannot easily mock `check_for_newer_release` without restructuring,
-    /// so this test verifies the message variant and payload directly by
-    /// sending it through the channel manually — mirroring exactly what
-    /// `spawn_version_check` does when `check_for_newer_release` returns `Some`.
+    /// This test checks the message variant and payload by sending it manually
+    /// through the channel — mirroring exactly what `spawn_version_check` does
+    /// when `check_for_newer_release` returns `Some`. The actual spawn-with-network
+    /// path is covered by `version_check`'s integration tests (wiremock matrix),
+    /// not by this unit test.
     #[tokio::test]
-    async fn spawn_version_check_sends_message_on_some() {
+    async fn new_version_available_message_round_trips_through_channel() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(1);
         tx.send(Message::NewVersionAvailable {
             latest: "0.6.0".into(),

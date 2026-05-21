@@ -34,3 +34,4 @@ tokio-test.workspace = true
 mockall.workspace = true
 serial_test.workspace = true
 fdemon-daemon = { workspace = true, features = ["test-helpers"] }
+wiremock.workspace = true
