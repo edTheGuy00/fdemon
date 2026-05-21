@@ -357,8 +357,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         // A newer fdemon release was discovered on GitHub. Set the startup
         // notice so it renders as a banner above the New Session Dialog.
+        // Gate on dialog visibility: if the user has already left the startup
+        // screen, the result arrives too late to be useful and is silently
+        // dropped (with a debug trace for diagnostics).
         Message::NewVersionAvailable { latest } => {
-            state.startup_notice = Some(StartupNotice::NewVersionAvailable { latest });
+            if state.is_new_session_dialog_visible() {
+                state.startup_notice = Some(StartupNotice::NewVersionAvailable { latest });
+            } else {
+                tracing::debug!(
+                    "Version check completed after dialog dismissed; dropping notice for v{}",
+                    latest
+                );
+            }
             UpdateResult::none()
         }
 
@@ -3328,8 +3338,9 @@ mod tests {
     use crate::state::StartupNotice;
 
     #[test]
-    fn new_version_available_sets_startup_notice() {
+    fn new_version_available_sets_startup_notice_when_dialog_visible() {
         let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
         update(
             &mut state,
             Message::NewVersionAvailable {
@@ -3342,5 +3353,31 @@ mod tests {
                 latest: "0.6.0".into()
             })
         );
+    }
+
+    #[test]
+    fn new_version_available_sets_startup_notice_when_in_startup() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Startup;
+        update(
+            &mut state,
+            Message::NewVersionAvailable {
+                latest: "0.6.0".into(),
+            },
+        );
+        assert!(state.startup_notice.is_some());
+    }
+
+    #[test]
+    fn new_version_available_dropped_when_dialog_not_visible() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        update(
+            &mut state,
+            Message::NewVersionAvailable {
+                latest: "0.6.0".into(),
+            },
+        );
+        assert!(state.startup_notice.is_none());
     }
 }
