@@ -288,6 +288,20 @@ version_check = false
 
 When disabled, no outbound HTTP requests are made on startup. Network failures during the check are silent — no banner appears and no error is logged at user-visible levels.
 
+##### Privacy
+
+When `version_check` is enabled (default), fdemon issues a single HTTPS GET request to
+`https://api.github.com/repos/edTheGuy00/fdemon/releases/latest` per launch (or once per
+24-hour cache window, whichever is more recent). The request contains:
+
+- A `User-Agent: fdemon/<version>` header
+- An `Accept: application/vnd.github+json` header
+
+No other data is transmitted. The source IP is visible to GitHub as with any HTTPS request.
+
+Set `version_check = false` to disable this behavior entirely — no outbound request will be
+made, and the on-disk cache will not be created.
+
 ### Watcher Settings
 
 Configure the file watcher for automatic hot reload.
