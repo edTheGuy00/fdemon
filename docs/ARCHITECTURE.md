@@ -572,7 +572,7 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 | `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `MemoryState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
-| `version_check.rs` | GitHub releases API client; queries the latest fdemon release at TUI startup and returns `Some(version)` when a newer release is available. Errors and non-newer releases collapse silently to `None` (fire-and-forget — this is a developer convenience, not a security channel). |
+| `version_check.rs` | GitHub releases API client; queries the latest fdemon release at TUI startup and returns `Some(version)` when a newer release is available. Results are cached in `<dirs::cache_dir()>/fdemon/version_check.json` (24 h TTL, JSON `{ checked_at, latest }`; per-user, not per-project) — no outbound request is made on a cache hit within the TTL. Errors and non-newer releases collapse silently to `None` (fire-and-forget — this is a developer convenience, not a security channel). |
 
 **Configuration (`config/`):**
 
@@ -2002,7 +2002,7 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
 8. tui::run_with_project(): Spawn background startup tasks (fire-and-forget, non-blocking):
    - spawn_tool_availability_check — detect adb, xcrun simctl, idevicesyslog
    - spawn_bootable_device_discovery — list iOS simulators and Android AVDs
-   - spawn_version_check — query GitHub releases API; sends Message::NewVersionAvailable if a newer release exists
+   - spawn_version_check — query GitHub releases API (or serve from on-disk cache); sends Message::NewVersionAvailable if a newer release exists. The handler drops this message silently if ui_mode has already transitioned away from Startup/NewSessionDialog (late-arrival gate).
 9. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
    OR when [behavior] auto_launch=true AND a valid last_device is cached.
    Otherwise: show New Session dialog. (See docs/CONFIGURATION.md for the full priority table.)
