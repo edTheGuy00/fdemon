@@ -107,24 +107,26 @@ fn new_version_available_dropped_when_dialog_not_visible() {
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/version-check-banner-followup
+**Status:** Done
+**Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/handler/update.rs` | Gated `Message::NewVersionAvailable` arm on `state.is_new_session_dialog_visible()`; replaced existing test with three scoped tests covering `NewSessionDialog`, `Startup`, and `Normal` modes |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Used existing `is_new_session_dialog_visible()` predicate**: The task explicitly required using this helper rather than duplicating the `matches!` expression inline. This ensures the gate stays in sync with the dialog-visibility definition if new modes are added to it in the future.
+2. **Replaced rather than added to existing test**: The existing `new_version_available_sets_startup_notice` test was calling `update` without setting `ui_mode`, which would now fail (since `AppState::new()` defaults to `UiMode::Normal`). It was replaced with three new tests matching the task's acceptance criteria exactly.
 
 ### Testing Performed
 
-- `cargo test -p fdemon-app handler` — Pending
-- `cargo clippy -p fdemon-app -- -D warnings` — Pending
+- `cargo test -p fdemon-app handler` — Passed (1380 tests, 0 failures); all three new tests pass
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (clean)
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **Late-arrival drop is silent to the user**: The debug trace is diagnostic only; the user will never see the banner if the check completes after they dismiss/skip the startup dialog. This is the intended behaviour per the task design.

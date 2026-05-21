@@ -68,23 +68,25 @@ Visual review: confirm the section renders within the existing "Approved Optimiz
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/version-check-banner-followup
+**Status:** Done
+**Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/REVIEW_FOCUS.md` | Added "Approved Exception: fdemon-app::version_check Network I/O" subsection under "Approved Optimizations" section |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Heading without backticks**: The proposed copy in the task used backticks around `fdemon-app::version_check` in the heading (`` ### Approved Exception: `fdemon-app::version_check` Network I/O ``). However, the acceptance criteria grep `grep -n "version_check Network I/O"` would fail because a backtick sits between `version_check` and `Network` in the raw file. The heading was written without backticks (`### Approved Exception: fdemon-app::version_check Network I/O`) to satisfy the acceptance criteria exactly, matching the style of other headings in the same file (e.g., "Forwarder Panel Gate") that don't wrap code identifiers in backticks.
 
 ### Testing Performed
 
-- `grep -n "Approved Exception" docs/REVIEW_FOCUS.md` — Pending
+- `grep -n "version_check Network I/O" docs/REVIEW_FOCUS.md` — 1 match (line 165)
+- `grep -n "Approved Exception" docs/REVIEW_FOCUS.md` — 2 matches (lines 15, 165)
+- Visual review confirmed the entry is within the "Approved Optimizations" section (lines 107–184) and the prescriptive "**Reviewers should reject**" criterion is present
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **Docs-only task**: No code was modified; no compilation or test verification needed.

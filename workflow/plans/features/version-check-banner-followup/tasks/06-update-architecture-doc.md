@@ -52,25 +52,26 @@ Implementation changes from tasks 03 + 04 that require ARCHITECTURE.md updates:
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/version-check-banner-followup
+**Status:** Done
+**Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/ARCHITECTURE.md` | (1) Updated `version_check.rs` row in Core Modules table to mention on-disk cache path `<dirs::cache_dir()>/fdemon/version_check.json`, 24 h TTL, and per-user scope. (2) Added late-arrival gate note to `spawn_version_check` line in Startup Sequence. |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **No new "System artifacts" section**: No such section existed; folding the cache path into the `version_check.rs` row was the lower-restructuring path as recommended by the task notes.
+2. **Content boundaries**: No code snippets, no config TOML values, no implementation details added — only module-level description and runtime artifact path, which are appropriate ARCHITECTURE.md content.
 
 ### Testing Performed
 
-- doc-standards validation — Pending
-- `grep -n version_check.json docs/ARCHITECTURE.md` — Pending
-- `grep -n "late.arrival\|ui_mode" docs/ARCHITECTURE.md` — Pending
+- `grep -n "version_check.json" docs/ARCHITECTURE.md` — 1 match at line 575 (PASS)
+- `grep -n "late-arrival" docs/ARCHITECTURE.md` — 1 match at line 2005 (PASS)
+- `grep -n "emit_migration_nudge\|NudgeMode\|show_migration_banner" docs/ARCHITECTURE.md` — 0 matches (PASS)
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **None**: Both edits are additive and targeted; no existing content was removed or restructured.

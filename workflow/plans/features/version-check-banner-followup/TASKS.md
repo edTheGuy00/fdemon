@@ -30,12 +30,12 @@ Wave 2 (parallel)                         ▼
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Modules |
 |---|------|--------|------------|------------|-------|---------|
-| 1 | [01-privacy-disclosure](tasks/01-privacy-disclosure.md) | Not Started | - | 0.5h | implementor | `docs/CONFIGURATION.md`, `README.md` |
-| 2 | [02-layer-boundary-exception](tasks/02-layer-boundary-exception.md) | Not Started | - | 0.5h | implementor | `docs/REVIEW_FOCUS.md` |
-| 3 | [03-handler-late-arrival-gate](tasks/03-handler-late-arrival-gate.md) | Not Started | - | 1h | implementor | `fdemon-app/handler/update.rs` |
-| 4 | [04-version-check-hardening](tasks/04-version-check-hardening.md) | Not Started | - | 4-6h | implementor | `fdemon-app/version_check.rs`, `fdemon-app/spawn.rs`, `fdemon-app/Cargo.toml`, workspace `Cargo.toml`, `fdemon-tui/runner.rs` |
-| 5 | [05-config-defaults-and-polish](tasks/05-config-defaults-and-polish.md) | Not Started | 4 | 1.5-2h | implementor | `fdemon-app/config/types.rs`, `fdemon-app/lib.rs`, `fdemon-app/version_check.rs`, `fdemon-tui/widgets/new_session_dialog/mod.rs`, `src/headless/runner.rs`, `docs/CONFIGURATION.md` |
-| 6 | [06-update-architecture-doc](tasks/06-update-architecture-doc.md) | Not Started | 3, 4 | 0.5h | doc_maintainer | `docs/ARCHITECTURE.md` |
+| 1 | [01-privacy-disclosure](tasks/01-privacy-disclosure.md) | Done | - | 0.5h | implementor | `docs/CONFIGURATION.md`, `README.md` |
+| 2 | [02-layer-boundary-exception](tasks/02-layer-boundary-exception.md) | Done | - | 0.5h | implementor | `docs/REVIEW_FOCUS.md` |
+| 3 | [03-handler-late-arrival-gate](tasks/03-handler-late-arrival-gate.md) | Done | - | 1h | implementor | `fdemon-app/handler/update.rs` |
+| 4 | [04-version-check-hardening](tasks/04-version-check-hardening.md) | Done (re-validated after follow-up fixes) | - | 4-6h | implementor | `fdemon-app/version_check.rs`, `fdemon-app/spawn.rs`, `fdemon-app/Cargo.toml`, workspace `Cargo.toml`, `fdemon-tui/runner.rs` |
+| 5 | [05-config-defaults-and-polish](tasks/05-config-defaults-and-polish.md) | Done | 4 | 1.5-2h | implementor | `fdemon-app/config/types.rs`, `fdemon-app/lib.rs`, `fdemon-app/version_check.rs`, `fdemon-tui/widgets/new_session_dialog/mod.rs`, `src/headless/runner.rs`, `docs/CONFIGURATION.md` |
+| 6 | [06-update-architecture-doc](tasks/06-update-architecture-doc.md) | Done | 3, 4 | 0.5h | doc_maintainer | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

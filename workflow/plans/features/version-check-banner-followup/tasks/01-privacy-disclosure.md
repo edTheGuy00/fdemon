@@ -79,25 +79,29 @@ This is a docs-only task. No code-level tests are added. Manual smoke:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/version-check-banner-followup
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `docs/CONFIGURATION.md` | Added `##### Privacy` subsection immediately after the `version_check` opt-out example block (line 291), naming the endpoint, transmitted headers, source IP note, 24-hour cache TTL, and `version_check = false` opt-out. |
+| `README.md` | Added `## Privacy` section before `## Contributing`, with one-paragraph disclosure naming `api.github.com`, the `User-Agent` header, and `version_check = false` opt-out with cross-reference to `docs/CONFIGURATION.md`. |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Privacy section placement in README**: Inserted between `## Contributing` and `## License` as the task suggested "after Installation / before License." The Contributing section sits between those two, so placing Privacy just before Contributing keeps the logical flow: features → config → privacy → contributing → license.
+2. **Heading depth in CONFIGURATION.md**: Used `#####` as specified in the task — `version_check` is already `####`, so the nested Privacy subsection is one level deeper.
 
 ### Testing Performed
 
-- `grep -n Privacy docs/CONFIGURATION.md` — Pending
-- `grep -n Privacy README.md` — Pending
-- Visual review of rendered markdown — Pending
+- `grep -n "Privacy" docs/CONFIGURATION.md` — Passed (line 291, inside `version_check` block)
+- `grep -n "Privacy" README.md` — Passed (line 190)
+- `grep -n "api.github.com" README.md` — Passed (line 193)
+- `grep -n "24-hour" docs/CONFIGURATION.md` — Passed (line 295)
+- `grep -n "version_check = false" docs/CONFIGURATION.md README.md` — Passed (both files)
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **Forward-looking cache TTL**: The "24-hour cache window" is referenced in the privacy block before task 04 (version-check hardening) actually implements the cache. If task 04 changes the TTL, this doc will need a corresponding update — noted in the task's own "Notes" section.

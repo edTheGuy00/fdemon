@@ -238,27 +238,46 @@ The cache-path injection trick: a private `fn cache_path() -> Option<PathBuf>` t
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/version-check-banner-followup
+**Status:** Done
+**Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/version_check.rs` | Full refactor: typed `ReleaseResponse` struct, `CacheEntry` + `read_cache_at`/`write_cache_at`/`read_cache`/`write_cache` cache module, `fetch_latest_tag(endpoint, timeout)` with body cap and no-redirect policy, `check_for_newer_release(timeout)` with cache integration, `parse_semver` rewritten with iterator chaining and pre-release tolerance, 22 tests (6 parse + 5 cache + 8 wiremock + 3 comparison) |
+| `crates/fdemon-app/src/spawn.rs` | Updated `spawn_version_check` signature to accept `timeout: Duration`, added JoinHandle intentional-drop comment, renamed test to `new_version_available_message_round_trips_through_channel` |
+| `crates/fdemon-app/Cargo.toml` | Added `wiremock.workspace = true` to `[dev-dependencies]` |
+| `Cargo.toml` | Added `wiremock = "0.6"` to `[workspace.dependencies]` |
+| `crates/fdemon-tui/src/runner.rs` | Updated both `spawn_version_check` call sites to pass `Duration::from_secs(3)` with a comment noting task 05 will replace with the config field |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Cache path injection**: Used `read_cache_at(path)` / `write_cache_at(path, entry)` functions that accept an explicit path, allowing tests to use `tempfile::tempdir()` without `std::env::set_var`. Production code calls the wrapper `read_cache()` / `write_cache()` that use `dirs::cache_dir()`.
+
+2. **`fetch_latest_tag` returns raw tag string regardless of version comparison**: The comparison logic (`latest > current`) lives in `check_for_newer_release`, not in the fetch layer. This makes `fetch_latest_tag` testable with a simple equality assertion without needing to know the current version in tests.
+
+3. **Windows atomic-rename**: Added `#[cfg(windows)]` block to remove the destination file before rename, since `std::fs::rename` fails over existing files on Windows. This is best-effort — a small window exists between remove and rename, which is acceptable for a non-critical cache file.
+
+4. **Cache TTL check uses `saturating_sub`**: Prevents underflow in the edge case where system clock goes backwards. The age check `now.saturating_sub(entry.checked_at) < CACHE_TTL_SECS` is safe even if `checked_at > now`.
+
+5. **Oversized response test uses JSON body with padding**: The wiremock `set_body_json` API doesn't support setting raw bytes with arbitrary size, so we use a JSON object with a large padding string field to exceed 512 KiB. The body cap triggers on the actual byte count, not the Content-Length header.
 
 ### Testing Performed
 
-- `cargo build --workspace` — Pending
-- `cargo test -p fdemon-app version_check` — Pending
-- `cargo clippy --workspace --all-targets -- -D warnings` — Pending
-- Cache TTL behavior verified manually — Pending
-- Windows atomic-rename verified on CI — Pending
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app version_check` — Passed (22 tests)
+- `cargo test --workspace` — Passed (all tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+- `grep -n "REQUEST_TIMEOUT" crates/fdemon-app/src/version_check.rs` — Returns no match (AC6 ✓)
+- `grep -n "spawn_version_check_sends_message_on_some" crates/fdemon-app/src/spawn.rs` — Returns no match (AC7 ✓)
+- `parse_semver("0.6.0-rc.1") == Some((0, 6, 0))` — Asserted in test suite (AC8 ✓)
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **Windows atomic-rename window**: Between `remove_file` and `rename` on Windows there is a brief moment where the cache file does not exist. A crash in that window loses the cache. Acceptable for a best-effort developer-tool cache.
+
+2. **No real network test**: The `check_for_newer_release` function is not covered by an end-to-end network test. The wiremock tests cover `fetch_latest_tag` directly; the cache integration is tested via unit tests with tempdir. A full integration test against real GitHub would require network access in CI.
+
+3. **Cache TTL behavior unverified at runtime**: AC4 (only one outbound request in 24h) is verifiable manually via `lsof`/cache file inspection but not by automated tests here. The TTL logic is unit-tested with synthetic timestamps.

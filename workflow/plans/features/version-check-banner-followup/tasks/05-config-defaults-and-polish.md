@@ -167,26 +167,38 @@ Plus the updated `behavior_settings_auto_launch_defaults_false` per the section 
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/version-check-banner-followup
+**Status:** Done
+**Branch:** feat/version-check-banner
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/config/types.rs` | Added `version_check_timeout_secs: u8` field to `BehaviorSettings` with `#[serde(default = "default_version_check_timeout_secs")]`; added `default_version_check_timeout_secs() -> u8 { 3 }` helper; updated `Default` impl; updated `behavior_settings_auto_launch_defaults_false` test to assert `version_check` and `version_check_timeout_secs`; added two new tests |
+| `crates/fdemon-app/src/lib.rs` | Narrowed `pub mod version_check` to `pub(crate) mod version_check` |
+| `crates/fdemon-app/src/version_check.rs` | Narrowed `pub async fn check_for_newer_release` to `pub(crate) async fn check_for_newer_release` |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Extracted `split_notice_area` helper; updated banner copy to include URL hint; replaced inline `Layout::vertical` in both `render_regions_impl` and `Widget::render` call sites |
+| `src/headless/runner.rs` | Added intentional-absence comment for `spawn_version_check` |
+| `crates/fdemon-tui/src/runner.rs` | Both `spawn_version_check` call sites now read `engine.settings.behavior.version_check_timeout_secs` |
+| `docs/CONFIGURATION.md` | Added `version_check_timeout_secs` to table + added `#### version_check_timeout_secs` detail section |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <Rationale>
+1. **Headless comment placement**: The task said to add the comment "near where `spawn_tool_availability_check` is called" but `spawn_tool_availability_check` is not called in the headless runner. Placed the comment logically near the other spawn/startup code (after the stdin reader spawn) since that's the most readable location for explaining what is NOT done in headless mode.
+
+2. **`split_notice_area` formatting**: The task spec showed a multi-line layout call, but `cargo fmt` collapsed it to a single line. Used the rustfmt-preferred single-line form to keep the codebase format-clean.
+
+3. **URL encoding**: Used `\u{2014}` (em dash) in the Rust string literal for the `—` separator in the banner copy, consistent with the task spec's intent.
 
 ### Testing Performed
 
-- `cargo build --workspace` — Pending
-- `cargo test -p fdemon-app config` — Pending
-- `cargo clippy --workspace --all-targets -- -D warnings` — Pending
-- Banner copy visual check at ≥80 cols — Pending
+- `cargo build --workspace` — Passed
+- `cargo test -p fdemon-app config` — Passed (537 tests)
+- `cargo test --workspace --lib` — Passed (1297 tests)
+- `cargo test -p fdemon-tui startup_notice_renders_new_version_banner` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (clean)
+- `cargo fmt --all -- --check` — Passed (clean)
 
 ### Risks/Limitations
 
-1. **<Risk>**: <Description>
+1. **Banner width on narrow terminals**: The URL hint makes the banner line ~90 chars on default terminals. Ratatui clips gracefully; the version-number actionable part remains visible. Acceptable per task spec.
