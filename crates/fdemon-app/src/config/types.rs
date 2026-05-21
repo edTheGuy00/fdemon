@@ -164,6 +164,10 @@ pub struct BehaviorSettings {
     /// for the dialog" only, not a launch trigger.
     #[serde(default)]
     pub auto_launch: bool,
+    /// When true (default), fdemon checks GitHub for a newer release on startup
+    /// and shows a one-line banner if one is available. Set to false to opt out.
+    #[serde(default = "default_true")]
+    pub version_check: bool,
 }
 
 impl Default for BehaviorSettings {
@@ -171,6 +175,7 @@ impl Default for BehaviorSettings {
         Self {
             confirm_quit: true,
             auto_launch: false,
+            version_check: true,
         }
     }
 }
@@ -1484,6 +1489,20 @@ mod tests {
         assert!(s.auto_launch);
         let toml_out = toml::to_string(&s).unwrap();
         assert!(toml_out.contains("auto_launch = true"));
+    }
+
+    #[test]
+    fn behavior_version_check_defaults_to_true_when_table_missing() {
+        let toml = ""; // empty config
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(settings.behavior.version_check);
+    }
+
+    #[test]
+    fn behavior_version_check_can_be_opted_out() {
+        let toml = "[behavior]\nversion_check = false\n";
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(!settings.behavior.version_check);
     }
 
     #[test]
