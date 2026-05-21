@@ -450,8 +450,7 @@ fn render_bar(
         } else {
             Style::default().fg(Color::White).bg(color)
         };
-        let mut lx = label_start;
-        for ch in label.chars() {
+        for (lx, ch) in (label_start..).zip(label.chars()) {
             if lx >= x + bar_width || lx >= area.x + area.width {
                 break;
             }
@@ -459,7 +458,6 @@ fn render_bar(
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(label_style);
             }
-            lx += 1;
         }
     }
 
@@ -552,8 +550,7 @@ fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64, us
             } else {
                 x
             };
-            let mut lx = lx_start;
-            for ch in label.chars() {
+            for (lx, ch) in (lx_start..).zip(label.chars()) {
                 if lx >= area_right {
                     break;
                 }
@@ -561,7 +558,6 @@ fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64, us
                     cell.set_symbol(&ch.to_string());
                     cell.set_style(label_style);
                 }
-                lx += 1;
             }
         }
     } else {
@@ -594,8 +590,7 @@ fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64, us
             } else {
                 x
             };
-            let mut lx = lx_start;
-            for ch in label.chars() {
+            for (lx, ch) in (lx_start..).zip(label.chars()) {
                 if lx >= area_right {
                     break;
                 }
@@ -603,7 +598,6 @@ fn render_time_axis(area: Rect, buf: &mut Buffer, vp_start: u64, vp_end: u64, us
                     cell.set_symbol(&ch.to_string());
                     cell.set_style(label_style);
                 }
-                lx += 1;
             }
         }
     }
@@ -655,8 +649,7 @@ fn render_paused_indicator(area: Rect, buf: &mut Buffer) {
         return;
     }
     let x_start = area.x + area.width - label_len;
-    let mut x = x_start;
-    for ch in label.chars() {
+    for (x, ch) in (x_start..).zip(label.chars()) {
         if x >= area.x + area.width {
             break;
         }
@@ -664,7 +657,6 @@ fn render_paused_indicator(area: Rect, buf: &mut Buffer) {
             cell.set_symbol(&ch.to_string());
             cell.set_style(style);
         }
-        x += 1;
     }
 }
 

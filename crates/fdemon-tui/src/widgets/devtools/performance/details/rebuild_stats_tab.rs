@@ -75,7 +75,7 @@ fn render_table(area: Rect, buf: &mut Buffer, state: &PerformanceState) {
 
     // Rows sorted by count descending (default sort, no interactive toggle in Phase 3).
     let mut rows: Vec<&RebuildLocation> = snapshot.rebuilds.iter().collect();
-    rows.sort_by(|a, b| b.build_count.cmp(&a.build_count));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.build_count));
 
     // ── Layout ────────────────────────────────────────────────────────────────
     //
