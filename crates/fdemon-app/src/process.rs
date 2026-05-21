@@ -52,7 +52,7 @@ pub fn process_message(
         let all_actions: Vec<UpdateAction> = result
             .action
             .into_iter()
-            .chain(result.extra_actions.into_iter())
+            .chain(result.extra_actions)
             .collect();
 
         for action in all_actions {
