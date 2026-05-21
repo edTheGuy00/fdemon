@@ -564,9 +564,33 @@ pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()> {
         .write_all(full_content.as_bytes())
         .map_err(|e| Error::config(format!("Failed to write temp file: {}", e)))?;
 
-    temp_file
-        .persist(&config_path)
-        .map_err(|e| Error::config(format!("Failed to rename temp file: {}", e)))?;
+    // On Windows, `tempfile::persist` uses `MoveFileEx` with
+    // `MOVEFILE_REPLACE_EXISTING`. When two writers race for the same
+    // destination the loser can briefly see `ERROR_ACCESS_DENIED` while the
+    // winner still has the file open. Retry a few times with exponential
+    // backoff. POSIX `rename` is atomic, so on Unix the first attempt
+    // succeeds and the loop is a no-op.
+    const MAX_PERSIST_ATTEMPTS: u32 = 5;
+    let mut pending = temp_file;
+    let mut attempt: u32 = 0;
+    loop {
+        match pending.persist(&config_path) {
+            Ok(_) => break,
+            Err(persist_err) => {
+                attempt += 1;
+                if attempt >= MAX_PERSIST_ATTEMPTS {
+                    return Err(Error::config(format!(
+                        "Failed to rename temp file: {}",
+                        persist_err.error
+                    )));
+                }
+                pending = persist_err.file;
+                std::thread::sleep(std::time::Duration::from_millis(
+                    10u64 << (attempt - 1),
+                ));
+            }
+        }
+    }
 
     info!("Saved settings to {:?}", config_path);
     Ok(())
