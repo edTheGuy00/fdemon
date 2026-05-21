@@ -168,6 +168,11 @@ pub struct BehaviorSettings {
     /// and shows a one-line banner if one is available. Set to false to opt out.
     #[serde(default = "default_true")]
     pub version_check: bool,
+    /// Total HTTP timeout in seconds for the GitHub release version check.
+    /// Increase on slow or flaky connections; decrease to fail-fast.
+    /// A value of 0 is equivalent to disabling the check.
+    #[serde(default = "default_version_check_timeout_secs")]
+    pub version_check_timeout_secs: u8,
 }
 
 impl Default for BehaviorSettings {
@@ -176,6 +181,7 @@ impl Default for BehaviorSettings {
             confirm_quit: true,
             auto_launch: false,
             version_check: true,
+            version_check_timeout_secs: 3,
         }
     }
 }
@@ -225,6 +231,10 @@ fn default_extensions() -> Vec<String> {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_version_check_timeout_secs() -> u8 {
+    3
 }
 
 /// Icon rendering mode for the TUI.
@@ -1480,6 +1490,8 @@ mod tests {
         let s: BehaviorSettings = toml::from_str("").unwrap();
         assert!(!s.auto_launch);
         assert!(s.confirm_quit);
+        assert!(s.version_check);
+        assert_eq!(s.version_check_timeout_secs, 3);
     }
 
     #[test]
@@ -1503,6 +1515,18 @@ mod tests {
         let toml = "[behavior]\nversion_check = false\n";
         let settings: Settings = toml::from_str(toml).unwrap();
         assert!(!settings.behavior.version_check);
+    }
+
+    #[test]
+    fn behavior_version_check_timeout_secs_defaults_to_three() {
+        let s: BehaviorSettings = toml::from_str("").unwrap();
+        assert_eq!(s.version_check_timeout_secs, 3);
+    }
+
+    #[test]
+    fn behavior_version_check_timeout_secs_can_be_overridden() {
+        let s: BehaviorSettings = toml::from_str("version_check_timeout_secs = 10").unwrap();
+        assert_eq!(s.version_check_timeout_secs, 10);
     }
 
     #[test]

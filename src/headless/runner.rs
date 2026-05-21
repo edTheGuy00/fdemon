@@ -63,6 +63,8 @@ pub async fn run_headless(
         spawn_stdin_reader_blocking(stdin_tx);
     });
 
+    // version_check is not spawned in headless mode: no banner surface, and CI runs should not generate stderr chatter.
+
     // Evaluate DAP auto-start (covers --dap-port, config-enabled, and IDE-detected scenarios).
     // --dap-port already sets dap.enabled=true above, so this single check handles all paths.
     if should_auto_start_dap(&engine.settings) {

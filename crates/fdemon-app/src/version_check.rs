@@ -227,7 +227,7 @@ pub(crate) async fn fetch_latest_tag(endpoint: &str, timeout: Duration) -> Optio
 /// into a terminal banner can therefore skip escape-sequence sanitisation.
 /// Do not change `parse_semver` to be more permissive without also adding
 /// explicit sanitisation at the render site.
-pub async fn check_for_newer_release(timeout: Duration) -> Option<String> {
+pub(crate) async fn check_for_newer_release(timeout: Duration) -> Option<String> {
     let current = parse_semver(env!("CARGO_PKG_VERSION"))?;
     let now = now_secs();
 

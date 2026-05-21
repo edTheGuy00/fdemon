@@ -250,9 +250,10 @@ Control general application behavior.
 
 ```toml
 [behavior]
-confirm_quit = true     # Show confirmation dialog when quitting with active sessions
-auto_launch = false     # Set true to auto-launch on the device cached in settings.local.toml
-version_check = true    # Set false to disable startup version check (no outbound HTTP)
+confirm_quit = true          # Show confirmation dialog when quitting with active sessions
+auto_launch = false          # Set true to auto-launch on the device cached in settings.local.toml
+version_check = true         # Set false to disable startup version check (no outbound HTTP)
+version_check_timeout_secs = 3  # HTTP timeout for the version check request
 ```
 
 | Property | Type | Default | Description |
@@ -260,6 +261,7 @@ version_check = true    # Set false to disable startup version check (no outboun
 | `confirm_quit` | `boolean` | `true` | If `true`, shows confirmation dialog when quitting with running apps. If `false`, quits immediately. |
 | `auto_launch` | `boolean` | `false` | When `true`, fdemon auto-launches the cached `last_device` from `settings.local.toml` on startup if no `launch.toml` configuration has `auto_start = true`. When `false` (default), the cache is preserved across runs but only used to pre-select a default in the New Session dialog. Per-config `auto_start = true` always wins regardless of this flag. Has no effect in headless mode. |
 | `version_check` | `boolean` | `true` | When `true` (default), fdemon queries the GitHub releases API on startup and displays a banner above the New Session Dialog if a newer version is available. Set to `false` to disable entirely — no outbound HTTP requests are made and no banner is shown. Network failures are always silent regardless of this setting. |
+| `version_check_timeout_secs` | `integer` (0–255) | `3` | Total HTTP timeout in seconds for the GitHub release version check. Increase on slow or flaky connections; decrease to fail-fast. A value of `0` is equivalent to disabling the check. Has no effect when `version_check = false`. |
 
 **Example:**
 
@@ -301,6 +303,21 @@ No other data is transmitted. The source IP is visible to GitHub as with any HTT
 
 Set `version_check = false` to disable this behavior entirely — no outbound request will be
 made, and the on-disk cache will not be created.
+
+#### `version_check_timeout_secs`
+
+- **Type:** integer (0–255)
+- **Default:** `3`
+
+Total HTTP timeout (seconds) for the GitHub release check. Increase this on slow or
+flaky connections; decrease to fail-fast.
+
+```toml
+[behavior]
+version_check_timeout_secs = 10
+```
+
+A value of `0` disables the check (equivalent to setting `version_check = false`).
 
 ### Watcher Settings
 

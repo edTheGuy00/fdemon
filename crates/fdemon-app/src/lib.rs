@@ -82,7 +82,7 @@ pub mod settings_items;
 pub(crate) mod signals;
 pub mod spawn;
 pub mod state;
-pub mod version_check;
+pub(crate) mod version_check;
 pub mod watcher;
 
 // Re-export primary types

@@ -630,6 +630,14 @@ impl<'a> NewSessionDialog<'a> {
         .split(popup_layout[1])[1]
     }
 
+    /// Split `area` into a one-row banner region and the remaining dialog region.
+    ///
+    /// Returns `(banner_area, dialog_area)`.
+    fn split_notice_area(area: Rect) -> (Rect, Rect) {
+        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        (chunks[0], chunks[1])
+    }
+
     /// Render a one-line startup notice banner above the dialog.
     ///
     /// Called when `startup_notice` is `Some`. The banner occupies the topmost
@@ -638,7 +646,7 @@ impl<'a> NewSessionDialog<'a> {
     fn render_startup_notice(notice: &StartupNotice, area: Rect, buf: &mut Buffer) {
         let text = match notice {
             StartupNotice::NewVersionAvailable { latest } => format!(
-                "\u{2B06} New version available: v{} (current v{})",
+                "\u{2B06} New version available: v{} (current v{}) \u{2014} https://github.com/edTheGuy00/fdemon/releases",
                 latest,
                 env!("CARGO_PKG_VERSION")
             ),
@@ -724,13 +732,9 @@ impl NewSessionDialog<'_> {
         ctx: Option<&mut crate::widgets::MouseCtx<'_>>,
     ) {
         if let Some(notice) = self.startup_notice {
-            let chunks = Layout::vertical([
-                Constraint::Length(1), // banner
-                Constraint::Min(0),    // dialog
-            ])
-            .split(area);
-            Self::render_startup_notice(notice, chunks[0], buf);
-            self.render_regions_no_banner(chunks[1], buf, ctx);
+            let (banner_area, dialog_area) = Self::split_notice_area(area);
+            Self::render_startup_notice(notice, banner_area, buf);
+            self.render_regions_no_banner(dialog_area, buf, ctx);
         } else {
             self.render_regions_no_banner(area, buf, ctx);
         }
@@ -1036,16 +1040,11 @@ impl Widget for NewSessionDialog<'_> {
         if let Some(notice) = self.startup_notice {
             // Reserve the top row for the startup notice banner; give the rest
             // to the dialog so its responsive layout calculations remain accurate.
-            let chunks = Layout::vertical([
-                Constraint::Length(1), // banner
-                Constraint::Min(0),    // dialog
-            ])
-            .split(area);
+            let (banner_area, dialog_area) = Self::split_notice_area(area);
 
-            Self::render_startup_notice(notice, chunks[0], buf);
+            Self::render_startup_notice(notice, banner_area, buf);
 
             // Render dialog in the remaining area
-            let dialog_area = chunks[1];
             match Self::layout_mode(dialog_area) {
                 LayoutMode::TooSmall => {
                     Self::render_too_small(dialog_area, buf);
