@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use fdemon_app::{
-    config::{emit_migration_nudge, load_all_configs, should_auto_start_dap, NudgeMode},
+    config::{load_all_configs, should_auto_start_dap},
     message::{AutoLaunchSuccess, Message},
     spawn::find_auto_launch_target,
     state::AppState,
@@ -271,13 +271,6 @@ async fn headless_auto_start(engine: &mut Engine) {
 
     // Load launch.toml configs to drive tier-1 (auto_start) and tier-3 (first config) resolution
     let configs = load_all_configs(&project_path);
-
-    // Migration nudge: user has a cached device but the flag is not set. In
-    // headless mode the cache is never consulted, so this helps CI/script users
-    // understand why fdemon didn't pick the previously-used device.
-    // The headless message explicitly avoids referencing [behavior] auto_launch
-    // as a remediation since that flag does NOT apply in headless mode.
-    let _ = emit_migration_nudge(NudgeMode::Headless, &project_path, &engine.settings);
 
     // Discover devices
     info!("Discovering devices for headless auto-start...");

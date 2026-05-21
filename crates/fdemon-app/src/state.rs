@@ -63,6 +63,18 @@ pub enum UiMode {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Startup Notice (version-check-banner)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A persistent one-line notice rendered above the New Session Dialog
+/// on startup. Cleared when the dialog is dismissed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupNotice {
+    /// A newer fdemon release is available on GitHub.
+    NewVersionAvailable { latest: String },
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DevTools State (Phase 4)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1415,11 +1427,13 @@ pub struct AppState {
     /// which snapshots the current `resolved_sdk` at open time.
     pub flutter_version_state: FlutterVersionState,
 
-    /// Set to `true` when `emit_migration_nudge` reported that the cache-auto-launch
-    /// migration condition applies. Drives a one-line banner above the New Session
-    /// dialog so users see the change without needing to inspect the log file.
-    /// Cleared when the New Session dialog is dismissed.
-    pub show_migration_banner: bool,
+    /// Optional one-line notice rendered above the New Session Dialog on startup.
+    ///
+    /// Set by handlers such as `Message::NewVersionAvailable` to surface
+    /// actionable information (e.g., a newer fdemon release is available).
+    /// Cleared when the New Session dialog is dismissed via
+    /// [`AppState::hide_new_session_dialog`].
+    pub startup_notice: Option<StartupNotice>,
 
     /// Transient toast notifications shown as a one-line overlay in the TUI.
     ///
@@ -1561,7 +1575,7 @@ impl AppState {
             shared_source_handles: Vec::new(),
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
-            show_migration_banner: false,
+            startup_notice: None,
             toasts: Vec::new(),
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
@@ -1661,9 +1675,9 @@ impl AppState {
     /// Hide the new session dialog
     pub fn hide_new_session_dialog(&mut self) {
         self.ui_mode = UiMode::Normal;
-        // Clear the migration banner so it doesn't re-appear if the dialog is
+        // Clear the startup notice so it doesn't re-appear if the dialog is
         // re-opened later in the same process (e.g. via n key in Normal mode).
-        self.show_migration_banner = false;
+        self.startup_notice = None;
     }
 
     // ─────────────────────────────────────────────────────────
@@ -3022,32 +3036,28 @@ mod tests {
             .is_empty());
     }
 
-    // ── Migration banner field tests (Task 04) ────────────────────────────────
+    // ── Startup notice field tests (version-check-banner) ────────────────────
 
-    /// The `show_migration_banner` field must default to `false` so the banner
-    /// does not appear on processes where the migration condition does not apply.
+    /// The `startup_notice` field must default to `None` so no notice appears
+    /// on processes where no actionable startup condition applies.
     #[test]
-    fn show_migration_banner_defaults_to_false() {
-        let state = AppState::default();
-        assert!(
-            !state.show_migration_banner,
-            "show_migration_banner must default to false"
-        );
+    fn startup_notice_defaults_to_none() {
+        let state = AppState::new();
+        assert!(state.startup_notice.is_none());
     }
 
-    /// `hide_new_session_dialog` must clear `show_migration_banner` so the
-    /// banner does not persist if the dialog is re-opened in the same process.
+    /// `hide_new_session_dialog` must clear `startup_notice` so the notice
+    /// does not persist if the dialog is re-opened in the same process.
     #[test]
-    fn hide_new_session_dialog_clears_migration_banner() {
+    fn hide_new_session_dialog_clears_startup_notice() {
         let mut state = AppState {
-            show_migration_banner: true,
-            ..AppState::default()
+            startup_notice: Some(StartupNotice::NewVersionAvailable {
+                latest: "9.9.9".into(),
+            }),
+            ..AppState::new()
         };
         state.hide_new_session_dialog();
-        assert!(
-            !state.show_migration_banner,
-            "show_migration_banner must be cleared when the dialog is dismissed"
-        );
+        assert!(state.startup_notice.is_none());
         assert_eq!(
             state.ui_mode,
             UiMode::Normal,

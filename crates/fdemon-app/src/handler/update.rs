@@ -8,7 +8,9 @@
 //! - `settings_handlers`: Settings page handlers (Phase 6.1, Task 04)
 
 use crate::message::{AutoLaunchSuccess, Message};
-use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode, MAX_PENDING_WATCHER_ERRORS};
+use crate::state::{
+    AppState, DevToolsError, DevToolsPanel, StartupNotice, UiMode, MAX_PENDING_WATCHER_ERRORS,
+};
 use fdemon_core::{AppPhase, LogLevel, LogSource};
 use tracing::{info, warn};
 
@@ -348,6 +350,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     state.pending_watcher_errors.push(message);
                 }
             }
+            UpdateResult::none()
+        }
+
+        // ── Version Check (version-check-banner) ─────────────────────────────
+
+        // A newer fdemon release was discovered on GitHub. Set the startup
+        // notice so it renders as a banner above the New Session Dialog.
+        Message::NewVersionAvailable { latest } => {
+            state.startup_notice = Some(StartupNotice::NewVersionAvailable { latest });
             UpdateResult::none()
         }
 
@@ -3310,3 +3321,26 @@ fn scroll_to_log_entry(session: &mut crate::session::Session, entry_index: usize
 }
 
 // Tests have been moved to src/config/launch.rs where parse_dart_defines is now defined
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::StartupNotice;
+
+    #[test]
+    fn new_version_available_sets_startup_notice() {
+        let mut state = AppState::new();
+        update(
+            &mut state,
+            Message::NewVersionAvailable {
+                latest: "0.6.0".into(),
+            },
+        );
+        assert_eq!(
+            state.startup_notice,
+            Some(StartupNotice::NewVersionAvailable {
+                latest: "0.6.0".into()
+            })
+        );
+    }
+}

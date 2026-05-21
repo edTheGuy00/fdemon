@@ -680,6 +680,14 @@ pub enum Message {
     NewSessionDialogDartDefinesDelete,
 
     // ─────────────────────────────────────────────────────────
+    // Version Check Messages (version-check-banner)
+    // ─────────────────────────────────────────────────────────
+    /// A newer fdemon release was discovered on GitHub during the
+    /// startup background check. Sets `state.startup_notice` so the
+    /// New Session Dialog renders a one-line banner.
+    NewVersionAvailable { latest: String },
+
+    // ─────────────────────────────────────────────────────────
     // Tool Availability & Device Discovery Messages (Phase 4, Task 05)
     // ─────────────────────────────────────────────────────────
     /// Tool availability check completed
