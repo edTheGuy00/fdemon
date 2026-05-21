@@ -75,6 +75,14 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
+    if engine.settings.behavior.should_run_version_check() {
+        spawn::spawn_version_check(
+            engine.msg_sender(),
+            std::time::Duration::from_secs(
+                engine.settings.behavior.version_check_timeout_secs as u64,
+            ),
+        );
+    }
 
     // Dispatch based on auto-start detection
     dispatch_startup_action(&mut engine, startup_result);
@@ -197,6 +205,14 @@ pub async fn run_with_project_and_dap(
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
+    if engine.settings.behavior.should_run_version_check() {
+        spawn::spawn_version_check(
+            engine.msg_sender(),
+            std::time::Duration::from_secs(
+                engine.settings.behavior.version_check_timeout_secs as u64,
+            ),
+        );
+    }
 
     // Dispatch based on auto-start detection
     dispatch_startup_action(&mut engine, startup_result);

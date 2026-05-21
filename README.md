@@ -187,6 +187,13 @@ Each task file includes a **Completion Summary** with:
 
 This transparent development process demonstrates how AI can augment software development while maintaining high code quality, comprehensive testing, and thorough documentation.
 
+## Privacy
+
+On startup, fdemon checks GitHub for newer releases by issuing a single HTTPS request to
+`api.github.com`. No personal data is transmitted beyond a `User-Agent: fdemon/<version>`
+header and the request itself. Disable this by setting `version_check = false` under
+`[behavior]` in `.fdemon/config.toml`. See `docs/CONFIGURATION.md` for full details.
+
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

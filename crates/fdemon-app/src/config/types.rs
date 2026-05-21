@@ -164,6 +164,15 @@ pub struct BehaviorSettings {
     /// for the dialog" only, not a launch trigger.
     #[serde(default)]
     pub auto_launch: bool,
+    /// When true (default), fdemon checks GitHub for a newer release on startup
+    /// and shows a one-line banner if one is available. Set to false to opt out.
+    #[serde(default = "default_true")]
+    pub version_check: bool,
+    /// Total HTTP timeout in seconds for the GitHub release version check.
+    /// Increase on slow or flaky connections; decrease to fail-fast.
+    /// A value of 0 is equivalent to disabling the check.
+    #[serde(default = "default_version_check_timeout_secs")]
+    pub version_check_timeout_secs: u8,
 }
 
 impl Default for BehaviorSettings {
@@ -171,7 +180,21 @@ impl Default for BehaviorSettings {
         Self {
             confirm_quit: true,
             auto_launch: false,
+            version_check: true,
+            version_check_timeout_secs: 3,
         }
+    }
+}
+
+impl BehaviorSettings {
+    /// Returns `true` when the startup version check should run.
+    ///
+    /// Both the explicit `version_check` bool and a non-zero
+    /// `version_check_timeout_secs` are required. A zero timeout is
+    /// documented as equivalent to disabling the check, so we honor
+    /// that at the call site (no outbound HTTP attempt at all).
+    pub fn should_run_version_check(&self) -> bool {
+        self.version_check && self.version_check_timeout_secs > 0
     }
 }
 
@@ -220,6 +243,10 @@ fn default_extensions() -> Vec<String> {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_version_check_timeout_secs() -> u8 {
+    3
 }
 
 /// Icon rendering mode for the TUI.
@@ -1475,6 +1502,8 @@ mod tests {
         let s: BehaviorSettings = toml::from_str("").unwrap();
         assert!(!s.auto_launch);
         assert!(s.confirm_quit);
+        assert!(s.version_check);
+        assert_eq!(s.version_check_timeout_secs, 3);
     }
 
     #[test]
@@ -1484,6 +1513,32 @@ mod tests {
         assert!(s.auto_launch);
         let toml_out = toml::to_string(&s).unwrap();
         assert!(toml_out.contains("auto_launch = true"));
+    }
+
+    #[test]
+    fn behavior_version_check_defaults_to_true_when_table_missing() {
+        let toml = ""; // empty config
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(settings.behavior.version_check);
+    }
+
+    #[test]
+    fn behavior_version_check_can_be_opted_out() {
+        let toml = "[behavior]\nversion_check = false\n";
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(!settings.behavior.version_check);
+    }
+
+    #[test]
+    fn behavior_version_check_timeout_secs_defaults_to_three() {
+        let s: BehaviorSettings = toml::from_str("").unwrap();
+        assert_eq!(s.version_check_timeout_secs, 3);
+    }
+
+    #[test]
+    fn behavior_version_check_timeout_secs_can_be_overridden() {
+        let s: BehaviorSettings = toml::from_str("version_check_timeout_secs = 10").unwrap();
+        assert_eq!(s.version_check_timeout_secs, 10);
     }
 
     #[test]
@@ -3692,5 +3747,35 @@ sdk_path = "/Users/me/flutter"
             deserialized.flutter.sdk_path,
             Some(PathBuf::from("/opt/flutter"))
         );
+    }
+
+    #[test]
+    fn should_run_version_check_when_enabled_with_positive_timeout() {
+        let s = BehaviorSettings {
+            version_check: true,
+            version_check_timeout_secs: 3,
+            ..Default::default()
+        };
+        assert!(s.should_run_version_check());
+    }
+
+    #[test]
+    fn should_not_run_version_check_when_disabled() {
+        let s = BehaviorSettings {
+            version_check: false,
+            version_check_timeout_secs: 3,
+            ..Default::default()
+        };
+        assert!(!s.should_run_version_check());
+    }
+
+    #[test]
+    fn should_not_run_version_check_when_timeout_is_zero() {
+        let s = BehaviorSettings {
+            version_check: true,
+            version_check_timeout_secs: 0,
+            ..Default::default()
+        };
+        assert!(!s.should_run_version_check());
     }
 }

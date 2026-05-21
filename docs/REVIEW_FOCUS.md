@@ -162,6 +162,26 @@ Phase 5: `←`/`→` on the TimelineEvents tab are guarded at two levels — (a)
 
 Phase 5 closes the interactive-Gantt scope. Phase 6 will add: CPU sampling via `getCpuSamples`, cross-thread async connector lines, per-frame zoom-to-frame coupling, event annotation/pinning, and trace export. Reviewers seeing Phase 5 PRs should not expect these features.
 
+### Approved Exception: fdemon-app::version_check Network I/O
+
+`crates/fdemon-app/src/version_check.rs` is the **only** module in `fdemon-app` permitted
+to perform outbound network I/O. It issues one HTTPS GET to GitHub's releases API on
+startup (gated behind `[behavior] version_check`) to surface a "new version available"
+banner.
+
+This is an exception to the layered architecture documented in `docs/ARCHITECTURE.md`,
+which assigns network I/O to `fdemon-daemon`. The exception is approved because:
+
+1. The module has no Flutter-protocol knowledge — placing it in `fdemon-daemon` would
+   force the daemon crate to take a TLS dependency it does not otherwise need.
+2. The call is bounded: one HTTPS request per process, 3-second timeout, fire-and-forget.
+3. The behavior is fully opt-out via `[behavior] version_check = false`.
+
+**Reviewers should reject** any new outbound network I/O in `fdemon-app` outside this
+module without a similar explicit exception. Future HTTPS-using features (e.g., crash
+reporting, plugin registry) should land in `fdemon-daemon` or a new dedicated crate
+(`fdemon-net`), not be added next to `version_check.rs` as precedent.
+
 ## Performance Concerns
 
 ### Hot Paths

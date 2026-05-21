@@ -26,6 +26,7 @@ notify-debouncer-full.workspace = true
 trait-variant.workspace = true
 tempfile.workspace = true
 arboard = { version = "3", default-features = false }
+reqwest.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -33,3 +34,4 @@ tokio-test.workspace = true
 mockall.workspace = true
 serial_test.workspace = true
 fdemon-daemon = { workspace = true, features = ["test-helpers"] }
+wiremock.workspace = true

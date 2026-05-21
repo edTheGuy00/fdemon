@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use fdemon_app::{
-    config::{emit_migration_nudge, load_all_configs, should_auto_start_dap, NudgeMode},
+    config::{load_all_configs, should_auto_start_dap},
     message::{AutoLaunchSuccess, Message},
     spawn::find_auto_launch_target,
     state::AppState,
@@ -62,6 +62,8 @@ pub async fn run_headless(
     std::thread::spawn(move || {
         spawn_stdin_reader_blocking(stdin_tx);
     });
+
+    // version_check is not spawned in headless mode: no banner surface, and CI runs should not generate stderr chatter.
 
     // Evaluate DAP auto-start (covers --dap-port, config-enabled, and IDE-detected scenarios).
     // --dap-port already sets dap.enabled=true above, so this single check handles all paths.
@@ -271,13 +273,6 @@ async fn headless_auto_start(engine: &mut Engine) {
 
     // Load launch.toml configs to drive tier-1 (auto_start) and tier-3 (first config) resolution
     let configs = load_all_configs(&project_path);
-
-    // Migration nudge: user has a cached device but the flag is not set. In
-    // headless mode the cache is never consulted, so this helps CI/script users
-    // understand why fdemon didn't pick the previously-used device.
-    // The headless message explicitly avoids referencing [behavior] auto_launch
-    // as a remediation since that flag does NOT apply in headless mode.
-    let _ = emit_migration_nudge(NudgeMode::Headless, &project_path, &engine.settings);
 
     // Discover devices
     info!("Discovering devices for headless auto-start...");

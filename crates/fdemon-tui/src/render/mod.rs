@@ -251,7 +251,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &state.tool_availability,
                 &icons,
             )
-            .migration_banner(state.show_migration_banner)
+            .startup_notice(state.startup_notice.as_ref())
             .enable_mouse(state.settings.ui.enable_mouse);
             widgets::new_session_dialog::render_with_regions(
                 area,
