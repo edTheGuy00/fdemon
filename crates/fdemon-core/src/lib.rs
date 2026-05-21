@@ -50,10 +50,13 @@ pub mod discovery;
 pub mod error;
 pub mod events;
 pub mod exception_block;
+pub mod frame_hints;
 pub mod logging;
 pub mod network;
 pub mod performance;
+pub mod rebuild_stats;
 pub mod stack_trace;
+pub mod timeline;
 pub mod types;
 pub mod url;
 pub mod widget_tree;
@@ -76,6 +79,7 @@ pub use events::{
     DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
 pub use exception_block::{ExceptionBlock, ExceptionBlockParser, FeedResult};
+pub use frame_hints::{frame_hints, FrameHint, FramePhaseKind, MAX_HINTS_PER_FRAME};
 pub use network::{
     format_bytes, format_duration_ms, ConnectionInfo, HttpProfileEntry, HttpProfileEntryDetail,
     HttpProfileEvent, NetworkTiming, SocketEntry,
@@ -94,6 +98,7 @@ pub use types::{
     SearchState,
 };
 pub use widget_tree::{
-    BoxConstraints, CreationLocation, DiagnosticLevel, DiagnosticsNode, EdgeInsets, LayoutInfo,
-    WidgetSize,
+    build_inspector_rows, compute_details_context, parent_of, BoxConstraints, CreationLocation,
+    DetailsContext, DiagnosticLevel, DiagnosticsNode, EdgeInsets, InspectorRow,
+    InspectorRowBuilderInputs, LayoutInfo, RowGroup, WidgetSize,
 };

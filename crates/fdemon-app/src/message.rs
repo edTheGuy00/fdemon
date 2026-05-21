@@ -4,9 +4,10 @@ use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
-use crate::session::performance::PerfSection;
+use crate::session::memory::MemorySection;
+use crate::session::performance::{PerfSection, SelectionDirection, TimelineEventCursor};
 use crate::session::{NetworkDetailTab, SessionId};
-use crate::state::DevToolsPanel;
+use crate::state::{DevToolsPanel, PerfDetailsTab};
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
@@ -395,6 +396,17 @@ pub enum Message {
 
     /// Force close settings panel without saving
     ForceHideSettings,
+
+    // ─────────────────────────────────────────────────────────────
+    // Background Settings Persistence Handshake
+    // (devtools-inspector-parity Phase 1.5, Task 02)
+    // ─────────────────────────────────────────────────────────────
+    /// Confirmation that a `UpdateAction::PersistSettings` completed successfully.
+    SettingsPersisted,
+
+    /// A `UpdateAction::PersistSettings` write failed.
+    /// `error` carries the formatted error string for logging/UI surfacing.
+    SettingsPersistFailed { error: String },
 
     // ─────────────────────────────────────────────────────────────
     // Launch Config Editing Messages (Phase 5, Task 07)
@@ -885,8 +897,11 @@ pub enum Message {
     /// Enter DevTools mode (from Normal mode via 'd' key).
     EnterDevToolsMode,
 
-    /// Exit DevTools mode (return to Normal mode via Esc).
-    ExitDevToolsMode,
+    /// Escape key pressed while in DevTools mode. The handler routes this
+    /// through [`handle_devtools_escape`]:
+    /// - Inspector tab + details open → close details, stay in DevTools.
+    /// - Otherwise → exit DevTools back to Logs.
+    DevToolsEscape,
 
     /// Switch to a specific DevTools sub-panel.
     SwitchDevToolsPanel(DevToolsPanel),
@@ -968,6 +983,10 @@ pub enum Message {
     /// Layout data received from VM Service RPC.
     LayoutDataFetched {
         session_id: SessionId,
+        /// The node id that was fetched. Used by the stale-guard in
+        /// `handle_layout_data_fetched` to cross-check against
+        /// `details_node_id` (Phase 2 follow-up M2).
+        node_id: String,
         layout: Box<LayoutInfo>,
     },
 
@@ -983,6 +1002,31 @@ pub enum Message {
     /// The handler sets `inspector.layout_loading = false` and stores an error
     /// message with a retry hint.
     LayoutDataFetchTimeout { session_id: SessionId },
+
+    /// `ext.flutter.inspector.getProperties` succeeded.
+    ///
+    /// `widget_properties` is the partition with `propertyType != "RenderObject"`;
+    /// `render_properties` contains the render-object nodes plus (already merged
+    /// in by the spawn task) the sub-properties of each render object.
+    DevToolsInspectorPropertiesFetched {
+        session_id: SessionId,
+        node_id: String,
+        widget_properties: Vec<DiagnosticsNode>,
+        render_properties: Vec<DiagnosticsNode>,
+    },
+
+    /// `getProperties` returned an error or the response failed to parse.
+    DevToolsInspectorPropertiesFetchFailed {
+        session_id: SessionId,
+        node_id: String,
+        error: String,
+    },
+
+    /// `getProperties` exceeded its 10-second timeout.
+    DevToolsInspectorPropertiesFetchTimeout {
+        session_id: SessionId,
+        node_id: String,
+    },
 
     /// Toggle a debug overlay extension (repaint rainbow, debug paint, perf overlay).
     ToggleDebugOverlay { extension: DebugOverlayKind },
@@ -1088,10 +1132,27 @@ pub enum Message {
     /// Delete last character from filter input buffer.
     NetworkFilterBackspace,
 
-    // ── Performance Panel UI Messages ─────────────────────────────────────────
-    /// Toggle the allocation table sort column (Size ↔ Instances).
-    ToggleAllocationSort,
+    // ── Memory Panel UI Messages ──────────────────────────────────────────────
+    /// Cycle focus within the Memory panel sections (Chart ↔ AllocationList).
+    MemFocusSection(MemorySection),
+    /// Scroll the focused Memory section up by one unit (one row / one sample).
+    MemScrollUp,
+    /// Scroll the focused Memory section down by one unit.
+    MemScrollDown,
+    /// Page the focused Memory section up by a viewport-height unit.
+    MemPageUp,
+    /// Page the focused Memory section down by a viewport-height unit.
+    MemPageDown,
+    /// Jump to the oldest / first item in the focused Memory section.
+    MemJumpToStart,
+    /// Jump to the live edge / last item in the focused Memory section.
+    MemJumpToEnd,
+    /// Select an allocation table row (or deselect with `None`).
+    MemSelectAllocRow { index: Option<usize> },
+    /// Toggle the allocation table sort column (BySize ↔ ByInstances).
+    MemToggleSort,
 
+    // ── Performance Panel UI Messages ─────────────────────────────────────────
     // --- Performance panel interactivity ---
     /// Move keyboard focus to the given sub-section within the Performance panel.
     PerfFocusSection(PerfSection),
@@ -1107,8 +1168,140 @@ pub enum Message {
     PerfJumpToStart,
     /// Jump to the last item in the focused Performance panel section.
     PerfJumpToEnd,
-    /// Select a row in the allocation table, or clear selection when `index` is `None`.
-    PerfSelectAllocRow { index: Option<usize> },
+
+    // --- Performance details pane (Phase 2) ---
+    /// Cycle the active tab in the Performance Details pane.
+    ///
+    /// Emitted by `]` (forward = true) and `[` (forward = false) when
+    /// `PerformanceState::focused_section == PerfSection::Details`.
+    PerfCycleDetailsTab { forward: bool },
+
+    /// Focus a specific tab in the Performance Details pane.
+    ///
+    /// Phase 2 only emits this from tests; Phase 3 wires up mouse-click
+    /// regions on the tab strip that emit this variant.
+    PerfFocusDetailsTab(PerfDetailsTab),
+
+    // --- Performance Phase 3: Rebuild Stats + Timeline ---
+    /// A new `Flutter.RebuiltWidgets` extension event arrived.
+    ///
+    /// Emitted by `forward_vm_events` when it receives a stream event whose
+    /// `extensionKind == "Flutter.RebuiltWidgets"`. The payload has already
+    /// been parsed by `fdemon_core::rebuild_stats::parse_rebuilt_widgets_event`.
+    RebuildStatsEventReceived {
+        session_id: SessionId,
+        payload: fdemon_core::rebuild_stats::RebuildEventPayload,
+    },
+
+    /// The user pressed `R` on the Rebuild Stats tab — toggle the extension.
+    ///
+    /// Triggers an async `set_profile_widget_builds` RPC and emits
+    /// `RebuildStatsExtensionStateChanged` on success.
+    ToggleRebuildStats { session_id: SessionId },
+
+    /// The async toggle returned a new state — update `rebuild_stats_enabled`.
+    ///
+    /// When `enabled` flips to `false`, clears `rebuild_stats_totals` and
+    /// `rebuild_stats_frames` and snaps the active details tab if it was
+    /// on `RebuildStats`.
+    RebuildStatsExtensionStateChanged {
+        session_id: SessionId,
+        enabled: bool,
+    },
+
+    /// The one-shot `widgetLocationIdMap` RPC returned a fresh map.
+    ///
+    /// Used as a fallback seed for the location map when early
+    /// `Flutter.RebuiltWidgets` events were missed (location data arrives
+    /// inline in those events, but the RPC covers the case where they were
+    /// not observed).
+    RebuildStatsLocationMapFetched {
+        session_id: SessionId,
+        map: fdemon_core::rebuild_stats::LocationMap,
+    },
+
+    /// The async toggle of `ext.flutter.profileWidgetBuilds` failed.
+    ///
+    /// Emitted by the `ToggleProfileWidgetBuilds` action when the RPC call
+    /// returns an error (e.g., dying isolate during hot-restart). The handler
+    /// appends a `LogEntry` to the session log buffer so the user knows the
+    /// toggle did not take effect.
+    ///
+    /// A companion `RebuildStatsExtensionStateChanged` with the rolled-back
+    /// state is also emitted so the UI is consistent with the actual extension
+    /// state.
+    RebuildStatsToggleFailed {
+        session_id: SessionId,
+        reason: String,
+    },
+
+    /// The 1-Hz timeline poll returned a batch of new events.
+    ///
+    /// Merged into `PerformanceState::timeline_tracks` and capped at
+    /// `settings.devtools.timeline_event_buffer_size` total nodes.
+    /// `metadata` carries `ph:"M"` thread-name events extracted from the same
+    /// response and used to populate `timeline_thread_name_map`.
+    TimelineEventsBatchReceived {
+        session_id: SessionId,
+        events: Vec<fdemon_core::timeline::TimelineEvent>,
+        metadata: Vec<fdemon_core::timeline::ThreadMetadata>,
+    },
+
+    /// The user pressed `f` on the Timeline Events tab — cycle the filter.
+    ///
+    /// Cycles `TimelineFilter::All → Ui → Raster → All` and resets the
+    /// scroll offset to the top.
+    TimelineEventsCycleFilter { session_id: SessionId },
+
+    // ── Phase 5 T04: Timeline search ─────────────────────────────────────────
+    /// Open the timeline search input (user pressed `/` on the TimelineEvents tab).
+    ///
+    /// Sets `timeline_search_input_active = true` and
+    /// `timeline_search_query = Some("")`.
+    TimelineSearchOpen { session_id: SessionId },
+
+    /// Append a character to the timeline search query while input is active.
+    TimelineSearchInputChar { session_id: SessionId, ch: char },
+
+    /// Delete the last character from the timeline search query while input is active.
+    TimelineSearchInputBackspace { session_id: SessionId },
+
+    /// Commit the current search query (Enter while input active).
+    ///
+    /// Sets `timeline_search_input_active = false`, keeps the query so
+    /// `n`/`N` navigation can begin.
+    TimelineSearchInputCommit { session_id: SessionId },
+
+    /// Cancel the current search (Esc while input active).
+    ///
+    /// Sets `timeline_search_input_active = false`, clears the query.
+    TimelineSearchInputCancel { session_id: SessionId },
+
+    /// Navigate to the next search match (`n` key, query must be `Some`).
+    ///
+    /// Advances `timeline_search_match_cursor` modulo the match count, pans
+    /// the viewport to center on the match, and updates `timeline_selected_event`.
+    TimelineSearchNextMatch { session_id: SessionId },
+
+    /// Navigate to the previous search match (`N` key, query must be `Some`).
+    ///
+    /// Mirrors `TimelineSearchNextMatch` in the reverse direction.
+    TimelineSearchPrevMatch { session_id: SessionId },
+
+    /// The timeline polling task started — carries shutdown/pause/handle refs.
+    ///
+    /// Modeled on `VmServicePerformanceMonitoringStarted`. The TEA handler
+    /// stores the senders and handle on `SessionHandle` so lifecycle events
+    /// (session close, VM disconnect, panel switch) can pause/stop the task.
+    VmServiceTimelineMonitoringStarted {
+        session_id: SessionId,
+        /// Shutdown sender — `true` stops the polling loop.
+        timeline_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Pause sender — `true` skips poll ticks (Performance panel not active).
+        timeline_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Shared slot containing the task's `JoinHandle` (for abort on close).
+        timeline_task_handle: SharedTaskHandle,
+    },
 
     // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)
@@ -1595,6 +1788,48 @@ pub enum Message {
     /// for leaf nodes.
     DevToolsInspectorToggleNode { index: usize },
 
+    /// Opens the Details view for the currently selected widget in the
+    /// Inspector tree.
+    ///
+    /// Snapshots the selected `value_id` into `InspectorState::details_node_id`
+    /// and sets `InspectorState::details_open = true`. In Phase 1 this also
+    /// fires `FetchLayoutData` for the snapshotted node if it isn't already
+    /// cached. Phase 2 will additionally fire `FetchInspectorProperties`.
+    ///
+    /// Key binding: `Enter` while the Inspector tree is focused (task 06).
+    DevToolsInspectorOpenDetails,
+
+    /// Closes the Details view and returns the Inspector tab to tree mode.
+    ///
+    /// Sets `InspectorState::details_open = false`. Tied to the first `Esc`
+    /// press while details is open (tiered Esc — a second `Esc` exits DevTools
+    /// mode entirely).
+    ///
+    /// Key binding: `Esc` while details view is open (task 06).
+    DevToolsInspectorCloseDetails,
+
+    /// Cycles the active Details tab forward or backward.
+    ///
+    /// `forward = true` advances to the next [`crate::state::DetailsTab`]
+    /// (wrapping at the end); `forward = false` steps to the previous tab
+    /// (wrapping at the start). The cycle order is
+    /// `Properties → RenderObject → FlexExplorer → Properties`.
+    ///
+    /// Key bindings: `Tab` (forward) and `Shift+Tab` (backward) while the
+    /// Details view is open (task 06).
+    DevToolsInspectorCycleTab { forward: bool },
+
+    /// Toggles `InspectorState::hide_implementation_widgets`.
+    ///
+    /// The handler reads the current value, flips it, rebuilds the visible-row
+    /// list, and persists the new value to `.fdemon/config.toml` (task 03 /
+    /// task 05). This variant is parameterless — the toggle is not signed
+    /// (cannot force a specific value via the message bus), consistent with
+    /// other toggle variants in this enum.
+    ///
+    /// Key binding: `H` while the Inspector panel is active (task 06).
+    DevToolsInspectorToggleHideImplementation,
+
     // ── Mouse Capture (log-text-selection-broken fix) ─────────────────────────
     /// Copy a specific log entry's rendered text to the system clipboard.
     ///
@@ -1639,5 +1874,94 @@ pub enum Message {
         /// `Ok` carries the parsed metadata; `Err` carries a human-readable
         /// error description. Both variants set `probe_completed = true`.
         result: std::result::Result<FlutterVersionInfo, String>,
+    },
+
+    // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────────
+    /// Commit the Timeline Events viewport anchor to the given frame number.
+    ///
+    /// Sent by the 200 ms debounce task spawned on each frame selection change.
+    /// Stale messages (where `generation < state.performance.frame_anchor_generation`)
+    /// are silently dropped; only the most recent debounce wins.
+    ApplyFrameAnchor {
+        /// Session the anchor belongs to.
+        session_id: SessionId,
+        /// Monotonic counter at the time this debounce was created.
+        generation: u64,
+        /// Frame number to anchor on, or `None` to clear the anchor.
+        frame_number: Option<u64>,
+    },
+
+    // ── Phase 5: Timeline pan/zoom viewport ───────────────────────────────────
+    /// Zoom in on the Timeline Events Gantt (halve the viewport width).
+    ///
+    /// Sets `timeline_follow_latest = false` and halves `timeline_viewport_width_micros`,
+    /// clamped at [`TIMELINE_VIEWPORT_MIN_MICROS`]. The anchor point is the
+    /// current viewport center.
+    TimelineZoomIn { session_id: SessionId },
+
+    /// Zoom out on the Timeline Events Gantt (double the viewport width).
+    ///
+    /// Sets `timeline_follow_latest = false` and doubles `timeline_viewport_width_micros`,
+    /// clamped at [`TIMELINE_VIEWPORT_MAX_MICROS`].
+    TimelineZoomOut { session_id: SessionId },
+
+    /// Pan the Timeline Events Gantt left by 10% of the current viewport width.
+    ///
+    /// Sets `timeline_follow_latest = false`; saturates at 0.
+    TimelinePanLeft { session_id: SessionId },
+
+    /// Pan the Timeline Events Gantt right by 10% of the current viewport width.
+    ///
+    /// Sets `timeline_follow_latest = false`.
+    TimelinePanRight { session_id: SessionId },
+
+    /// Resume follow-latest mode on the Timeline Events Gantt.
+    ///
+    /// Sets `timeline_follow_latest = true` and resets `viewport_width_micros` to
+    /// the default 5 s window. The `committed_frame_anchor` (if any) is preserved —
+    /// the next render will return to the frame-anchored viewport (PLAN D2 mode 2)
+    /// rather than the live-edge fallback.
+    TimelineFollowLatest { session_id: SessionId },
+
+    // ── Phase 5 T03: Timeline event selection ─────────────────────────────────
+    /// Select the first visible event in the Timeline Events Gantt.
+    ///
+    /// Selects the first root event of the first visible thread (in `tid` ascending
+    /// order, filter-respected). Emitted by `Enter` when no event is currently selected.
+    TimelineSelectFirstVisible { session_id: SessionId },
+
+    /// Move the timeline event selection in the given direction.
+    ///
+    /// Emitted by `←`/`→` (sibling nav) and `↑`/`↓`/`j`/`k` (depth/thread nav)
+    /// when an event is selected.
+    TimelineMoveSelection {
+        session_id: SessionId,
+        dir: SelectionDirection,
+    },
+
+    /// Open the event details popup for the currently selected event.
+    ///
+    /// Emitted by `Enter` when an event is already selected and the popup is
+    /// not open. No-op if no event is selected.
+    TimelineOpenPopup { session_id: SessionId },
+
+    /// Close the event details popup without clearing the selection.
+    ///
+    /// Emitted by `Esc` when the popup is open.
+    TimelineClosePopup { session_id: SessionId },
+
+    /// Clear the timeline event selection.
+    ///
+    /// Emitted by `Esc` when the popup is closed but an event is selected.
+    TimelineClearSelection { session_id: SessionId },
+
+    /// Select a specific event by cursor (mouse-driven).
+    ///
+    /// Emitted when the user clicks on a Gantt bar. The handler sets
+    /// `timeline_selected_event = Some(cursor)` without opening the popup
+    /// (a second click or `Enter` opens the popup).
+    TimelineSelectAt {
+        session_id: SessionId,
+        cursor: TimelineEventCursor,
     },
 }

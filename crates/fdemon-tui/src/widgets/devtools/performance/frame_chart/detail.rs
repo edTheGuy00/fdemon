@@ -17,8 +17,27 @@ use super::super::styles::{fps_style, jank_style};
 
 impl FrameChart<'_> {
     /// Render the 3-line detail panel below the chart.
+    ///
+    /// # Dual-pane vs chart-only behaviour
+    ///
+    /// When `self.dual_pane == false` (chart-only fallback, small terminal):
+    /// - A selected frame → `render_frame_detail` (per-frame breakdown).
+    /// - No selection → `render_summary_line` (aggregate FPS / Avg / Jank / Shader).
+    ///
+    /// When `self.dual_pane == true` (upper pane of the dual-pane layout):
+    /// - Per-frame detail is **suppressed** here — the Details pane below already
+    ///   renders it via [`super::super::details::frame_analysis_tab`].
+    /// - `render_summary_line` is shown regardless of selection, so the chart's
+    ///   bottom strip continues to display useful aggregate statistics.
     pub(super) fn render_detail_panel(&self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
+            return;
+        }
+
+        if self.dual_pane {
+            // In dual-pane mode always show the aggregate summary line — per-frame
+            // detail is rendered by the Frame Analysis tab in the Details pane below.
+            self.render_summary_line(area, buf);
             return;
         }
 

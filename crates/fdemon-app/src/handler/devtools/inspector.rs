@@ -5,10 +5,12 @@
 
 use std::time::Instant;
 
+use fdemon_core::{DetailsContext, RowGroup};
+
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::InspectorNav;
 use crate::session::SessionId;
-use crate::state::{AppState, DevToolsError, InspectorState};
+use crate::state::{AppState, DetailsTab, DevToolsError, InspectorState};
 
 use super::map_rpc_error;
 
@@ -59,9 +61,17 @@ pub fn handle_widget_tree_fetched(
         state.devtools_view_state.inspector.pending_node_id = None;
         state.devtools_view_state.inspector.layout_last_fetch_time = None;
 
+        // Clear Details and group expansion state — node ids from the previous
+        // tree are invalid after a refresh; the Details panel must not render
+        // against freed Dart object ids.
+        state
+            .devtools_view_state
+            .inspector
+            .reset_details_and_groups();
+
         // Auto-fetch layout for the initially selected node (root at index 0)
         // so the layout panel shows data immediately on Inspector entry.
-        if let Some(node_id) = get_selected_value_id(&state.devtools_view_state.inspector) {
+        if let Some(node_id) = state.devtools_view_state.inspector.selected_value_id() {
             state.devtools_view_state.inspector.layout_loading = true;
             state.devtools_view_state.inspector.pending_node_id = Some(node_id.clone());
             state.devtools_view_state.inspector.layout_last_fetch_time = Some(Instant::now());
@@ -107,9 +117,68 @@ pub fn handle_widget_tree_fetch_failed(
 ///
 /// On Expand/Collapse: no layout fetch is triggered (selection does not change).
 pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> UpdateResult {
-    // Phase 1: read the visible node count and current selection, then handle navigation.
+    // Phase 1: when Details is open, Up/Down/Left/Right are all no-ops in the
+    // tree. The user must press Esc to return to tree mode first.
+    // Left/Right are repurposed as cycle-tab by the key handler (task 06) and
+    // must NOT reach this function when details_open == true — this guard is a
+    // safety net for any path that bypasses the key handler.
+    if state.devtools_view_state.inspector.details_open {
+        return UpdateResult::none();
+    }
+    // Phase 2: read the visible node count and current selection, then handle navigation.
     // We scope the mutable borrow of `inspector` here so it ends before we access
     // `state.session_manager` below.
+    // Expand / Collapse: use selected_row() to branch on RowGroup so that
+    // chain leaders mutate `expanded_groups` and standalone nodes mutate
+    // `expanded`.  These arms early-return (no layout fetch needed).
+    if matches!(nav, InspectorNav::Expand | InspectorNav::Collapse) {
+        let inspector = &mut state.devtools_view_state.inspector;
+        let row = match inspector.selected_row() {
+            Some(r) => r,
+            None => return UpdateResult::none(),
+        };
+        // Capture the group and value_id before the immutable borrow on `row`
+        // ends (row borrows from inspector).
+        let group = row.group.clone();
+        let value_id = row.node.value_id.clone();
+        let has_children = !row.node.children.is_empty();
+
+        match nav {
+            InspectorNav::Expand => match group {
+                RowGroup::LeaderCollapsed { .. } => {
+                    if let Some(id) = value_id {
+                        inspector.expanded_groups.insert(id);
+                    }
+                }
+                _ => {
+                    // Standard node: insert into `expanded`.
+                    if has_children {
+                        if let Some(id) = value_id {
+                            if !inspector.is_expanded(&id) {
+                                inspector.expanded.insert(id);
+                            }
+                        }
+                    }
+                }
+            },
+            InspectorNav::Collapse => match group {
+                RowGroup::LeaderExpanded => {
+                    if let Some(id) = value_id {
+                        inspector.expanded_groups.remove(&id);
+                    }
+                }
+                _ => {
+                    if let Some(id) = value_id {
+                        inspector.expanded.remove(&id);
+                    }
+                }
+            },
+            _ => unreachable!("arm limited to Expand | Collapse"),
+        }
+        return UpdateResult::none();
+    }
+
+    // Up / Down: use visible_nodes() for count and value_id extraction.
     let should_fetch_layout = {
         let inspector = &mut state.devtools_view_state.inspector;
         let visible = inspector.visible_nodes();
@@ -118,16 +187,6 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
         if count == 0 {
             return UpdateResult::none();
         }
-
-        // Collect the data we need before the mutable borrow below.
-        let (value_id, has_children) = visible
-            .get(inspector.selected_index)
-            .and_then(|(node, _depth)| {
-                node.value_id
-                    .as_ref()
-                    .map(|id| (id.clone(), !node.children.is_empty()))
-            })
-            .unzip();
 
         let old_index = inspector.selected_index;
 
@@ -142,19 +201,8 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
                     inspector.selected_index += 1;
                 }
             }
-            InspectorNav::Expand => {
-                if let (Some(value_id), Some(true)) = (value_id, has_children) {
-                    if !inspector.is_expanded(&value_id) {
-                        inspector.expanded.insert(value_id);
-                    }
-                }
-                return UpdateResult::none();
-            }
-            InspectorNav::Collapse => {
-                if let Some(value_id) = value_id {
-                    inspector.expanded.remove(&value_id);
-                }
-                return UpdateResult::none();
+            InspectorNav::Expand | InspectorNav::Collapse => {
+                unreachable!("Expand/Collapse are handled above")
             }
         }
 
@@ -192,17 +240,6 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
     UpdateResult::none()
 }
 
-/// Extract the `value_id` of the currently selected visible node.
-///
-/// Returns `None` when the inspector has no tree loaded or the selected index
-/// is out of range, or when the node has no `value_id`.
-fn get_selected_value_id(inspector: &InspectorState) -> Option<String> {
-    let visible = inspector.visible_nodes();
-    visible
-        .get(inspector.selected_index)
-        .and_then(|(node, _depth)| node.value_id.clone())
-}
-
 /// If the currently-selected inspector node has a `value_id`, isn't debounced,
 /// and isn't already cached as `last_fetched_node_id`, mark fetch state and
 /// return the node id to fetch. Otherwise return `None`.
@@ -213,7 +250,7 @@ fn maybe_fetch_layout(inspector: &mut InspectorState) -> Option<String> {
     if inspector.is_layout_fetch_debounced() {
         return None;
     }
-    let node_id = get_selected_value_id(inspector)?;
+    let node_id = inspector.selected_value_id()?;
     if inspector.last_fetched_node_id.as_deref() == Some(node_id.as_str()) {
         return None;
     }
@@ -259,39 +296,42 @@ pub fn handle_widget_tree_fetch_timeout(
 /// Handle layout data fetch completion.
 ///
 /// Updates the inspector state's layout fields with the fetched layout info.
-/// Discards stale responses when the user has navigated away from the node
-/// that this fetch was dispatched for.
+/// Discards stale responses using `details_node_id` as the authoritative
+/// comparison key (Phase 2 follow-up M2). This is a unified stale guard:
+/// an in-flight layout response is accepted only if the Details panel is
+/// still open on the same node that was fetched. Tree navigation that moves
+/// the selection without closing Details does not discard the response.
 pub fn handle_layout_data_fetched(
     state: &mut AppState,
     session_id: SessionId,
+    node_id: String,
     layout: fdemon_core::LayoutInfo,
 ) -> UpdateResult {
     let active_id = state.session_manager.selected().map(|h| h.session.id);
 
     if active_id == Some(session_id) {
-        // Guard against stale responses: if the user navigated away from the
-        // node this fetch was dispatched for, discard the response so the UI
-        // does not show layout data for the wrong node.
-        let selected_id = get_selected_value_id(&state.devtools_view_state.inspector);
-        let pending_id = state
-            .devtools_view_state
-            .inspector
-            .pending_node_id
-            .as_deref();
-        if pending_id != selected_id.as_deref() {
-            state.devtools_view_state.inspector.layout_loading = false;
-            state.devtools_view_state.inspector.pending_node_id = None;
+        let inspector = &mut state.devtools_view_state.inspector;
+
+        // Stale-guard: only apply if the response matches the currently-displayed
+        // details panel node. Discards orphan responses from closed-then-reopened-
+        // on-different-node races (Phase 2 follow-up M2).
+        if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+            // Clear the pending flag if it still points to this stale node so
+            // that a subsequent open on the correct node will dispatch a new fetch.
+            if inspector.pending_node_id.as_deref() == Some(node_id.as_str()) {
+                inspector.pending_node_id = None;
+                inspector.layout_loading = false;
+            }
             return UpdateResult::none();
         }
 
-        state.devtools_view_state.inspector.layout = Some(layout);
-        state.devtools_view_state.inspector.layout_loading = false;
-        state.devtools_view_state.inspector.layout_error = None;
-        state.devtools_view_state.inspector.has_layout_object_group = true;
+        inspector.layout = Some(layout);
+        inspector.layout_loading = false;
+        inspector.layout_error = None;
+        inspector.has_layout_object_group = true;
         // Promote pending node ID to last_fetched so repeated panel switches
         // for the same node skip redundant fetches.
-        state.devtools_view_state.inspector.last_fetched_node_id =
-            state.devtools_view_state.inspector.pending_node_id.take();
+        inspector.last_fetched_node_id = inspector.pending_node_id.take();
     }
 
     UpdateResult::none()
@@ -344,6 +384,151 @@ pub fn handle_layout_data_fetch_timeout(
     UpdateResult::none()
 }
 
+// ── Inspector Properties Handlers (Phase 2, Task 06) ─────────────────────────
+
+/// Apply a successful `getProperties` response to [`InspectorState`].
+///
+/// Stale-guarded: the response is accepted only if `details_node_id` still
+/// matches `node_id` — i.e. the Details panel is still open on the same
+/// widget that was fetched (Phase 2 follow-up C2 / M2).  This catches the
+/// close-then-reopen-on-different-node race: even if `pending_properties_node_id`
+/// still points to the old node, a response arriving after the user has
+/// navigated to a different node is discarded.
+///
+/// When the response is discarded and `pending_properties_node_id` still
+/// points to the stale node, both the pending id and the loading flag are
+/// cleared so the user can fetch fresh data for the currently-displayed node.
+pub fn handle_inspector_properties_fetched(
+    state: &mut AppState,
+    session_id: SessionId,
+    node_id: String,
+    widget_properties: Vec<fdemon_core::DiagnosticsNode>,
+    render_properties: Vec<fdemon_core::DiagnosticsNode>,
+) -> UpdateResult {
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if active_id != Some(session_id) {
+        return UpdateResult::none();
+    }
+
+    let inspector = &mut state.devtools_view_state.inspector;
+
+    // Stale-guard: only apply if the response matches the currently-displayed
+    // details panel. Discards orphan responses from closed-then-reopened-on-
+    // different-node races (Phase 2 follow-up C2).
+    if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+        // Clear the pending flag if it still points to this stale node so
+        // that a subsequent open on the correct node will dispatch a new fetch.
+        if inspector.pending_properties_node_id.as_deref() == Some(node_id.as_str()) {
+            inspector.pending_properties_node_id = None;
+            inspector.properties_loading = false;
+        }
+        return UpdateResult::none();
+    }
+
+    inspector.properties = widget_properties;
+    inspector.render_properties = render_properties;
+    inspector.properties_loading = false;
+    inspector.properties_error = None;
+    // Promote pending to last-fetched so a subsequent open on the same node
+    // skips the fetch (cache hit).
+    inspector.last_fetched_properties_node_id = inspector.pending_properties_node_id.take();
+
+    // Phase 3: the fetch may have changed which tabs are visible.
+    // If the active tab is now hidden, snap to Properties.
+    inspector.clamp_details_tab();
+
+    UpdateResult::none()
+}
+
+/// Handle a `getProperties` RPC failure.
+///
+/// Maps the raw RPC error string to a user-friendly [`DevToolsError`] and
+/// clears the loading state. The `last_fetched_properties_node_id` cache is
+/// deliberately **not** updated on failure so that the next `Enter` on the same
+/// node retries the fetch.
+///
+/// Stale-guarded: only applies the error if `details_node_id` still matches
+/// `node_id` (Phase 2 follow-up C2 / M2). When discarding, the pending id
+/// and loading flag are cleared if they still point to the stale node.
+pub fn handle_inspector_properties_fetch_failed(
+    state: &mut AppState,
+    session_id: SessionId,
+    node_id: String,
+    error: String,
+) -> UpdateResult {
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if active_id != Some(session_id) {
+        return UpdateResult::none();
+    }
+
+    let inspector = &mut state.devtools_view_state.inspector;
+
+    // Stale-guard: only apply if the response matches the currently-displayed
+    // details panel (unified key — same as properties_fetched and layout_fetched).
+    if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+        if inspector.pending_properties_node_id.as_deref() == Some(node_id.as_str()) {
+            inspector.pending_properties_node_id = None;
+            inspector.properties_loading = false;
+        }
+        return UpdateResult::none();
+    }
+
+    inspector.properties_loading = false;
+    inspector.properties_error = Some(map_rpc_error(&error));
+    inspector.pending_properties_node_id = None;
+    // last_fetched_properties_node_id deliberately not updated; cache stays
+    // empty so the next Enter retries.
+
+    // Phase 3: failure may leave render_properties empty; clamp if Render
+    // Object was the active tab.
+    inspector.clamp_details_tab();
+
+    UpdateResult::none()
+}
+
+/// Handle a `getProperties` RPC timeout.
+///
+/// Sets a timeout error on `properties_error` and clears the loading state.
+/// Stale-guarded identically to [`handle_inspector_properties_fetch_failed`]:
+/// only applies if `details_node_id` still matches `node_id`.
+pub fn handle_inspector_properties_fetch_timeout(
+    state: &mut AppState,
+    session_id: SessionId,
+    node_id: String,
+) -> UpdateResult {
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+    if active_id != Some(session_id) {
+        return UpdateResult::none();
+    }
+
+    let inspector = &mut state.devtools_view_state.inspector;
+
+    // Stale-guard: only apply if the response matches the currently-displayed
+    // details panel (unified key — same as properties_fetched and layout_fetched).
+    if inspector.details_node_id.as_deref() != Some(node_id.as_str()) {
+        if inspector.pending_properties_node_id.as_deref() == Some(node_id.as_str()) {
+            inspector.pending_properties_node_id = None;
+            inspector.properties_loading = false;
+        }
+        return UpdateResult::none();
+    }
+
+    inspector.properties_loading = false;
+    inspector.properties_error = Some(DevToolsError::new(
+        "Request timed out",
+        "Press [r] to retry",
+    ));
+    inspector.pending_properties_node_id = None;
+
+    // Phase 3 follow-up (m1): the timeout settlement path does not currently
+    // mutate `render_properties`, so visible_tabs() cannot change here today.
+    // We clamp anyway to preserve the "every settlement path clamps"
+    // invariant — see fetched/fetch_failed handlers above.
+    inspector.clamp_details_tab();
+
+    UpdateResult::none()
+}
+
 // ── Mouse Click Handlers (Phase 4) ───────────────────────────────────────────
 
 /// Select a visible inspector node by absolute row index.
@@ -356,6 +541,11 @@ pub fn handle_layout_data_fetch_timeout(
 /// Out-of-range clicks (e.g. the tree shrank between render and click) are
 /// silently ignored — no action is emitted.
 pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> UpdateResult {
+    // When Details is open, selection is frozen — clicks do not change the
+    // selected row. The user must press Esc to close Details first.
+    if state.devtools_view_state.inspector.details_open {
+        return UpdateResult::none();
+    }
     // Phase 1: bounds-check and update selection.
     // Scope the mutable borrow of `inspector` so it ends before we access
     // `state.session_manager` below.
@@ -417,23 +607,24 @@ pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> Update
 /// Clicking on a leaf node (no children) or a node without a `value_id` is a
 /// no-op for the expanded set; selection still changes normally.
 pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> UpdateResult {
-    // Step 1: capture value_id and has_children before delegating, so that
-    // visible_nodes() is only traversed once (the delegate also calls it internally).
-    let (value_id, has_children) = {
+    // Step 1: capture value_id, has_children, and group before delegating, so
+    // that inspector_rows() is only traversed once (the delegate also calls it
+    // internally).
+    let (value_id, has_children, group) = {
         let inspector = &state.devtools_view_state.inspector;
-        let visible = inspector.visible_nodes();
-        if index >= visible.len() {
+        let rows = inspector.inspector_rows();
+        if index >= rows.len() {
             // Out-of-range click — no selection change, no expanded-set mutation.
             return UpdateResult::none();
         }
-        visible
-            .get(index)
-            .and_then(|(node, _depth)| {
-                node.value_id
-                    .as_ref()
-                    .map(|id| (id.clone(), !node.children.is_empty()))
-            })
-            .unzip()
+        match rows.get(index) {
+            Some(row) => (
+                row.node.value_id.clone(),
+                !row.node.children.is_empty(),
+                row.group.clone(),
+            ),
+            None => return UpdateResult::none(),
+        }
     };
     // `inspector` immutable borrow has ended.
 
@@ -441,17 +632,221 @@ pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> Updat
     // clears stale layout, dispatches fetch under debounce rules).
     let select_result = handle_inspector_select_row(state, index);
 
-    // Step 3: toggle the node's expanded state.
-    if let (Some(value_id), Some(true)) = (value_id, has_children) {
+    // Step 3: toggle the node's expanded state, branching on RowGroup so that
+    // chain leader glyph clicks mutate `expanded_groups` and standalone nodes
+    // mutate `expanded`.
+    if let Some(id) = value_id {
         let inspector = &mut state.devtools_view_state.inspector;
-        if inspector.is_expanded(&value_id) {
-            inspector.expanded.remove(&value_id);
-        } else {
-            inspector.expanded.insert(value_id);
+        match group {
+            RowGroup::LeaderCollapsed { .. } => {
+                // Expand the chain.
+                inspector.expanded_groups.insert(id);
+            }
+            RowGroup::LeaderExpanded => {
+                // Collapse the chain.
+                inspector.expanded_groups.remove(&id);
+            }
+            _ => {
+                // Standard node: toggle `expanded` (guarded by has_children).
+                if has_children {
+                    if inspector.is_expanded(&id) {
+                        inspector.expanded.remove(&id);
+                    } else {
+                        inspector.expanded.insert(id);
+                    }
+                }
+            }
         }
     }
 
     select_result
+}
+
+// ── Details Panel Handlers (Phase 1, Task 05) ────────────────────────────────
+
+/// Open the Details panel for the currently selected inspector node.
+///
+/// Sets `details_open = true`, snaps `details_tab` back to `Properties`, and
+/// records `details_node_id` so the TUI can render the correct content.
+///
+/// Dispatches up to two fetch actions in one update cycle:
+/// - **`FetchInspectorProperties`** — when the properties cache misses or
+///   there is a prior error on the same node and no fetch is already in flight.
+/// - **`FetchLayoutData`** — when layout cache misses and no fetch is in flight
+///   (existing Phase 1 behaviour).
+///
+/// Multiple actions are returned via [`UpdateResult::actions_vec`].
+///
+/// No-op when:
+/// - Details is already open.
+/// - No tree row is currently selected (empty tree or out-of-range index).
+pub fn handle_open_details(state: &mut AppState) -> UpdateResult {
+    let inspector = &mut state.devtools_view_state.inspector;
+    if inspector.details_open {
+        return UpdateResult::none();
+    }
+    let Some(node_id) = inspector.selected_value_id() else {
+        return UpdateResult::none(); // no selection, nothing to open
+    };
+    inspector.details_tab = DetailsTab::Properties; // always start on first tab
+    inspector.details_node_id = Some(node_id.clone());
+
+    // Phase 3: precompute tree-derived visibility predicates for the open session.
+    //
+    // Walks the tree once; cached on `inspector.details_context` and consumed by
+    // `visible_tabs()` for the duration of the details session. Cleared by
+    // `reset_details_and_groups()` and overwritten by the next open.
+    if let Some(root) = inspector.root.as_ref() {
+        inspector.details_context =
+            fdemon_core::widget_tree::compute_details_context(root, &node_id);
+    } else {
+        // Root absent (shouldn't happen if a node is selected, but defensive):
+        // default context means only the Properties tab will render until a
+        // future open lands.
+        inspector.details_context = DetailsContext::default();
+    }
+
+    inspector.details_open = true;
+
+    let session_id = match state.session_manager.selected().map(|h| h.session.id) {
+        Some(id) => id,
+        None => return UpdateResult::none(),
+    };
+
+    let mut actions: Vec<UpdateAction> = Vec::new();
+
+    // (A) Properties fetch — skip when cached for this exact node and no prior
+    //     error, or when a fetch is already in-flight.
+    {
+        let inspector = &mut state.devtools_view_state.inspector;
+        let need_properties = inspector.last_fetched_properties_node_id.as_deref()
+            != Some(node_id.as_str())
+            || inspector.properties_error.is_some();
+        if need_properties && !inspector.properties_loading {
+            inspector.properties_loading = true;
+            inspector.properties_error = None;
+            inspector.pending_properties_node_id = Some(node_id.clone());
+            actions.push(UpdateAction::FetchInspectorProperties {
+                session_id,
+                node_id: node_id.clone(),
+                vm_handle: None,
+            });
+        }
+    }
+
+    // (B) Layout fetch — existing logic. Skip when already cached or in-flight.
+    {
+        let inspector = &mut state.devtools_view_state.inspector;
+        let need_layout = inspector.last_fetched_node_id.as_deref() != Some(node_id.as_str())
+            && !inspector.layout_loading;
+        if need_layout {
+            inspector.layout_loading = true;
+            inspector.pending_node_id = Some(node_id.clone());
+            inspector.layout_last_fetch_time = Some(Instant::now());
+            actions.push(UpdateAction::FetchLayoutData {
+                session_id,
+                node_id,
+                vm_handle: None,
+            });
+        }
+    }
+
+    UpdateResult::actions_vec(actions)
+}
+
+/// Close the Details panel.
+///
+/// Sets `details_open = false` and clears `details_node_id`. The `details_tab`
+/// is left at its current value; [`handle_open_details`] always resets it to
+/// `Properties` on the next open, so the value stored here is not observed by
+/// the user.
+///
+/// No-op when Details is already closed.
+pub fn handle_close_details(state: &mut AppState) -> UpdateResult {
+    let inspector = &mut state.devtools_view_state.inspector;
+    if !inspector.details_open {
+        return UpdateResult::none();
+    }
+    inspector.details_open = false;
+    inspector.details_node_id = None;
+    UpdateResult::none()
+}
+
+/// Cycle the active Details tab forward or backward.
+///
+/// Wraps around at both ends within the set of currently-visible tabs
+/// (as returned by [`InspectorState::visible_tabs`]). No-op when Details is
+/// not open. When only one tab is visible, forward and backward both leave the
+/// tab unchanged.
+pub fn handle_cycle_tab(state: &mut AppState, forward: bool) -> UpdateResult {
+    let inspector = &mut state.devtools_view_state.inspector;
+    if !inspector.details_open {
+        return UpdateResult::none();
+    }
+
+    let visible = inspector.visible_tabs();
+    if visible.is_empty() {
+        // Defensive: visible_tabs always returns at least [Properties].
+        return UpdateResult::none();
+    }
+
+    // Find current tab in visible list. If somehow not present (e.g. clamp
+    // was missed), fall back to first visible tab.
+    let current_idx = visible.iter().position(|t| *t == inspector.details_tab);
+
+    inspector.details_tab = match current_idx {
+        Some(idx) => {
+            let next_idx = if forward {
+                (idx + 1) % visible.len()
+            } else {
+                (idx + visible.len() - 1) % visible.len()
+            };
+            visible[next_idx]
+        }
+        None => visible[0],
+    };
+
+    UpdateResult::none()
+}
+
+/// Toggle the `hide_implementation_widgets` flag.
+///
+/// Flips the flag on the inspector state, clamps `selected_index` to a valid
+/// row if the visible row count has shrunk (folding can hide rows), and
+/// mirrors the new value back to `state.settings.devtools` so the setting
+/// survives a DevTools-mode switch.
+///
+/// Returns [`UpdateAction::PersistSettings`] so the settings are written to
+/// `.fdemon/config.toml` on a background tokio task, keeping the TEA event
+/// loop unblocked.  Persistence failures are handled by the action dispatch
+/// arm (logged at `warn!` level) and do not block the toggle.
+pub fn handle_toggle_hide_implementation(state: &mut AppState) -> UpdateResult {
+    state
+        .devtools_view_state
+        .inspector
+        .hide_implementation_widgets = !state
+        .devtools_view_state
+        .inspector
+        .hide_implementation_widgets;
+
+    // Clamp selected_index — row count may have shrunk if folding turned on.
+    let row_count = state.devtools_view_state.inspector.inspector_rows().len();
+    if row_count > 0 && state.devtools_view_state.inspector.selected_index >= row_count {
+        state.devtools_view_state.inspector.selected_index = row_count - 1;
+    }
+
+    // Mirror back to Settings so the value survives re-opening DevTools.
+    state.settings.devtools.hide_implementation_widgets = state
+        .devtools_view_state
+        .inspector
+        .hide_implementation_widgets;
+
+    // Persist asynchronously — file I/O runs on a background tokio task so the
+    // TUI event loop is never stalled by disk writes.
+    UpdateResult::action(UpdateAction::PersistSettings {
+        settings: state.settings.clone(),
+        project_path: state.project_path.clone(),
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -833,12 +1228,14 @@ mod tests {
         state.devtools_view_state.inspector.root = Some(node);
         state.devtools_view_state.inspector.selected_index = 0;
 
-        // Simulate a pending fetch for "node-xyz".
+        // Simulate details open for "node-xyz" and a pending fetch for the same node.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("node-xyz".to_string());
         state.devtools_view_state.inspector.pending_node_id = Some("node-xyz".to_string());
         state.devtools_view_state.inspector.layout_loading = true;
 
         let layout = fdemon_core::LayoutInfo::default();
-        handle_layout_data_fetched(&mut state, session_id, layout);
+        handle_layout_data_fetched(&mut state, session_id, "node-xyz".to_string(), layout);
 
         assert_eq!(
             state
@@ -1153,6 +1550,9 @@ mod tests {
 
     #[test]
     fn test_layout_data_fetched_discards_stale_response() {
+        // Under unified stale-guard semantics (M2), the guard compares
+        // response.node_id against details_node_id (not selected_value_id()).
+        // When details is closed, all in-flight layout responses are discarded.
         let mut state = make_state_with_session();
         let session_id = state.session_manager.selected().unwrap().session.id;
 
@@ -1165,21 +1565,20 @@ mod tests {
             .expanded
             .insert("root-id".to_string());
 
-        // Simulate: fetch was dispatched for "root-id" (index 0).
+        // Simulate: fetch was dispatched for "root-id" (index 0), but the
+        // user closed Details before it completed (details_node_id is None).
         state.devtools_view_state.inspector.pending_node_id = Some("root-id".to_string());
         state.devtools_view_state.inspector.layout_loading = true;
-
-        // User navigated to child (index 1) before fetch completed.
-        state.devtools_view_state.inspector.selected_index = 1;
+        // details_node_id is None (default) — Details is closed.
 
         // Now the stale response arrives for "root-id".
         let layout = fdemon_core::LayoutInfo::default();
-        handle_layout_data_fetched(&mut state, session_id, layout);
+        handle_layout_data_fetched(&mut state, session_id, "root-id".to_string(), layout);
 
         // Response should be discarded — layout should remain None.
         assert!(
             state.devtools_view_state.inspector.layout.is_none(),
-            "Stale layout response should be discarded when user navigated away"
+            "Stale layout response should be discarded when details is closed"
         );
         assert!(
             !state.devtools_view_state.inspector.layout_loading,
@@ -1210,12 +1609,14 @@ mod tests {
             .insert("root-id".to_string());
         state.devtools_view_state.inspector.selected_index = 0;
 
-        // Fetch was dispatched for "root-id" — matches current selection.
+        // Details open for "root-id"; fetch was dispatched for the same node.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("root-id".to_string());
         state.devtools_view_state.inspector.pending_node_id = Some("root-id".to_string());
         state.devtools_view_state.inspector.layout_loading = true;
 
         let layout = fdemon_core::LayoutInfo::default();
-        handle_layout_data_fetched(&mut state, session_id, layout);
+        handle_layout_data_fetched(&mut state, session_id, "root-id".to_string(), layout);
 
         assert!(
             state.devtools_view_state.inspector.layout.is_some(),
@@ -1742,5 +2143,1485 @@ mod tests {
             state.devtools_view_state.inspector.error.is_some(),
             "error must be set after fetch failure (scenario 4)"
         );
+    }
+
+    // ── Details panel handlers (Phase 1, Task 05) ─────────────────────────────
+
+    /// Build a state with a session and a tree whose root has value_id "node-0-value-id"
+    /// and a child at index 1 with value_id "node-1-value-id". The root is expanded
+    /// so both rows are visible.
+    fn make_state_with_tree() -> AppState {
+        let mut state = make_state_with_session();
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "node-0-value-id",
+            "children": [{
+                "description": "Child",
+                "valueId": "node-1-value-id",
+                "children": []
+            }]
+        }))
+        .expect("valid DiagnosticsNode for make_state_with_tree");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("node-0-value-id".to_string());
+        state
+    }
+
+    #[test]
+    fn handle_open_details_sets_details_open_and_snapshots_node_id() {
+        let mut state = make_state_with_tree();
+        // Select the child (index 1) whose value_id is "node-1-value-id".
+        state.devtools_view_state.inspector.selected_index = 1;
+
+        let _ = handle_open_details(&mut state);
+
+        assert!(state.devtools_view_state.inspector.details_open);
+        assert_eq!(
+            state
+                .devtools_view_state
+                .inspector
+                .details_node_id
+                .as_deref(),
+            Some("node-1-value-id"),
+            "details_node_id should be set to the selected node's value_id"
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "details_tab should be reset to Properties on open"
+        );
+    }
+
+    #[test]
+    fn handle_open_details_is_no_op_when_no_selection() {
+        let mut state = make_state_with_session();
+        // No tree loaded — selected_value_id() returns None.
+        let result = handle_open_details(&mut state);
+        assert!(!state.devtools_view_state.inspector.details_open);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handle_open_details_is_no_op_when_already_open() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("existing-id".to_string());
+
+        let result = handle_open_details(&mut state);
+        // Should return immediately — no state change.
+        assert_eq!(
+            state
+                .devtools_view_state
+                .inspector
+                .details_node_id
+                .as_deref(),
+            Some("existing-id"),
+            "details_node_id should not be updated when details already open"
+        );
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handle_open_details_dispatches_fetch_layout_when_data_stale() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        // Ensure layout data is stale (last_fetched_node_id differs or is None).
+        state.devtools_view_state.inspector.last_fetched_node_id = None;
+        state.devtools_view_state.inspector.layout_loading = false;
+
+        let result = handle_open_details(&mut state);
+
+        // Phase 2: handle_open_details now returns multiple actions.
+        // Check via result.actions() which combines primary + extra actions.
+        assert!(
+            result
+                .actions()
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchLayoutData { .. })),
+            "Should dispatch FetchLayoutData when layout data is stale"
+        );
+        assert!(state.devtools_view_state.inspector.layout_loading);
+    }
+
+    #[test]
+    fn handle_open_details_skips_fetch_when_data_already_cached() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        // Pre-cache both layout and properties data for "node-0-value-id".
+        state.devtools_view_state.inspector.last_fetched_node_id =
+            Some("node-0-value-id".to_string());
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("node-0-value-id".to_string());
+        state.devtools_view_state.inspector.layout_loading = false;
+
+        let result = handle_open_details(&mut state);
+
+        // Phase 2: both caches are warm — no action should be dispatched.
+        assert!(
+            result.actions().is_empty(),
+            "Should NOT dispatch any fetch when both caches are warm, got {:?}",
+            result.actions()
+        );
+        assert!(
+            !state.devtools_view_state.inspector.layout_loading,
+            "layout_loading should remain false when data is cached"
+        );
+    }
+
+    #[test]
+    fn handle_close_details_clears_details_node_id() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("some-node-id".to_string());
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::RenderObject;
+
+        handle_close_details(&mut state);
+
+        assert!(!state.devtools_view_state.inspector.details_open);
+        assert!(state
+            .devtools_view_state
+            .inspector
+            .details_node_id
+            .is_none());
+        // details_tab is intentionally preserved.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "details_tab should be preserved across close/reopen"
+        );
+    }
+
+    #[test]
+    fn handle_close_details_is_no_op_when_already_closed() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = false;
+
+        let result = handle_close_details(&mut state);
+        assert!(!state.devtools_view_state.inspector.details_open);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn handle_cycle_tab_forward_advances_through_three_tabs_with_wrap() {
+        let mut state = make_state_with_tree();
+        // Phase 3 update: populate state to make all three tabs visible.
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            inspector.details_context = fdemon_core::widget_tree::DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            };
+        }
+
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject
+        );
+
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::FlexExplorer
+        );
+
+        // Wrap around.
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_backward_advances_through_three_tabs_with_wrap() {
+        let mut state = make_state_with_tree();
+        // Phase 3 update: populate state to make all three tabs visible.
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            inspector.details_context = fdemon_core::widget_tree::DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            };
+        }
+
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::FlexExplorer
+        );
+
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject
+        );
+
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_is_no_op_when_details_closed() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = false;
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+
+        handle_cycle_tab(&mut state, true);
+
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "Tab should not change when details is closed"
+        );
+    }
+
+    // ── Phase 3 cycle-tab / visible-tabs / details-context tests ─────────────
+
+    #[test]
+    fn handle_cycle_tab_is_noop_when_only_properties_visible() {
+        let mut state = AppState::new();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::Properties;
+        // Default: render_properties empty, details_context default → 1 visible tab.
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "forward cycle with 1 visible tab should be a no-op"
+        );
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "backward cycle with 1 visible tab should be a no-op"
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_skips_flex_explorer_when_hidden() {
+        let mut state = AppState::new();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            // details_context default → is_flex_layout = false → FlexExplorer hidden
+        }
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "forward from Properties should land on RenderObject"
+        );
+        handle_cycle_tab(&mut state, true);
+        // Skip FlexExplorer, wrap to Properties.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "forward from RenderObject should skip FlexExplorer and wrap to Properties"
+        );
+    }
+
+    // Phase 3 follow-up (m4): backward cycling in the 2-tab case (Properties +
+    // RenderObject, FlexExplorer hidden) was required by Phase 3 task 03
+    // acceptance criterion #6 but only the forward direction was tested.
+    #[test]
+    fn handle_cycle_tab_two_visible_tabs_backward_wraps_between_properties_and_render_object() {
+        let mut state = AppState::new();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            // details_context default → is_flex_layout = false → FlexExplorer hidden
+        }
+        // Backward from Properties → last visible tab (RenderObject).
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "backward from Properties should wrap to RenderObject (last visible tab)"
+        );
+        // Backward from RenderObject → Properties.
+        handle_cycle_tab(&mut state, false);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "backward from RenderObject should wrap to Properties"
+        );
+    }
+
+    #[test]
+    fn handle_cycle_tab_skips_render_object_when_hidden() {
+        let mut state = AppState::new();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::Properties;
+            // render_properties empty → RenderObject hidden
+            inspector.details_context = fdemon_core::widget_tree::DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            };
+        }
+        handle_cycle_tab(&mut state, true);
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::FlexExplorer,
+            "forward from Properties should skip RenderObject and land on FlexExplorer"
+        );
+        handle_cycle_tab(&mut state, true);
+        // Skip RenderObject, wrap to Properties.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "forward from FlexExplorer should skip RenderObject and wrap to Properties"
+        );
+    }
+
+    #[test]
+    fn handle_open_details_populates_details_context_for_column_widget() {
+        let mut state = make_state_with_session();
+        let column = serde_json::from_value::<fdemon_core::DiagnosticsNode>(serde_json::json!({
+            "description": "Column",
+            "valueId": "col-id"
+        }))
+        .expect("valid DiagnosticsNode");
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.root = Some(column);
+            inspector.selected_index = 0;
+        }
+        handle_open_details(&mut state);
+        let ctx = &state.devtools_view_state.inspector.details_context;
+        assert!(ctx.is_flex_layout, "Column should be is_flex_layout=true");
+    }
+
+    #[test]
+    fn handle_open_details_populates_details_context_for_non_flex_root() {
+        let mut state = make_state_with_session();
+        let container = serde_json::from_value::<fdemon_core::DiagnosticsNode>(serde_json::json!({
+            "description": "Container",
+            "valueId": "c-id"
+        }))
+        .expect("valid DiagnosticsNode");
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.root = Some(container);
+            inspector.selected_index = 0;
+        }
+        handle_open_details(&mut state);
+        let ctx = &state.devtools_view_state.inspector.details_context;
+        assert!(
+            !ctx.is_flex_layout,
+            "Container with no parent should be is_flex_layout=false"
+        );
+    }
+
+    #[test]
+    fn handle_inspector_properties_fetched_clamps_active_tab_to_properties_when_render_object_disappears(
+    ) {
+        let mut state = make_state_with_session();
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::RenderObject;
+            inspector.details_node_id = Some("node-id".into());
+            inspector.pending_properties_node_id = Some("node-id".into());
+            // Previously had render_properties → RenderObject was visible.
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderOld".into(),
+                ..Default::default()
+            }];
+        }
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        // Simulate a successful fetch that returns no render-object properties
+        // (e.g. user re-selected a widget with no RenderObject).
+        handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "node-id".to_string(),
+            vec![], // widget_props
+            vec![], // render_props — empty triggers clamp
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "clamp_details_tab should snap RenderObject → Properties when render_properties becomes empty"
+        );
+    }
+
+    #[test]
+    fn handle_toggle_hide_implementation_flips_flag_and_clamps_selection() {
+        let mut state = make_state_with_tree();
+        // Default is hide_implementation_widgets = true.
+        // With our two-node tree (root + child), tree shows both rows when hide=false
+        // and may collapse chains when hide=true.
+        let was = state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets;
+
+        handle_toggle_hide_implementation(&mut state);
+
+        assert_ne!(
+            state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            was,
+            "hide_implementation_widgets should be flipped"
+        );
+
+        // selected_index must be valid (< row_count).
+        let row_count = state.devtools_view_state.inspector.inspector_rows().len();
+        assert!(
+            state.devtools_view_state.inspector.selected_index < row_count.max(1),
+            "selected_index should be clamped to a valid row after toggle"
+        );
+    }
+
+    #[test]
+    fn handle_toggle_hide_implementation_writes_back_to_settings() {
+        let mut state = make_state_with_tree();
+        let original = state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets;
+
+        handle_toggle_hide_implementation(&mut state);
+
+        assert_eq!(
+            state.settings.devtools.hide_implementation_widgets, !original,
+            "Settings must reflect the toggled value"
+        );
+        assert_eq!(
+            state.settings.devtools.hide_implementation_widgets,
+            state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "Settings and inspector state must be in sync after toggle"
+        );
+    }
+
+    #[test]
+    fn handle_toggle_hide_implementation_returns_persist_settings_action() {
+        let mut state = make_state_with_tree();
+        let initial = state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets;
+        let expected_project_path = state.project_path.clone();
+
+        let result = handle_toggle_hide_implementation(&mut state);
+
+        // Must return a PersistSettings action — never UpdateResult::none().
+        let action = match result.action {
+            Some(a) => a,
+            None => panic!("expected PersistSettings action, got none"),
+        };
+
+        match action {
+            UpdateAction::PersistSettings {
+                settings,
+                project_path,
+            } => {
+                assert_eq!(
+                    settings.devtools.hide_implementation_widgets, !initial,
+                    "PersistSettings payload must carry the toggled value"
+                );
+                assert_eq!(
+                    project_path, expected_project_path,
+                    "PersistSettings must use the state's project_path"
+                );
+            }
+            other => panic!("expected PersistSettings, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_inspector_navigate_is_no_op_when_details_open() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_navigate(&mut state, InspectorNav::Down);
+
+        assert!(
+            result.action.is_none(),
+            "navigate should return no action when details is open"
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 0,
+            "selected_index should not change when details is open"
+        );
+    }
+
+    #[test]
+    fn handle_inspector_select_row_is_no_op_when_details_open() {
+        let mut state = make_state_with_tree();
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_select_row(&mut state, 1);
+
+        assert!(result.action.is_none());
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 0,
+            "row selection should be frozen when details is open"
+        );
+    }
+
+    // ── Task 06: expanded_groups wiring ──────────────────────────────────────
+
+    /// Build a state with a session and a folded chain:
+    ///   - root wrapper (local project, expanded) at index 0
+    ///   - chain leader (non-local, `RowGroup::LeaderCollapsed`) at index 1
+    ///     with `value_id` = "leader-id"
+    ///
+    /// `hide_implementation_widgets` is set to `true` so the builder folds the
+    /// chain.
+    fn make_state_with_folded_chain() -> AppState {
+        let mut state = make_state_with_session();
+        // Chain: 3 non-local-project nodes (chain-0 → chain-1 → chain-2).
+        let chain = fdemon_core::DiagnosticsNode {
+            description: "chain-0".to_string(),
+            value_id: Some("leader-id".to_string()),
+            created_by_local_project: false,
+            children: vec![fdemon_core::DiagnosticsNode {
+                description: "chain-1".to_string(),
+                value_id: Some("member-1-id".to_string()),
+                created_by_local_project: false,
+                children: vec![fdemon_core::DiagnosticsNode {
+                    description: "chain-2".to_string(),
+                    value_id: Some("member-2-id".to_string()),
+                    created_by_local_project: false,
+                    children: vec![],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let root = fdemon_core::DiagnosticsNode {
+            description: "RootWrapper".to_string(),
+            value_id: Some("wrapper-id".to_string()),
+            created_by_local_project: true,
+            children: vec![chain],
+            ..Default::default()
+        };
+        state.devtools_view_state.inspector.root = Some(root);
+        // Expand the wrapper so the chain leader is visible at index 1.
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("wrapper-id".to_string());
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = true;
+        state.devtools_view_state.inspector.selected_index = 1; // chain leader
+        state
+    }
+
+    /// Build a state with a folded chain whose leader is already expanded in
+    /// `expanded_groups` (i.e. `RowGroup::LeaderExpanded`).
+    fn make_state_with_expanded_chain() -> AppState {
+        let mut state = make_state_with_folded_chain();
+        state
+            .devtools_view_state
+            .inspector
+            .expanded_groups
+            .insert("leader-id".to_string());
+        state
+    }
+
+    #[test]
+    fn expand_on_leader_collapsed_inserts_into_expanded_groups() {
+        let mut state = make_state_with_folded_chain();
+        // Verify precondition: the selected row is a LeaderCollapsed.
+        {
+            let row = state
+                .devtools_view_state
+                .inspector
+                .selected_row()
+                .expect("row should exist at index 1");
+            assert!(
+                matches!(row.group, fdemon_core::RowGroup::LeaderCollapsed { .. }),
+                "Expected LeaderCollapsed but got: {:?}",
+                row.group
+            );
+        }
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Expand);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .contains("leader-id"),
+            "expanded_groups should contain leader-id after Expand on LeaderCollapsed"
+        );
+    }
+
+    #[test]
+    fn expand_on_leader_collapsed_does_not_insert_into_expanded() {
+        let mut state = make_state_with_folded_chain();
+        let before_len = state.devtools_view_state.inspector.expanded.len();
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Expand);
+
+        assert_eq!(
+            state.devtools_view_state.inspector.expanded.len(),
+            before_len,
+            "expanded set must not be mutated when expanding a chain leader"
+        );
+    }
+
+    #[test]
+    fn collapse_on_leader_expanded_removes_from_expanded_groups() {
+        let mut state = make_state_with_expanded_chain();
+        // Verify precondition: the selected row is a LeaderExpanded.
+        {
+            let row = state
+                .devtools_view_state
+                .inspector
+                .selected_row()
+                .expect("row should exist at index 1");
+            assert_eq!(
+                row.group,
+                fdemon_core::RowGroup::LeaderExpanded,
+                "Expected LeaderExpanded but got: {:?}",
+                row.group
+            );
+        }
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Collapse);
+
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .contains("leader-id"),
+            "expanded_groups should not contain leader-id after Collapse on LeaderExpanded"
+        );
+    }
+
+    #[test]
+    fn expand_on_standalone_row_inserts_into_expanded() {
+        // Regression guard: standalone nodes must still use `expanded`.
+        let mut state = make_state_with_session();
+        // Build a simple parent/child tree, both local-project (so RowGroup::None).
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Parent",
+            "valueId": "parent-id",
+            "createdByLocalProject": true,
+            "children": [{
+                "description": "Child",
+                "valueId": "child-id",
+                "createdByLocalProject": true,
+                "children": []
+            }]
+        }))
+        .expect("valid tree");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let _ = handle_inspector_navigate(&mut state, InspectorNav::Expand);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded
+                .contains("parent-id"),
+            "expanded should contain parent-id after Expand on a standalone row"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .is_empty(),
+            "expanded_groups must remain empty when expanding a standalone row"
+        );
+    }
+
+    #[test]
+    fn mouse_toggle_on_leader_glyph_mutates_expanded_groups_not_expanded() {
+        let mut state = make_state_with_folded_chain();
+        let before_expanded_len = state.devtools_view_state.inspector.expanded.len();
+
+        // Index 1 = chain leader (LeaderCollapsed).
+        handle_inspector_toggle_node(&mut state, 1);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .contains("leader-id"),
+            "expanded_groups should contain leader-id after toggle on LeaderCollapsed"
+        );
+        assert_eq!(
+            state.devtools_view_state.inspector.expanded.len(),
+            before_expanded_len,
+            "expanded set must not be mutated when toggling a chain leader"
+        );
+    }
+
+    #[test]
+    fn mouse_toggle_on_standalone_glyph_mutates_expanded() {
+        // Regression guard: standalone nodes must still use `expanded`.
+        let mut state = make_state_with_session();
+        let tree = make_tree_with_children();
+        state.devtools_view_state.inspector.root = Some(tree);
+        // hide_implementation_widgets = true but root + child are not part of a
+        // chain (root has a child, so root is not a single-child non-local node
+        // in the strict chain definition — verify RowGroup::None at index 0).
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = true;
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        handle_inspector_toggle_node(&mut state, 0);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded
+                .contains("root-id"),
+            "expanded should contain root-id after toggle on a standalone row"
+        );
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded_groups
+                .is_empty(),
+            "expanded_groups must remain empty when toggling a standalone row"
+        );
+    }
+
+    // ── Task 07: reset_details_and_groups ────────────────────────────────────
+
+    /// Build a state with details open, a node id snapshotted, a non-default
+    /// tab, a non-empty expanded_groups set, and populated properties vectors.
+    /// This is the "dirty" precondition for tests below.
+    fn make_state_with_details_open() -> (AppState, crate::session::SessionId) {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "root-id",
+            "children": [{
+                "description": "Child",
+                "valueId": "child-id",
+                "children": []
+            }]
+        }))
+        .expect("valid DiagnosticsNode for make_state_with_details_open");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        // Open details with a snapshotted node id.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("root-id".to_string());
+        state.devtools_view_state.inspector.details_tab = crate::state::DetailsTab::RenderObject;
+        // Populate expanded_groups with a fake leader id.
+        state
+            .devtools_view_state
+            .inspector
+            .expanded_groups
+            .insert("leader-id".to_string());
+        // Simulate populated properties cache.
+        state.devtools_view_state.inspector.properties =
+            vec![serde_json::from_value(serde_json::json!({
+                "description": "prop-a",
+                "propertyType": "color"
+            }))
+            .unwrap()];
+        state.devtools_view_state.inspector.render_properties =
+            vec![serde_json::from_value(serde_json::json!({
+                "description": "render-prop-b",
+                "propertyType": "RenderObject"
+            }))
+            .unwrap()];
+        state.devtools_view_state.inspector.properties_loading = true;
+        state.devtools_view_state.inspector.properties_error =
+            Some(DevToolsError::new("old error", "hint"));
+        (state, session_id)
+    }
+
+    /// After fetching a new tree, the Details panel must be closed and all
+    /// details-related state must be cleared (C2 fix).
+    #[test]
+    fn widget_tree_fetched_clears_details_state_when_details_was_open() {
+        let (mut state, session_id) = make_state_with_details_open();
+
+        let new_tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "NewRoot",
+            "valueId": "new-root-id"
+        }))
+        .unwrap();
+        let _ = handle_widget_tree_fetched(&mut state, session_id, Box::new(new_tree));
+
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            !inspector.details_open,
+            "details_open must be false after tree refresh"
+        );
+        assert!(
+            inspector.details_node_id.is_none(),
+            "details_node_id must be None after tree refresh"
+        );
+        assert_eq!(
+            inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "details_tab must be reset to Properties after tree refresh"
+        );
+        assert!(
+            inspector.expanded_groups.is_empty(),
+            "expanded_groups must be empty after tree refresh"
+        );
+        assert!(
+            inspector.properties.is_empty(),
+            "properties must be empty after tree refresh"
+        );
+        assert!(
+            inspector.render_properties.is_empty(),
+            "render_properties must be empty after tree refresh"
+        );
+        assert!(
+            !inspector.properties_loading,
+            "properties_loading must be false after tree refresh"
+        );
+        assert!(
+            inspector.properties_error.is_none(),
+            "properties_error must be None after tree refresh"
+        );
+    }
+
+    /// Regression guard: `hide_implementation_widgets` must be preserved by
+    /// `reset_details_and_groups` because it is a user preference.
+    #[test]
+    fn reset_details_and_groups_preserves_hide_implementation_widgets() {
+        let mut state = make_state_with_session();
+        // Set the flag to a non-default value (default is true).
+        state
+            .devtools_view_state
+            .inspector
+            .hide_implementation_widgets = false;
+
+        state
+            .devtools_view_state
+            .inspector
+            .reset_details_and_groups();
+
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "hide_implementation_widgets must not be touched by reset_details_and_groups"
+        );
+    }
+
+    /// Regression guard: `reset_details_and_groups` itself does NOT clear
+    /// `has_ever_rendered_tree` — only `SessionRestartCompleted` does that.
+    #[test]
+    fn reset_details_and_groups_preserves_has_ever_rendered_tree() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.has_ever_rendered_tree = true;
+
+        state
+            .devtools_view_state
+            .inspector
+            .reset_details_and_groups();
+
+        assert!(
+            state.devtools_view_state.inspector.has_ever_rendered_tree,
+            "has_ever_rendered_tree must not be cleared by reset_details_and_groups; \
+             only SessionRestartCompleted should clear it"
+        );
+    }
+
+    /// After hot restart, Details and groups state must be cleared alongside
+    /// `has_ever_rendered_tree`.
+    #[test]
+    fn session_restart_completed_clears_details_state() {
+        let (mut state, session_id) = make_state_with_details_open();
+        // Also prime has_ever_rendered_tree so we can check it is cleared.
+        state.devtools_view_state.inspector.has_ever_rendered_tree = true;
+
+        use crate::handler::update::update;
+        use crate::message::Message;
+        let _ = update(&mut state, Message::SessionRestartCompleted { session_id });
+
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            !inspector.details_open,
+            "details_open must be false after hot restart"
+        );
+        assert!(
+            inspector.details_node_id.is_none(),
+            "details_node_id must be None after hot restart"
+        );
+        assert_eq!(
+            inspector.details_tab,
+            crate::state::DetailsTab::Properties,
+            "details_tab must be reset to Properties after hot restart"
+        );
+        assert!(
+            inspector.expanded_groups.is_empty(),
+            "expanded_groups must be empty after hot restart"
+        );
+        assert!(
+            inspector.properties.is_empty(),
+            "properties must be empty after hot restart"
+        );
+        assert!(
+            !inspector.has_ever_rendered_tree,
+            "has_ever_rendered_tree must be false after hot restart"
+        );
+    }
+
+    // ── Properties handlers (Phase 2, Task 06) ───────────────────────────────
+
+    /// Build a minimal `DiagnosticsNode` suitable for use as a test property.
+    fn sample_diagnostic(
+        name: &str,
+        description: &str,
+        property_type: Option<&str>,
+    ) -> fdemon_core::DiagnosticsNode {
+        let mut node: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": description
+        }))
+        .expect("valid DiagnosticsNode");
+        node.name = Some(name.to_string());
+        if let Some(pt) = property_type {
+            node.property_type = Some(pt.to_string());
+        }
+        node
+    }
+
+    /// Build a state with a session and the given node selected (value_id =
+    /// `node_id`). The tree contains exactly that one node as the root; the
+    /// root is auto-selected at index 0.
+    fn make_state_with_selected_widget(node_id: &str) -> AppState {
+        let mut state = make_state_with_session();
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "TestWidget",
+            "valueId": node_id
+        }))
+        .expect("valid DiagnosticsNode");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state.devtools_view_state.inspector.selected_index = 0;
+        state
+    }
+
+    /// Build a state with a session, the given node selected, **and** the
+    /// properties fetch already in-flight (`pending_properties_node_id` set,
+    /// `properties_loading = true`).
+    fn make_state_with_inspector_open(node_id: &str) -> AppState {
+        let mut state = make_state_with_selected_widget(node_id);
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some(node_id.to_string());
+        state
+    }
+
+    #[test]
+    fn properties_fetched_stores_into_state() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        let widget_props = vec![sample_diagnostic("name", "value", None)];
+        let render_props = vec![sample_diagnostic(
+            "renderObject",
+            "RenderFlex",
+            Some("RenderObject"),
+        )];
+
+        handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "objects/42".into(),
+            widget_props.clone(),
+            render_props.clone(),
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert_eq!(i.properties.len(), widget_props.len());
+        assert_eq!(i.render_properties.len(), render_props.len());
+        assert!(!i.properties_loading, "properties_loading must be cleared");
+        assert!(
+            i.properties_error.is_none(),
+            "properties_error must be None"
+        );
+        assert_eq!(
+            i.last_fetched_properties_node_id.as_deref(),
+            Some("objects/42"),
+            "last_fetched_properties_node_id should be set"
+        );
+        assert!(
+            i.pending_properties_node_id.is_none(),
+            "pending_properties_node_id must be cleared"
+        );
+    }
+
+    #[test]
+    fn properties_fetched_discards_stale_response() {
+        let mut state = make_state_with_inspector_open("objects/B");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        // B is in-flight.
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/B".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        // A's response arrives late, while B is in-flight.
+        handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "objects/A".into(),
+            vec![sample_diagnostic("stale", "stale", None)],
+            vec![],
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(
+            i.properties.is_empty(),
+            "stale response must not mutate properties"
+        );
+        assert!(
+            i.properties_loading,
+            "loading flag should still be set for in-flight B"
+        );
+        assert!(
+            i.last_fetched_properties_node_id.is_none(),
+            "last_fetched must not be set from a stale response"
+        );
+    }
+
+    #[test]
+    fn properties_fetched_cross_session_guard() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        // Use a session_id that does not match any active session.
+        handle_inspector_properties_fetched(
+            &mut state,
+            9999,
+            "objects/42".into(),
+            vec![sample_diagnostic("name", "value", None)],
+            vec![],
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(
+            i.properties.is_empty(),
+            "cross-session response must not mutate properties"
+        );
+        assert!(
+            i.properties_loading,
+            "loading flag must not change on cross-session response"
+        );
+    }
+
+    #[test]
+    fn properties_fetch_failed_sets_error() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        handle_inspector_properties_fetch_failed(
+            &mut state,
+            session_id,
+            "objects/42".into(),
+            "Isolate not found: 12345".to_string(),
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(!i.properties_loading, "loading must be false after failure");
+        assert!(
+            i.properties_error.is_some(),
+            "error must be set after failure"
+        );
+        assert!(
+            i.pending_properties_node_id.is_none(),
+            "pending must be cleared after failure"
+        );
+        // Cache must NOT be updated on failure — next Enter will retry.
+        assert!(
+            i.last_fetched_properties_node_id.is_none(),
+            "last_fetched must not be updated on failure"
+        );
+    }
+
+    #[test]
+    fn properties_fetch_timeout_sets_error() {
+        let mut state = make_state_with_inspector_open("objects/42");
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        handle_inspector_properties_fetch_timeout(&mut state, session_id, "objects/42".into());
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(!i.properties_loading, "loading must be false after timeout");
+        let err = i
+            .properties_error
+            .as_ref()
+            .expect("error must be set after timeout");
+        assert!(
+            err.message.contains("timed out"),
+            "error message should mention timeout, got: {:?}",
+            err.message
+        );
+        assert!(
+            i.pending_properties_node_id.is_none(),
+            "pending must be cleared after timeout"
+        );
+    }
+
+    // Phase 3 follow-up (m1): timeout clamp must not disturb a still-visible
+    // active tab. RenderObject is visible when render_properties is non-empty,
+    // so a timeout (which does not touch render_properties) must be a no-op for
+    // the active tab.
+    #[test]
+    fn handle_inspector_properties_fetch_timeout_does_not_disturb_visible_active_tab() {
+        let mut state = make_state_with_session();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        {
+            let inspector = &mut state.devtools_view_state.inspector;
+            inspector.details_open = true;
+            inspector.details_tab = crate::state::DetailsTab::RenderObject;
+            inspector.details_node_id = Some("node-1".into());
+            inspector.render_properties = vec![fdemon_core::DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }];
+            inspector.pending_properties_node_id = Some("node-1".into());
+            inspector.properties_loading = true;
+        }
+        handle_inspector_properties_fetch_timeout(&mut state, session_id, "node-1".into());
+        // RenderObject is still in visible_tabs (render_properties non-empty),
+        // so the clamp must be a no-op for the active tab.
+        assert_eq!(
+            state.devtools_view_state.inspector.details_tab,
+            crate::state::DetailsTab::RenderObject,
+            "timeout clamp must not snap active tab when it's still visible"
+        );
+        assert!(!state.devtools_view_state.inspector.properties_loading);
+        assert!(state
+            .devtools_view_state
+            .inspector
+            .properties_error
+            .is_some());
+    }
+
+    #[test]
+    fn open_details_dispatches_properties_fetch_on_cache_miss() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // No cache: last_fetched_properties_node_id is None.
+        let result = handle_open_details(&mut state);
+
+        let actions = result.actions();
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                UpdateAction::FetchInspectorProperties { node_id, .. } if node_id == "objects/42"
+            )),
+            "FetchInspectorProperties must be dispatched on cache miss, got {:?}",
+            actions
+        );
+
+        let i = &state.devtools_view_state.inspector;
+        assert!(i.properties_loading, "properties_loading should be true");
+        assert_eq!(i.pending_properties_node_id.as_deref(), Some("objects/42"));
+    }
+
+    #[test]
+    fn open_details_cache_hit_skips_properties_dispatch() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // Both caches warm — no fetch should be dispatched.
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.last_fetched_node_id = Some("objects/42".into());
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            actions.is_empty(),
+            "no fetch should be dispatched on full cache hit, got {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn open_details_cache_hit_on_properties_but_layout_miss_dispatches_only_layout() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // Properties cache warm, layout cache cold.
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.last_fetched_node_id = None;
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
+            "FetchInspectorProperties must not be dispatched on properties cache hit"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchLayoutData { .. })),
+            "FetchLayoutData must be dispatched on layout cache miss"
+        );
+    }
+
+    #[test]
+    fn open_details_retries_properties_when_prior_error() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // Cache appears hot but there was a prior error — must retry.
+        state
+            .devtools_view_state
+            .inspector
+            .last_fetched_properties_node_id = Some("objects/42".into());
+        state.devtools_view_state.inspector.properties_error =
+            Some(DevToolsError::new("prev error", "retry"));
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
+            "FetchInspectorProperties must be dispatched when prior error exists"
+        );
+    }
+
+    #[test]
+    fn open_details_does_not_double_dispatch_when_properties_already_loading() {
+        let mut state = make_state_with_selected_widget("objects/42");
+        // A fetch is already in-flight — must not dispatch another.
+        state.devtools_view_state.inspector.properties_loading = true;
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("objects/42".into());
+
+        let result = handle_open_details(&mut state);
+        let actions = result.actions();
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::FetchInspectorProperties { .. })),
+            "FetchInspectorProperties must not be double-dispatched when already loading"
+        );
+    }
+
+    // ── Regression tests: stale-guard unification (Phase 2 follow-up C2 / M2) ──
+
+    /// Regression test for C2: open details on A → close → open on B → A's
+    /// fetch completes → B's details must NOT be mutated.
+    ///
+    /// This test reproduces the exact race described in the C2 review finding:
+    /// `pending_properties_node_id` still points to A, but the Details panel is
+    /// now open on B. The stale guard must use `details_node_id` (not the pending
+    /// id) to decide whether to apply the response.
+    #[test]
+    fn properties_response_discarded_when_user_reopened_details_on_different_node() {
+        let mut state = make_state_with_session();
+
+        // Step 1: open details on A. Schedules a fetch, sets pending=A.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("A".into());
+        state
+            .devtools_view_state
+            .inspector
+            .pending_properties_node_id = Some("A".into());
+        state.devtools_view_state.inspector.properties_loading = true;
+
+        // Step 2: user closes details (simulates handle_close_details behavior):
+        // details_open and details_node_id are cleared, but pending and loading
+        // are deliberately left as-is — this is the original close-details
+        // behaviour that opens the race.
+        state.devtools_view_state.inspector.details_open = false;
+        state.devtools_view_state.inspector.details_node_id = None;
+
+        // Step 3: user reopens details on B. Loading is still true so no new
+        // fetch is dispatched; pending stays at A.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("B".into());
+
+        // Step 4: A's response arrives.
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        let widget_props = vec![sample_diagnostic("colorA", "Color(0xff0000ff)", None)];
+        let render_props = vec![];
+        let result = handle_inspector_properties_fetched(
+            &mut state,
+            session_id,
+            "A".into(),
+            widget_props,
+            render_props,
+        );
+
+        // Step 5: verify B's details were NOT mutated.
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            inspector.properties.is_empty(),
+            "properties for B must remain empty; A's response should be discarded"
+        );
+        assert!(
+            inspector.render_properties.is_empty(),
+            "render_properties for B must remain empty"
+        );
+        assert_eq!(
+            inspector.details_node_id.as_deref(),
+            Some("B"),
+            "details_node_id should still point to B"
+        );
+
+        // Step 6: pending should be cleared since A's fetch is now resolved,
+        // and loading cleared so the user can refetch for B.
+        assert!(
+            inspector.pending_properties_node_id.is_none(),
+            "pending should be cleared once A's stale response arrives"
+        );
+        assert!(
+            !inspector.properties_loading,
+            "properties_loading should be cleared so user can refetch for B"
+        );
+
+        assert!(result.action.is_none(), "no action should be returned");
+    }
+
+    /// Companion test for the unified-key layout handler (M2).
+    ///
+    /// Verifies that a layout response for node A is accepted when the Details
+    /// panel is still open on A, even if the tree selection has moved to a
+    /// different node. Under unified semantics the guard checks `details_node_id`,
+    /// not `selected_value_id()`.
+    #[test]
+    fn layout_response_applied_when_details_node_matches_even_if_selection_moved() {
+        let mut state = make_state_with_session();
+
+        // Build a two-node tree (root A + child B) with root expanded.
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "A",
+            "children": [{
+                "description": "Child",
+                "valueId": "B",
+                "children": []
+            }]
+        }))
+        .expect("valid DiagnosticsNode");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("A".to_string());
+
+        // Details open for A; in-flight layout fetch is also for A.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("A".into());
+        state.devtools_view_state.inspector.pending_node_id = Some("A".into());
+        state.devtools_view_state.inspector.layout_loading = true;
+
+        // User navigates tree to B (selection moves to index 1) while keeping
+        // details open on A.
+        state.devtools_view_state.inspector.selected_index = 1;
+
+        // A's layout response arrives.
+        let layout = fdemon_core::LayoutInfo::default();
+        let session_id = state.session_manager.selected().unwrap().session.id;
+        let result = handle_layout_data_fetched(&mut state, session_id, "A".into(), layout.clone());
+
+        // Layout for A should be applied because details_node_id is A.
+        let inspector = &state.devtools_view_state.inspector;
+        assert!(
+            inspector.layout.is_some(),
+            "Layout for A must be applied when details_node_id == A"
+        );
+        assert!(!inspector.layout_loading, "layout_loading must be cleared");
+        assert_eq!(
+            inspector.last_fetched_node_id.as_deref(),
+            Some("A"),
+            "last_fetched_node_id should be promoted from pending"
+        );
+        assert!(result.action.is_none(), "no action should be returned");
     }
 }

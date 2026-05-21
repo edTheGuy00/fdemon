@@ -35,6 +35,7 @@ pub fn handle_show(state: &mut AppState) -> UpdateResult {
     UpdateResult {
         message: Some(Message::FlutterVersionProbeRequested),
         action: Some(UpdateAction::ScanInstalledSdks { active_sdk_root }),
+        extra_actions: Vec::new(),
     }
 }
 

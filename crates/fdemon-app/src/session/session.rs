@@ -19,6 +19,7 @@ use super::block_state::LogBlockState;
 use super::collapse::CollapseState;
 use super::debug_state::DebugState;
 use super::log_batcher::LogBatcher;
+use super::memory::MemoryState;
 use super::network::NetworkState;
 use super::next_session_id;
 use super::performance::PerformanceState;
@@ -179,8 +180,11 @@ pub struct Session {
     // ─────────────────────────────────────────────────────────
     // Performance Monitoring (Phase 3, Task 05)
     // ─────────────────────────────────────────────────────────
-    /// Performance monitoring state (memory, GC, frames).
+    /// Performance monitoring state (frame timing, stats).
     pub performance: PerformanceState,
+
+    /// Memory monitoring state (heap snapshots, GC events, allocation profile).
+    pub memory: MemoryState,
 
     // ─────────────────────────────────────────────────────────
     // Network Monitoring (Phase 4, Task 03)
@@ -234,6 +238,7 @@ impl Session {
             error_count: 0,
             log_batcher: LogBatcher::new(),
             performance: PerformanceState::default(),
+            memory: MemoryState::default(),
             network: NetworkState::default(),
             debug: DebugState::default(),
         }

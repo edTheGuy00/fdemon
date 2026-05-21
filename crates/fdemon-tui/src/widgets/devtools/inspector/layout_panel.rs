@@ -28,7 +28,7 @@ const COMPACT_MODE_HEIGHT: u16 = 5;
 impl WidgetInspector<'_> {
     /// Render the layout panel showing box model, dimensions, and constraints
     /// for the currently selected widget tree node.
-    pub(super) fn render_layout_panel(
+    pub(in crate::widgets::devtools::inspector) fn render_layout_panel(
         &self,
         area: Rect,
         buf: &mut Buffer,
@@ -307,7 +307,7 @@ fn render_layout_error(area: Rect, buf: &mut Buffer, message: &str, hint: &str) 
 }
 
 /// Render the box model visualization with nested padding/widget blocks.
-pub(super) fn render_box_model(
+pub(in crate::widgets::devtools::inspector) fn render_box_model(
     area: Rect,
     buf: &mut Buffer,
     size: &WidgetSize,
@@ -400,7 +400,11 @@ pub(super) fn render_box_model(
 }
 
 /// Render the simplified size box without padding wrapper.
-pub(super) fn render_size_box(area: Rect, buf: &mut Buffer, size: &WidgetSize) {
+pub(in crate::widgets::devtools::inspector) fn render_size_box(
+    area: Rect,
+    buf: &mut Buffer,
+    size: &WidgetSize,
+) {
     if area.height < 4 || area.width < 8 {
         return;
     }
@@ -517,7 +521,7 @@ fn render_flex_properties(x: u16, y: u16, width: u16, buf: &mut Buffer, layout: 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 
 /// Format a constraint value: `"Inf"` for infinity or very large values, `"{:.1}"` otherwise.
-pub(super) fn format_constraint_value(value: f64) -> String {
+pub(in crate::widgets::devtools::inspector) fn format_constraint_value(value: f64) -> String {
     if value == f64::INFINITY || value >= 1e10 {
         "Inf".to_string()
     } else {

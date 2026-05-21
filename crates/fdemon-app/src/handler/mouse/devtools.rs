@@ -6,6 +6,9 @@
 //! - Performance → section scroll (Up/Down → `PerfScrollUp`/`PerfScrollDown`;
 //!   Shift+Up/Down → `PerfPageUp`/`PerfPageDown`; Ctrl/Alt → no-op;
 //!   horizontal wheel → no-op). The keyboard handler routes by `focused_section`.
+//! - Memory → memory chart / alloc-table scroll (Up/Down → `MemScrollUp`/`MemScrollDown`;
+//!   Shift+Up/Down → `MemPageUp`/`MemPageDown`; Ctrl/Alt → no-op;
+//!   horizontal wheel → no-op). The keyboard handler routes by `focused_section`.
 //! - Network → request-list navigation (Up/Down; Shift → PageUp/PageDown);
 //!   no-op when filter input is active
 //!
@@ -94,6 +97,7 @@ pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -
     match state.devtools_view_state.active_panel {
         DevToolsPanel::Inspector => handle_inspector_scroll(dir, mods),
         DevToolsPanel::Performance => handle_performance_scroll(dir, mods),
+        DevToolsPanel::Memory => handle_memory_scroll(dir, mods),
         DevToolsPanel::Network => handle_network_scroll(state, dir, mods),
     }
 }
@@ -130,6 +134,28 @@ fn handle_performance_scroll(dir: ScrollDir, mods: KeyModSet) -> Option<Message>
     match dir {
         ScrollDir::Up => Some(Message::PerfScrollUp),
         ScrollDir::Down => Some(Message::PerfScrollDown),
+        ScrollDir::Left | ScrollDir::Right => None,
+    }
+}
+
+fn handle_memory_scroll(dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
+    // Shift+wheel → page step (mirrors handle_performance_scroll).
+    if mods.is_shift_only() {
+        return match dir {
+            ScrollDir::Up => Some(Message::MemPageUp),
+            ScrollDir::Down => Some(Message::MemPageDown),
+            ScrollDir::Left | ScrollDir::Right => None,
+        };
+    }
+
+    // Ctrl or Alt → no-op for parity with the other panels.
+    if mods.ctrl || mods.alt {
+        return None;
+    }
+
+    match dir {
+        ScrollDir::Up => Some(Message::MemScrollUp),
+        ScrollDir::Down => Some(Message::MemScrollDown),
         ScrollDir::Left | ScrollDir::Right => None,
     }
 }
@@ -250,6 +276,93 @@ mod tests {
         assert!(handle_scroll(&s, ScrollDir::Right, KeyModSet::NONE).is_none());
     }
 
+    // ── Memory panel scroll tests (C2 regression coverage) ──────────────────
+
+    #[test]
+    fn memory_wheel_up_emits_mem_scroll_up() {
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let msg = handle_scroll(&s, ScrollDir::Up, KeyModSet::NONE);
+        assert!(matches!(msg, Some(Message::MemScrollUp)));
+    }
+
+    #[test]
+    fn memory_wheel_down_emits_mem_scroll_down() {
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let msg = handle_scroll(&s, ScrollDir::Down, KeyModSet::NONE);
+        assert!(matches!(msg, Some(Message::MemScrollDown)));
+    }
+
+    #[test]
+    fn memory_shift_wheel_up_emits_mem_page_up() {
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let mods = KeyModSet::new(true, false, false);
+        let msg = handle_scroll(&s, ScrollDir::Up, mods);
+        assert!(matches!(msg, Some(Message::MemPageUp)));
+    }
+
+    #[test]
+    fn memory_shift_wheel_down_emits_mem_page_down() {
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let mods = KeyModSet::new(true, false, false);
+        let msg = handle_scroll(&s, ScrollDir::Down, mods);
+        assert!(matches!(msg, Some(Message::MemPageDown)));
+    }
+
+    #[test]
+    fn memory_ctrl_modifier_returns_none() {
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let mods = KeyModSet::new(false, true, false);
+        assert!(handle_scroll(&s, ScrollDir::Up, mods).is_none());
+        assert!(handle_scroll(&s, ScrollDir::Down, mods).is_none());
+    }
+
+    #[test]
+    fn memory_alt_modifier_returns_none() {
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let mods = KeyModSet::new(false, false, true);
+        assert!(handle_scroll(&s, ScrollDir::Up, mods).is_none());
+        assert!(handle_scroll(&s, ScrollDir::Down, mods).is_none());
+    }
+
+    #[test]
+    fn memory_wheel_does_not_emit_perf_scroll_messages() {
+        // Regression: Memory panel previously delegated to handle_performance_scroll,
+        // emitting PerfScroll*/PerfPage* messages. Verify none of those variants appear.
+        let s = state_with_panel(DevToolsPanel::Memory);
+        let dirs = [
+            ScrollDir::Up,
+            ScrollDir::Down,
+            ScrollDir::Left,
+            ScrollDir::Right,
+        ];
+        let mod_combos = [
+            KeyModSet::NONE,
+            KeyModSet::new(true, false, false), // Shift
+            KeyModSet::new(false, true, false), // Ctrl
+            KeyModSet::new(false, false, true), // Alt
+            KeyModSet::new(true, true, false),  // Shift+Ctrl
+            KeyModSet::new(true, false, true),  // Shift+Alt
+        ];
+        for dir in dirs {
+            for mods in mod_combos {
+                let result = handle_scroll(&s, dir, mods);
+                assert!(
+                    !matches!(
+                        result,
+                        Some(Message::PerfScrollUp)
+                            | Some(Message::PerfScrollDown)
+                            | Some(Message::PerfPageUp)
+                            | Some(Message::PerfPageDown)
+                    ),
+                    "Memory wheel must never emit Perf* messages; got {:?} for dir={:?} mods={:?}",
+                    result,
+                    dir,
+                    mods
+                );
+            }
+        }
+    }
+
     #[test]
     fn network_wheel_navigates_request_list() {
         let s = state_with_panel(DevToolsPanel::Network);
@@ -368,6 +481,7 @@ mod tests {
         for panel in [
             DevToolsPanel::Inspector,
             DevToolsPanel::Performance,
+            DevToolsPanel::Memory,
             DevToolsPanel::Network,
         ] {
             let s = state_with_panel(panel);

@@ -85,6 +85,16 @@ pub const STACK_LOCATION_PACKAGE: Color = Color::Rgb(72, 79, 88);
 pub const STACK_ASYNC_GAP: Color = Color::Rgb(72, 79, 88);
 pub const STACK_PUNCTUATION: Color = Color::Rgb(72, 79, 88);
 
+// --- Inspector tree decorations ---
+/// Vertical guideline color for ancestor columns that still have siblings below.
+pub const TREE_GUIDELINE: Color = Color::Rgb(60, 60, 70);
+/// Branch tick (`├─` / `└─`) color for each row's connection to its parent.
+pub const TREE_BRANCH_TICK: Color = Color::Rgb(80, 80, 95);
+/// Text color for chain-member rows (dimmed to indicate implementation detail).
+pub const TREE_CHAIN_MEMBER_TEXT: Color = Color::Rgb(120, 120, 140);
+/// Text color for group-leader rows (slightly brighter than chain members).
+pub const TREE_GROUP_LEADER_TEXT: Color = Color::Rgb(140, 140, 170);
+
 // --- Legacy modal backgrounds (kept for backward compat) ---
 pub const LINK_BAR_BG: Color = Color::Rgb(30, 30, 30);
 

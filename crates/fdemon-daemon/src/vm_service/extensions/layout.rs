@@ -5,9 +5,11 @@
 
 use std::collections::HashMap;
 
+use fdemon_core::ansi::strip_ansi_codes;
 use fdemon_core::prelude::*;
 use fdemon_core::widget_tree::{
-    BoxConstraints, DiagnosticsNode, EdgeInsets, LayoutInfo, WidgetSize,
+    Axis, BoxConstraints, CrossAxisAlignment, DiagnosticsNode, EdgeInsets, FlexChild, FlexFit,
+    LayoutInfo, MainAxisAlignment, MainAxisSize, WidgetSize,
 };
 
 use super::ext;
@@ -67,6 +69,44 @@ pub async fn get_layout_node(
 /// Pass both the parsed node (for its `description`) and the raw JSON value from
 /// which the layout fields are read directly.
 pub fn extract_layout_info(node: &DiagnosticsNode, raw_json: &serde_json::Value) -> LayoutInfo {
+    let direction = render_property(raw_json, "direction").map(|s| match s {
+        "horizontal" => Axis::Horizontal,
+        _ => Axis::Vertical,
+    });
+
+    let main_axis_alignment =
+        render_property(raw_json, "mainAxisAlignment").and_then(|s| match s {
+            "start" => Some(MainAxisAlignment::Start),
+            "end" => Some(MainAxisAlignment::End),
+            "center" => Some(MainAxisAlignment::Center),
+            "spaceBetween" => Some(MainAxisAlignment::SpaceBetween),
+            "spaceAround" => Some(MainAxisAlignment::SpaceAround),
+            "spaceEvenly" => Some(MainAxisAlignment::SpaceEvenly),
+            _ => None,
+        });
+
+    let cross_axis_alignment =
+        render_property(raw_json, "crossAxisAlignment").and_then(|s| match s {
+            "start" => Some(CrossAxisAlignment::Start),
+            "end" => Some(CrossAxisAlignment::End),
+            "center" => Some(CrossAxisAlignment::Center),
+            "stretch" => Some(CrossAxisAlignment::Stretch),
+            "baseline" => Some(CrossAxisAlignment::Baseline),
+            _ => None,
+        });
+
+    let main_axis_size = render_property(raw_json, "mainAxisSize").and_then(|s| match s {
+        "min" => Some(MainAxisSize::Min),
+        "max" => Some(MainAxisSize::Max),
+        _ => None,
+    });
+
+    let children = raw_json
+        .get("children")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().map(extract_flex_child).collect::<Vec<_>>())
+        .unwrap_or_default();
+
     LayoutInfo {
         description: Some(node.description.clone()),
         constraints: raw_json
@@ -87,6 +127,89 @@ pub fn extract_layout_info(node: &DiagnosticsNode, raw_json: &serde_json::Value)
             .map(|s| s.to_string()),
         padding: extract_edge_insets(raw_json, "padding"),
         margin: extract_edge_insets(raw_json, "margin"),
+        direction,
+        main_axis_alignment,
+        cross_axis_alignment,
+        main_axis_size,
+        children,
+    }
+}
+
+/// Look up a named property in the `renderObject.properties` array of a
+/// `getLayoutExplorerNode` response and return its `description` value.
+///
+/// Returns `None` if the `renderObject` or `properties` fields are absent,
+/// or if no property with the given `name` is found.
+fn render_property<'a>(raw: &'a serde_json::Value, name: &str) -> Option<&'a str> {
+    raw.get("renderObject")?
+        .get("properties")?
+        .as_array()?
+        .iter()
+        .find(|item| item.get("name").and_then(|v| v.as_str()) == Some(name))?
+        .get("description")?
+        .as_str()
+}
+
+/// Extract a single flex child from its layout explorer JSON object.
+///
+/// Handles both string-encoded and numeric values for `flexFactor`, `offsetX`, and
+/// `offsetY` (Flutter serializes numbers in different ways across versions).
+/// The child's `name` (description) has ANSI escape codes stripped.
+fn extract_flex_child(child_json: &serde_json::Value) -> FlexChild {
+    let id = child_json
+        .get("valueId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let name = child_json
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(strip_ansi_codes)
+        .unwrap_or_default();
+
+    let size = parse_widget_size(child_json);
+
+    let constraints = child_json
+        .get("constraints")
+        .and_then(|c| c.get("description"))
+        .and_then(|d| d.as_str())
+        .and_then(BoxConstraints::parse);
+
+    let flex_factor = child_json.get("flexFactor").and_then(|v| {
+        v.as_u64()
+            .map(|u| u as u32)
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    });
+
+    let flex_fit = child_json
+        .get("flexFit")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "tight" => Some(FlexFit::Tight),
+            "loose" => Some(FlexFit::Loose),
+            _ => None,
+        });
+
+    let parent_offset = child_json.get("parentData").and_then(|pd| {
+        let x = pd.get("offsetX").and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })?;
+        let y = pd.get("offsetY").and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })?;
+        Some((x, y))
+    });
+
+    FlexChild {
+        id,
+        name,
+        size,
+        constraints,
+        flex_factor,
+        flex_fit,
+        parent_offset,
     }
 }
 
@@ -827,5 +950,269 @@ mod tests {
         assert_eq!(margin.right, 12.0);
         assert_eq!(margin.bottom, 12.0);
         assert_eq!(margin.left, 12.0);
+    }
+
+    // ── Flex container fields: direction, alignment, children ───────────────
+
+    #[test]
+    fn extract_layout_info_column_with_flex_children() {
+        let json = json!({
+            "description": "Column",
+            "valueId": "objects/100",
+            "size": { "width": "180.0", "height": "872.0" },
+            "constraints": { "description": "0.0<=w<=414.0, 0.0<=h<=896.0" },
+            "renderObject": {
+                "properties": [
+                    { "name": "direction", "description": "vertical" },
+                    { "name": "mainAxisAlignment", "description": "spaceBetween" },
+                    { "name": "crossAxisAlignment", "description": "stretch" },
+                    { "name": "mainAxisSize", "description": "max" }
+                ]
+            },
+            "children": [
+                {
+                    "description": "Container",
+                    "valueId": "objects/101",
+                    "size": { "width": "180.0", "height": "341.0" },
+                    "parentData": { "offsetX": "0.0", "offsetY": "0.0" }
+                },
+                {
+                    "description": "Expanded",
+                    "valueId": "objects/102",
+                    "size": { "width": "180.0", "height": "189.0" },
+                    "parentData": { "offsetX": "0.0", "offsetY": "341.0" },
+                    "flexFactor": 1,
+                    "flexFit": "tight"
+                }
+            ]
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let info = extract_layout_info(&node, &json);
+
+        assert_eq!(info.direction, Some(Axis::Vertical));
+        assert_eq!(
+            info.main_axis_alignment,
+            Some(MainAxisAlignment::SpaceBetween)
+        );
+        assert_eq!(info.cross_axis_alignment, Some(CrossAxisAlignment::Stretch));
+        assert_eq!(info.main_axis_size, Some(MainAxisSize::Max));
+
+        assert_eq!(info.children.len(), 2);
+        assert_eq!(info.children[0].name, "Container");
+        assert!(info.children[0].flex_factor.is_none());
+        assert_eq!(info.children[0].parent_offset, Some((0.0, 0.0)));
+
+        assert_eq!(info.children[1].name, "Expanded");
+        assert_eq!(info.children[1].flex_factor, Some(1));
+        assert_eq!(info.children[1].flex_fit, Some(FlexFit::Tight));
+        assert_eq!(info.children[1].parent_offset, Some((0.0, 341.0)));
+    }
+
+    #[test]
+    fn extract_layout_info_non_flex_widget_has_empty_flex_fields() {
+        let json = json!({
+            "description": "Container",
+            "valueId": "objects/200",
+            "size": { "width": "100.0", "height": "50.0" }
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let info = extract_layout_info(&node, &json);
+
+        assert!(info.direction.is_none());
+        assert!(info.main_axis_alignment.is_none());
+        assert!(info.cross_axis_alignment.is_none());
+        assert!(info.main_axis_size.is_none());
+        assert!(info.children.is_empty());
+    }
+
+    #[test]
+    fn extract_layout_info_strips_ansi_from_child_name() {
+        let json = json!({
+            "description": "Row",
+            "children": [
+                { "description": "\x1b[33mText\x1b[0m" }
+            ]
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let info = extract_layout_info(&node, &json);
+        assert_eq!(info.children[0].name, "Text");
+    }
+
+    #[test]
+    fn extract_layout_info_handles_numeric_offsets() {
+        let json = json!({
+            "description": "Column",
+            "children": [
+                {
+                    "description": "A",
+                    "parentData": { "offsetX": 1.5, "offsetY": 2.5 }
+                }
+            ]
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let info = extract_layout_info(&node, &json);
+        assert_eq!(info.children[0].parent_offset, Some((1.5, 2.5)));
+    }
+
+    #[test]
+    fn extract_layout_info_row_direction_horizontal() {
+        let json = json!({
+            "description": "Row",
+            "renderObject": {
+                "properties": [
+                    { "name": "direction", "description": "horizontal" },
+                    { "name": "mainAxisAlignment", "description": "center" },
+                    { "name": "crossAxisAlignment", "description": "center" },
+                    { "name": "mainAxisSize", "description": "min" }
+                ]
+            }
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let info = extract_layout_info(&node, &json);
+
+        assert_eq!(info.direction, Some(Axis::Horizontal));
+        assert_eq!(info.main_axis_alignment, Some(MainAxisAlignment::Center));
+        assert_eq!(info.cross_axis_alignment, Some(CrossAxisAlignment::Center));
+        assert_eq!(info.main_axis_size, Some(MainAxisSize::Min));
+    }
+
+    #[test]
+    fn extract_layout_info_all_main_axis_alignments() {
+        for (desc, expected) in &[
+            ("start", MainAxisAlignment::Start),
+            ("end", MainAxisAlignment::End),
+            ("center", MainAxisAlignment::Center),
+            ("spaceBetween", MainAxisAlignment::SpaceBetween),
+            ("spaceAround", MainAxisAlignment::SpaceAround),
+            ("spaceEvenly", MainAxisAlignment::SpaceEvenly),
+        ] {
+            let json = json!({
+                "description": "Row",
+                "renderObject": {
+                    "properties": [
+                        { "name": "mainAxisAlignment", "description": desc }
+                    ]
+                }
+            });
+            let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+            let info = extract_layout_info(&node, &json);
+            assert_eq!(
+                info.main_axis_alignment,
+                Some(*expected),
+                "mainAxisAlignment={desc}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_layout_info_all_cross_axis_alignments() {
+        for (desc, expected) in &[
+            ("start", CrossAxisAlignment::Start),
+            ("end", CrossAxisAlignment::End),
+            ("center", CrossAxisAlignment::Center),
+            ("stretch", CrossAxisAlignment::Stretch),
+            ("baseline", CrossAxisAlignment::Baseline),
+        ] {
+            let json = json!({
+                "description": "Column",
+                "renderObject": {
+                    "properties": [
+                        { "name": "crossAxisAlignment", "description": desc }
+                    ]
+                }
+            });
+            let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+            let info = extract_layout_info(&node, &json);
+            assert_eq!(
+                info.cross_axis_alignment,
+                Some(*expected),
+                "crossAxisAlignment={desc}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_flex_child_populates_id_and_size() {
+        let child_json = json!({
+            "description": "SizedBox",
+            "valueId": "objects/55",
+            "size": { "width": "80.0", "height": "40.0" }
+        });
+        let child = extract_flex_child(&child_json);
+        assert_eq!(child.id.as_deref(), Some("objects/55"));
+        assert_eq!(child.name, "SizedBox");
+        let size = child.size.unwrap();
+        assert_eq!(size.width, 80.0);
+        assert_eq!(size.height, 40.0);
+        assert!(child.flex_factor.is_none());
+        assert!(child.flex_fit.is_none());
+        assert!(child.parent_offset.is_none());
+    }
+
+    #[test]
+    fn extract_flex_child_loose_fit() {
+        let child_json = json!({
+            "description": "Flexible",
+            "flexFactor": 2,
+            "flexFit": "loose"
+        });
+        let child = extract_flex_child(&child_json);
+        assert_eq!(child.flex_factor, Some(2));
+        assert_eq!(child.flex_fit, Some(FlexFit::Loose));
+    }
+
+    #[test]
+    fn extract_flex_child_unknown_flex_fit_returns_none() {
+        let child_json = json!({
+            "description": "Widget",
+            "flexFit": "unknownFit"
+        });
+        let child = extract_flex_child(&child_json);
+        assert!(child.flex_fit.is_none());
+    }
+
+    #[test]
+    fn extract_flex_child_constraints_parsed() {
+        let child_json = json!({
+            "description": "Text",
+            "constraints": { "description": "0.0<=w<=200.0, 0.0<=h<=Infinity" }
+        });
+        let child = extract_flex_child(&child_json);
+        let c = child.constraints.unwrap();
+        assert_eq!(c.min_width, 0.0);
+        assert_eq!(c.max_width, 200.0);
+        assert!(c.max_height.is_infinite());
+    }
+
+    #[test]
+    fn render_property_returns_description_for_named_property() {
+        let json = json!({
+            "renderObject": {
+                "properties": [
+                    { "name": "direction", "description": "vertical" },
+                    { "name": "mainAxisAlignment", "description": "start" }
+                ]
+            }
+        });
+        assert_eq!(render_property(&json, "direction"), Some("vertical"));
+        assert_eq!(render_property(&json, "mainAxisAlignment"), Some("start"));
+    }
+
+    #[test]
+    fn render_property_returns_none_when_absent() {
+        let json = json!({ "description": "Container" });
+        assert!(render_property(&json, "direction").is_none());
+    }
+
+    #[test]
+    fn render_property_returns_none_when_name_not_found() {
+        let json = json!({
+            "renderObject": {
+                "properties": [
+                    { "name": "padding", "description": "EdgeInsets.zero" }
+                ]
+            }
+        });
+        assert!(render_property(&json, "direction").is_none());
     }
 }

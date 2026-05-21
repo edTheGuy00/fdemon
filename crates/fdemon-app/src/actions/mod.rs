@@ -183,6 +183,41 @@ pub fn handle_action(
             });
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Settings Persistence (devtools-inspector-parity Phase 1.5, Task 02)
+        //
+        // Mirrors `AutoSaveConfig` but writes `.fdemon/config.toml` (Settings)
+        // rather than the launch configs. Uses `spawn_blocking` because
+        // `save_settings` is synchronous std I/O.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::PersistSettings {
+            settings,
+            project_path,
+        } => {
+            let tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::config::settings::save_settings(&project_path, &settings)
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {
+                        let _ = tx.send(Message::SettingsPersisted).await;
+                    }
+                    Ok(Err(e)) => {
+                        let msg = format!("save_settings failed: {e}");
+                        tracing::warn!("{msg}");
+                        let _ = tx.send(Message::SettingsPersistFailed { error: msg }).await;
+                    }
+                    Err(join_err) => {
+                        let msg = format!("save_settings task panicked: {join_err}");
+                        tracing::warn!("{msg}");
+                        let _ = tx.send(Message::SettingsPersistFailed { error: msg }).await;
+                    }
+                }
+            });
+        }
+
         UpdateAction::LaunchFlutterSession {
             device: _,
             mode: _,
@@ -200,8 +235,17 @@ pub fn handle_action(
             spawn::spawn_entry_point_discovery(msg_tx, project_path);
         }
 
-        UpdateAction::ConnectVmService { session_id, ws_uri } => {
-            let handle = vm_service::spawn_vm_service_connection(session_id, ws_uri, msg_tx);
+        UpdateAction::ConnectVmService {
+            session_id,
+            ws_uri,
+            rebuilt_widgets_gate_rx,
+        } => {
+            let handle = vm_service::spawn_vm_service_connection(
+                session_id,
+                ws_uri,
+                msg_tx,
+                rebuilt_widgets_gate_rx,
+            );
             match session_tasks.lock() {
                 Ok(mut guard) => {
                     guard.insert(session_id, handle);
@@ -289,6 +333,23 @@ pub fn handle_action(
                     "FetchLayoutData reached handle_action with no VmRequestHandle \
                      for session {} — skipping",
                     session_id
+                );
+            }
+        }
+
+        UpdateAction::FetchInspectorProperties {
+            session_id,
+            node_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                inspector::spawn_fetch_inspector_properties(session_id, node_id, handle, msg_tx);
+            } else {
+                warn!(
+                    session_id = %session_id,
+                    node_id = %node_id,
+                    "FetchInspectorProperties dispatched without VM handle \
+                     (no active VM Service) — skipping"
                 );
             }
         }
@@ -924,6 +985,187 @@ pub fn handle_action(
                 );
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 3: Timeline monitoring
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::StartTimelineMonitoring {
+            session_id,
+            handle,
+            poll_interval_ms,
+        } => {
+            if let Some(vm_handle) = handle {
+                performance::spawn_timeline_polling(
+                    session_id,
+                    vm_handle,
+                    msg_tx,
+                    poll_interval_ms,
+                );
+            } else {
+                warn!(
+                    "StartTimelineMonitoring reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 3: Toggle profileWidgetBuilds extension
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::ToggleProfileWidgetBuilds {
+            session_id,
+            enabled,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                tokio::spawn(async move {
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                "ToggleProfileWidgetBuilds for session {}: isolate ID error: {}",
+                                session_id,
+                                e
+                            );
+                            return;
+                        }
+                    };
+                    let result = handle
+                        .call_extension(
+                            "ext.flutter.profileWidgetBuilds",
+                            &isolate_id,
+                            Some(
+                                [("enabled".to_string(), enabled.to_string())]
+                                    .into_iter()
+                                    .collect(),
+                            ),
+                        )
+                        .await;
+                    match result {
+                        Ok(_) => {
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsExtensionStateChanged {
+                                    session_id,
+                                    enabled,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "ToggleProfileWidgetBuilds for session {}: extension call failed: {}",
+                                session_id,
+                                e
+                            );
+                            // Roll back the optimistic UI state by emitting the opposite of
+                            // what was attempted: if we tried to enable and failed, the extension
+                            // is still disabled (and vice versa).
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsExtensionStateChanged {
+                                    session_id,
+                                    enabled: !enabled,
+                                })
+                                .await;
+                            // Notify the user via the session log buffer.
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsToggleFailed {
+                                    session_id,
+                                    reason: format!("{e}"),
+                                })
+                                .await;
+                        }
+                    }
+                });
+            } else {
+                warn!(
+                    "ToggleProfileWidgetBuilds reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 3: Fetch widgetLocationIdMap (fallback seed for location map)
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::FetchWidgetLocationIdMap {
+            session_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                tokio::spawn(async move {
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                "FetchWidgetLocationIdMap for session {}: isolate ID error: {}",
+                                session_id,
+                                e
+                            );
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsToggleFailed {
+                                    session_id,
+                                    reason: format!("Failed to fetch widget location map: {e}"),
+                                })
+                                .await;
+                            return;
+                        }
+                    };
+                    match fdemon_daemon::vm_service::widget_location_id_map_handle(
+                        &handle,
+                        &isolate_id,
+                    )
+                    .await
+                    {
+                        Ok(map) => {
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsLocationMapFetched {
+                                    session_id,
+                                    map,
+                                })
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "FetchWidgetLocationIdMap for session {} failed: {}",
+                                session_id,
+                                e
+                            );
+                            let _ = msg_tx
+                                .send(crate::message::Message::RebuildStatsToggleFailed {
+                                    session_id,
+                                    reason: format!("Failed to fetch widget location map: {e}"),
+                                })
+                                .await;
+                        }
+                    }
+                });
+            } else {
+                warn!(
+                    "FetchWidgetLocationIdMap reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Phase 5: Frame-anchor debounce
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::DebounceFrameAnchor {
+            session_id,
+            generation,
+            frame_number,
+            delay_ms,
+        } => {
+            performance::spawn_frame_anchor_debounce(
+                session_id,
+                generation,
+                frame_number,
+                delay_ms,
+                msg_tx,
+            );
+        }
     }
 }
 
@@ -1153,6 +1395,123 @@ mod tests {
         assert!(
             raw.contains('\n'),
             "expected pretty-printed JSON, got: {raw}"
+        );
+    }
+
+    // ── PersistSettings dispatch tests ──────────────────────────────────────
+
+    /// Build the minimal set of arguments `handle_action` expects.
+    ///
+    /// We only need the `msg_tx` / `shutdown_rx` pair for the
+    /// `PersistSettings` arm; all other parameters are stubbed.
+    fn make_handle_action_args() -> (
+        tokio::sync::mpsc::Sender<crate::message::Message>,
+        tokio::sync::mpsc::Receiver<crate::message::Message>,
+        tokio::sync::watch::Receiver<bool>,
+    ) {
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(32);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        (msg_tx, msg_rx, shutdown_rx)
+    }
+
+    #[tokio::test]
+    async fn persist_settings_action_sends_persisted_message_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Ensure the `.fdemon` dir exists so `save_settings` can write to it.
+        std::fs::create_dir_all(dir.path().join(".fdemon")).unwrap();
+
+        let settings = crate::config::Settings::default();
+        let project_path = dir.path().to_path_buf();
+
+        let (msg_tx, mut msg_rx, shutdown_rx) = make_handle_action_args();
+
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot = Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<
+            std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>,
+        > = Arc::new(std::sync::Mutex::new(None));
+        let dap_debug_senders: Arc<
+            std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        handle_action(
+            crate::UpdateAction::PersistSettings {
+                settings,
+                project_path: project_path.clone(),
+            },
+            msg_tx,
+            None,   // session_cmd_sender
+            vec![], // session_senders
+            session_tasks,
+            shutdown_rx,
+            &project_path,
+            fdemon_daemon::ToolAvailability::default(),
+            dap_server_handle,
+            vm_handle_for_dap,
+            dap_debug_senders,
+        );
+
+        // Allow the spawned tasks to run.
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for SettingsPersisted")
+            .expect("channel closed");
+
+        assert!(
+            matches!(msg, crate::message::Message::SettingsPersisted),
+            "expected SettingsPersisted, got: {msg:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_settings_action_sends_failed_message_on_error() {
+        // Use a regular file as the project path so `save_settings` fails when
+        // it tries to `create_dir_all(<file>/.fdemon)` — a non-directory
+        // ancestor is rejected on every platform (the prior approach used a
+        // Unix-style absolute path that succeeded on Windows by resolving
+        // against the writable drive root).
+        let temp_file = tempfile::NamedTempFile::new().expect("create temp file");
+        let project_path = temp_file.path().to_path_buf();
+
+        let settings = crate::config::Settings::default();
+
+        let (msg_tx, mut msg_rx, shutdown_rx) = make_handle_action_args();
+
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot = Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<
+            std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>,
+        > = Arc::new(std::sync::Mutex::new(None));
+        let dap_debug_senders: Arc<
+            std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        handle_action(
+            crate::UpdateAction::PersistSettings {
+                settings,
+                project_path: project_path.clone(),
+            },
+            msg_tx,
+            None,
+            vec![],
+            session_tasks,
+            shutdown_rx,
+            &project_path,
+            fdemon_daemon::ToolAvailability::default(),
+            dap_server_handle,
+            vm_handle_for_dap,
+            dap_debug_senders,
+        );
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for SettingsPersistFailed")
+            .expect("channel closed");
+
+        assert!(
+            matches!(msg, crate::message::Message::SettingsPersistFailed { .. }),
+            "expected SettingsPersistFailed, got: {msg:?}"
         );
     }
 }

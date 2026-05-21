@@ -220,6 +220,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::SessionRestartCompleted { session_id } => {
+            let mut should_reenable_rebuild_stats = false;
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.complete_reload();
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -233,12 +234,32 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(ref vm_handle) = handle.vm_request_handle {
                     vm_handle.invalidate_isolate_cache();
                 }
+                // Phase 3: if rebuild tracking was enabled before the restart,
+                // re-enable it after the new isolate registers its extensions.
+                // The VM extension is lost on hot-restart; we must re-call
+                // set_profile_widget_builds on the new isolate.
+                should_reenable_rebuild_stats = handle.session.performance.rebuild_stats_enabled;
             }
             // Hot restart creates a new isolate with a fresh framework state.
             // Reset the sticky render flag so the next fetch polls readiness
             // instead of skipping it with FetchTrigger::Refresh.
             if state.devtools_view_state.inspector.has_ever_rendered_tree {
                 state.devtools_view_state.inspector.has_ever_rendered_tree = false;
+            }
+            // Clear Details and group expansion state — hot restart creates a
+            // new Dart isolate, so all previously captured Dart object ids
+            // (stored in details_node_id, properties, etc.) are now invalid.
+            state
+                .devtools_view_state
+                .inspector
+                .reset_details_and_groups();
+            // Phase 3: re-enable profileWidgetBuilds if it was active before restart.
+            if should_reenable_rebuild_stats {
+                return UpdateResult::action(UpdateAction::ToggleProfileWidgetBuilds {
+                    session_id,
+                    enabled: true,
+                    vm_handle: None, // hydrated by process.rs
+                });
             }
             UpdateResult::none()
         }
@@ -793,6 +814,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::DevToolsInspectorToggleNode { index } => {
             crate::handler::devtools::inspector::handle_inspector_toggle_node(state, index)
+        }
+
+        Message::DevToolsInspectorOpenDetails => {
+            crate::handler::devtools::handle_open_details(state)
+        }
+        Message::DevToolsInspectorCloseDetails => {
+            crate::handler::devtools::handle_close_details(state)
+        }
+        Message::DevToolsInspectorCycleTab { forward } => {
+            crate::handler::devtools::handle_cycle_tab(state, forward)
+        }
+        Message::DevToolsInspectorToggleHideImplementation => {
+            crate::handler::devtools::handle_toggle_hide_implementation(state)
         }
 
         // ─────────────────────────────────────────────────────────
@@ -1445,6 +1479,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .unwrap_or(crate::config::FlutterMode::Debug);
             let auto_repaint_rainbow = state.settings.devtools.auto_repaint_rainbow;
             let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
+            let auto_enable_rebuild_tracking = state.settings.devtools.auto_enable_rebuild_tracking;
 
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Clean up any existing performance task before spawning a new one.
@@ -1473,17 +1508,26 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Clear the network-pause sender — a new one will arrive with
                 // the next VmServiceNetworkMonitoringStarted message.
                 handle.network_pause_tx = None;
+                // Clean up any existing timeline monitoring task.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.timeline_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+                handle.timeline_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
                     LogSource::App,
                     "VM Service connected — enhanced logging active",
                 ));
-                // Reset performance state on (re)connection so stale data from
-                // a previous session or hot-restart is not shown in the new one.
-                // Use configurable memory history size from settings.
-                handle.session.performance =
-                    crate::session::PerformanceState::with_memory_history_size(memory_history_size);
+                // Reset performance and memory state on (re)connection so stale
+                // data from a previous session or hot-restart is not shown.
+                // Use configurable memory history size from settings for MemoryState.
+                handle.session.performance = crate::session::PerformanceState::default();
+                handle.session.memory =
+                    crate::session::MemoryState::with_history_size(memory_history_size);
             }
             // Clear any previous connection error and update status to Connected,
             // but only when this session is currently active in the UI.
@@ -1532,7 +1576,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
 
-            // Two things must happen on VmServiceConnected:
+            // Three things must happen on VmServiceConnected:
             //   (a) Start performance monitoring — but only when DevTools is
             //       already active. In Normal mode the monitoring task is
             //       not spawned (zero overhead until DevTools is opened);
@@ -1543,16 +1587,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             //       delayed event ordering). Must run in *both* UI modes —
             //       a DevTools-first user (DevTools opened before VM
             //       connected) would otherwise never see the fallback fire.
+            //   (c) Auto-enable rebuild tracking if `auto_enable_rebuild_tracking`
+            //       is set. This fires on first connection only (rebuild_stats_enabled
+            //       is false after the PerformanceState reset above). The hot-restart
+            //       re-enable in `SessionRestartCompleted` is independent and fires
+            //       at a different lifecycle point, so there is no race.
             //
-            // `UpdateResult` has a single action slot, so we route the
-            // fallback through a `TriggerDevToolsServeFallback` follow-up
-            // message that chains the original `follow_up_msg` as its
-            // continuation. The follow-up's handler is idempotent (no-op
-            // when an endpoint is already set or a previous dispatch is in
-            // flight), so unconditional queuing is safe.
+            // `UpdateResult` has a primary action slot and extra_actions. The
+            // fallback is routed through a `TriggerDevToolsServeFallback` follow-up
+            // message; `perf_action` is the primary action; and the auto-enable
+            // rebuild tracking action (if needed) goes into `extra_actions`.
             //
-            // process.rs hydrates `StartPerformanceMonitoring.handle` with
-            // the VmRequestHandle from the session before dispatch.
+            // process.rs hydrates `StartPerformanceMonitoring.handle` and
+            // `ToggleProfileWidgetBuilds.vm_handle` with the VmRequestHandle
+            // from the session before dispatch.
             let perf_action = if state.ui_mode == UiMode::DevTools {
                 Some(UpdateAction::StartPerformanceMonitoring {
                     session_id,
@@ -1565,12 +1613,39 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 None
             };
 
+            // Auto-enable rebuild tracking: gate on setting AND the session's
+            // current rebuild_stats_enabled being false. After the reset above,
+            // rebuild_stats_enabled is always false, so this is effectively
+            // gated solely on the config flag — but checking the field keeps
+            // the logic idempotent if the reset is ever removed or reordered.
+            let rebuild_stats_currently_enabled = state
+                .session_manager
+                .get(session_id)
+                .map(|h| h.session.performance.rebuild_stats_enabled)
+                .unwrap_or(false);
+            let auto_enable_action =
+                if auto_enable_rebuild_tracking && !rebuild_stats_currently_enabled {
+                    Some(UpdateAction::ToggleProfileWidgetBuilds {
+                        session_id,
+                        enabled: true,
+                        vm_handle: None, // hydrated by process.rs
+                    })
+                } else {
+                    None
+                };
+
+            let mut extra_actions = Vec::new();
+            if let Some(action) = auto_enable_action {
+                extra_actions.push(action);
+            }
+
             UpdateResult {
                 message: Some(Message::TriggerDevToolsServeFallback {
                     session_id,
                     continuation: follow_up_msg.map(Box::new),
                 }),
                 action: perf_action,
+                extra_actions,
             }
         }
 
@@ -1613,6 +1688,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Clear the old network-pause sender — a new one will arrive
                 // if the user re-enters the Network tab after reconnect.
                 handle.network_pause_tx = None;
+                // Abort the old timeline monitoring task.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.timeline_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+                handle.timeline_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1719,6 +1802,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // will see the sender drop; the shutdown arm handles clean exit.
                 handle.perf_pause_tx = None;
                 handle.session.performance.monitoring_active = false;
+                handle.session.memory.monitoring_active = false;
                 // Abort the network monitoring polling task and signal it to stop.
                 if let Some(h) = handle.network_task_handle.take() {
                     h.abort();
@@ -1732,6 +1816,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // handles clean exit. Setting to None signals no Network tab
                 // is open for this disconnected session.
                 handle.network_pause_tx = None;
+                // Abort the timeline monitoring polling task and signal it to stop.
+                if let Some(h) = handle.timeline_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(ref tx) = handle.timeline_shutdown_tx {
+                    let _ = tx.send(true);
+                }
+                handle.timeline_shutdown_tx = None;
+                handle.timeline_pause_tx = None;
 
                 // Clear DevTools endpoint and pending flag. If the daemon
                 // dies mid-flight, devtools_serve_pending would otherwise
@@ -1774,8 +1867,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::VmServiceMemorySnapshot { session_id, memory } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                handle.session.performance.memory_history.push(memory);
-                handle.session.performance.monitoring_active = true;
+                handle.session.memory.memory_history.push(memory);
+                handle.session.memory.monitoring_active = true;
                 // Recompute stats on every memory poll cycle (2-second backstop
                 // for when frame events are sparse — e.g. idle or backgrounded).
                 handle.session.performance.recompute_stats();
@@ -1792,7 +1885,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // frequent Scavenge events from filling the ring buffer and pushing
                 // out the more informative major GC entries.
                 if gc_event.is_major_gc() {
-                    handle.session.performance.gc_history.push(gc_event);
+                    handle.session.memory.gc_history.push(gc_event);
                 } else {
                     tracing::trace!(
                         "Filtered Scavenge GC event for session {} (minor GC)",
@@ -1875,6 +1968,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // handlers can gate the entire polling loop (memory + alloc).
                 handle.perf_pause_tx = Some(perf_pause_tx);
 
+                // The polling task is live. Flip both monitoring flags so the
+                // Performance and Memory panels stop rendering "starting..."
+                // placeholders and switch to live data views. Both share the
+                // same polling task, so they become active together.
+                handle.session.performance.monitoring_active = true;
+                handle.session.memory.monitoring_active = true;
+
                 // Adjust initial pause values based on current UI state.
                 // The polling task always starts with perf_pause = true (paused).
                 // If monitoring was lazy-started because the user entered DevTools,
@@ -1886,8 +1986,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     if let Some(ref tx) = handle.perf_pause_tx {
                         let _ = tx.send(false);
                     }
-                    // Unpause allocation polling only if the Performance panel is active.
-                    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+                    // Unpause allocation polling if the Performance or Memory panel is active.
+                    // Both panels share the same alloc polling task; the invariant is that
+                    // alloc polling is unpaused whenever either panel is visible.
+                    if matches!(
+                        state.devtools_view_state.active_panel,
+                        DevToolsPanel::Performance | DevToolsPanel::Memory,
+                    ) {
                         if let Some(ref tx) = handle.alloc_pause_tx {
                             let _ = tx.send(false);
                         }
@@ -1902,7 +2007,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::EnterDevToolsMode => devtools::handle_enter_devtools_mode(state),
 
-        Message::ExitDevToolsMode => devtools::handle_exit_devtools_mode(state),
+        // Tiered Esc: closes Details panel first when Inspector is active,
+        // then exits DevTools mode on the second press.
+        Message::DevToolsEscape => devtools::handle_devtools_escape(state),
 
         Message::SwitchDevToolsPanel(panel) => devtools::handle_switch_panel(state, panel),
 
@@ -1964,6 +2071,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult {
                 message: continuation.map(|b| *b),
                 action,
+                extra_actions: Vec::new(),
             }
         }
 
@@ -2083,9 +2191,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
         }
 
-        Message::LayoutDataFetched { session_id, layout } => {
-            devtools::handle_layout_data_fetched(state, session_id, *layout)
-        }
+        Message::LayoutDataFetched {
+            session_id,
+            node_id,
+            layout,
+        } => devtools::handle_layout_data_fetched(state, session_id, node_id, *layout),
 
         Message::LayoutDataFetchFailed { session_id, error } => {
             devtools::handle_layout_data_fetch_failed(state, session_id, error)
@@ -2133,6 +2243,31 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::LayoutDataFetchTimeout { session_id } => {
             devtools::handle_layout_data_fetch_timeout(state, session_id)
         }
+
+        // ── Inspector Properties Messages (Phase 2, Task 06) ─────────────────
+        Message::DevToolsInspectorPropertiesFetched {
+            session_id,
+            node_id,
+            widget_properties,
+            render_properties,
+        } => devtools::handle_inspector_properties_fetched(
+            state,
+            session_id,
+            node_id,
+            widget_properties,
+            render_properties,
+        ),
+
+        Message::DevToolsInspectorPropertiesFetchFailed {
+            session_id,
+            node_id,
+            error,
+        } => devtools::handle_inspector_properties_fetch_failed(state, session_id, node_id, error),
+
+        Message::DevToolsInspectorPropertiesFetchTimeout {
+            session_id,
+            node_id,
+        } => devtools::handle_inspector_properties_fetch_timeout(state, session_id, node_id),
 
         // ─────────────────────────────────────────────────────────
         // Entry Point Discovery Messages (Phase 3, Task 09)
@@ -2249,31 +2384,187 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::NetworkFilterBackspace => devtools::network::handle_filter_backspace(state),
 
-        // ── Performance Panel UI Messages ─────────────────────────────────────
-        Message::ToggleAllocationSort => {
-            devtools::performance::handle_toggle_allocation_sort(state)
+        // ── Memory Panel UI Messages ──────────────────────────────────────────
+        Message::MemToggleSort => devtools::memory::handle_toggle_allocation_sort(state),
+        Message::MemFocusSection(section) => {
+            devtools::memory::handle_mem_focus_section(state, section)
+        }
+        Message::MemScrollUp => devtools::memory::handle_mem_scroll(state, devtools::ScrollDir::Up),
+        Message::MemScrollDown => {
+            devtools::memory::handle_mem_scroll(state, devtools::ScrollDir::Down)
+        }
+        Message::MemPageUp => devtools::memory::handle_mem_page(state, devtools::ScrollDir::Up),
+        Message::MemPageDown => devtools::memory::handle_mem_page(state, devtools::ScrollDir::Down),
+        Message::MemJumpToStart => devtools::memory::handle_mem_jump_to_start(state),
+        Message::MemJumpToEnd => devtools::memory::handle_mem_jump_to_end(state),
+        Message::MemSelectAllocRow { index } => {
+            devtools::memory::handle_mem_select_alloc_row(state, index)
         }
 
+        // ── Performance Panel UI Messages ─────────────────────────────────────
         // ── Performance panel interactivity (Phase 2 handlers) ───────────────
         Message::PerfFocusSection(section) => {
             devtools::performance::handle_perf_focus_section(state, section)
         }
         Message::PerfScrollUp => {
-            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Up)
+            devtools::performance::handle_perf_scroll(state, devtools::ScrollDir::Up)
         }
         Message::PerfScrollDown => {
-            devtools::performance::handle_perf_scroll(state, devtools::performance::ScrollDir::Down)
+            devtools::performance::handle_perf_scroll(state, devtools::ScrollDir::Down)
         }
         Message::PerfPageUp => {
-            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Up)
+            devtools::performance::handle_perf_page(state, devtools::ScrollDir::Up)
         }
         Message::PerfPageDown => {
-            devtools::performance::handle_perf_page(state, devtools::performance::ScrollDir::Down)
+            devtools::performance::handle_perf_page(state, devtools::ScrollDir::Down)
         }
         Message::PerfJumpToStart => devtools::performance::handle_perf_jump_to_start(state),
         Message::PerfJumpToEnd => devtools::performance::handle_perf_jump_to_end(state),
-        Message::PerfSelectAllocRow { index } => {
-            devtools::performance::handle_perf_select_alloc_row(state, index)
+
+        // Performance details pane (Phase 2).
+        Message::PerfCycleDetailsTab { forward } => {
+            devtools::performance::handle_perf_cycle_details_tab(state, forward)
+        }
+        Message::PerfFocusDetailsTab(tab) => {
+            devtools::performance::handle_perf_focus_details_tab(state, tab)
+        }
+
+        // ── Performance Phase 3: Rebuild Stats + Timeline ────────────────────
+        Message::RebuildStatsEventReceived {
+            session_id,
+            payload,
+        } => devtools::performance::rebuild_stats::handle_event(state, session_id, payload),
+        Message::ToggleRebuildStats { session_id } => {
+            devtools::performance::rebuild_stats::handle_toggle(state, session_id)
+        }
+        Message::RebuildStatsExtensionStateChanged {
+            session_id,
+            enabled,
+        } => devtools::performance::rebuild_stats::handle_extension_state_changed(
+            state, session_id, enabled,
+        ),
+        Message::RebuildStatsLocationMapFetched { session_id, map } => {
+            devtools::performance::rebuild_stats::handle_location_map_fetched(
+                state, session_id, map,
+            )
+        }
+        Message::RebuildStatsToggleFailed { session_id, reason } => {
+            devtools::performance::rebuild_stats::handle_toggle_failed(state, session_id, reason)
+        }
+        Message::TimelineEventsBatchReceived {
+            session_id,
+            events,
+            metadata,
+        } => devtools::performance::timeline::handle_batch(state, session_id, events, metadata),
+        Message::TimelineEventsCycleFilter { session_id } => {
+            devtools::performance::timeline::handle_cycle_filter(state, session_id)
+        }
+
+        // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────
+        Message::ApplyFrameAnchor {
+            session_id,
+            generation,
+            frame_number,
+        } => devtools::performance::handle_apply_frame_anchor(
+            state,
+            session_id,
+            generation,
+            frame_number,
+        ),
+
+        // ── Phase 5: Timeline pan/zoom viewport ───────────────────────────────
+        Message::TimelineZoomIn { session_id } => {
+            devtools::performance::handle_zoom_in(state, session_id)
+        }
+        Message::TimelineZoomOut { session_id } => {
+            devtools::performance::handle_zoom_out(state, session_id)
+        }
+        Message::TimelinePanLeft { session_id } => {
+            devtools::performance::handle_pan_left(state, session_id)
+        }
+        Message::TimelinePanRight { session_id } => {
+            devtools::performance::handle_pan_right(state, session_id)
+        }
+        Message::TimelineFollowLatest { session_id } => {
+            devtools::performance::handle_follow_latest(state, session_id)
+        }
+
+        // ── Phase 5 T03: Timeline event selection ─────────────────────────────
+        Message::TimelineSelectFirstVisible { session_id } => {
+            devtools::performance::handle_select_first_visible(state, session_id)
+        }
+        Message::TimelineMoveSelection { session_id, dir } => {
+            devtools::performance::handle_move_selection(state, session_id, dir)
+        }
+        Message::TimelineOpenPopup { session_id } => {
+            devtools::performance::handle_open_popup(state, session_id)
+        }
+        Message::TimelineClosePopup { session_id } => {
+            devtools::performance::handle_close_popup(state, session_id)
+        }
+        Message::TimelineClearSelection { session_id } => {
+            devtools::performance::handle_clear_selection(state, session_id)
+        }
+        Message::TimelineSelectAt { session_id, cursor } => {
+            devtools::performance::handle_select_at(state, session_id, cursor)
+        }
+
+        // ── Phase 5 T04: Timeline search ─────────────────────────────────────
+        Message::TimelineSearchOpen { session_id } => {
+            devtools::performance::handle_search_open(state, session_id)
+        }
+        Message::TimelineSearchInputChar { session_id, ch } => {
+            devtools::performance::handle_search_input_char(state, session_id, ch)
+        }
+        Message::TimelineSearchInputBackspace { session_id } => {
+            devtools::performance::handle_search_input_backspace(state, session_id)
+        }
+        Message::TimelineSearchInputCommit { session_id } => {
+            devtools::performance::handle_search_input_commit(state, session_id)
+        }
+        Message::TimelineSearchInputCancel { session_id } => {
+            devtools::performance::handle_search_input_cancel(state, session_id)
+        }
+        Message::TimelineSearchNextMatch { session_id } => {
+            devtools::performance::handle_next_match(state, session_id)
+        }
+        Message::TimelineSearchPrevMatch { session_id } => {
+            devtools::performance::handle_prev_match(state, session_id)
+        }
+
+        Message::VmServiceTimelineMonitoringStarted {
+            session_id,
+            timeline_shutdown_tx,
+            timeline_pause_tx,
+            timeline_task_handle,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.timeline_shutdown_tx = Some(timeline_shutdown_tx);
+                // Take the JoinHandle out of the Arc<Mutex<Option<>>> so it is
+                // owned by the SessionHandle and can be aborted on session close.
+                handle.timeline_task_handle = match timeline_task_handle.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("timeline task handle mutex poisoned: {e}");
+                        e.into_inner().take()
+                    }
+                };
+                handle.timeline_pause_tx = Some(timeline_pause_tx);
+
+                // If we are already in DevTools on the Performance panel, unpause
+                // immediately so polling begins. Otherwise leave paused until
+                // the user enters the Performance panel.
+                if state.ui_mode == UiMode::DevTools
+                    && state.devtools_view_state.active_panel == DevToolsPanel::Performance
+                {
+                    if let Some(handle) = state.session_manager.get(session_id) {
+                        if let Some(ref tx) = handle.timeline_pause_tx {
+                            let _ = tx.send(false);
+                        }
+                    }
+                }
+            }
+            UpdateResult::none()
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -2902,6 +3193,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 "Mouse capture off — native selection ready"
             };
             state.push_toast(crate::state::ToastLevel::Info, label);
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Background Settings Persistence Handshake
+        // (devtools-inspector-parity Phase 1.5, Task 02)
+        // ─────────────────────────────────────────────────────────
+        // Success is a no-op in Phase 1.5; future phases may surface
+        // a toast or status-bar indicator.
+        Message::SettingsPersisted => UpdateResult::none(),
+
+        // Log the error at warn level so it surfaces in tracing output;
+        // no UI change in Phase 1.5.
+        Message::SettingsPersistFailed { error } => {
+            warn!("Settings persist failed: {error}");
             UpdateResult::none()
         }
     }

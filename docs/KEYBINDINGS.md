@@ -36,6 +36,7 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Debug Overlays](#debug-overlays)
   - [Widget Inspector Panel](#widget-inspector-panel)
   - [Performance Panel](#performance-panel)
+  - [Memory Panel](#memory-panel)
   - [Network Panel](#network-panel)
 - [Flutter Version Mode](#flutter-version-mode)
   - [General Controls](#general-controls-4)
@@ -91,7 +92,7 @@ These commands control the Flutter app running in the current session. They are 
 | Key | Action | Description |
 |-----|--------|-------------|
 | `r` | Hot Reload | Trigger a hot reload (disabled when busy) |
-| `R` | Hot Restart | Trigger a hot restart (disabled when busy) |
+| `R` | Hot Restart | Trigger a hot restart (disabled when busy). **Context-dependent:** In DevTools Performance with the Rebuild Stats tab focused, `R` instead toggles `ext.flutter.profileWidgetBuilds` (rebuild tracking) — the hot-restart binding is shadowed in that specific context. |
 | `s` | Stop App | Stop the running app (disabled when busy) |
 
 ### Log Navigation
@@ -418,13 +419,18 @@ The settings panel provides a tabbed interface for managing project settings, us
 
 Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connection).
 
+> **Migration note (2026-05):** the previous Performance panel's memory chart and
+> allocation table moved to a new Memory panel (`m`). The `s` (sort) binding
+> moved with them.
+
 ### Panel Navigation
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Esc` | Exit DevTools | Return to Normal mode (log view). In Performance panel, deselects frame first. In Network panel, deselects request first. |
+| `Esc` | Exit DevTools | Return to Normal mode (log view). In Performance panel, deselects frame first. In Memory panel, deselects alloc row first. In Network panel, deselects request first. |
 | `i` | Inspector Panel | Switch to Widget Inspector panel |
 | `p` | Performance Panel | Switch to Performance monitoring panel |
+| `m` | Memory Panel | Switch to Memory panel |
 | `n` | Network Panel | Switch to Network monitor panel |
 | `b` | Browser DevTools | Open Flutter DevTools in system browser |
 | `q` | Quit | Quit the application |
@@ -444,15 +450,48 @@ Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connecti
 
 ### Widget Inspector Panel
 
-When the Inspector panel is active:
+The Inspector panel has two modes: **tree mode** (default) and **details mode**
+(after pressing `Enter` on a selected widget). Key bindings differ between
+modes.
 
-| Key | Action | Description |
-|-----|--------|-------------|
-| `Up` / `k` | Move Up | Move selection up in widget tree |
-| `Down` / `j` | Move Down | Move selection down in widget tree |
-| `Enter` / `Right` | Expand | Expand selected tree node |
-| `Left` / `h` | Collapse | Collapse selected tree node |
-| `r` | Refresh | Refresh widget tree from VM Service |
+#### Tree mode
+
+| Key | Action |
+|-----|--------|
+| `Up` / `k` | Move selection up |
+| `Down` / `j` | Move selection down |
+| `Right` / `l` | Expand node (or expand collapsed group) |
+| `Left` / `h` | Collapse node |
+| `Enter` | Open Details view for selected widget |
+| `Shift+H` | Toggle "Hide implementation widgets" (chain collapsing) |
+| `r` | Refresh widget tree |
+| `b` | Open Flutter DevTools in browser |
+| `Esc` | Exit DevTools → Logs |
+
+#### Details mode
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Right` / `l` | Cycle to next visible tab (wraps; skips hidden tabs; no-op when only one tab is visible) |
+| `Shift+Tab` / `Left` / `h` | Cycle to previous visible tab |
+| `Esc` | Close Details (return to tree mode) |
+| `r` | Refresh details |
+| `b` | Open Flutter DevTools in browser |
+| `Up` / `Down` / `j` / `k` | **No-op** — selection frozen while details is open |
+
+**Details tab visibility:**
+- Widget properties: always shown.
+- Render object: shown when the selected widget has a render object (e.g. `Padding`, `Column`, `Stack` — not `Container`).
+- Flex explorer: shown when the selected widget or its parent is `Row`, `Column`, or `Flex`.
+
+Press `Esc` from Details to return to tree mode; press `Esc` again to exit
+DevTools to the log view.
+
+Chain collapsing: when "Hide implementation widgets" is on (default,
+`[devtools] hide_implementation_widgets = true` in `.fdemon/config.toml`),
+long single-child chains of non-local-project wrapper widgets (e.g. nested
+`BlocProvider`s) fold into a single `+ N more widgets` row. Press `Right` on
+the leader to expand the chain in place.
 
 The Inspector panel shows a 50/50 split: widget tree on one side, layout explorer on the other. Layout data auto-fetches when a tree node is selected.
 
@@ -460,42 +499,42 @@ The Inspector panel shows a 50/50 split: widget tree on one side, layout explore
 
 When the Performance panel is active:
 
-#### Section Focus
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Cycle focus between Frame Chart and Details pane |
+| `←` / `→` | Select previous / next frame |
+| `]` | Cycle details tab forward (Frame Analysis → Rebuild Stats → Timeline Events) |
+| `[` | Cycle details tab backward |
+| `↑` / `k` | Scroll focused section up |
+| `↓` / `j` | Scroll focused section down |
+| `PageUp` / `PageDown` | Page-scroll focused section |
+| `Home` / `End` | Jump to oldest / live edge |
+| `Esc` | Deselect frame; or, if no frame selected, return to Logs |
+| `Ctrl+p` | Toggle performance overlay on device |
+| `b` | Open DevTools in browser |
+| `f` | Performance, Details, TimelineEvents tab — Cycle filter All → UI → Raster |
+| `R` (Shift+r) | Performance, Details, RebuildStats tab — Toggle widget rebuild tracking |
 
-| Key | Action | Description |
-|-----|--------|-------------|
-| `Tab` | Focus Next Section | Cycle focus forward: Frame Chart → Memory Chart → Allocation List → Frame Chart |
-| `Shift+Tab` | Focus Previous Section | Cycle focus backward through sections |
-| Click section | Focus Section | Click anywhere in a section to focus it |
+> The `]`/`[` cycle only fires when the Details pane has focus (press `Tab` from the Frame Chart).
+>
+> The `f` key only fires when the Details pane has focus **and** the Timeline Events tab is active.
+>
+> The `R` (Shift+r) key only fires when the Details pane has focus **and** the Rebuild Stats tab is active. In all other contexts (Logs panel, Frame Chart focus, Frame Analysis tab, Memory panel, etc.) `R` performs a hot restart as usual.
 
-#### Scrolling (applies to the focused section)
+### Memory Panel
 
-| Key | Action | Description |
-|-----|--------|-------------|
-| `↑` / `k` | Scroll Up | Scroll focused section up one step (or move row selection up in Allocation List) |
-| `↓` / `j` | Scroll Down | Scroll focused section down one step (or move row selection down in Allocation List) |
-| `PageUp` | Page Up | Scroll focused section up one viewport |
-| `PageDown` | Page Down | Scroll focused section down one viewport |
-| `Home` | Jump to Oldest | Jump to oldest sample / first row (maximum scroll back in time) |
-| `End` | Jump to Live Edge | Jump to live edge (scroll offset = 0, present time) |
+When the Memory panel is active:
 
-#### Frame Selection (Frame Chart section)
-
-| Key | Action | Description |
-|-----|--------|-------------|
-| `←` | Previous Frame | Select the previous frame in the bar chart |
-| `→` | Next Frame | Select the next frame in the bar chart |
-| `Esc` | Deselect Frame | Clear frame selection (show summary instead of detail) |
-| Click frame bar | Select Frame | Click a bar to select that frame |
-
-#### Allocation List (Allocation List section)
-
-| Key | Action | Description |
-|-----|--------|-------------|
-| `s` | Toggle Sort | Toggle allocation table sort column (Size / Instances) |
-| Click alloc row | Select Row | Focus the Allocation List and select the clicked row |
-
-The Performance panel shows a frame timing bar chart (top) and memory time-series chart with class allocation table (bottom). Each section can be independently focused and scrolled. `Home` scrolls back to the oldest buffered sample; `End` returns to the live edge.
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Cycle focus between Memory Chart and Allocation List |
+| `↑` / `k` | Scroll focused section up |
+| `↓` / `j` | Scroll focused section down |
+| `PageUp` / `PageDown` | Page-scroll focused section |
+| `Home` / `End` | Jump to oldest / live edge of chart, or first / last alloc row |
+| `s` | Toggle allocation sort (By Size ↔ By Instances) |
+| `Esc` | Deselect alloc row; or, if no row selected, return to Logs |
+| `b` | Open DevTools in browser |
 
 ### Network Panel
 

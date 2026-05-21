@@ -423,12 +423,14 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::DiscoverBootableDevices
             | UpdateAction::BootDevice { .. }
             | UpdateAction::AutoSaveConfig { .. }
+            | UpdateAction::PersistSettings { .. }
             | UpdateAction::LaunchFlutterSession { .. }
             | UpdateAction::DiscoverEntryPoints { .. }
             | UpdateAction::ConnectVmService { .. }
             | UpdateAction::StartPerformanceMonitoring { .. }
             | UpdateAction::FetchWidgetTree { .. }
             | UpdateAction::FetchLayoutData { .. }
+            | UpdateAction::FetchInspectorProperties { .. }
             | UpdateAction::ToggleOverlay { .. }
             | UpdateAction::OpenBrowserDevTools { .. }
             | UpdateAction::StartNetworkMonitoring { .. }
@@ -450,7 +452,11 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::SwitchFlutterVersion { .. }
             | UpdateAction::RemoveFlutterVersion { .. }
             | UpdateAction::ProbeFlutterVersion { .. }
-            | UpdateAction::SendDaemonCommand { .. } => {
+            | UpdateAction::SendDaemonCommand { .. }
+            | UpdateAction::StartTimelineMonitoring { .. }
+            | UpdateAction::ToggleProfileWidgetBuilds { .. }
+            | UpdateAction::FetchWidgetLocationIdMap { .. }
+            | UpdateAction::DebounceFrameAnchor { .. } => {
                 warn!("runner action queue received non-runner variant: {action:?}");
             }
         }

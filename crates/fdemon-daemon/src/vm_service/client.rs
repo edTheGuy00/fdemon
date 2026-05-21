@@ -212,6 +212,60 @@ impl VmRequestHandle {
         }
     }
 
+    /// Create a `VmRequestHandle` wired to a live channel whose receiver is
+    /// returned to the caller.
+    ///
+    /// Intended for tests that need to intercept and respond to RPC requests:
+    /// the caller receives `cmd_rx` and can drive a fake responder by reading
+    /// [`ClientCommand::SendRequest`] messages from it.
+    ///
+    /// Unlike [`new_for_test`](Self::new_for_test), the receiver is **not**
+    /// immediately dropped, so `request()` calls will block until the caller
+    /// handles them (or the receiver is dropped).
+    ///
+    /// - Under `#[cfg(test)]` without `test-helpers`: `pub(crate)` — only
+    ///   accessible within `fdemon-daemon` tests.
+    /// - With `test-helpers` feature enabled: `pub` — accessible from
+    ///   external test harnesses (e.g. `fdemon-app` tests). This replaces the
+    ///   `#[cfg(test)]` variant when both would be active.
+    #[cfg(all(test, not(feature = "test-helpers")))]
+    pub(crate) fn new_with_test_channel() -> (Self, tokio::sync::mpsc::Receiver<ClientCommand>) {
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
+        let handle = Self {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::new(Mutex::new(None)),
+            ws_uri: String::new(),
+        };
+        (handle, cmd_rx)
+    }
+
+    /// Create a `VmRequestHandle` wired to a live channel whose receiver is
+    /// returned to the caller (`test-helpers` feature variant).
+    ///
+    /// Exposed as `pub` when the `test-helpers` Cargo feature is enabled, so
+    /// that external test harnesses (e.g. `fdemon-app` tests) can construct
+    /// fake responders without a full trait abstraction (that is T11's job).
+    ///
+    /// Each [`ClientCommand::SendRequest`] received on the channel contains the
+    /// RPC method name, optional params, and a `response_tx` oneshot sender.
+    /// The test drives a fake responder by receiving items and sending back
+    /// `Ok(json_value)` or `Err(error)`.
+    ///
+    /// This variant is also available within `fdemon-daemon`'s own tests when
+    /// `test-helpers` is active — it supersedes the `pub(crate)` variant.
+    #[cfg(feature = "test-helpers")]
+    pub fn new_with_test_channel() -> (Self, tokio::sync::mpsc::Receiver<ClientCommand>) {
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
+        let handle = Self {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::new(Mutex::new(None)),
+            ws_uri: String::new(),
+        };
+        (handle, cmd_rx)
+    }
+
     /// Peek at the current cached isolate ID without modifying it.
     ///
     /// Returns `None` if the cache is empty or if the lock cannot be
@@ -414,6 +468,31 @@ impl VmRequestHandle {
 }
 
 // ---------------------------------------------------------------------------
+// VmRequestApi impl for VmRequestHandle
+// ---------------------------------------------------------------------------
+
+impl super::request_api::VmRequestApi for VmRequestHandle {
+    fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        // Delegate to the inherent async method.
+        VmRequestHandle::request(self, method, params)
+    }
+
+    fn call_extension(
+        &self,
+        method: &str,
+        isolate_id: &str,
+        args: Option<HashMap<String, String>>,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value>> + Send {
+        // Delegate to the inherent async method.
+        VmRequestHandle::call_extension(self, method, isolate_id, args)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -476,7 +555,29 @@ pub enum ConnectionState {
 // ---------------------------------------------------------------------------
 
 /// Internal messages sent from the public API to the background task.
-enum ClientCommand {
+///
+/// - Without `test-helpers` feature: `pub(crate)` — only visible within
+///   `fdemon-daemon`.
+/// - With `test-helpers` feature: `pub` — visible to external test harnesses
+///   (e.g. `fdemon-app` tests) so they can construct fake responders.
+#[cfg(not(feature = "test-helpers"))]
+pub(crate) enum ClientCommand {
+    /// Send a JSON-RPC request and deliver the response to `response_tx`.
+    SendRequest {
+        method: String,
+        params: Option<serde_json::Value>,
+        response_tx: oneshot::Sender<Result<serde_json::Value>>,
+    },
+    /// Gracefully close the WebSocket connection and stop the background task.
+    Disconnect,
+}
+
+/// Internal messages sent from the public API to the background task.
+///
+/// `pub` under the `test-helpers` Cargo feature so that external test
+/// harnesses (e.g. `fdemon-app` tests) can construct fake responders.
+#[cfg(feature = "test-helpers")]
+pub enum ClientCommand {
     /// Send a JSON-RPC request and deliver the response to `response_tx`.
     SendRequest {
         method: String,
@@ -700,11 +801,13 @@ impl VmServiceClient {
         Ok(main_isolate.clone())
     }
 
-    /// Subscribe to Flutter streams (Extension, Logging, GC, Debug, and Isolate).
+    /// Subscribe to Flutter streams (Extension, Logging, GC, Debug, and Isolate)
+    /// and enable VM timeline recording.
     ///
     /// Returns a list of human-readable error descriptions for any streams
     /// that could not be subscribed (non-fatal — the app continues without
-    /// them).
+    /// them). Timeline flag failures are also non-fatal: older Dart VMs without
+    /// `setVMTimelineFlags` support will simply not record timeline data.
     pub async fn subscribe_flutter_streams(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
@@ -731,6 +834,26 @@ impl VmServiceClient {
         // Isolate stream: isolate lifecycle events (start, runnable, exit, reload)
         if let Err(e) = self.stream_listen(stream_id::ISOLATE).await {
             errors.push(format!("Isolate stream: {e}"));
+        }
+
+        // Enable VM timeline recording so the Dart VM populates its buffer.
+        // Without this call, `getVMTimeline` always returns an empty traceEvents
+        // array and the Timeline Events tab stays on "Waiting for timeline events…".
+        // Non-fatal: older Dart VMs that do not support setVMTimelineFlags should
+        // still run fdemon without timeline data rather than failing to connect.
+        match super::timeline::set_vm_timeline_flags(
+            &self.handle,
+            super::timeline::DEFAULT_RECORDED_STREAMS,
+        )
+        .await
+        {
+            Ok(()) => info!(
+                "VM Service: setVMTimelineFlags enabled streams {:?}",
+                super::timeline::DEFAULT_RECORDED_STREAMS
+            ),
+            Err(e) => warn!(
+                "VM Service: setVMTimelineFlags failed (timeline events may be unavailable): {e}"
+            ),
         }
 
         errors

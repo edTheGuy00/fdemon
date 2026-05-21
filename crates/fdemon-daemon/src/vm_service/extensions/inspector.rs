@@ -6,12 +6,14 @@
 use std::collections::HashMap;
 
 use fdemon_core::prelude::*;
+use fdemon_core::rebuild_stats::LocationMap;
 use fdemon_core::widget_tree::DiagnosticsNode;
 
 use super::ext;
 use super::parse_diagnostics_node_response;
 use super::parse_optional_diagnostics_node_response;
 use super::VmServiceClient;
+use crate::vm_service::client::VmRequestHandle;
 
 // ---------------------------------------------------------------------------
 // Object Group Manager
@@ -270,6 +272,83 @@ pub async fn get_selected_widget(
         .call_extension(ext::GET_SELECTED_WIDGET, isolate_id, Some(args))
         .await?;
     parse_optional_diagnostics_node_response(&result)
+}
+
+/// Fetch the engine's widget location map (id → file:line:column + name).
+///
+/// Used as a one-shot fallback when fdemon connects after `Flutter.RebuiltWidgets`
+/// events have already been emitted with location data that we missed. The
+/// response shape is identical to the `locations` sub-object inside
+/// `Flutter.RebuiltWidgets` events: parallel arrays per file URI.
+///
+/// Returns an empty [`LocationMap`] if the Flutter app hasn't built any
+/// instrumented widgets yet (the extension responds with only a `"type"` key).
+///
+/// Available in debug mode only — returns `Err` in profile/release builds.
+///
+/// # Errors
+///
+/// - [`Error::Protocol`] if the VM Service response is not a JSON object, or
+///   if any per-file location block fails to parse (e.g., array length mismatch).
+/// - [`Error::ChannelClosed`] if the VM Service client connection is closed.
+pub async fn widget_location_id_map(
+    client: &VmServiceClient,
+    isolate_id: &str,
+) -> Result<LocationMap> {
+    let response = client
+        .call_extension(ext::WIDGET_LOCATION_ID_MAP, isolate_id, None)
+        .await?;
+
+    // Response is a JSON object whose keys are file URIs. Filter out the
+    // "type" marker key that VM Service responses always carry.
+    let obj = response
+        .as_object()
+        .ok_or_else(|| Error::protocol("widgetLocationIdMap response was not a JSON object"))?;
+
+    let mut map = LocationMap::default();
+    for (key, value) in obj {
+        if key == "type" {
+            continue;
+        }
+        map.merge_parallel_arrays(key, value)?;
+    }
+    Ok(map)
+}
+
+/// Fetch the engine's widget location map using a [`VmRequestHandle`].
+///
+/// Identical to [`widget_location_id_map`] but accepts the channel-based
+/// [`VmRequestHandle`] that background action tasks hold, rather than the
+/// full [`VmServiceClient`]. Use this from `fdemon-app` action tasks where
+/// only the handle (not the client) is available.
+///
+/// # Errors
+///
+/// - [`Error::Protocol`] if the VM Service response is not a JSON object, or
+///   if any per-file location block fails to parse (e.g., array length mismatch).
+/// - [`Error::ChannelClosed`] if the VM Service client connection is closed.
+pub async fn widget_location_id_map_handle(
+    handle: &VmRequestHandle,
+    isolate_id: &str,
+) -> Result<LocationMap> {
+    let response = handle
+        .call_extension(ext::WIDGET_LOCATION_ID_MAP, isolate_id, None)
+        .await?;
+
+    // Response is a JSON object whose keys are file URIs. Filter out the
+    // "type" marker key that VM Service responses always carry.
+    let obj = response
+        .as_object()
+        .ok_or_else(|| Error::protocol("widgetLocationIdMap response was not a JSON object"))?;
+
+    let mut map = LocationMap::default();
+    for (key, value) in obj {
+        if key == "type" {
+            continue;
+        }
+        map.merge_parallel_arrays(key, value)?;
+    }
+    Ok(map)
 }
 
 // ---------------------------------------------------------------------------
@@ -676,5 +755,190 @@ mod tests {
         });
         let node = parse_diagnostics_node_response(&json).unwrap();
         assert_eq!(node.node_type.as_deref(), Some("_WidgetDiagnosticableNode"));
+    }
+
+    // ── widget_location_id_map parsing (no live client required) ────────────
+    //
+    // These tests exercise the response parsing logic by directly calling
+    // LocationMap::merge_parallel_arrays, mirroring exactly what
+    // widget_location_id_map does after receiving the VM Service response.
+
+    #[test]
+    fn widget_location_id_map_parses_single_file() {
+        use fdemon_core::rebuild_stats::LocationMap;
+        use serde_json::json;
+
+        // Simulate the object returned by the VM Service (minus the RPC envelope
+        // which call_extension already strips). The "type" key is the VM Service
+        // type marker and must be skipped.
+        let response = json!({
+            "type": "Map",
+            "package:foo/main.dart": {
+                "ids": [1, 2],
+                "lines": [10, 20],
+                "columns": [3, 4],
+                "names": ["A", "B"]
+            }
+        });
+
+        let obj = response.as_object().expect("response should be an object");
+        let mut map = LocationMap::default();
+        for (key, value) in obj {
+            if key == "type" {
+                continue;
+            }
+            map.merge_parallel_arrays(key, value)
+                .expect("merge should succeed");
+        }
+
+        assert_eq!(map.by_id.len(), 2, "expected 2 location entries");
+        let loc1 = map.by_id.get(&1).expect("id 1 should be present");
+        assert_eq!(loc1.file_uri, "package:foo/main.dart");
+        assert_eq!(loc1.line, 10);
+        assert_eq!(loc1.column, 3);
+        assert_eq!(loc1.name, "A");
+        let loc2 = map.by_id.get(&2).expect("id 2 should be present");
+        assert_eq!(loc2.file_uri, "package:foo/main.dart");
+        assert_eq!(loc2.line, 20);
+        assert_eq!(loc2.column, 4);
+        assert_eq!(loc2.name, "B");
+    }
+
+    #[test]
+    fn widget_location_id_map_parses_multi_file() {
+        use fdemon_core::rebuild_stats::LocationMap;
+        use serde_json::json;
+
+        let response = json!({
+            "type": "Map",
+            "package:foo/main.dart": {
+                "ids": [1, 2],
+                "lines": [10, 20],
+                "columns": [1, 2],
+                "names": ["WidgetA", "WidgetB"]
+            },
+            "package:foo/other.dart": {
+                "ids": [3, 4],
+                "lines": [30, 40],
+                "columns": [5, 6],
+                "names": ["WidgetC", "WidgetD"]
+            }
+        });
+
+        let obj = response.as_object().expect("response should be an object");
+        let mut map = LocationMap::default();
+        for (key, value) in obj {
+            if key == "type" {
+                continue;
+            }
+            map.merge_parallel_arrays(key, value)
+                .expect("merge should succeed");
+        }
+
+        assert_eq!(
+            map.by_id.len(),
+            4,
+            "expected 4 location entries across 2 files"
+        );
+        assert!(map.by_id.contains_key(&1));
+        assert!(map.by_id.contains_key(&2));
+        assert!(map.by_id.contains_key(&3));
+        assert!(map.by_id.contains_key(&4));
+
+        let loc3 = map.by_id.get(&3).expect("id 3 should be present");
+        assert_eq!(loc3.file_uri, "package:foo/other.dart");
+        assert_eq!(loc3.name, "WidgetC");
+    }
+
+    #[test]
+    fn widget_location_id_map_handles_empty_response() {
+        use fdemon_core::rebuild_stats::LocationMap;
+        use serde_json::json;
+
+        // Only the "type" marker key — no file URIs. Should produce an empty map.
+        let response = json!({ "type": "Map" });
+
+        let obj = response.as_object().expect("response should be an object");
+        let mut map = LocationMap::default();
+        for (key, value) in obj {
+            if key == "type" {
+                continue;
+            }
+            map.merge_parallel_arrays(key, value)
+                .expect("merge should succeed");
+        }
+
+        assert!(
+            map.by_id.is_empty(),
+            "empty response should yield empty map"
+        );
+    }
+
+    #[test]
+    fn widget_location_id_map_propagates_parse_errors() {
+        use fdemon_core::rebuild_stats::LocationMap;
+        use serde_json::json;
+
+        // Malformed: `lines` array is shorter than `ids` — merge_parallel_arrays
+        // must return an Err for length mismatch.
+        let response = json!({
+            "type": "Map",
+            "package:foo/main.dart": {
+                "ids": [1, 2],
+                "lines": [10],
+                "columns": [3, 4],
+                "names": ["A", "B"]
+            }
+        });
+
+        let obj = response.as_object().expect("response should be an object");
+        let mut map = LocationMap::default();
+        let mut had_error = false;
+        for (key, value) in obj {
+            if key == "type" {
+                continue;
+            }
+            if map.merge_parallel_arrays(key, value).is_err() {
+                had_error = true;
+            }
+        }
+        assert!(
+            had_error,
+            "malformed parallel arrays should produce an error"
+        );
+    }
+
+    #[test]
+    fn widget_location_id_map_skips_type_key() {
+        use fdemon_core::rebuild_stats::LocationMap;
+        use serde_json::json;
+
+        // The "type" key must never be treated as a file URI.
+        let response = json!({
+            "type": "Map",
+            "package:foo/main.dart": {
+                "ids": [42],
+                "lines": [7],
+                "columns": [1],
+                "names": ["Root"]
+            }
+        });
+
+        let obj = response.as_object().expect("response should be an object");
+        let mut map = LocationMap::default();
+        for (key, value) in obj {
+            if key == "type" {
+                continue;
+            }
+            map.merge_parallel_arrays(key, value)
+                .expect("merge should succeed");
+        }
+
+        // Only 1 entry — the "type" key was skipped correctly.
+        assert_eq!(map.by_id.len(), 1, "only file-URI keys should be merged");
+        assert!(
+            map.by_id.contains_key(&42),
+            "location id 42 should be present"
+        );
     }
 }

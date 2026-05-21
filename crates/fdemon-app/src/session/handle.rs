@@ -176,6 +176,45 @@ pub struct SessionHandle {
     /// with Network as the default panel).
     pub network_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
 
+    /// Shutdown channel for the timeline polling task.
+    ///
+    /// Sending `true` stops the 1-Hz polling loop cleanly. Stored as `Arc`
+    /// because the `Message` enum (which carries the initial sender) requires
+    /// `Clone`. Set by `VmServiceTimelineMonitoringStarted`, cleared on
+    /// disconnect/session-close.
+    pub timeline_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// Pause channel for the timeline polling task.
+    ///
+    /// `true` = paused (Performance panel not active), `false` = active.
+    ///
+    /// Initial value is `true` (paused) — timeline polling starts paused and
+    /// is unpaused when the user opens the Performance panel. Sending `true`
+    /// pauses (user left Performance panel); `false` unpauses (user entered).
+    pub timeline_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// Join handle for the timeline polling task.
+    ///
+    /// Aborted on session close or VM disconnect to prevent zombie polling
+    /// tasks from continuing after the session has ended. Set by
+    /// `VmServiceTimelineMonitoringStarted`, cleared on disconnect/close.
+    pub timeline_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Gate sender for the `Flutter.RebuiltWidgets` forwarder.
+    ///
+    /// When `false` (gate closed), the event forwarder skips parsing and
+    /// dispatching `Flutter.RebuiltWidgets` events, eliminating ~60 fps
+    /// allocations when the user is not viewing the Performance panel.
+    /// When `true` (gate open), events are parsed and forwarded normally.
+    ///
+    /// Initial value is `false` (gate closed) — forwarding begins paused and
+    /// opens when `ui_mode == DevTools && active_panel == Performance`.
+    ///
+    /// Stored as `Arc` because it is created in `process.rs` (where both
+    /// sides of the channel are available) and the handle must be kept alive
+    /// for the session's lifetime.
+    pub rebuilt_widgets_gate_tx: Option<Arc<tokio::sync::watch::Sender<bool>>>,
+
     /// Per-session native log tag discovery and visibility state.
     ///
     /// Tracks every distinct tag seen in this session's native log stream
@@ -216,6 +255,16 @@ impl std::fmt::Debug for SessionHandle {
             .field("has_alloc_pause", &self.alloc_pause_tx.is_some())
             .field("has_perf_pause", &self.perf_pause_tx.is_some())
             .field("has_network_pause", &self.network_pause_tx.is_some())
+            .field(
+                "has_timeline_shutdown",
+                &self.timeline_shutdown_tx.is_some(),
+            )
+            .field("has_timeline_pause", &self.timeline_pause_tx.is_some())
+            .field("has_timeline_task", &self.timeline_task_handle.is_some())
+            .field(
+                "has_rebuilt_widgets_gate",
+                &self.rebuilt_widgets_gate_tx.is_some(),
+            )
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
@@ -243,6 +292,10 @@ impl SessionHandle {
             alloc_pause_tx: None,
             perf_pause_tx: None,
             network_pause_tx: None,
+            timeline_shutdown_tx: None,
+            timeline_pause_tx: None,
+            timeline_task_handle: None,
+            rebuilt_widgets_gate_tx: None,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
         }

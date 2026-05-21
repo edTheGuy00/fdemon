@@ -1,93 +1,159 @@
-//! Performance monitoring state — memory, GC, and frame timing.
+//! Performance monitoring state — frame timing and aggregated statistics.
+//!
+//! Memory monitoring state has moved to [`super::memory`].
 
 use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use fdemon_core::performance::{
-    AllocationProfile, FrameTiming, GcEvent, MemorySample, MemoryUsage, PerformanceStats,
-    RingBuffer,
-};
+use fdemon_core::performance::{FrameTiming, PerformanceStats, RingBuffer};
+use fdemon_core::rebuild_stats::{LocationMap, RebuildStatsSnapshot};
+use fdemon_core::timeline::TimelineTrack;
+use serde::{Deserialize, Serialize};
 
-/// Default number of memory snapshots to keep (at 2s interval = 2 minutes).
-pub(crate) const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
-/// Default number of major GC events to keep.
+use crate::state::PerfDetailsTab;
+
+// ── TimelineEventCursor ───────────────────────────────────────────────────────
+
+/// Identifies a single event in the timeline tree.
 ///
-/// Only major GC events (MarkSweep, MarkCompact) are stored — Scavenge events
-/// are filtered out in the handler. Major GCs are rare, so 50 slots provides
-/// ample history without wasting memory.
-pub(crate) const DEFAULT_GC_HISTORY_SIZE: usize = 50;
+/// Stable across batches as long as the event survives the ring-buffer eviction
+/// policy (oldest root events are evicted first, by `ts`). When eviction removes
+/// the pointed-to event, the selection is cleared and a debug log entry is
+/// emitted.
+///
+/// The triple `(tid, depth, ts)` uniquely identifies an event because:
+/// - `tid` identifies the thread track.
+/// - `depth` is the nesting level within the root event subtree.
+/// - `ts` (start timestamp in micros) disambiguates siblings at the same depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimelineEventCursor {
+    /// Thread id of the track that owns this event.
+    pub tid: i64,
+    /// Nesting depth (0 = root event, 1 = direct child, …).
+    pub depth: u8,
+    /// Event start timestamp in microseconds. Disambiguates siblings.
+    pub ts: i64,
+}
+
+// ── SelectionDirection ────────────────────────────────────────────────────────
+
+/// Direction for moving the timeline event selection cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionDirection {
+    /// Move to the previous sibling at the same depth; wraps to last if at first.
+    PrevSibling,
+    /// Move to the next sibling at the same depth; wraps to first if at last.
+    NextSibling,
+    /// Move to the parent event. If at depth 0, move to the previous thread's
+    /// first root event.
+    ParentOrUpThread,
+    /// Move to the first child. If no children, move to the next thread's first
+    /// root event.
+    FirstChildOrDownThread,
+}
+
+// ── TimelineFilter ────────────────────────────────────────────────────────────
+
+/// Filter controlling which timeline threads are shown in the Timeline Events tab.
+///
+/// Cycles `All → Ui → Raster → All` when the user presses `f` on the Timeline
+/// Events tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TimelineFilter {
+    /// Show events from all threads.
+    #[default]
+    All,
+    /// Show only Flutter UI thread events.
+    Ui,
+    /// Show only Flutter Raster (GPU) thread events.
+    Raster,
+}
+
+impl TimelineFilter {
+    /// Cycle to the next filter value: `All → Ui → Raster → All`.
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Ui,
+            Self::Ui => Self::Raster,
+            Self::Raster => Self::All,
+        }
+    }
+}
+
 /// 30 seconds at 60 FPS — enables meaningful scroll-back.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 1800;
-/// Memory sample buffer size: 120 samples at 500ms polling = 60 seconds of history.
-pub(crate) const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
 
-/// Column by which the class allocation table is sorted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AllocationSortColumn {
-    /// Sort by total allocated bytes (descending).
-    #[default]
-    BySize,
-    /// Sort by total instance count (descending).
-    ByInstances,
-}
+/// Maximum number of entries in [`PerformanceState::frame_anchor_map`].
+///
+/// 2 000 frames ≈ 33 seconds at 60 FPS — enough to cover all frame history
+/// while keeping memory overhead in the tens of KB.  Oldest frame numbers
+/// (smallest keys) are evicted first when the map reaches this cap.
+pub(crate) const FRAME_ANCHOR_MAP_CAP: usize = 2_000;
 
 /// Active section within the Performance DevTools panel.
 ///
-/// Used for `Tab`/`Shift+Tab` navigation between the three sub-sections.
+/// Used for `Tab`/`Shift+Tab` navigation between the two sub-sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PerfSection {
     /// Frame timing bar chart (default section on open).
     #[default]
     FrameChart,
-    /// Memory usage time-series chart.
-    MemoryChart,
-    /// Class allocation table (from `getAllocationProfile`).
-    MemoryList,
+    /// The details pane (frame analysis, rebuild stats, timeline events).
+    Details,
 }
 
 impl PerfSection {
-    /// Return the next section in Tab order (wraps around).
+    /// Return the next section in Tab order — wraps `FrameChart → Details → FrameChart`.
+    ///
+    /// # Caution: 2-variant assumption
+    ///
+    /// This implementation assumes `PerfSection` has exactly 2 variants
+    /// (`FrameChart` and `Details`). The body returns the opposite variant
+    /// unconditionally — correct for n=2, silently wrong if a third variant
+    /// is added. If you add a variant, rewrite both `next` and `prev` to
+    /// cycle through all variants explicitly.
     pub fn next(self) -> Self {
         match self {
-            PerfSection::FrameChart => PerfSection::MemoryChart,
-            PerfSection::MemoryChart => PerfSection::MemoryList,
-            PerfSection::MemoryList => PerfSection::FrameChart,
+            PerfSection::FrameChart => PerfSection::Details,
+            PerfSection::Details => PerfSection::FrameChart,
         }
     }
 
-    /// Return the previous section in Tab order (wraps around).
+    /// Return the previous section in Tab order — wraps the other way.
+    ///
+    /// # Caution: 2-variant assumption
+    ///
+    /// This implementation assumes `PerfSection` has exactly 2 variants
+    /// (`FrameChart` and `Details`). The body returns the opposite variant
+    /// unconditionally — correct for n=2, silently wrong if a third variant
+    /// is added. If you add a variant, rewrite both `next` and `prev` to
+    /// cycle through all variants explicitly.
     pub fn prev(self) -> Self {
         match self {
-            PerfSection::FrameChart => PerfSection::MemoryList,
-            PerfSection::MemoryChart => PerfSection::FrameChart,
-            PerfSection::MemoryList => PerfSection::MemoryChart,
+            PerfSection::FrameChart => PerfSection::Details,
+            PerfSection::Details => PerfSection::FrameChart,
         }
     }
 }
 
 /// Performance monitoring state for a session.
 ///
-/// Holds rolling ring-buffer history for memory snapshots, GC events, and
-/// frame timings, plus aggregated statistics for display.
+/// Holds frame timing history and aggregated statistics for the frame chart.
+/// Memory monitoring state (heap snapshots, GC events, allocation profile) has
+/// moved to [`super::memory::MemoryState`].
 #[derive(Debug, Clone)]
 pub struct PerformanceState {
-    /// Rolling history of memory snapshots.
-    pub memory_history: RingBuffer<MemoryUsage>,
-    /// Rolling history of GC events.
-    pub gc_history: RingBuffer<GcEvent>,
-    /// Rolling history of frame timings (populated by Task 06).
+    /// Rolling history of frame timings.
     pub frame_history: RingBuffer<FrameTiming>,
     /// Aggregated performance statistics (updated periodically).
     pub stats: PerformanceStats,
     /// Whether performance monitoring is active.
-    pub monitoring_active: bool,
-
-    /// Rich memory samples for time-series chart (populated by VM service polling).
     ///
-    /// Each entry contains a full breakdown (Dart heap, native, raster cache, RSS)
-    /// at 500ms polling. The buffer holds 120 samples = 60 seconds of history.
-    /// Runs in parallel with `memory_history` — the older `memory_history` is kept
-    /// as a fallback when rich sample data is unavailable.
-    pub memory_samples: RingBuffer<MemorySample>,
+    /// **Invariant:** flipped in lockstep with [`super::memory::MemoryState::monitoring_active`].
+    /// Both flags are set true in the `VmServicePerformanceMonitoringStarted` arm
+    /// and reset to false on `VmServiceConnected` (full struct replacement). If a
+    /// future change diverges these lifecycles, document the rationale here.
+    pub monitoring_active: bool,
 
     /// Index of the currently selected frame in `frame_history`.
     ///
@@ -96,16 +162,7 @@ pub struct PerformanceState {
     /// the detail panel shows per-phase breakdown if available.
     pub selected_frame: Option<usize>,
 
-    /// Latest allocation profile snapshot from `getAllocationProfile`.
-    ///
-    /// `None` until the first profile is fetched or when monitoring is inactive.
-    /// Replaced on each fetch — only the most recent snapshot is retained.
-    pub allocation_profile: Option<AllocationProfile>,
-
-    /// Column by which the class allocation table is sorted.
-    pub allocation_sort: AllocationSortColumn,
-
-    // ── Navigation / scroll state (Phase 2 interactivity) ────────────────────
+    // ── Navigation / scroll state ─────────────────────────────────────────────
     /// Which sub-section of the Performance panel currently has keyboard focus.
     pub focused_section: PerfSection,
 
@@ -114,87 +171,234 @@ pub struct PerformanceState {
     /// `0` means the chart is at the live edge (newest frames visible).
     pub frame_chart_scroll_offset: usize,
 
-    /// How many samples the memory chart has been scrolled back from the live edge.
-    pub memory_chart_scroll_offset: usize,
-
-    /// Row index of the selected row in the allocation table, if any.
-    pub alloc_table_selected_row: Option<usize>,
-
-    /// Scroll offset for the allocation table (number of rows scrolled past the top).
-    pub alloc_table_scroll_offset: usize,
-
     /// Render-hint: visible width (in columns) of the frame chart from the last rendered frame.
     ///
     /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3 and
+    // docs/REVIEW_FOCUS.md "Approved TEA Exception → Current usage".
     pub frame_chart_visible_width: Cell<usize>,
 
-    /// Render-hint: visible width (in columns) of the memory chart from the last rendered frame.
+    /// Which tab is active within the Performance Details pane.
     ///
-    /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
-    pub memory_chart_visible_width: Cell<usize>,
+    /// Defaults to `PerfDetailsTab::FrameAnalysis`. Cycled by `]`/`[` when
+    /// `focused_section == PerfSection::Details`. The renderer reads this
+    /// value to dispatch to the correct tab module.
+    pub details_tab: PerfDetailsTab,
 
-    /// Render-hint: visible height (in rows) of the allocation table from the last rendered frame.
+    /// Render-hint: visible height (in rows) of the Details pane content area
+    /// from the last rendered frame.
     ///
-    /// Defaults to `0`, signalling "not yet rendered — use fallback".
-    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md "Region Registry Pattern" and Principle 3.
-    pub alloc_table_visible_height: Cell<usize>,
+    /// Defaults to `0`, signalling "not yet rendered — use fallback". Phase 3
+    /// consumes this for Rebuild Stats / Timeline Events scrolling; Phase 2 sets
+    /// it but does not read it.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3 and
+    // docs/REVIEW_FOCUS.md "Approved TEA Exception → Current usage".
+    pub details_pane_visible_height: Cell<usize>,
+
+    /// Refresh rate (Hz) used to compute the per-frame budget in
+    /// [`fdemon_core::frame_hints::frame_hints`].
+    ///
+    /// Phase 2 hard-codes `60.0`. Phase 3 may parse the `Display.Refresh`
+    /// Extension event stream to detect 90 / 120 Hz devices. A conservative
+    /// 60 Hz default never reports a non-janky frame as janky.
+    pub display_refresh_rate: f64,
+
+    // ── Phase 3: Rebuild Stats ────────────────────────────────────────────────
+    /// Whether the `ext.flutter.profileWidgetBuilds` extension is currently on.
+    ///
+    /// Drives Rebuild Stats tab visibility; persisted across hot restart so
+    /// `session_lifecycle::handle_session_restart_completed` can re-enable it.
+    pub rebuild_stats_enabled: bool,
+
+    /// Persistent location map: incrementally merged from
+    /// `Flutter.RebuiltWidgets` events and the one-shot
+    /// `widgetLocationIdMap` fallback.
+    pub rebuild_stats_location_map: LocationMap,
+
+    /// Lifetime accumulator (since extension was last enabled): location id →
+    /// total rebuild count across all observed frames. Cleared on disable.
+    pub rebuild_stats_totals: HashMap<u32, u32>,
+
+    /// Per-frame snapshot ring buffer (newest at the back). Capped by
+    /// `Settings::devtools::rebuild_stats_frame_window` (default 30).
+    pub rebuild_stats_frames: VecDeque<RebuildStatsSnapshot>,
+
+    /// Scroll offset for the Rebuild Stats table.
+    pub rebuild_stats_scroll_offset: usize,
+
+    /// Currently-selected row in the Rebuild Stats table (j/k navigation).
+    pub rebuild_stats_selected_row: Option<usize>,
+
+    // ── Phase 4: Timeline Events (thread-grouped tree) ────────────────────────
+    /// Per-thread event trees, keyed by `tid`. `BTreeMap` iteration order is
+    /// `tid` ascending so the renderer produces stable thread-row ordering.
+    ///
+    /// Total node count across all tracks is capped by
+    /// `Settings::devtools::timeline_event_buffer_size` (default 10_000). Eviction
+    /// drops the oldest root events globally (by `ts`) until under the cap.
+    pub timeline_tracks: BTreeMap<i64, TimelineTrack>,
+
+    /// Render-hint write-back: actual visible thread-row count last frame.
+    ///
+    /// Written by the Gantt renderer (T05); read by the scroll handler.
+    // EXCEPTION (TEA): render-hint Cell — see docs/CODE_STANDARDS.md Principle 3.
+    pub timeline_visible_row_count: Cell<usize>,
+
+    /// Scroll offset measured in thread rows (not individual events).
+    ///
+    /// Reset to 0 on filter change or panel exit.
+    pub timeline_thread_scroll_offset: usize,
+
+    /// `tid → thread_name` cache, populated from `ph:"M"` metadata events.
+    /// Persists across polls within a session. Used by the Gantt renderer to
+    /// label thread rows.
+    pub timeline_thread_name_map: HashMap<i64, String>,
+
+    /// Current filter selection — `All`, `Ui`, or `Raster`.
+    pub timeline_events_filter: TimelineFilter,
+
+    // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────────
+    /// The frame *number* (from `FrameTiming.number`) currently anchored in
+    /// the Timeline Events Gantt viewport.
+    ///
+    /// `None` — no anchor; show the "Select a frame…" placeholder.
+    /// `Some(N)` — anchor to the frame with `FrameTiming.number == N`.
+    ///
+    /// Set by `handle_apply_frame_anchor` after the 200 ms debounce fires.
+    /// Reset to `None` when leaving the Performance panel.
+    pub committed_frame_anchor: Option<u64>,
+
+    /// Monotonic counter incremented each time the frame selection changes.
+    ///
+    /// `ApplyFrameAnchor` messages carry the generation at which they were
+    /// spawned; handlers silently drop messages whose generation is older than
+    /// the current value (stale debounce firings).
+    pub frame_anchor_generation: u64,
+
+    /// Persistent map of `frame_number → (vm_ts_start, vm_ts_end)` populated by
+    /// the timeline ingest handler. Survives `timeline_tracks` eviction so that
+    /// anchoring on an older frame still works even after its raw events have
+    /// dropped out of the event buffer. Capped at [`FRAME_ANCHOR_MAP_CAP`] entries
+    /// (oldest frame numbers evicted first when full).
+    pub frame_anchor_map: BTreeMap<u64, (u64, u64)>,
+
+    // ── Phase 5: Timeline event selection ────────────────────────────────────
+    /// Currently selected event in the Timeline Events Gantt.
+    ///
+    /// `None` — no event is selected (normal pan/zoom mode).
+    /// `Some(cursor)` — the event identified by `cursor` is highlighted.
+    ///
+    /// Cleared when:
+    /// - The user presses `Esc` (with popup closed).
+    /// - The identified event is evicted from the ring buffer.
+    /// - The user switches away from the Timeline Events tab.
+    pub timeline_selected_event: Option<TimelineEventCursor>,
+
+    /// Whether the event details popup is currently open.
+    ///
+    /// When `true`, the popup overlays the Gantt and intercepts `Esc`
+    /// (to close the popup) before the selection-clear arm fires.
+    ///
+    /// Default: `false`.
+    pub timeline_details_popup_open: bool,
+
+    // ── Phase 5: Pan/zoom viewport state ─────────────────────────────────────
+    /// Manual viewport start in microseconds.
+    ///
+    /// Honored only when `timeline_follow_latest == false`. When `follow_latest`
+    /// is true, the active viewport is computed from the frame anchor (mode 2)
+    /// or the live-edge fallback (mode 3) per PLAN D2.
+    pub timeline_viewport_start_micros: u64,
+
+    /// Viewport width in microseconds.
+    ///
+    /// Default: [`TIMELINE_VIEWPORT_MICROS`] (5 s). Bounded by
+    /// [`TIMELINE_VIEWPORT_MIN_MICROS`] (100 ms) ..= [`TIMELINE_VIEWPORT_MAX_MICROS`] (60 s).
+    /// This field is always updated together with `timeline_viewport_start_micros`
+    /// by the zoom handler; both fields are logically irrelevant when
+    /// `timeline_follow_latest == true`.
+    pub timeline_viewport_width_micros: u64,
+
+    /// When `true` (default), `compute_active_viewport` returns the live-edge or
+    /// frame-anchored window (PLAN D2 modes 2 & 3).
+    ///
+    /// When `false`, the Gantt is pinned to the manual
+    /// `[viewport_start_micros, viewport_start_micros + viewport_width_micros]`
+    /// window (PLAN D2 mode 1). The Gantt renders a "PAUSED" indicator while in
+    /// this state; press `g` or `End` to resume follow-latest.
+    ///
+    /// Panning or zooming sets this to `false`. Pressing `g`/`End` sets it to
+    /// `true` and resets `viewport_width_micros` to the default 5 s.
+    pub timeline_follow_latest: bool,
+
+    // ── Phase 5 T04: Timeline search ─────────────────────────────────────────
+    /// The active search query. `None` = no query / search not open.
+    ///
+    /// `Some("")` = input is open but query is empty (still in input mode).
+    /// `Some(q)` = committed query; `n`/`N` navigation is armed.
+    ///
+    /// Reset to `None` on `Esc` while input is active, and when clearing the
+    /// Performance panel state (e.g. on panel exit).
+    pub timeline_search_query: Option<String>,
+
+    /// `true` while the user is typing in the search input (`/` opened it,
+    /// neither `Enter` nor `Esc` has closed it yet).
+    ///
+    /// When `false`, the query is "committed" and match navigation (`n`/`N`)
+    /// is active (if `timeline_search_query.is_some()`).
+    pub timeline_search_input_active: bool,
+
+    /// Current match index when navigating with `n`/`N`.
+    ///
+    /// Wraps modulo match count. Reset to `0` whenever the query changes
+    /// (char appended or deleted) so the first `n` after a new query always
+    /// selects the chronologically first match.
+    pub timeline_search_match_cursor: usize,
 }
 
 impl Default for PerformanceState {
     fn default() -> Self {
         Self {
-            memory_history: RingBuffer::new(DEFAULT_MEMORY_HISTORY_SIZE),
-            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
             frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
             stats: PerformanceStats::default(),
             monitoring_active: false,
-            memory_samples: RingBuffer::new(DEFAULT_MEMORY_SAMPLE_SIZE),
             selected_frame: None,
-            allocation_profile: None,
-            allocation_sort: AllocationSortColumn::default(),
             focused_section: PerfSection::default(),
             frame_chart_scroll_offset: 0,
-            memory_chart_scroll_offset: 0,
-            alloc_table_selected_row: None,
-            alloc_table_scroll_offset: 0,
             frame_chart_visible_width: Cell::new(0),
-            memory_chart_visible_width: Cell::new(0),
-            alloc_table_visible_height: Cell::new(0),
-        }
-    }
-}
-
-impl PerformanceState {
-    /// Create a new [`PerformanceState`] with a configurable memory history size.
-    ///
-    /// The `memory_history_size` parameter controls how many memory snapshots to
-    /// retain (ring buffer capacity). At the default 2-second poll interval,
-    /// `60` snapshots covers 2 minutes of history.
-    ///
-    /// GC and frame history sizes use fixed defaults — only memory is configurable
-    /// for now (see `DEFAULT_GC_HISTORY_SIZE` and `DEFAULT_FRAME_HISTORY_SIZE`).
-    /// The `memory_samples` buffer always uses [`DEFAULT_MEMORY_SAMPLE_SIZE`].
-    pub fn with_memory_history_size(memory_history_size: usize) -> Self {
-        Self {
-            memory_history: RingBuffer::new(memory_history_size),
-            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
-            frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
-            stats: PerformanceStats::default(),
-            monitoring_active: false,
-            memory_samples: RingBuffer::new(DEFAULT_MEMORY_SAMPLE_SIZE),
-            selected_frame: None,
-            allocation_profile: None,
-            allocation_sort: AllocationSortColumn::default(),
-            focused_section: PerfSection::default(),
-            frame_chart_scroll_offset: 0,
-            memory_chart_scroll_offset: 0,
-            alloc_table_selected_row: None,
-            alloc_table_scroll_offset: 0,
-            frame_chart_visible_width: Cell::new(0),
-            memory_chart_visible_width: Cell::new(0),
-            alloc_table_visible_height: Cell::new(0),
+            details_tab: PerfDetailsTab::default(),
+            details_pane_visible_height: Cell::new(0),
+            display_refresh_rate: 60.0,
+            // Phase 3: Rebuild Stats — all start empty/disabled
+            rebuild_stats_enabled: false,
+            rebuild_stats_location_map: LocationMap::default(),
+            rebuild_stats_totals: HashMap::new(),
+            rebuild_stats_frames: VecDeque::new(),
+            rebuild_stats_scroll_offset: 0,
+            rebuild_stats_selected_row: None,
+            // Phase 4: Timeline Events (thread-grouped tree) — all start empty
+            timeline_tracks: BTreeMap::new(),
+            timeline_visible_row_count: Cell::new(0),
+            timeline_thread_scroll_offset: 0,
+            timeline_thread_name_map: HashMap::new(),
+            timeline_events_filter: TimelineFilter::All,
+            // Phase 5: Frame-anchored viewport — start unanchored
+            committed_frame_anchor: None,
+            frame_anchor_generation: 0,
+            frame_anchor_map: BTreeMap::new(),
+            // Phase 5: Timeline event selection — start with nothing selected
+            timeline_selected_event: None,
+            timeline_details_popup_open: false,
+            // Phase 5: Pan/zoom viewport — start in follow-latest mode
+            timeline_viewport_start_micros: 0,
+            // Default width = 5 s (matches TIMELINE_VIEWPORT_MICROS in the TUI crate;
+            // cannot import the TUI constant here due to layer boundaries).
+            timeline_viewport_width_micros: 5_000_000,
+            timeline_follow_latest: true,
+            // Phase 5 T04: Timeline search — all start empty/inactive
+            timeline_search_query: None,
+            timeline_search_input_active: false,
+            timeline_search_match_cursor: 0,
         }
     }
 }
@@ -382,17 +586,15 @@ mod tests {
     // ── PerfSection navigation ───────────────────────────────────────────────
 
     #[test]
-    fn perf_section_next_cycles_forward() {
-        assert_eq!(PerfSection::FrameChart.next(), PerfSection::MemoryChart);
-        assert_eq!(PerfSection::MemoryChart.next(), PerfSection::MemoryList);
-        assert_eq!(PerfSection::MemoryList.next(), PerfSection::FrameChart);
+    fn perf_section_next_cycles_between_frame_chart_and_details() {
+        assert_eq!(PerfSection::FrameChart.next(), PerfSection::Details);
+        assert_eq!(PerfSection::Details.next(), PerfSection::FrameChart);
     }
 
     #[test]
-    fn perf_section_prev_cycles_backward() {
-        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::MemoryList);
-        assert_eq!(PerfSection::MemoryList.prev(), PerfSection::MemoryChart);
-        assert_eq!(PerfSection::MemoryChart.prev(), PerfSection::FrameChart);
+    fn perf_section_prev_cycles_between_frame_chart_and_details() {
+        assert_eq!(PerfSection::FrameChart.prev(), PerfSection::Details);
+        assert_eq!(PerfSection::Details.prev(), PerfSection::FrameChart);
     }
 
     #[test]
@@ -407,12 +609,15 @@ mod tests {
         let s = PerformanceState::default();
         assert_eq!(s.focused_section, PerfSection::FrameChart);
         assert_eq!(s.frame_chart_scroll_offset, 0);
-        assert_eq!(s.memory_chart_scroll_offset, 0);
-        assert_eq!(s.alloc_table_selected_row, None);
-        assert_eq!(s.alloc_table_scroll_offset, 0);
         assert_eq!(s.frame_chart_visible_width.get(), 0);
-        assert_eq!(s.memory_chart_visible_width.get(), 0);
-        assert_eq!(s.alloc_table_visible_height.get(), 0);
+    }
+
+    #[test]
+    fn performance_state_defaults_phase_2_fields() {
+        let s = PerformanceState::default();
+        assert_eq!(s.details_tab, PerfDetailsTab::FrameAnalysis);
+        assert_eq!(s.details_pane_visible_height.get(), 0);
+        assert_eq!(s.display_refresh_rate, 60.0);
     }
 
     #[test]
@@ -420,15 +625,6 @@ mod tests {
         let s = PerformanceState::default();
         assert_eq!(s.frame_history.capacity(), DEFAULT_FRAME_HISTORY_SIZE);
         assert_eq!(DEFAULT_FRAME_HISTORY_SIZE, 1800);
-    }
-
-    #[test]
-    fn with_memory_history_size_initializes_new_fields() {
-        let s = PerformanceState::with_memory_history_size(30);
-        assert_eq!(s.focused_section, PerfSection::FrameChart);
-        assert_eq!(s.frame_chart_scroll_offset, 0);
-        assert_eq!(s.alloc_table_selected_row, None);
-        assert_eq!(s.frame_chart_visible_width.get(), 0);
     }
 
     // ── Test helper ─────────────────────────────────────────────────────────
@@ -628,67 +824,6 @@ mod tests {
         assert!(state.selected_frame_timing().is_none());
     }
 
-    // ── Memory samples ring buffer ──────────────────────────────────────────
-
-    #[test]
-    fn test_memory_samples_ring_buffer_default_capacity() {
-        let state = PerformanceState::default();
-        assert_eq!(state.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
-    }
-
-    #[test]
-    fn test_memory_samples_ring_buffer_default_capacity_is_120() {
-        assert_eq!(DEFAULT_MEMORY_SAMPLE_SIZE, 120);
-    }
-
-    // ── AllocationSortColumn defaults ──────────────────────────────────────
-
-    #[test]
-    fn test_allocation_sort_default_is_by_size() {
-        let state = PerformanceState::default();
-        assert_eq!(state.allocation_sort, AllocationSortColumn::BySize);
-    }
-
-    #[test]
-    fn test_allocation_sort_column_default_trait() {
-        assert_eq!(
-            AllocationSortColumn::default(),
-            AllocationSortColumn::BySize
-        );
-    }
-
-    // ── Constructor: with_memory_history_size ──────────────────────────────
-
-    #[test]
-    fn test_with_memory_history_size_sets_memory_history_capacity() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert_eq!(state.memory_history.capacity(), 30);
-    }
-
-    #[test]
-    fn test_with_memory_history_size_memory_samples_uses_default() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert_eq!(state.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
-    }
-
-    #[test]
-    fn test_with_memory_history_size_selected_frame_is_none() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert!(state.selected_frame.is_none());
-    }
-
-    #[test]
-    fn test_with_memory_history_size_allocation_profile_is_none() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert!(state.allocation_profile.is_none());
-    }
-
-    #[test]
-    fn test_with_memory_history_size_allocation_sort_is_by_size() {
-        let state = PerformanceState::with_memory_history_size(30);
-        assert_eq!(state.allocation_sort, AllocationSortColumn::BySize);
-    }
-
     // ── Default constructor ──────────────────────────────────────────────────
 
     #[test]
@@ -698,8 +833,93 @@ mod tests {
     }
 
     #[test]
-    fn test_default_allocation_profile_is_none() {
+    fn test_default_monitoring_active_is_false() {
         let state = PerformanceState::default();
-        assert!(state.allocation_profile.is_none());
+        assert!(!state.monitoring_active);
+    }
+
+    // ── Phase 3: TimelineFilter ──────────────────────────────────────────────
+
+    #[test]
+    fn timeline_filter_default_is_all() {
+        assert_eq!(TimelineFilter::default(), TimelineFilter::All);
+    }
+
+    #[test]
+    fn timeline_filter_next_cycles_all_ui_raster_all() {
+        assert_eq!(TimelineFilter::All.next(), TimelineFilter::Ui);
+        assert_eq!(TimelineFilter::Ui.next(), TimelineFilter::Raster);
+        assert_eq!(TimelineFilter::Raster.next(), TimelineFilter::All);
+    }
+
+    // ── Phase 3: PerformanceState defaults ──────────────────────────────────
+
+    #[test]
+    fn performance_state_phase3_rebuild_stats_defaults() {
+        let s = PerformanceState::default();
+        assert!(!s.rebuild_stats_enabled);
+        assert!(s.rebuild_stats_location_map.by_id.is_empty());
+        assert!(s.rebuild_stats_totals.is_empty());
+        assert!(s.rebuild_stats_frames.is_empty());
+        assert_eq!(s.rebuild_stats_scroll_offset, 0);
+        assert!(s.rebuild_stats_selected_row.is_none());
+    }
+
+    // ── Phase 4: Timeline tree state defaults ────────────────────────────────
+
+    #[test]
+    fn performance_state_phase4_timeline_tree_defaults() {
+        let s = PerformanceState::default();
+        assert!(
+            s.timeline_tracks.is_empty(),
+            "timeline_tracks should start empty"
+        );
+        assert_eq!(s.timeline_visible_row_count.get(), 0);
+        assert_eq!(s.timeline_thread_scroll_offset, 0);
+        assert!(s.timeline_thread_name_map.is_empty());
+        assert_eq!(s.timeline_events_filter, TimelineFilter::All);
+    }
+
+    // ── Phase 5 T04: Timeline search defaults ────────────────────────────────
+
+    #[test]
+    fn performance_state_search_defaults() {
+        let s = PerformanceState::default();
+        assert!(
+            s.timeline_search_query.is_none(),
+            "search query should default to None"
+        );
+        assert!(
+            !s.timeline_search_input_active,
+            "search input should default to inactive"
+        );
+        assert_eq!(
+            s.timeline_search_match_cursor, 0,
+            "search match cursor should default to 0"
+        );
+    }
+
+    // ── Phase 5: Pan/zoom viewport defaults ──────────────────────────────────
+
+    #[test]
+    fn performance_state_phase5_viewport_defaults() {
+        let s = PerformanceState::default();
+        // New Phase 5 fields — verify defaults without redeclaring Phase 4 fields
+        assert_eq!(
+            s.timeline_viewport_start_micros, 0,
+            "viewport start should default to 0"
+        );
+        assert_eq!(
+            s.timeline_viewport_width_micros, 5_000_000,
+            "viewport width should default to 5s (5_000_000 µs)"
+        );
+        assert!(
+            s.timeline_follow_latest,
+            "follow_latest should default to true"
+        );
+        // Verify Phase 4 frame-anchor fields are NOT redeclared (still present)
+        assert!(s.committed_frame_anchor.is_none());
+        assert_eq!(s.frame_anchor_generation, 0);
+        assert!(s.frame_anchor_map.is_empty());
     }
 }

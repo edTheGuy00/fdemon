@@ -24,6 +24,7 @@ fs2.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 trait-variant.workspace = true
+tempfile.workspace = true
 arboard = { version = "3", default-features = false }
 
 [dev-dependencies]

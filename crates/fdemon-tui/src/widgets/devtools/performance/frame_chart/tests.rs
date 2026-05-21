@@ -90,7 +90,7 @@ fn test_renders_empty_history_without_panic() {
     let history = RingBuffer::new(100);
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -103,7 +103,7 @@ fn test_renders_single_frame_without_panic() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     // Verify at least one non-space character is present in the chart area
     let text = collect_text(&buf, 80, 20);
@@ -119,7 +119,7 @@ fn test_jank_frame_uses_red_color() {
     history.push(make_janky_frame(1)); // 20ms > 16ms
     let stats = make_stats(Some(50.0), 1, Some(20.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     assert!(
         has_color(&buf, 40, 20, COLOR_JANK),
@@ -133,7 +133,7 @@ fn test_normal_frame_uses_cyan_and_green() {
     history.push(make_frame(1, 5_000, 3_000)); // 8ms total, well under budget
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     assert!(
         has_color(&buf, 40, 20, COLOR_UI_NORMAL) || has_color(&buf, 40, 20, COLOR_RASTER_NORMAL),
@@ -147,7 +147,7 @@ fn test_shader_frame_uses_magenta() {
     history.push(make_shader_frame(1));
     let stats = make_stats(Some(30.0), 0, Some(35.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     assert!(
         has_color(&buf, 40, 20, COLOR_SHADER),
@@ -157,16 +157,19 @@ fn test_shader_frame_uses_magenta() {
 
 #[test]
 fn test_budget_line_label_drawn() {
+    // Use a frame whose elapsed_ms is above the 60 FPS budget so the
+    // adaptive y_range_ms expands past BUDGET_LINE_MS (16.667ms) and the
+    // budget line is rendered.
     let mut history = RingBuffer::new(100);
-    history.push(make_frame(1, 5_000, 3_000));
-    let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
+    history.push(make_frame(1, 12_000, 6_000)); // 18ms total — over budget
+    let stats = make_stats(Some(55.0), 1, Some(18.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
         text.contains("16ms"),
-        "Budget line should contain '16ms' label; buffer: {text:?}"
+        "Budget line should contain '16ms' label when frames exceed budget; buffer: {text:?}"
     );
 }
 
@@ -176,13 +179,13 @@ fn test_selected_frame_shows_highlight() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 40, 20);
     let text = collect_text(&buf, 40, 20);
-    // Selection highlight uses '▔'
+    // Selection highlight now uses full-column side markers: ▏ (U+258F) or ▕ (U+2595).
     assert!(
-        text.contains('\u{2594}'),
-        "Selected frame should render a highlight character (▔)"
+        text.contains('\u{258F}') || text.contains('\u{2595}'),
+        "Selected frame should render full-column side marker characters (▏ or ▕)"
     );
 }
 
@@ -192,7 +195,7 @@ fn test_detail_panel_shows_frame_info_when_selected() {
     history.push(make_frame(42, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     // Should contain frame number
@@ -208,7 +211,7 @@ fn test_summary_line_when_no_selection() {
     history.push(make_frame(1, 5_000, 3_000));
     let stats = make_stats(Some(60.0), 2, Some(8.2), 100);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -226,7 +229,7 @@ fn test_compact_mode_for_small_area_no_panic() {
     let history = RingBuffer::new(100);
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     // Area too small for chart (height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT = 7)
     let area = Rect::new(0, 0, 80, 3);
     let mut buf = Buffer::empty(area);
@@ -239,7 +242,7 @@ fn test_zero_area_no_panic() {
     let history = RingBuffer::new(100);
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let area = Rect::new(0, 0, 0, 0);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -255,7 +258,7 @@ fn test_frame_count_fits_width() {
     }
     let stats = make_stats(Some(60.0), 0, Some(8.0), 20);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     // Width 30 → max_visible = 30 / 3 = 10 frames
     let buf = render_widget(widget, 30, 20);
     // Should not panic and should render something
@@ -264,22 +267,23 @@ fn test_frame_count_fits_width() {
 }
 
 #[test]
-fn test_auto_scaling_minimum_range() {
-    // All frames are very short (< 5ms each), y-axis should still be >= 20ms range
-    // The budget line at 16ms should still appear even when all frames are < 5ms
+fn test_auto_scaling_hides_budget_line_for_fast_frames() {
+    // When all visible frames are well under the 60 FPS budget the adaptive
+    // y_range shrinks below BUDGET_LINE_MS, and the budget line is
+    // suppressed so the bars use the full chart height instead of
+    // clustering at the bottom.
     let mut history = RingBuffer::new(100);
     for i in 0..10u64 {
         history.push(make_frame(i, 2_000, 1_000)); // 3ms total
     }
     let stats = make_stats(Some(60.0), 0, Some(3.0), 10);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
-    // Budget line should still appear because MIN_Y_RANGE_MS = 20ms > 3ms frame time
     assert!(
-        text.contains("16ms"),
-        "Budget line should appear even when all frames are below 16ms; text: {text:?}"
+        !text.contains("16ms"),
+        "Budget line should be suppressed when y_range_ms < BUDGET_LINE_MS; text: {text:?}"
     );
 }
 
@@ -297,7 +301,7 @@ fn test_detail_panel_with_phases() {
     history.push(frame);
     let stats = make_stats(Some(60.0), 0, Some(12.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     // Phase breakdown should include "Build", "Layout", "Paint"
@@ -313,7 +317,7 @@ fn test_detail_panel_jank_label() {
     history.push(make_janky_frame(99));
     let stats = make_stats(Some(50.0), 1, Some(20.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -328,7 +332,7 @@ fn test_detail_panel_shader_label() {
     history.push(make_shader_frame(7));
     let stats = make_stats(Some(30.0), 0, Some(35.0), 1);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 20);
     let text = collect_text(&buf, 80, 20);
     assert!(
@@ -347,7 +351,7 @@ fn test_many_frames_shows_most_recent() {
     }
     let stats = make_stats(Some(60.0), 0, Some(8.0), 100);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     // width 30 → 10 frames visible in the bar chart
     let buf = render_widget(widget, 30, 20);
     // No panic is the minimum requirement; verify something was rendered
@@ -363,7 +367,7 @@ fn test_full_buffer_history_no_panic() {
     }
     let stats = make_stats(Some(60.0), 5, Some(8.0), 300);
     let hint_cell = Cell::new(0);
-    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let widget = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
     let buf = render_widget(widget, 80, 24);
     let text = collect_text(&buf, 80, 24);
     assert!(!text.is_empty());
@@ -438,7 +442,7 @@ fn frame_chart_records_one_region_per_visible_frame() {
     }
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let mut regions = MouseRegions::default();
     let area = Rect::new(0, 0, 80, 24);
@@ -480,11 +484,11 @@ fn frame_chart_in_compact_mode_records_no_regions() {
     history.push(make_timing(1));
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
-    // Compact: height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT (= 4 + 3 = 7).
+    // Compact: height < MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT (= 2 + 3 = 5).
     let mut regions = MouseRegions::default();
-    let area = Rect::new(0, 0, 80, 5);
+    let area = Rect::new(0, 0, 80, 4);
     let mut buf = Buffer::empty(area);
     {
         let builder = regions.builder();
@@ -514,7 +518,7 @@ fn frame_chart_region_width_is_chars_per_frame() {
     }
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let mut regions = MouseRegions::default();
     let area = Rect::new(0, 0, 80, 20);
@@ -552,7 +556,7 @@ fn frame_chart_region_height_equals_chart_height() {
     history.push(make_timing(42));
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let total_h: u16 = 20;
     let expected_chart_h = total_h - DETAIL_PANEL_HEIGHT;
@@ -592,7 +596,7 @@ fn frame_chart_no_regions_without_ctx() {
     }
     let stats = PerformanceStats::default();
     let hint_cell = Cell::new(0);
-    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell);
+    let chart = FrameChart::new(&history, None, &stats, false, 0, &hint_cell, false);
 
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
@@ -602,22 +606,24 @@ fn frame_chart_no_regions_without_ctx() {
     // The absence of region registration is enforced by the type system (no ctx).
 }
 
-// ── compute_visible_range unit tests (Task 05) ────────────────────────────────
+// ── compute_visible_range unit tests (Task 05 / updated for Task 01) ─────────
+//
+// After Task 01 (Fix 3), `compute_visible_range` no longer accepts a
+// `selected_frame` parameter. `scroll_offset` is the sole viewport authority.
 
 /// Model A: scroll_offset is "frames back from the live edge".
 /// With offset=200 and 1000 frames, the window should end at frame 800.
 #[test]
 fn visible_range_anchors_at_offset_when_scrolled() {
-    let (start, end) = compute_visible_range(1000, 50, None, 200);
+    let (start, end) = compute_visible_range(1000, 50, 200);
     assert_eq!(end, 800, "end should be frame_count - scroll_offset = 800");
     assert_eq!(start, 750, "start should be end - visible_width = 750");
 }
 
-/// Live-edge mode: when offset is 0 and nothing is selected, the window
-/// sits at the newest frames.
+/// Live-edge mode: when offset is 0, the window sits at the newest frames.
 #[test]
 fn visible_range_lives_at_edge_when_offset_zero() {
-    let (start, end) = compute_visible_range(1000, 50, None, 0);
+    let (start, end) = compute_visible_range(1000, 50, 0);
     assert_eq!(end, 1000, "live-edge: end should equal frame_count");
     assert_eq!(start, 950, "live-edge: start should be end - visible_width");
 }
@@ -627,9 +633,9 @@ fn visible_range_lives_at_edge_when_offset_zero() {
 /// keeping the same window size.
 #[test]
 fn scroll_offset_window_drifts_forward_with_new_arrivals() {
-    let (s1, e1) = compute_visible_range(1000, 50, None, 100);
-    let (s2, e2) = compute_visible_range(1010, 50, None, 100); // 10 new frames arrive
-                                                               // Window size is preserved
+    let (s1, e1) = compute_visible_range(1000, 50, 100);
+    let (s2, e2) = compute_visible_range(1010, 50, 100); // 10 new frames arrive
+                                                         // Window size is preserved
     assert_eq!(
         e1 - s1,
         e2 - s2,
@@ -643,24 +649,17 @@ fn scroll_offset_window_drifts_forward_with_new_arrivals() {
     );
 }
 
-/// Selection-anchor mode: when offset is 0 and a frame is selected, the window
-/// is anchored so the selected frame is at the right edge.
+/// scroll_offset is the sole viewport authority: with offset=100 the window
+/// anchors at len - offset regardless of any selection state.
+/// (Previously tested as "scroll_offset_takes_priority_over_selection" with a
+/// `selected_frame` argument; the argument has been removed in Task 01 Fix 3.)
 #[test]
-fn visible_range_anchors_to_selection_when_not_scrolled() {
-    let (start, end) = compute_visible_range(1000, 50, Some(300), 0);
-    assert_eq!(end, 301, "end = selected + 1");
-    assert_eq!(start, 251, "start = end - visible_width");
-}
-
-/// Scroll-offset takes priority over selection: even when a frame is selected,
-/// a non-zero scroll_offset wins.
-#[test]
-fn scroll_offset_takes_priority_over_selection() {
-    // selection = 300, but scroll_offset = 100 → window anchored at len - offset
-    let (start, end) = compute_visible_range(1000, 50, Some(300), 100);
+fn scroll_offset_is_sole_viewport_authority() {
+    // offset=100 → end = 1000 - 100 = 900
+    let (start, end) = compute_visible_range(1000, 50, 100);
     assert_eq!(
         end, 900,
-        "scroll_offset wins: end = frame_count - scroll_offset"
+        "scroll_offset is sole authority: end = frame_count - scroll_offset"
     );
     assert_eq!(start, 850, "start = end - visible_width");
 }
@@ -668,8 +667,113 @@ fn scroll_offset_takes_priority_over_selection() {
 /// Edge case: offset >= frame_count → window collapses to (0, 0).
 #[test]
 fn scroll_offset_saturating_behaviour_at_zero() {
-    let (start, end) = compute_visible_range(10, 50, None, 100);
+    let (start, end) = compute_visible_range(10, 50, 100);
     // saturating_sub(100) on 10 → 0
     assert_eq!(end, 0);
     assert_eq!(start, 0);
+}
+
+// ── Task 01, Bug 1: ms_to_half_blocks minimum floor ──────────────────────────
+
+/// A very-small but nonzero `ms` value must return at least 1 (MIN_BAR_HALF_BLOCKS).
+///
+/// Previously `ms_to_half_blocks(0.5, 20.0, 4.0)` would round to 0 and the
+/// bar would be invisible. After the fix it should return 1.
+#[test]
+fn ms_to_half_blocks_clamps_nonzero_to_at_least_one() {
+    // 0.5 / 20.0 * 4.0 = 0.1 → rounds to 0 before fix; must be 1 after fix.
+    assert_eq!(
+        ms_to_half_blocks(0.5, 20.0, 4.0),
+        1,
+        "very small nonzero ms should return at least 1 half-block"
+    );
+
+    // Very small but non-zero with total_half_blocks=2 (1 row visible).
+    assert_eq!(
+        ms_to_half_blocks(0.01, 20.0, 2.0),
+        1,
+        "nonzero ms with tiny ratio should still return at least 1"
+    );
+}
+
+/// Zero-duration frame must return exactly 0 (zero-duration stays invisible).
+#[test]
+fn ms_to_half_blocks_zero_ms_stays_zero() {
+    assert_eq!(
+        ms_to_half_blocks(0.0, 20.0, 4.0),
+        0,
+        "zero ms → 0 half-blocks"
+    );
+}
+
+// ── Task 01, Bug 2: full-column selection highlight ───────────────────────────
+
+/// The selection highlight side-markers (▏ or ▕) must be present on every
+/// row of the chart area for the selected frame, not just the top row.
+#[test]
+fn selection_highlight_paints_full_column() {
+    let mut history = RingBuffer::new(100);
+    history.push(make_frame(1, 5_000, 3_000));
+    let stats = make_stats(Some(60.0), 0, Some(8.0), 1);
+    let hint_cell = Cell::new(0);
+    // height=20: chart area = rows 0..17 (height 17), detail = rows 17..20.
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
+    let area = Rect::new(0, 0, 40, 20);
+    let mut buf = Buffer::empty(area);
+    widget.render(area, &mut buf);
+
+    let chart_h = 20 - DETAIL_PANEL_HEIGHT; // 17 rows
+
+    // The right-marker column for slot 0 is x = 0 + 2 = 2.
+    // Count how many rows in column 2 contain the right-eighth marker (▕ = U+2595).
+    let right_marker_col: u16 = 2;
+    let mut marker_row_count = 0u16;
+    for y in 0..chart_h {
+        if let Some(cell) = buf.cell((right_marker_col, y)) {
+            if cell.symbol().contains('\u{2595}') || cell.symbol().contains('\u{258F}') {
+                marker_row_count += 1;
+            }
+        }
+    }
+
+    assert_eq!(
+        marker_row_count, chart_h,
+        "selection highlight marker should appear on every chart row ({chart_h}), \
+         found it on {marker_row_count} rows"
+    );
+}
+
+/// The column to the right of the selection's right-marker should not carry
+/// selection highlight characters (no bleed-over to unselected bars).
+///
+/// Slot 0 uses columns 0 and 1 for bars. Right-marker is at column 2.
+/// The next slot (slot 1) starts at column 3 — that column must be unmodified.
+#[test]
+fn selection_highlight_does_not_paint_adjacent_columns() {
+    let mut history = RingBuffer::new(100);
+    // Two frames so there's an adjacent column to check.
+    history.push(make_frame(1, 5_000, 3_000));
+    history.push(make_frame(2, 5_000, 3_000));
+    let stats = make_stats(Some(60.0), 0, Some(8.0), 2);
+    let hint_cell = Cell::new(0);
+    // Select frame 0 (slot 0, columns 0-1).
+    let widget = FrameChart::new(&history, Some(0), &stats, false, 0, &hint_cell, false);
+    let area = Rect::new(0, 0, 40, 20);
+    let mut buf = Buffer::empty(area);
+    widget.render(area, &mut buf);
+
+    // Adjacent slot (slot 1) starts at column 3. Its left bar (UI) is at x=3.
+    // That column must NOT contain any selection-highlight characters.
+    let adjacent_col: u16 = 3;
+    let chart_h = 20 - DETAIL_PANEL_HEIGHT;
+    for y in 0..chart_h {
+        if let Some(cell) = buf.cell((adjacent_col, y)) {
+            assert!(
+                !cell.symbol().contains('\u{2595}') && !cell.symbol().contains('\u{258F}'),
+                "adjacent column {adjacent_col} row {y} should not contain a selection marker; \
+                 found {:?}",
+                cell.symbol()
+            );
+        }
+    }
 }

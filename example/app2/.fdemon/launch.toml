@@ -9,3 +9,8 @@ flavor = "develop"
 [[configurations]]
 name = "Default 2"
 device = "auto"
+
+[[configurations]]
+name = "Default 3"
+device = "auto"
+mode = "release"

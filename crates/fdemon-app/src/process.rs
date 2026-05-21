@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, watch};
 use crate::handler::Task;
 use crate::message::Message;
 use crate::session::SessionId;
-use crate::state::AppState;
+use crate::state::{AppState, DevToolsPanel, UiMode};
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
@@ -43,8 +43,19 @@ pub fn process_message(
     while let Some(m) = msg {
         let result = handler::update(state, m);
 
-        // Handle any action
-        if let Some(action) = result.action {
+        // Collect all actions: primary `action` first, then any `extra_actions`.
+        // Most handlers return at most one action; `extra_actions` is only non-empty
+        // for handlers that must dispatch multiple side effects in one update cycle
+        // (e.g. `handle_open_details` dispatching both `FetchInspectorProperties`
+        // and `FetchLayoutData` simultaneously).
+        let follow_msg = result.message;
+        let all_actions: Vec<UpdateAction> = result
+            .action
+            .into_iter()
+            .chain(result.extra_actions)
+            .collect();
+
+        for action in all_actions {
             // For ReloadAllSessions, collect cmd_senders for all sessions
             let session_senders = get_session_cmd_senders_for_action(&action, state);
             let session_cmd_sender = get_session_cmd_sender(&action, state);
@@ -59,15 +70,24 @@ pub fn process_message(
             // Hydrate actions that carry an optional VmRequestHandle with the
             // actual handle from the session. The handlers only return session_id;
             // we need the handle from AppState here before dispatching.
-            let action = hydrate_start_performance_monitoring(action, state);
+            // ConnectVmService hydration: creates the rebuilt-widgets gate channel
+            // and injects the receiver into the action. Must run before any other
+            // hydration so the gate is in place before the forwarder task spawns.
+            let action = hydrate_connect_vm_service(action, state);
+            let action = action.and_then(|a| hydrate_start_performance_monitoring(a, state));
             let action = action.and_then(|a| hydrate_fetch_widget_tree(a, state));
             let action = action.and_then(|a| hydrate_fetch_layout_data(a, state));
+            let action = action.and_then(|a| hydrate_fetch_inspector_properties(a, state));
             let action = action.and_then(|a| hydrate_toggle_overlay(a, state));
             let action = action.and_then(|a| hydrate_dispose_devtools_groups(a, state));
             let action = action.and_then(|a| hydrate_start_network_monitoring(a, state));
             let action = action.and_then(|a| hydrate_fetch_http_request_detail(a, state));
             let action = action.and_then(|a| hydrate_clear_http_profile(a, state));
             let action = action.and_then(|a| hydrate_send_daemon_command(a, state));
+            // Phase 3: Timeline and rebuild stats hydration.
+            let action = action.and_then(|a| hydrate_start_timeline_monitoring(a, state));
+            let action = action.and_then(|a| hydrate_toggle_profile_widget_builds(a, state));
+            let action = action.and_then(|a| hydrate_fetch_widget_location_id_map(a, state));
 
             if let Some(action) = action {
                 // `SetMouseCapture` and `WriteClipboard` require synchronous
@@ -131,6 +151,29 @@ pub fn process_message(
                             ),
                         }
                     }
+                    UpdateAction::FetchInspectorProperties {
+                        session_id,
+                        node_id,
+                        ..
+                    } => {
+                        match msg_tx.try_send(Message::DevToolsInspectorPropertiesFetchFailed {
+                            session_id: *session_id,
+                            node_id: node_id.clone(),
+                            error: "no VM Service handle".to_string(),
+                        }) {
+                            Ok(()) => tracing::debug!(
+                                session_id = %session_id,
+                                node_id = %node_id,
+                                "Inspector: dispatched fallback PropertiesFetchFailed after hydration drop"
+                            ),
+                            Err(e) => tracing::error!(
+                                session_id = %session_id,
+                                node_id = %node_id,
+                                error = ?e,
+                                "Inspector: failed to dispatch fallback PropertiesFetchFailed — properties panel may stay stuck"
+                            ),
+                        }
+                    }
                     UpdateAction::FetchHttpRequestDetail { session_id, .. } => {
                         match msg_tx.try_send(Message::VmServiceHttpRequestDetailFailed {
                             session_id: *session_id,
@@ -153,8 +196,70 @@ pub fn process_message(
         }
 
         // Continue with follow-up message
-        msg = result.message;
+        msg = follow_msg;
     }
+}
+
+/// Hydrate `ConnectVmService` by creating the `Flutter.RebuiltWidgets` gate channel.
+///
+/// Creates a `watch::channel(bool)` where `true` means "gate open — forward events"
+/// and `false` means "gate closed — skip events". The initial value is determined
+/// from the current UI mode and active panel:
+/// - `true`  when `ui_mode == DevTools && active_panel == Performance`
+/// - `false` for all other states
+///
+/// The sender half (`Arc<watch::Sender<bool>>`) is stored in the session's
+/// `rebuilt_widgets_gate_tx` so panel-switch handlers can open/close the gate
+/// without changing any action or message types.
+///
+/// The receiver half is injected into the `ConnectVmService` action to be passed
+/// to `spawn_vm_service_connection` → `forward_vm_events`.
+///
+/// Already-hydrated actions (receiver is `Some`) are returned unchanged.
+/// All other action variants are returned unchanged.
+fn hydrate_connect_vm_service(action: UpdateAction, state: &mut AppState) -> Option<UpdateAction> {
+    if let UpdateAction::ConnectVmService {
+        session_id,
+        ws_uri,
+        rebuilt_widgets_gate_rx,
+    } = action
+    {
+        if rebuilt_widgets_gate_rx.is_some() {
+            // Already hydrated — return as-is.
+            return Some(UpdateAction::ConnectVmService {
+                session_id,
+                ws_uri,
+                rebuilt_widgets_gate_rx,
+            });
+        }
+
+        // Gate is open (true) only when viewing the Performance panel in DevTools mode.
+        let gate_open = state.ui_mode == UiMode::DevTools
+            && state.devtools_view_state.active_panel == DevToolsPanel::Performance;
+
+        let (tx, rx) = tokio::sync::watch::channel(gate_open);
+        let tx = Arc::new(tx);
+
+        // Store the sender in the session handle so panel-switch handlers can
+        // open/close the gate by calling `tx.send(bool)`.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.rebuilt_widgets_gate_tx = Some(tx);
+        } else {
+            // Session no longer exists — discard the action.
+            tracing::debug!(
+                session_id = %session_id,
+                "ConnectVmService: session not found during gate hydration — discarding"
+            );
+            return None;
+        }
+
+        return Some(UpdateAction::ConnectVmService {
+            session_id,
+            ws_uri,
+            rebuilt_widgets_gate_rx: Some(rx),
+        });
+    }
+    Some(action)
 }
 
 /// Hydrate `StartPerformanceMonitoring` with the `VmRequestHandle` from the
@@ -295,6 +400,51 @@ fn hydrate_fetch_layout_data(action: UpdateAction, state: &AppState) -> Option<U
         });
     }
     Some(action)
+}
+
+/// Hydrate `FetchInspectorProperties` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection, since there is nothing to query without one. A `None` return
+/// triggers the fallback `DevToolsInspectorPropertiesFetchFailed` message in
+/// `process_message`'s `else` branch so the loading spinner is never left stuck.
+/// All other action variants are returned unchanged.
+fn hydrate_fetch_inspector_properties(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    let UpdateAction::FetchInspectorProperties {
+        session_id,
+        node_id,
+        vm_handle,
+    } = action
+    else {
+        return Some(action);
+    };
+
+    if vm_handle.is_some() {
+        // Already hydrated (e.g. called from a test or re-dispatched).
+        return Some(UpdateAction::FetchInspectorProperties {
+            session_id,
+            node_id,
+            vm_handle,
+        });
+    }
+
+    // Extract the VM request handle from the session; if unavailable (VM
+    // disconnected or not yet connected) return None so that
+    // `process_message`'s else-branch can dispatch the fallback
+    // `DevToolsInspectorPropertiesFetchFailed` message.
+    let handle = state
+        .session_manager
+        .get(session_id)
+        .and_then(|h| h.vm_request_handle.clone())?;
+
+    Some(UpdateAction::FetchInspectorProperties {
+        session_id,
+        node_id,
+        vm_handle: Some(handle),
+    })
 }
 
 /// Hydrate `ToggleOverlay` with the `VmRequestHandle` from the session.
@@ -458,6 +608,108 @@ fn hydrate_clear_http_profile(action: UpdateAction, state: &AppState) -> Option<
             .get(session_id)
             .and_then(|h| h.vm_request_handle.clone())?;
         return Some(UpdateAction::ClearHttpProfile {
+            session_id,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `StartTimelineMonitoring` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_start_timeline_monitoring(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::StartTimelineMonitoring {
+        session_id,
+        handle,
+        poll_interval_ms,
+    } = action
+    {
+        if handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::StartTimelineMonitoring {
+                session_id,
+                handle,
+                poll_interval_ms,
+            });
+        }
+        let vm_handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::StartTimelineMonitoring {
+            session_id,
+            handle: Some(vm_handle),
+            poll_interval_ms,
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `ToggleProfileWidgetBuilds` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_toggle_profile_widget_builds(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::ToggleProfileWidgetBuilds {
+        session_id,
+        enabled,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::ToggleProfileWidgetBuilds {
+                session_id,
+                enabled,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::ToggleProfileWidgetBuilds {
+            session_id,
+            enabled,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `FetchWidgetLocationIdMap` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_fetch_widget_location_id_map(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::FetchWidgetLocationIdMap {
+        session_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::FetchWidgetLocationIdMap {
+                session_id,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::FetchWidgetLocationIdMap {
             session_id,
             vm_handle: Some(handle),
         });

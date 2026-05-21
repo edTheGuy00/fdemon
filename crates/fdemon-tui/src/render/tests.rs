@@ -410,11 +410,11 @@ fn view_renders_expected_devtools_tab_regions_at_80x24() {
         })
         .collect();
 
-    // Inspector / Performance / Network — exactly 3 sub-tab click regions.
+    // Inspector / Performance / Memory / Network — exactly 4 sub-tab click regions.
     assert_eq!(
         tab_regions.len(),
-        3,
-        "expected 3 SwitchDevToolsPanel regions for the DevTools sub-tab bar, got {}",
+        4,
+        "expected 4 SwitchDevToolsPanel regions for the DevTools sub-tab bar, got {}",
         tab_regions.len()
     );
 }
@@ -546,23 +546,21 @@ fn view_renders_expected_network_regions_with_selection_at_160x30() {
 /// Baseline: performance compact-mode path at 80×24 registers no frame regions.
 ///
 /// At 80×24 with one session the DevTools panel area has 18 rows after the
-/// 3-row sub-tab bar is removed. `PerformancePanel::render_with_regions` enters
-/// the two-section split path (height 18 ≥ DUAL_SECTION_MIN_HEIGHT 16).  After
-/// subtracting 1 footer row the usable height is 17; the 45% frame-timing chunk
-/// rounds to 7 rows.  With `Borders::ALL` removed that leaves a 5-row inner
-/// area for `FrameChart`, which is below `MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT`
-/// (4 + 3 = 7) — so `FrameChart::render_with_regions` takes the compact-mode
-/// branch and records **no** `SelectPerformanceFrame` regions.
+/// T03 (Memory/Performance split): The `PerformancePanel` now gives the frame chart
+/// the full panel inner area. At 80×24, after the 3-row tab bar is removed the panel
+/// gets 21 rows; after reserving 1 footer row the usable height is 20; with
+/// `Borders::ALL` the frame chart inner area is 18 rows — well above the 7-row
+/// minimum for bar-chart rendering. With 8 frames, `SelectPerformanceFrame` click
+/// regions are registered.
 ///
-/// This test locks in the "no regions in compact mode" contract so a future
-/// refactor of `FrameChart` cannot silently produce spurious click regions at
-/// 80×24.
+/// This test locks in the "full-area frame chart registers click regions at 80×24"
+/// contract introduced by the Performance/Memory panel split.
 #[test]
-fn performance_compact_mode_at_80x24_records_no_regions() {
+fn performance_full_area_at_80x24_records_frame_regions() {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    // 8 frames — enough to populate the chart at wider terminals.
+    // 8 frames — enough to populate the chart.
     let mut state = build_state_devtools_performance_with_frames(8);
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -579,12 +577,11 @@ fn performance_compact_mode_at_80x24_records_no_regions() {
         })
         .count();
 
-    // The frame chart inner area (5 rows) is below the 7-row threshold for
-    // bar-chart rendering, so no SelectPerformanceFrame regions are pushed.
-    assert_eq!(
-        frame_regions, 0,
-        "compact mode at 80×24 must register 0 SelectPerformanceFrame regions, got {}",
-        frame_regions
+    // The frame chart now gets the full panel area — 18 inner rows at 80×24.
+    // With 8 frames, the bar chart renders and click regions are registered.
+    assert!(
+        frame_regions > 0,
+        "full-area Performance panel at 80×24 should register SelectPerformanceFrame regions, got 0"
     );
 }
 

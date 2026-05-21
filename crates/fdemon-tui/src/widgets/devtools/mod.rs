@@ -5,16 +5,18 @@
 //! dispatches to the active panel below it.
 
 pub mod inspector;
+pub mod memory;
 pub mod network;
 pub mod performance;
 
 pub use inspector::WidgetInspector;
+pub use memory::MemoryPanel;
 pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
 use fdemon_app::message::Message;
-use fdemon_app::session::{PerformanceState, SessionHandle};
-use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
+use fdemon_app::session::{MemoryState, PerfSection, PerformanceState, SessionHandle};
+use fdemon_app::state::{DevToolsPanel, DevToolsViewState, PerfDetailsTab, VmConnectionStatus};
 use fdemon_app::{MouseAction, MouseRect};
 use ratatui::{
     buffer::Buffer,
@@ -133,8 +135,8 @@ impl DevToolsView<'_> {
             DevToolsPanel::Performance => {
                 // Safety fallback for when no session is active.
                 // In practice DevTools mode is only reachable when a session exists.
-                // Note: PerformanceState contains Cell<usize> render-hint fields, which are
-                // !Sync, so a stack-local default is used instead of a LazyLock static.
+                // Note: PerformanceState contains Cell<usize> render-hint fields,
+                // which are !Sync, so a stack-local default is used instead of a LazyLock static.
                 let default_perf;
                 let (perf, vm_connected) = match self.session {
                     Some(s) => (&s.session.performance, s.session.vm_connected),
@@ -152,6 +154,22 @@ impl DevToolsView<'_> {
                 )
                 .with_connection_error(self.state.vm_connection_error.as_deref());
                 performance::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
+            }
+            DevToolsPanel::Memory => {
+                // Safety fallback: MemoryState contains Cell<usize> render-hint fields (!Sync),
+                // so stack-local defaults are used instead of LazyLock statics.
+                let default_memory;
+                let (mem, vm_connected) = match self.session {
+                    Some(s) => (&s.session.memory, s.session.vm_connected),
+                    None => {
+                        default_memory = MemoryState::default();
+                        (&default_memory, false)
+                    }
+                };
+
+                let widget =
+                    MemoryPanel::new(mem, true, vm_connected, &self.state.connection_status);
+                memory::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Network => {
                 // Safety fallback: DevTools mode is only reachable when a session
@@ -203,6 +221,7 @@ impl DevToolsView<'_> {
         let tabs = [
             (DevToolsPanel::Inspector, "[i] Inspector"),
             (DevToolsPanel::Performance, "[p] Performance"),
+            (DevToolsPanel::Memory, "[m] Memory"),
             (DevToolsPanel::Network, "[n] Network"),
         ];
 
@@ -344,12 +363,51 @@ impl DevToolsView<'_> {
 
         let y = area.y + area.height - 1;
 
-        let hints = match self.state.active_panel {
+        let hints: std::borrow::Cow<'static, str> = match self.state.active_panel {
             DevToolsPanel::Inspector => {
-                "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [r] Refresh  [b] Browser"
+                if self.state.inspector.details_open {
+                    "[Esc] Close  [Tab] Next Tab  [Shift+Tab] Prev Tab  [r] Refresh  [b] Browser"
+                        .into()
+                } else {
+                    "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [Enter] Details  [Shift+H] Hide Impl  [r] Refresh  [b] Browser".into()
+                }
             }
             DevToolsPanel::Performance => {
-                "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
+                let focused_section = self
+                    .session
+                    .map(|h| h.session.performance.focused_section)
+                    .unwrap_or(PerfSection::FrameChart);
+                match focused_section {
+                    PerfSection::FrameChart => {
+                        "[Esc] Logs  [←/→] Frames  [Tab] Section  ]/[ Tabs  [j/k] Scroll  [b] Browser".into()
+                    }
+                    PerfSection::Details => {
+                        let details_tab = self
+                            .session
+                            .map(|h| h.session.performance.details_tab)
+                            .unwrap_or(PerfDetailsTab::FrameAnalysis);
+                        let base = "[Esc] Logs  [Tab] Section  ]/[ Tabs  [b] Browser";
+                        match details_tab {
+                            PerfDetailsTab::TimelineEvents => {
+                                format!("{base}  [f] Filter").into()
+                            }
+                            PerfDetailsTab::RebuildStats => {
+                                format!("{base}  [R] Rebuild track").into()
+                            }
+                            PerfDetailsTab::FrameAnalysis => base.into(),
+                        }
+                    }
+                }
+            }
+            DevToolsPanel::Memory => {
+                let has_alloc_selection = self
+                    .session
+                    .is_some_and(|s| s.session.memory.alloc_table_selected_row.is_some());
+                if has_alloc_selection {
+                    "[Esc] Deselect  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser".into()
+                } else {
+                    "[Esc] Logs  [Tab] Switch  [j/k] Scroll  [s] Sort  [b] Browser".into()
+                }
             }
             DevToolsPanel::Network => {
                 let has_selection = self
@@ -357,8 +415,10 @@ impl DevToolsView<'_> {
                     .is_some_and(|s| s.session.network.selected_index.is_some());
                 if has_selection {
                     "[Esc] Deselect  [g/h/q/s/t] Detail tabs  [Space] Toggle rec  [b] Browser"
+                        .into()
                 } else {
                     "[Esc] Logs  [↑↓] Navigate  [Enter] Detail  [Space] Toggle rec  [b] Browser"
+                        .into()
                 }
             }
         };
@@ -486,11 +546,21 @@ mod tests {
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
-        assert!(text.contains("Inspector"), "Expected Inspector tab");
-        assert!(text.contains("Performance"), "Expected Performance tab");
         assert!(
-            !text.contains("Layout"),
-            "Layout tab should not appear; got: {text:?}"
+            text.contains("Inspector"),
+            "Expected Inspector tab; got: {text:?}"
+        );
+        assert!(
+            text.contains("Performance"),
+            "Expected Performance tab; got: {text:?}"
+        );
+        assert!(
+            text.contains("Memory"),
+            "Expected Memory tab; got: {text:?}"
+        );
+        assert!(
+            text.contains("Network"),
+            "Expected Network tab; got: {text:?}"
         );
     }
 
@@ -876,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn devtools_tab_bar_registers_three_click_regions() {
+    fn devtools_tab_bar_registers_four_click_regions() {
         use crate::render::MouseCtx;
         use fdemon_app::message::Message;
         use fdemon_app::{MouseAction, MouseRegions};
@@ -909,8 +979,8 @@ mod tests {
             .count();
 
         assert_eq!(
-            switch_panel_count, 3,
-            "expected 3 sub-tab SwitchDevToolsPanel regions, got {switch_panel_count}"
+            switch_panel_count, 4,
+            "expected 4 sub-tab SwitchDevToolsPanel regions, got {switch_panel_count}"
         );
     }
 
@@ -936,10 +1006,15 @@ mod tests {
         }
 
         // Each tab region must be exactly 1 row tall and have width = len(" {label} ").
-        let expected_widths: Vec<u16> = [" [i] Inspector ", " [p] Performance ", " [n] Network "]
-            .iter()
-            .map(|s| s.len() as u16)
-            .collect();
+        let expected_widths: Vec<u16> = [
+            " [i] Inspector ",
+            " [p] Performance ",
+            " [m] Memory ",
+            " [n] Network ",
+        ]
+        .iter()
+        .map(|s| s.len() as u16)
+        .collect();
 
         let actual_widths: Vec<u16> = regions
             .iter()
@@ -982,5 +1057,263 @@ mod tests {
             None,
         );
         // No assert needed — the absence of panic is the pass condition.
+    }
+
+    // ── Inspector footer mode tests ───────────────────────────────────────────
+
+    /// Build a `DevToolsViewState` with the Inspector panel active and
+    /// `details_open` set to the specified value.
+    fn make_state_in_devtools_inspector(details_open: bool) -> DevToolsViewState {
+        use fdemon_app::state::InspectorState;
+        DevToolsViewState {
+            active_panel: DevToolsPanel::Inspector,
+            inspector: InspectorState {
+                details_open,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Render a full DevToolsView (80×24) and return the text on the last row
+    /// of the panel content area — this is where `render_footer` writes hints.
+    fn footer_string(state: &DevToolsViewState) -> String {
+        let area = Rect::new(0, 0, 200, 24);
+        let mut buf = Buffer::empty(area);
+        DevToolsView::new(state, None, IconSet::default()).render(area, &mut buf);
+
+        // The layout splits the area into a 3-row tab bar (chunks[0]) and the
+        // remaining 21 rows for panel content (chunks[1]).  render_footer draws
+        // on the last row of chunks[1]: y = 3 + 21 - 1 = 23.
+        let footer_y = area.height - 1;
+        let mut row = String::new();
+        for x in 0..area.width {
+            if let Some(cell) = buf.cell((x, footer_y)) {
+                row.push_str(cell.symbol());
+            }
+        }
+        row
+    }
+
+    #[test]
+    fn inspector_footer_in_tree_mode_includes_enter_details_hint() {
+        let state = make_state_in_devtools_inspector(false);
+        let s = footer_string(&state);
+        assert!(s.contains("[Enter] Details"), "footer was: {s}");
+        assert!(s.contains("[Shift+H] Hide Impl"), "footer was: {s}");
+    }
+
+    #[test]
+    fn inspector_footer_in_details_mode_includes_esc_close_hint() {
+        let state = make_state_in_devtools_inspector(true);
+        let s = footer_string(&state);
+        assert!(s.contains("[Esc] Close"), "footer was: {s}");
+        assert!(s.contains("[Tab] Next Tab"), "footer was: {s}");
+        assert!(
+            !s.contains("[↑↓] Navigate"),
+            "navigate hint should be hidden in details mode; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn inspector_footer_in_details_mode_does_not_include_navigate_hint() {
+        let state = make_state_in_devtools_inspector(true);
+        let s = footer_string(&state);
+        assert!(
+            !s.contains("[↑↓] Navigate"),
+            "navigate hint must not appear in details mode; footer was: {s}"
+        );
+        assert!(s.contains("[Shift+Tab] Prev Tab"), "footer was: {s}");
+    }
+
+    // ── Performance footer tests ──────────────────────────────────────────────
+
+    /// Build a `SessionHandle` with `focused_section` set to `section`.
+    fn make_perf_session_handle(section: PerfSection) -> fdemon_app::session::SessionHandle {
+        use fdemon_app::session::{Session, SessionHandle};
+        let mut session = Session::new(
+            "test-device".to_string(),
+            "Test Device".to_string(),
+            "android".to_string(),
+            false,
+        );
+        session.performance.focused_section = section;
+        SessionHandle::new(session)
+    }
+
+    /// Render a DevToolsView in Performance mode with the given session handle and
+    /// return the footer row text.
+    fn performance_footer_string_with_session(
+        handle: &fdemon_app::session::SessionHandle,
+    ) -> String {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
+        let area = Rect::new(0, 0, 200, 24);
+        let mut buf = Buffer::empty(area);
+        DevToolsView::new(&state, Some(handle), IconSet::default()).render(area, &mut buf);
+        let footer_y = area.height - 1;
+        let mut row = String::new();
+        for x in 0..area.width {
+            if let Some(cell) = buf.cell((x, footer_y)) {
+                row.push_str(cell.symbol());
+            }
+        }
+        row
+    }
+
+    #[test]
+    fn performance_footer_hides_scroll_keys_when_details_focused() {
+        let handle = make_perf_session_handle(PerfSection::Details);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            !s.contains("[j/k] Scroll"),
+            "[j/k] Scroll must not appear when Details is focused; footer was: {s}"
+        );
+        assert!(
+            !s.contains("[←/→] Frames"),
+            "[←/→] Frames must not appear when Details is focused; footer was: {s}"
+        );
+        assert!(
+            s.contains("]/[") && s.contains("Tabs"),
+            "]/[ Tabs should appear; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn performance_footer_shows_scroll_keys_when_frame_chart_focused() {
+        let handle = make_perf_session_handle(PerfSection::FrameChart);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            s.contains("[j/k] Scroll"),
+            "[j/k] Scroll must appear when FrameChart is focused; footer was: {s}"
+        );
+        assert!(
+            s.contains("[←/→] Frames"),
+            "[←/→] Frames must appear when FrameChart is focused; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn performance_footer_mentions_details_tab_cycling() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
+        let s = footer_string(&state);
+        assert!(s.contains("]/[") || s.contains("] /["), "footer was: {s}");
+        assert!(
+            s.contains("Tabs"),
+            "footer should mention Tabs; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn performance_footer_mentions_tab_section_cycling() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
+        let s = footer_string(&state);
+        assert!(
+            s.contains("Section"),
+            "footer should mention Section; footer was: {s}"
+        );
+    }
+
+    // ── Phase-3 Performance footer tests ─────────────────────────────────────
+
+    /// Build a `SessionHandle` with `focused_section == Details` and the given
+    /// `details_tab`.
+    fn make_perf_session_handle_with_details_tab(
+        tab: PerfDetailsTab,
+    ) -> fdemon_app::session::SessionHandle {
+        use fdemon_app::session::{Session, SessionHandle};
+        let mut session = Session::new(
+            "test-device".to_string(),
+            "Test Device".to_string(),
+            "android".to_string(),
+            false,
+        );
+        session.performance.focused_section = PerfSection::Details;
+        session.performance.details_tab = tab;
+        SessionHandle::new(session)
+    }
+
+    #[test]
+    fn test_performance_footer_includes_filter_hint_on_timeline_events_tab() {
+        let handle = make_perf_session_handle_with_details_tab(PerfDetailsTab::TimelineEvents);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            s.contains("[f] Filter"),
+            "footer should include [f] Filter on TimelineEvents tab; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn test_performance_footer_includes_rebuild_hint_on_rebuild_stats_tab() {
+        let handle = make_perf_session_handle_with_details_tab(PerfDetailsTab::RebuildStats);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            s.contains("[R] Rebuild track"),
+            "footer should include [R] Rebuild track on RebuildStats tab; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn test_performance_footer_omits_phase_3_hints_on_frame_analysis_tab() {
+        let handle = make_perf_session_handle_with_details_tab(PerfDetailsTab::FrameAnalysis);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            !s.contains("[f] Filter"),
+            "footer must NOT include [f] Filter on FrameAnalysis tab; footer was: {s}"
+        );
+        assert!(
+            !s.contains("[R] Rebuild track"),
+            "footer must NOT include [R] Rebuild track on FrameAnalysis tab; footer was: {s}"
+        );
+    }
+
+    #[test]
+    fn test_performance_footer_omits_phase_3_hints_when_frame_chart_focused() {
+        let handle = make_perf_session_handle(PerfSection::FrameChart);
+        let s = performance_footer_string_with_session(&handle);
+        assert!(
+            !s.contains("[f] Filter"),
+            "footer must NOT include [f] Filter when FrameChart is focused; footer was: {s}"
+        );
+        assert!(
+            !s.contains("[R] Rebuild track"),
+            "footer must NOT include [R] Rebuild track when FrameChart is focused; footer was: {s}"
+        );
+    }
+
+    // ── Memory panel tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_devtools_view_renders_memory_panel_without_panic() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Memory,
+            ..Default::default()
+        };
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+        // Should not panic — Memory panel renders real widget
+    }
+
+    #[test]
+    fn test_tab_bar_includes_memory_tab() {
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            text.contains("Memory"),
+            "expected Memory tab, got: {text:?}"
+        );
     }
 }

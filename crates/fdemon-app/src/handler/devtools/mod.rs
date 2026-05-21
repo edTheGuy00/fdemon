@@ -7,22 +7,31 @@
 //! Sub-modules:
 //! - `inspector`: Widget tree fetch handlers, inspector navigation, and layout data handlers
 //! - `performance`: Frame selection, memory sample, and allocation profile handlers
+//! - `scroll_helpers`: Shared chart-scroll helpers used by `performance` and `memory`
 
 pub(crate) mod debug;
 pub mod inspector;
+pub(crate) mod memory;
 pub(crate) mod network;
 pub(crate) mod performance;
+pub(crate) mod scroll_helpers;
+
+/// Re-export `ScrollDir` from `scroll_helpers` at the `devtools` crate-level so
+/// that `handler/update.rs` can refer to `devtools::ScrollDir` without reaching
+/// into a specific panel submodule.
+pub(crate) use scroll_helpers::ScrollDir;
 
 pub use inspector::{
-    handle_inspector_navigate, handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout,
-    handle_layout_data_fetched, handle_widget_tree_fetch_failed, handle_widget_tree_fetch_timeout,
-    handle_widget_tree_fetched,
+    handle_close_details, handle_cycle_tab, handle_inspector_navigate,
+    handle_inspector_properties_fetch_failed, handle_inspector_properties_fetch_timeout,
+    handle_inspector_properties_fetched, handle_layout_data_fetch_failed,
+    handle_layout_data_fetch_timeout, handle_layout_data_fetched, handle_open_details,
+    handle_toggle_hide_implementation, handle_widget_tree_fetch_failed,
+    handle_widget_tree_fetch_timeout, handle_widget_tree_fetched,
 };
 
-pub(crate) use performance::{
-    handle_allocation_profile_received, handle_memory_sample_received,
-    handle_select_performance_frame,
-};
+pub(crate) use memory::{handle_allocation_profile_received, handle_memory_sample_received};
+pub(crate) use performance::handle_select_performance_frame;
 
 use crate::config::DevToolsSettings;
 use crate::handler::{FetchTrigger, UpdateAction, UpdateResult};
@@ -160,6 +169,7 @@ pub fn map_rpc_error(raw: &str) -> DevToolsError {
 pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
     match panel {
         "performance" => DevToolsPanel::Performance,
+        "memory" | "mem" => DevToolsPanel::Memory,
         "network" | "net" => DevToolsPanel::Network,
         _ => DevToolsPanel::Inspector, // "layout" falls through to Inspector
     }
@@ -236,6 +246,11 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             None
         };
 
+        // Timeline polls at 1 Hz independently of `performance_refresh_ms`.
+        // Mirrors the dual-dispatch in
+        // `session_lifecycle::maybe_start_monitoring_for_selected_session`.
+        let timeline_poll_interval_ms = 1000_u64;
+
         return UpdateResult {
             message: followup_msg,
             action: Some(UpdateAction::StartPerformanceMonitoring {
@@ -245,6 +260,11 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                 allocation_profile_interval_ms,
                 mode,
             }),
+            extra_actions: vec![UpdateAction::StartTimelineMonitoring {
+                session_id,
+                handle: None, // hydrated by process.rs
+                poll_interval_ms: timeline_poll_interval_ms,
+            }],
         };
     }
 
@@ -258,9 +278,13 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
-    // Unpause allocation polling when entering DevTools with Performance as the
-    // default panel so the user sees fresh allocation data immediately.
-    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+    // Unpause allocation polling when entering DevTools with Performance or
+    // Memory as the default panel so the user sees fresh allocation data
+    // immediately.
+    if matches!(
+        state.devtools_view_state.active_panel,
+        DevToolsPanel::Performance | DevToolsPanel::Memory
+    ) {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {
                 let _ = tx.send(false); // unpause
@@ -311,6 +335,27 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
+/// Handle the DevTools Esc key with tiered close semantics.
+///
+/// **Tier 1 — Details panel close**: When the Inspector tab is active and the
+/// Details panel is open, the first Esc closes the Details panel instead of
+/// exiting DevTools mode. This mirrors the behaviour of Flutter DevTools where
+/// Esc dismisses the innermost selection before navigating outward.
+///
+/// **Tier 2 — Exit DevTools**: When no inner panel is open (or a non-Inspector
+/// panel is active), delegates to [`handle_exit_devtools_mode`] which returns
+/// to Normal mode and disposes VM object groups.
+pub fn handle_devtools_escape(state: &mut AppState) -> UpdateResult {
+    // Tiered Esc: close Details first when the Inspector is active.
+    if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
+        && state.devtools_view_state.inspector.details_open
+    {
+        return inspector::handle_close_details(state);
+    }
+    // Fall through to the existing exit-DevTools logic.
+    handle_exit_devtools_mode(state)
+}
+
 /// Handle exiting DevTools mode — returns to Normal and disposes VM object groups.
 ///
 /// Pauses allocation polling since the Performance panel is no longer visible.
@@ -341,6 +386,40 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
+    // Pause timeline polling: the 1-Hz getVMTimeline loop must not fire while
+    // the user is viewing logs or other non-DevTools modes.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.timeline_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
+    // Clear the timeline tracks and thread-name map so the next DevTools entry
+    // shows fresh data rather than stale accumulated events.  Also reset the
+    // frame anchor and persistent anchor map so the user always starts fresh
+    // when re-entering DevTools. Clear search state so a stale query does not
+    // survive a buffer reset.
+    if let Some(handle) = state.session_manager.selected_mut() {
+        let perf = &mut handle.session.performance;
+        perf.timeline_tracks.clear();
+        perf.timeline_thread_name_map.clear();
+        perf.timeline_thread_scroll_offset = 0;
+        perf.committed_frame_anchor = None;
+        perf.frame_anchor_map.clear();
+        // Phase 5 T04: clear search state on panel exit.
+        perf.timeline_search_query = None;
+        perf.timeline_search_input_active = false;
+        perf.timeline_search_match_cursor = 0;
+    }
+
+    // Close the Flutter.RebuiltWidgets gate for all sessions: exiting DevTools
+    // means Performance is no longer visible regardless of which panel was active.
+    for handle in state.session_manager.iter_mut() {
+        if let Some(ref tx) = handle.rebuilt_widgets_gate_tx {
+            let _ = tx.send(false); // gate closed
+        }
+    }
+
     state.exit_devtools_mode();
 
     if let Some(handle) = state.session_manager.selected() {
@@ -360,15 +439,48 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
 /// Inspector (widget tree). Pauses/unpauses allocation polling based on whether
 /// the Performance panel is becoming visible or hidden.
 pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> UpdateResult {
-    // Before switching, check if we are leaving the Performance panel — if so,
-    // pause allocation polling. The `watch` channel coalesces rapid toggles so
-    // burst panel switches do not create burst fetches.
+    // Before switching, check if we are leaving a panel that uses allocation
+    // polling (Performance or Memory). Pause alloc polling when navigating away
+    // from both. The `watch` channel coalesces rapid toggles so burst panel
+    // switches do not create burst fetches.
     let old_panel = state.devtools_view_state.active_panel;
-    if old_panel == DevToolsPanel::Performance && panel != DevToolsPanel::Performance {
+    let leaving_alloc_panel =
+        matches!(
+            old_panel,
+            DevToolsPanel::Performance | DevToolsPanel::Memory
+        ) && !matches!(panel, DevToolsPanel::Performance | DevToolsPanel::Memory);
+    if leaving_alloc_panel {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {
                 let _ = tx.send(true); // pause
             }
+        }
+    }
+
+    // Before switching, check if we are leaving the Performance panel — if so,
+    // pause timeline polling so no getVMTimeline RPCs fire while on other panels,
+    // and clear the events buffer so the next entry shows fresh data.
+    if old_panel == DevToolsPanel::Performance && panel != DevToolsPanel::Performance {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.timeline_pause_tx {
+                let _ = tx.send(true); // pause timeline polling
+            }
+        }
+        // Clear accumulated timeline tracks, reset scroll, and clear the
+        // frame anchor and persistent anchor map so that re-entry to the
+        // Performance panel always starts from a clean (unanchored) state.
+        // Also clear search state so a stale query does not survive a panel switch.
+        if let Some(handle) = state.session_manager.selected_mut() {
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.clear();
+            perf.timeline_thread_name_map.clear();
+            perf.timeline_thread_scroll_offset = 0;
+            perf.committed_frame_anchor = None;
+            perf.frame_anchor_map.clear();
+            // Phase 5 T04: clear search state on Performance panel leave.
+            perf.timeline_search_query = None;
+            perf.timeline_search_input_active = false;
+            perf.timeline_search_match_cursor = 0;
         }
     }
 
@@ -383,6 +495,16 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
     }
 
     state.switch_devtools_panel(panel);
+
+    // Update the Flutter.RebuiltWidgets gate for all sessions.
+    // Gate is open (true = forward) only when Performance panel is active.
+    // All sessions share the same active_panel so we update all of them.
+    let gate_open = panel == DevToolsPanel::Performance;
+    for handle in state.session_manager.iter_mut() {
+        if let Some(ref tx) = handle.rebuilt_widgets_gate_tx {
+            let _ = tx.send(gate_open);
+        }
+    }
 
     match panel {
         DevToolsPanel::Inspector => {
@@ -417,13 +539,47 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
             }
         }
         DevToolsPanel::Performance => {
-            // Unpause allocation polling when entering the Performance panel.
-            // The background task will fire one immediate fetch (via the
-            // `alloc_pause_rx.changed()` arm) so the allocation table is
+            // Unpause allocation polling when entering the Performance panel from
+            // a non-alloc panel. The background task will fire one immediate fetch
+            // (via the `alloc_pause_rx.changed()` arm) so the allocation table is
             // populated without waiting for the next scheduled tick.
+            // Skip when the previous panel was also an alloc panel (e.g. Memory →
+            // Performance) — alloc polling was already unpaused, and resending the
+            // same value would create a spurious channel notification.
+            let entering_from_non_alloc = !matches!(
+                old_panel,
+                DevToolsPanel::Performance | DevToolsPanel::Memory
+            );
+            if entering_from_non_alloc {
+                if let Some(handle) = state.session_manager.selected() {
+                    if let Some(ref tx) = handle.alloc_pause_tx {
+                        let _ = tx.send(false); // unpause
+                    }
+                }
+            }
+            // Unpause timeline polling when entering the Performance panel.
+            // Timeline polling is always paused when leaving Performance, so
+            // we unconditionally unpause here.
             if let Some(handle) = state.session_manager.selected() {
-                if let Some(ref tx) = handle.alloc_pause_tx {
+                if let Some(ref tx) = handle.timeline_pause_tx {
                     let _ = tx.send(false); // unpause
+                }
+            }
+        }
+        DevToolsPanel::Memory => {
+            // Unpause allocation polling when entering the Memory panel from a
+            // non-alloc panel so the background task fires an immediate fetch.
+            // Skip when the previous panel was also an alloc panel (e.g. Performance
+            // → Memory) to avoid a spurious channel notification.
+            let entering_from_non_alloc = !matches!(
+                old_panel,
+                DevToolsPanel::Performance | DevToolsPanel::Memory
+            );
+            if entering_from_non_alloc {
+                if let Some(handle) = state.session_manager.selected() {
+                    if let Some(ref tx) = handle.alloc_pause_tx {
+                        let _ = tx.send(false); // unpause
+                    }
                 }
             }
         }
@@ -1790,6 +1946,235 @@ mod tests {
             "Found {raw_reads} raw `state.settings.devtools.inspector_readiness_poll_*` read(s) \
              in handler/devtools/mod.rs. All dispatch sites must use \
              clamped_readiness_poll_config() instead."
+        );
+    }
+
+    // ── Tiered Esc tests (Phase 1, Task 05) ──────────────────────────────────
+
+    fn make_state_with_tree_and_devtools() -> AppState {
+        let mut state = make_state_with_session();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+
+        let tree: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "root-id",
+            "children": []
+        }))
+        .expect("valid DiagnosticsNode for tiered-esc test");
+        state.devtools_view_state.inspector.root = Some(tree);
+        state
+    }
+
+    #[test]
+    fn tiered_esc_closes_details_first_then_exits_devtools() {
+        let mut state = make_state_with_tree_and_devtools();
+
+        // Open the Details panel.
+        state.devtools_view_state.inspector.details_open = true;
+        state.devtools_view_state.inspector.details_node_id = Some("root-id".to_string());
+
+        // First Esc: should close Details, NOT exit DevTools.
+        handle_devtools_escape(&mut state);
+
+        assert!(
+            !state.devtools_view_state.inspector.details_open,
+            "First Esc should close the Details panel"
+        );
+        assert_eq!(
+            state.ui_mode,
+            UiMode::DevTools,
+            "First Esc should NOT exit DevTools mode"
+        );
+
+        // Second Esc: Details is now closed, so this exits DevTools.
+        handle_devtools_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "Second Esc should exit DevTools mode"
+        );
+    }
+
+    #[test]
+    fn tiered_esc_exits_devtools_directly_when_details_closed() {
+        let mut state = make_state_with_tree_and_devtools();
+        // Details is already closed.
+        state.devtools_view_state.inspector.details_open = false;
+
+        handle_devtools_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "Esc with details closed should exit DevTools immediately"
+        );
+    }
+
+    #[test]
+    fn tiered_esc_on_performance_panel_exits_devtools() {
+        let mut state = make_state_with_session();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        // Inspector details_open is irrelevant when the active panel is Performance.
+        state.devtools_view_state.inspector.details_open = true;
+
+        handle_devtools_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "Esc on Performance panel should exit DevTools even if inspector.details_open"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // timeline_pause_tx tests (Phase 3 followup, Task 01)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with a live `timeline_pause_tx` channel (initial: paused/true).
+    /// Returns AppState and a receiver to observe the channel value.
+    fn make_state_with_timeline_pause() -> (AppState, tokio::sync::watch::Receiver<bool>) {
+        let mut state = make_state_with_session();
+        // Initial value true (paused) — timeline polling starts paused.
+        let (tx, rx) = tokio::sync::watch::channel(true);
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.timeline_pause_tx = Some(std::sync::Arc::new(tx));
+        (state, rx)
+    }
+
+    #[test]
+    fn test_exit_devtools_pauses_timeline() {
+        // handle_exit_devtools_mode should send true on timeline_pause_tx (pause).
+        let (mut state, rx) = make_state_with_timeline_pause();
+
+        // Simulate: timeline was unpaused (user was on Performance panel).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .timeline_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+        assert!(!*rx.borrow(), "precondition: timeline should be active");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "exiting DevTools should pause timeline polling (send true on timeline_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_leaving_performance_clears_timeline_tracks() {
+        // Verify that both handle_switch_panel (Performance → other) and
+        // handle_exit_devtools_mode clear `timeline_tracks`, `timeline_thread_name_map`,
+        // and reset `timeline_thread_scroll_offset` to 0.
+        use fdemon_core::timeline::{TimelineNode, TimelinePhase, TimelineThread, TimelineTrack};
+
+        fn fake_track(tid: i64) -> TimelineTrack {
+            TimelineTrack {
+                tid,
+                name: Some("io.flutter.ui".to_string()),
+                thread: TimelineThread::Ui,
+                root_events: vec![TimelineNode {
+                    name: "Frame".to_string(),
+                    category: None,
+                    ts: 1000,
+                    dur: Some(500),
+                    phase: TimelinePhase::Complete,
+                    thread: TimelineThread::Ui,
+                    frame_number: None,
+                    children: vec![],
+                }],
+            }
+        }
+
+        // ── Part 1: panel-switch path (Performance → Inspector) ──────────────
+        let mut state = make_state_with_session();
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        // Populate the tracks and name map.
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.insert(1, fake_track(1));
+            perf.timeline_tracks.insert(2, fake_track(2));
+            perf.timeline_thread_name_map
+                .insert(1, "io.flutter.ui".to_string());
+            perf.timeline_thread_scroll_offset = 5;
+        }
+
+        // Sanity-check: tracks are present before the switch.
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .timeline_tracks
+                .len(),
+            2
+        );
+
+        handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        let perf = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_tracks.is_empty(),
+            "panel-switch away from Performance should clear timeline_tracks"
+        );
+        assert!(
+            perf.timeline_thread_name_map.is_empty(),
+            "panel-switch away from Performance should clear timeline_thread_name_map"
+        );
+        assert_eq!(
+            perf.timeline_thread_scroll_offset, 0,
+            "panel-switch away from Performance should reset timeline_thread_scroll_offset to 0"
+        );
+
+        // ── Part 2: exit-DevTools path ────────────────────────────────────────
+        let mut state = make_state_with_session();
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.insert(1, fake_track(1));
+            perf.timeline_thread_name_map
+                .insert(1, "io.flutter.ui".to_string());
+            perf.timeline_thread_scroll_offset = 3;
+        }
+
+        handle_exit_devtools_mode(&mut state);
+
+        let perf = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .performance;
+        assert!(
+            perf.timeline_tracks.is_empty(),
+            "handle_exit_devtools_mode should clear timeline_tracks"
+        );
+        assert!(
+            perf.timeline_thread_name_map.is_empty(),
+            "handle_exit_devtools_mode should clear timeline_thread_name_map"
+        );
+        assert_eq!(
+            perf.timeline_thread_scroll_offset, 0,
+            "handle_exit_devtools_mode should reset timeline_thread_scroll_offset to 0"
         );
     }
 }

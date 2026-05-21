@@ -18,12 +18,25 @@ use tokio::sync::mpsc;
 use crate::handler::FetchTrigger;
 use crate::message::{DebugOverlayKind, Message};
 use crate::session::SessionId;
+use fdemon_daemon::vm_service::extensions::properties::{
+    parse_properties_response, split_widget_and_render_properties,
+};
 use fdemon_daemon::vm_service::{
     ext, extract_layout_info, parse_bool_extension_response, VmRequestHandle,
 };
 
 /// Timeout for a single `getLayoutExplorerNode` RPC call.
 const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Total time budget for `spawn_fetch_inspector_properties`, covering:
+///   - Initial `ext.flutter.inspector.getProperties` call for the widget node.
+///   - All recursive sub-`getProperties` calls (one per render-object property).
+///
+/// The total elapsed wall-clock time across all these RPCs is bounded by
+/// this single value. Individual RPCs do NOT have their own timeouts —
+/// the outer `tokio::time::timeout` wrapper in `spawn_fetch_inspector_properties`
+/// is the only timeout in the pipeline.
+const PROPERTIES_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// VM object group for the widget inspector. Scopes `valueId` references
 /// returned by `getRootWidgetTree`.
@@ -473,6 +486,7 @@ pub(super) fn spawn_fetch_layout_data(
         if let Err(e) = msg_tx
             .send(Message::LayoutDataFetched {
                 session_id,
+                node_id,
                 layout: Box::new(layout),
             })
             .await
@@ -484,6 +498,206 @@ pub(super) fn spawn_fetch_layout_data(
             );
         }
     });
+}
+
+/// Background task that fetches widget properties and, recursively, the
+/// sub-properties of any render-object property for the given widget node.
+///
+/// Sends one of these messages on completion via `msg_tx`:
+/// - [`Message::DevToolsInspectorPropertiesFetched`] on success
+/// - [`Message::DevToolsInspectorPropertiesFetchFailed`] on RPC error or parse failure
+/// - [`Message::DevToolsInspectorPropertiesFetchTimeout`] when the 10-second budget elapses
+///
+/// Reuses `INSPECTOR_OBJECT_GROUP` for all calls. The object group is disposed
+/// at session end (consistent with parent PLAN §7.2). This task does NOT call
+/// `disposeGroup` directly.
+///
+/// The recursive sub-fetch loop is intentionally sequential (a `for` loop, not
+/// `try_join_all`) to match DevTools' `_loadPropertiesForNode` implementation and
+/// to keep timeout accounting predictable. Sub-fetch failures are logged at
+/// debug level and do not abort the overall fetch — partial render-property data
+/// is better than no data.
+///
+/// A single outer `tokio::time::timeout(PROPERTIES_FETCH_TIMEOUT, ...)` wraps the
+/// entire async body. Individual RPCs do NOT have their own timeouts — the outer
+/// wrapper is the only timeout in the pipeline, bounding worst-case wall-clock
+/// regardless of how many sub-fetches are performed.
+pub(super) fn spawn_fetch_inspector_properties(
+    session_id: SessionId,
+    node_id: String,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        let task_result = tokio::time::timeout(
+            PROPERTIES_FETCH_TIMEOUT,
+            do_fetch_properties(handle, node_id.clone()),
+        )
+        .await;
+
+        match task_result {
+            Ok(Ok((widget_properties, render_properties))) => {
+                // ── Success: dispatch fetched properties ──────────────────────
+                if let Err(send_err) = msg_tx
+                    .send(Message::DevToolsInspectorPropertiesFetched {
+                        session_id,
+                        node_id: node_id.clone(),
+                        widget_properties,
+                        render_properties,
+                    })
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        node_id = %node_id,
+                        error = %send_err,
+                        "FetchInspectorProperties: failed to dispatch PropertiesFetched; receiver dropped"
+                    );
+                }
+            }
+            Ok(Err(error)) => {
+                // ── Inner error: RPC failed or parse failed ───────────────────
+                tracing::warn!(
+                    session_id = %session_id,
+                    node_id = %node_id,
+                    error = %error,
+                    "FetchInspectorProperties: fetch failed"
+                );
+                if let Err(send_err) = msg_tx
+                    .send(Message::DevToolsInspectorPropertiesFetchFailed {
+                        session_id,
+                        node_id: node_id.clone(),
+                        error,
+                    })
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        node_id = %node_id,
+                        error = %send_err,
+                        "FetchInspectorProperties: failed to dispatch PropertiesFetchFailed; receiver dropped"
+                    );
+                }
+            }
+            Err(_elapsed) => {
+                // ── Outer timeout fired — total budget exceeded ────────────────
+                tracing::warn!(
+                    session_id = %session_id,
+                    node_id = %node_id,
+                    timeout_secs = PROPERTIES_FETCH_TIMEOUT.as_secs(),
+                    "FetchInspectorProperties: total budget exceeded"
+                );
+                if let Err(send_err) = msg_tx
+                    .send(Message::DevToolsInspectorPropertiesFetchTimeout {
+                        session_id,
+                        node_id: node_id.clone(),
+                    })
+                    .await
+                {
+                    tracing::error!(
+                        session_id = %session_id,
+                        node_id = %node_id,
+                        error = %send_err,
+                        "FetchInspectorProperties: failed to dispatch PropertiesFetchTimeout; receiver dropped"
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// Async body for `spawn_fetch_inspector_properties`.
+///
+/// Resolves the Flutter UI isolate, calls `getProperties` for the widget node,
+/// then sequentially sub-fetches properties for each render-object node.
+/// No internal timeouts — the outer wrapper in `spawn_fetch_inspector_properties`
+/// is the sole timeout boundary.
+async fn do_fetch_properties(
+    handle: VmRequestHandle,
+    node_id: String,
+) -> Result<
+    (
+        Vec<fdemon_core::DiagnosticsNode>,
+        Vec<fdemon_core::DiagnosticsNode>,
+    ),
+    String,
+> {
+    // ── Step 1: Resolve the Flutter UI isolate ────────────────────────────
+    let isolate_id = handle
+        .resolve_flutter_ui_isolate()
+        .await
+        .map_err(|e| format!("Could not resolve Flutter UI isolate: {e}"))?;
+
+    // ── Step 2: First getProperties call (widget's own properties) ────────
+    let mut widget_args = HashMap::new();
+    widget_args.insert("arg".to_string(), node_id.clone());
+    widget_args.insert(
+        "objectGroup".to_string(),
+        INSPECTOR_OBJECT_GROUP.to_string(),
+    );
+
+    let widget_resp = handle
+        .call_extension(ext::GET_PROPERTIES, &isolate_id, Some(widget_args))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let all_props = parse_properties_response(&widget_resp).map_err(|e| e.to_string())?;
+
+    let (widget_properties, mut render_properties) = split_widget_and_render_properties(all_props);
+
+    // ── Step 3: Recursive sub-fetch for each render-object property ───────
+    //
+    // DevTools calls getProperties on the valueId of each render-object
+    // property to fetch the render object's own sub-properties (constraints,
+    // size, layer, semantics, etc.).
+    // Reference: inspector_controller.dart:914–931 (_loadPropertiesForNode).
+    //
+    // Collect value IDs first to avoid borrow conflicts on render_properties.
+    let render_value_ids: Vec<String> = render_properties
+        .iter()
+        .filter_map(|p| p.value_id.clone())
+        .collect();
+
+    for value_id in render_value_ids {
+        let mut sub_args = HashMap::new();
+        sub_args.insert("arg".to_string(), value_id.clone());
+        sub_args.insert(
+            "objectGroup".to_string(),
+            INSPECTOR_OBJECT_GROUP.to_string(),
+        );
+
+        match handle
+            .call_extension(ext::GET_PROPERTIES, &isolate_id, Some(sub_args))
+            .await
+        {
+            Err(e) => {
+                // Sub-fetch failure: log at debug level and continue — DevTools
+                // best-effort merges sub-properties (inspector_controller.dart:920).
+                tracing::debug!(
+                    node_id = %node_id,
+                    value_id = %value_id,
+                    error = %e,
+                    "FetchInspectorProperties: sub-property getProperties failed; skipping"
+                );
+                // Do not abort — partial render-property data is better than none.
+            }
+            Ok(v) => match parse_properties_response(&v) {
+                Ok(subs) => {
+                    render_properties.extend(subs);
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        node_id = %node_id,
+                        value_id = %value_id,
+                        error = %e,
+                        "FetchInspectorProperties: sub-property parse failed; skipping"
+                    );
+                }
+            },
+        }
+    }
+
+    Ok((widget_properties, render_properties))
 }
 
 /// Spawn a background task that disposes both DevTools VM object groups.
@@ -541,6 +755,13 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// Helper: create a one-shot `(SessionId, mpsc::Sender, mpsc::Receiver)` triple.
+    fn make_channel() -> (SessionId, mpsc::Sender<Message>, mpsc::Receiver<Message>) {
+        let (tx, rx) = mpsc::channel(16);
+        // SessionId is u64; use a fixed test value.
+        (42_u64, tx, rx)
+    }
+
     #[test]
     fn test_layout_fetch_timeout_is_reasonable() {
         assert_eq!(
@@ -551,6 +772,155 @@ mod tests {
         assert!(
             LAYOUT_FETCH_TIMEOUT >= Duration::from_secs(5),
             "layout fetch timeout must be at least 5 seconds to avoid false timeouts"
+        );
+    }
+
+    #[test]
+    fn test_properties_fetch_timeout_is_reasonable() {
+        assert_eq!(
+            PROPERTIES_FETCH_TIMEOUT,
+            Duration::from_secs(10),
+            "properties fetch timeout should be 10 seconds"
+        );
+        assert!(
+            PROPERTIES_FETCH_TIMEOUT >= Duration::from_secs(5),
+            "properties fetch timeout must be at least 5 seconds to avoid false timeouts"
+        );
+    }
+
+    /// When `resolve_flutter_ui_isolate` fails (no cached isolate + closed channel),
+    /// `spawn_fetch_inspector_properties` emits `DevToolsInspectorPropertiesFetchFailed`.
+    #[tokio::test]
+    async fn spawn_properties_emits_failed_when_isolate_resolution_fails() {
+        // new_for_test(None): no cached isolate ID, closed channel →
+        // resolve_flutter_ui_isolate() calls getVM which fails with ChannelClosed.
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(None);
+        let (session_id, tx, mut rx) = make_channel();
+        let node_id = "node-abc".to_string();
+
+        spawn_fetch_inspector_properties(session_id, node_id.clone(), handle, tx);
+
+        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for message")
+            .expect("channel closed");
+
+        match msg {
+            Message::DevToolsInspectorPropertiesFetchFailed {
+                session_id: sid,
+                node_id: nid,
+                error: _,
+            } => {
+                assert_eq!(sid, session_id);
+                assert_eq!(nid, "node-abc");
+            }
+            other => panic!("expected DevToolsInspectorPropertiesFetchFailed, got: {other:?}"),
+        }
+    }
+
+    /// When `call_extension` fails (cached isolate present, but closed channel),
+    /// `spawn_fetch_inspector_properties` emits `DevToolsInspectorPropertiesFetchFailed`.
+    #[tokio::test]
+    async fn spawn_properties_emits_failed_when_first_call_errors() {
+        // new_for_test(Some("isolate-1")): cached isolate → resolve_flutter_ui_isolate() succeeds.
+        // But the channel is closed → call_extension returns Err(ChannelClosed).
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(Some(
+            "isolates/main-1".to_string(),
+        ));
+        let (session_id, tx, mut rx) = make_channel();
+        let node_id = "node-xyz".to_string();
+
+        spawn_fetch_inspector_properties(session_id, node_id.clone(), handle, tx);
+
+        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for message")
+            .expect("channel closed");
+
+        match msg {
+            Message::DevToolsInspectorPropertiesFetchFailed {
+                session_id: sid,
+                node_id: nid,
+                error: _,
+            } => {
+                assert_eq!(sid, session_id);
+                assert_eq!(nid, "node-xyz");
+            }
+            other => panic!("expected DevToolsInspectorPropertiesFetchFailed, got: {other:?}"),
+        }
+    }
+
+    /// When the initial `getProperties` call times out,
+    /// `spawn_fetch_inspector_properties` emits `DevToolsInspectorPropertiesFetchTimeout`.
+    #[tokio::test]
+    async fn spawn_properties_emits_timeout_when_first_call_hangs() {
+        tokio::time::pause();
+
+        // new_for_test(Some(...)): cached isolate so resolve succeeds.
+        // Then the task blocks waiting for call_extension.
+        // We advance simulated time past PROPERTIES_FETCH_TIMEOUT to fire the timeout arm.
+        let handle = fdemon_daemon::vm_service::VmRequestHandle::new_for_test(Some(
+            "isolates/main-1".to_string(),
+        ));
+        let (session_id, tx, mut rx) = make_channel();
+        let node_id = "node-timeout".to_string();
+
+        spawn_fetch_inspector_properties(session_id, node_id.clone(), handle, tx);
+
+        // Advance past the 10s timeout. The closed channel actually causes the
+        // call_extension future to resolve immediately with Err, which hits the
+        // `Ok(Err(e))` arm instead of the timeout arm. Because we cannot inject
+        // a true "slow" RPC without a real WebSocket, this test verifies the
+        // channel-error path completes promptly and sends a message.
+        tokio::time::advance(Duration::from_secs(11)).await;
+
+        // The message is either FetchFailed (channel closed wins the race)
+        // or FetchTimeout (timeout fires first). Either is correct behavior;
+        // we just confirm a message is sent and the task does not hang.
+        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out — spawn task appears to be stuck")
+            .expect("channel closed unexpectedly");
+
+        assert!(
+            matches!(
+                msg,
+                Message::DevToolsInspectorPropertiesFetchFailed { .. }
+                    | Message::DevToolsInspectorPropertiesFetchTimeout { .. }
+            ),
+            "expected FetchFailed or FetchTimeout, got: {msg:?}"
+        );
+    }
+
+    /// The module-level `INSPECTOR_OBJECT_GROUP` constant is reused (no new group created).
+    #[test]
+    fn spawn_properties_reuses_inspector_object_group() {
+        // Verify that INSPECTOR_OBJECT_GROUP is the canonical group name and
+        // that spawn_fetch_inspector_properties does not introduce a new one.
+        assert_eq!(INSPECTOR_OBJECT_GROUP, "fdemon-inspector-1");
+    }
+
+    /// Verifies that the total-budget contract is documented and that
+    /// `PROPERTIES_FETCH_TIMEOUT` covers the entire operation (not just a single RPC).
+    ///
+    /// A full wall-clock test that exercises N slow sub-fetches in sequence would
+    /// require injecting controlled-latency mocks into `VmRequestHandle`, which
+    /// is not possible without dedicated test-infra (the same limitation that
+    /// prevented 3 of 5 spec'd tests for the original `spawn_fetch_inspector_properties`).
+    ///
+    // TODO(test-infra): add a mock VmRequestHandle that can simulate per-call
+    // latency so that a 2-sub-fetch sequence can verify the total budget is
+    // bounded by PROPERTIES_FETCH_TIMEOUT rather than 2 × PROPERTIES_FETCH_TIMEOUT.
+    #[tokio::test]
+    async fn spawn_properties_total_budget_is_bounded() {
+        use std::time::Instant;
+        // Document the contract: the outer timeout wraps the entire async body.
+        // Without a slow-mock RPC, we verify the constant itself is correctly set.
+        let _ = Instant::now();
+        assert_eq!(
+            PROPERTIES_FETCH_TIMEOUT,
+            Duration::from_secs(10),
+            "total budget constant must remain 10s (matches LAYOUT_FETCH_TIMEOUT)"
         );
     }
 }

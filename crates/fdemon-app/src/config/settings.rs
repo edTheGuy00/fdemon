@@ -483,6 +483,10 @@ network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
 inspector_readiness_poll_attempts = 2           # isWidgetTreeReady poll attempts before proceeding
 inspector_readiness_poll_interval_ms = 250      # Sleep between poll attempts (ms)
 inspector_readiness_poll_call_timeout_ms = 1000 # Per-call timeout for isWidgetTreeReady RPC (ms)
+# Hide implementation widgets in the inspector tree.
+# When true, long chains of wrapper widgets (BlocProvider, etc.) collapse
+# into a "+ N more widgets" leader row. Toggle at runtime with Shift+H.
+hide_implementation_widgets = true
 
 [editor]
 # Editor command (leave empty for auto-detection)
@@ -519,7 +523,15 @@ open_pattern = "$EDITOR $FILE:$LINE"
 ///
 /// Uses atomic write (temp file + rename) for safety.
 /// Preserves file structure by regenerating with header comments.
+///
+/// The temporary file is created with a unique name via `tempfile::Builder`
+/// (prefix `.config.toml.`, suffix `.tmp`) to eliminate the TOCTOU
+/// vulnerability that a fixed `.config.toml.tmp` name introduces when two
+/// concurrent saves race.
 pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()> {
+    use std::io::Write as _;
+    use tempfile::Builder;
+
     let fdemon_dir = project_path.join(FDEMON_DIR);
 
     // Ensure directory exists
@@ -529,7 +541,6 @@ pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()> {
     }
 
     let config_path = fdemon_dir.join(CONFIG_FILENAME);
-    let temp_path = fdemon_dir.join(".config.toml.tmp");
 
     // Generate TOML content with header
     let header = generate_config_header();
@@ -538,12 +549,46 @@ pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()> {
 
     let full_content = format!("{}{}", header, content);
 
-    // Atomic write: write to temp, then rename
-    std::fs::write(&temp_path, &full_content)
+    // Atomic write: create a uniquely-named temp file in the same directory,
+    // write the content, then persist (rename) it into the final path.
+    // Using the same directory as the target ensures the rename is atomic on
+    // POSIX systems (same filesystem).  A unique suffix per invocation means
+    // two concurrent saves never collide on the same temp file.
+    let mut temp_file = Builder::new()
+        .prefix(".config.toml.")
+        .suffix(".tmp")
+        .tempfile_in(&fdemon_dir)
+        .map_err(|e| Error::config(format!("Failed to create temp file: {}", e)))?;
+
+    temp_file
+        .write_all(full_content.as_bytes())
         .map_err(|e| Error::config(format!("Failed to write temp file: {}", e)))?;
 
-    std::fs::rename(&temp_path, &config_path)
-        .map_err(|e| Error::config(format!("Failed to rename temp file: {}", e)))?;
+    // On Windows, `tempfile::persist` uses `MoveFileEx` with
+    // `MOVEFILE_REPLACE_EXISTING`. When two writers race for the same
+    // destination the loser can briefly see `ERROR_ACCESS_DENIED` while the
+    // winner still has the file open. Retry a few times with exponential
+    // backoff. POSIX `rename` is atomic, so on Unix the first attempt
+    // succeeds and the loop is a no-op.
+    const MAX_PERSIST_ATTEMPTS: u32 = 5;
+    let mut pending = temp_file;
+    let mut attempt: u32 = 0;
+    loop {
+        match pending.persist(&config_path) {
+            Ok(_) => break,
+            Err(persist_err) => {
+                attempt += 1;
+                if attempt >= MAX_PERSIST_ATTEMPTS {
+                    return Err(Error::config(format!(
+                        "Failed to rename temp file: {}",
+                        persist_err.error
+                    )));
+                }
+                pending = persist_err.file;
+                std::thread::sleep(std::time::Duration::from_millis(10u64 << (attempt - 1)));
+            }
+        }
+    }
 
     info!("Saved settings to {:?}", config_path);
     Ok(())
@@ -691,6 +736,10 @@ network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
 inspector_readiness_poll_attempts = 2           # isWidgetTreeReady poll attempts before proceeding
 inspector_readiness_poll_interval_ms = 250      # Sleep between poll attempts (ms)
 inspector_readiness_poll_call_timeout_ms = 1000 # Per-call timeout for isWidgetTreeReady RPC (ms)
+# Hide implementation widgets in the inspector tree.
+# When true, long chains of wrapper widgets (BlocProvider, etc.) collapse
+# into a "+ N more widgets" leader row. Toggle at runtime with Shift+H.
+hide_implementation_widgets = true
 
 [editor]
 # Editor command (leave empty for auto-detection)
@@ -1359,8 +1408,19 @@ open_pattern = "zed $FILE:$LINE"
         let settings = Settings::default();
         save_settings(temp.path(), &settings).unwrap();
 
-        // Verify no temp file left behind
-        assert!(!temp.path().join(".fdemon/.config.toml.tmp").exists());
+        // Verify no leftover temp files remain after a successful save.
+        // The unique-suffix approach means temp names vary, so we scan for any
+        // `.config.toml.*.tmp`-pattern file rather than a fixed name.
+        let fdemon_dir = temp.path().join(".fdemon");
+        let leftover = std::fs::read_dir(&fdemon_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                let name = e.file_name();
+                let name_str = name.to_string_lossy();
+                name_str.starts_with(".config.toml.") && name_str.ends_with(".tmp")
+            });
+        assert!(!leftover, "no temp files should remain after save_settings");
     }
 
     #[test]
@@ -1981,5 +2041,61 @@ icons = "nerd_fonts"
         assert_eq!(config.command, "hx");
         assert!(config.pattern.contains("$FILE"));
         assert!(config.pattern.contains("$LINE"));
+    }
+
+    /// Two concurrent `save_settings` calls must not panic, must not leave
+    /// behind any temp files, and the final config.toml must be well-formed TOML.
+    ///
+    /// This exercises the unique-temp-filename guarantee added to address the
+    /// TOCTOU concern (m7 review item).
+    #[test]
+    fn save_settings_two_concurrent_writes_do_not_collide() {
+        use std::sync::Arc;
+
+        let temp = tempdir().unwrap();
+        let project_path = Arc::new(temp.path().to_path_buf());
+
+        let path1 = Arc::clone(&project_path);
+        let path2 = Arc::clone(&project_path);
+
+        let mut s1 = Settings::default();
+        s1.watcher.debounce_ms = 111;
+
+        let mut s2 = Settings::default();
+        s2.watcher.debounce_ms = 222;
+
+        // Spawn both writes on separate threads to exercise concurrent access.
+        let t1 = std::thread::spawn(move || {
+            save_settings(&path1, &s1).expect("save_settings thread 1 must not fail")
+        });
+        let t2 = std::thread::spawn(move || {
+            save_settings(&path2, &s2).expect("save_settings thread 2 must not fail")
+        });
+
+        t1.join().expect("thread 1 must not panic");
+        t2.join().expect("thread 2 must not panic");
+
+        // No leftover temp files.
+        let fdemon_dir = temp.path().join(".fdemon");
+        let leftover = std::fs::read_dir(&fdemon_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                let name = e.file_name();
+                let s = name.to_string_lossy();
+                s.starts_with(".config.toml.") && s.ends_with(".tmp")
+            });
+        assert!(
+            !leftover,
+            "no temp files should remain after concurrent saves"
+        );
+
+        // Final config.toml must be valid TOML (best-effort well-formedness check).
+        let content =
+            std::fs::read_to_string(fdemon_dir.join("config.toml")).expect("config.toml exists");
+        assert!(
+            content.parse::<toml::Value>().is_ok(),
+            "final config.toml must be valid TOML"
+        );
     }
 }

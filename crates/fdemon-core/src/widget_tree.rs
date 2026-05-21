@@ -15,9 +15,19 @@
 //! - [`BoxConstraints`] — Min/max width and height constraints for a widget
 //! - [`WidgetSize`] — Actual rendered size of a widget
 //! - [`DiagnosticLevel`] — Severity/visibility level for a diagnostic node
+//! - [`InspectorRow`] — A flattened row in the inspector tree view, with rendering metadata
+//! - [`RowGroup`] — Group-folding marker for hideable-chain rows
+
+use std::collections::HashSet;
 
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
+
+/// Maximum recursion depth for widget-tree walkers. Trees deeper than this
+/// are truncated to prevent stack exhaustion on malformed or adversarial
+/// VM Service responses. serde_json's default recursion limit (128) is the
+/// first line of defence; this cap is a defence-in-depth fallback.
+pub(crate) const MAX_TREE_WALK_DEPTH: usize = 512;
 
 // ============================================================================
 // DiagnosticsNode
@@ -34,16 +44,34 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsNode {
     /// Widget/object description (e.g., "Container", "Text('Hello')")
+    #[serde(deserialize_with = "deserialize_sanitized_string")]
     pub description: String,
 
     /// Runtime type as string
-    #[serde(rename = "type")]
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences.
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "deserialize_sanitized_option_string"
+    )]
     pub node_type: Option<String>,
 
     /// Property name (for property nodes)
+    ///
+    /// Rendered directly to the terminal buffer in `properties_tab.rs` and
+    /// `render_object_tab.rs`, so ANSI sequences in this field would corrupt
+    /// terminal state. Sanitized at deserialize time (M4).
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub name: Option<String>,
 
     /// Diagnostic level: "info", "debug", "warning", "error", "hidden", "off"
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences. Sanitizing
+    /// does not break `filter_and_sort_by_level` because that function matches
+    /// against clean literal strings; a clean Flutter response will never
+    /// contain ANSI bytes in this field.
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub level: Option<String>,
 
     /// Whether this node has children
@@ -51,12 +79,22 @@ pub struct DiagnosticsNode {
     pub has_children: bool,
 
     /// Tree display style: "dense", "sparse", etc.
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences.
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub style: Option<String>,
 
     /// VM Service object ID for this node's value — used as `arg` in subsequent calls
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences (defense-in-depth).
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub value_id: Option<String>,
 
     /// VM Service object ID for the DiagnosticsNode itself
+    ///
+    /// Sanitized at deserialize time to strip ANSI escape sequences (defence-in-depth
+    /// parity with `value_id`, `name`, and other `Option<String>` fields on this struct).
+    #[serde(default, deserialize_with = "deserialize_sanitized_option_string")]
     pub object_id: Option<String>,
 
     /// Source code location where the widget was created
@@ -81,6 +119,21 @@ pub struct DiagnosticsNode {
     /// Property nodes (populated when includeProperties is true)
     #[serde(default)]
     pub properties: Vec<DiagnosticsNode>,
+
+    /// Runtime type of the associated render-object property, if any.
+    ///
+    /// Flutter serializes this as `"propertyType"` in the diagnostic JSON.
+    /// Used to distinguish render-object property nodes (e.g. `propertyType ==
+    /// "RenderObject"`) from regular widget property nodes.
+    ///
+    /// Sanitized at deserialize time via [`deserialize_sanitized_option_string`] to
+    /// strip any ANSI escape sequences that may appear in VM Service output.
+    #[serde(
+        default,
+        rename = "propertyType",
+        deserialize_with = "deserialize_sanitized_option_string"
+    )]
+    pub property_type: Option<String>,
 }
 
 impl DiagnosticsNode {
@@ -116,18 +169,646 @@ impl DiagnosticsNode {
     /// Hidden nodes (level = `"hidden"` or `"off"`) and their entire subtrees
     /// are excluded — visible children of a hidden parent are NOT counted.
     ///
-    /// Note: Flutter widget trees rarely exceed ~100 levels deep, so the
-    /// recursive approach is safe in practice.
+    /// Trees deeper than [`MAX_TREE_WALK_DEPTH`] are truncated to prevent stack
+    /// exhaustion on malformed VM Service responses.
     pub fn visible_node_count(&self) -> usize {
+        self.visible_node_count_inner(0)
+    }
+
+    fn visible_node_count_inner(&self, depth: usize) -> usize {
+        if depth > MAX_TREE_WALK_DEPTH {
+            return 0;
+        }
         if !self.is_visible() {
             return 0;
         }
         1 + self
             .children
             .iter()
-            .map(|c| c.visible_node_count())
+            .map(|c| c.visible_node_count_inner(depth + 1))
             .sum::<usize>()
     }
+
+    /// Returns the widget's runtime type, stripping any generic type arguments.
+    ///
+    /// For example, `"BlocProvider<AppBloc>"` returns `"BlocProvider"` and
+    /// `"Container"` returns `"Container"`.
+    ///
+    /// The implementation uses `self.description` as the source, trimming
+    /// everything from the first `<` onward, then stripping whitespace. This
+    /// mirrors DevTools' `widgetRuntimeType` getter
+    /// (`diagnostics_node.dart:588`).
+    ///
+    /// Returns `None` when the description is empty after stripping.
+    pub fn widget_runtime_type(&self) -> Option<&str> {
+        let raw = &self.description;
+        let trimmed = if let Some(pos) = raw.find('<') {
+            raw[..pos].trim()
+        } else {
+            raw.trim()
+        };
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
+    /// Whether this node should always be shown in the inspector tree, even
+    /// when implementation-widget hiding is active.
+    ///
+    /// Mirrors DevTools' `_alwaysVisible` predicate
+    /// (`diagnostics_node.dart:664–672`):
+    ///
+    /// - `parent_child_count == 0` — root node (no parent).
+    /// - `self.created_by_local_project` — user-authored widget.
+    /// - `self.children.len() > 1` — has more than one child.
+    /// - `parent_child_count > 1` — has siblings (parent has >1 child).
+    ///
+    /// `parent_child_count` should be the number of children on the node's
+    /// parent (pass `0` for the root). The caller (state layer) is responsible
+    /// for supplying this, because `DiagnosticsNode` does not hold a back-link
+    /// to its parent.
+    pub fn is_always_visible(&self, parent_child_count: usize) -> bool {
+        let is_root = parent_child_count == 0;
+        let has_more_than_one_child = self.children.len() > 1;
+        let has_siblings = parent_child_count > 1;
+        is_root || self.created_by_local_project || has_more_than_one_child || has_siblings
+    }
+
+    /// Whether this node represents a flex container (`Row`, `Column`, or
+    /// `Flex`).
+    ///
+    /// Mirrors DevTools' `isFlex` getter (`diagnostics_node.dart:102`).
+    pub fn is_flex(&self) -> bool {
+        matches!(
+            self.widget_runtime_type(),
+            Some("Row") | Some("Column") | Some("Flex")
+        )
+    }
+
+    /// Whether this node participates in a flex layout — either because it
+    /// *is* a flex container or because its parent is one.
+    ///
+    /// `parent` should be `None` for the root node, or `Some(parent_node)`
+    /// otherwise. The caller (state layer) supplies the parent reference
+    /// because `DiagnosticsNode` does not hold a parent back-link.
+    ///
+    /// Mirrors DevTools' `isFlexLayout` getter (`diagnostics_node.dart:487`).
+    pub fn is_flex_layout(&self, parent: Option<&DiagnosticsNode>) -> bool {
+        self.is_flex() || parent.is_some_and(|p| p.is_flex())
+    }
+
+    /// Whether this node is a render-object property node.
+    ///
+    /// True when `property_type == "RenderObject"`. DevTools uses this to
+    /// distinguish render-object property nodes from regular widget properties
+    /// when building the layout explorer.
+    pub fn is_render_object_property(&self) -> bool {
+        self.property_type.as_deref() == Some("RenderObject")
+    }
+}
+
+// ============================================================================
+// InspectorRow / RowGroup
+// ============================================================================
+
+/// Group-folding marker for a row in the inspector tree, used when
+/// implementation-widget hiding is active.
+///
+/// When "Hide implementation widgets" is enabled, consecutive
+/// single-child non-local-project nodes are folded into a *hideable chain*.
+/// The first node in the chain becomes the `Leader`; subsequent nodes become
+/// `Member` rows (or are suppressed entirely when collapsed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowGroup {
+    /// Standalone row — not part of a hideable chain.
+    None,
+    /// Chain leader when the chain is **collapsed**.
+    ///
+    /// The leader row is shown with a `+ N more widgets` badge; the
+    /// `hidden_count` subordinate rows are suppressed from the list entirely.
+    LeaderCollapsed {
+        /// Number of subordinate rows hidden (does **not** include the leader
+        /// itself, matching DevTools' "N more widgets" badge text).
+        hidden_count: usize,
+    },
+    /// Chain leader when the chain is **expanded**.
+    ///
+    /// The leader renders normally; all subordinate rows follow immediately
+    /// below as [`RowGroup::Member`] rows.
+    LeaderExpanded,
+    /// A subordinate row of an expanded chain leader.
+    Member,
+}
+
+/// A single row in the inspector tree view, carrying both the node reference
+/// and all metadata required by the renderer.
+#[derive(Debug, Clone)]
+pub struct InspectorRow<'a> {
+    /// The diagnostics node this row represents.
+    pub node: &'a DiagnosticsNode,
+    /// Indentation depth of this row (root = 0).
+    pub depth: usize,
+    /// Ancestor depths at which a vertical connector line should be drawn
+    /// through this row.
+    ///
+    /// A depth `d` is included when the ancestor at depth `d` still has
+    /// sibling nodes that will be rendered *below* this row (i.e. the
+    /// ancestor is **not** the last child of its own parent).
+    pub ticks: Vec<usize>,
+    /// `true` when this row is **not** the last child of its parent.
+    ///
+    /// `true` → use `├─` branch; `false` → use `└─` branch (last child).
+    pub line_to_parent: bool,
+    /// Group-folding marker for this row.
+    pub group: RowGroup,
+}
+
+/// Inputs for [`build_inspector_rows`].
+pub struct InspectorRowBuilderInputs<'a> {
+    /// Root node of the subtree to flatten.
+    pub root: &'a DiagnosticsNode,
+    /// Set of `value_id`s whose subtrees are currently **expanded** in the
+    /// regular tree expand/collapse sense.
+    pub expanded: &'a HashSet<String>,
+    /// Set of `value_id`s of *group leaders* whose chains are currently
+    /// **expanded** (showing `Member` rows).  When a leader's `value_id` is
+    /// absent from this set, the leader renders as
+    /// [`RowGroup::LeaderCollapsed`].
+    pub expanded_groups: &'a HashSet<String>,
+    /// When `true`, consecutive single-child non-local-project nodes are
+    /// folded into hideable chains (mirrors DevTools' "Hide implementation
+    /// widgets" toggle).  When `false`, every visible node renders as a
+    /// standalone [`RowGroup::None`] row.
+    pub hide_implementation: bool,
+}
+
+/// Flatten a `DiagnosticsNode` subtree into a list of [`InspectorRow`]s
+/// suitable for line-by-line rendering.
+///
+/// The algorithm is a pre-order depth-first walk that:
+///
+/// 1. Respects `inputs.expanded` for regular tree expand/collapse.
+/// 2. When `inputs.hide_implementation` is `true`, folds consecutive
+///    single-child non-local-project nodes into *hideable chains* — the
+///    chain leader emits a single [`RowGroup::LeaderCollapsed`] or
+///    [`RowGroup::LeaderExpanded`] row; subordinates either follow as
+///    [`RowGroup::Member`] rows or are suppressed.
+/// 3. Computes `ticks` (vertical connector depths) and `line_to_parent`
+///    (branch style) for each row.
+///
+/// The output order is deterministic for the same inputs.
+pub fn build_inspector_rows<'a>(inputs: InspectorRowBuilderInputs<'a>) -> Vec<InspectorRow<'a>> {
+    let mut rows: Vec<InspectorRow<'a>> = Vec::new();
+
+    // Walk the tree; `open_ticks` tracks ancestor depths that still have
+    // remaining siblings to be emitted below the current position.
+    walk_node(
+        inputs.root,
+        0,
+        false,
+        &mut Vec::new(),
+        inputs.expanded,
+        inputs.expanded_groups,
+        inputs.hide_implementation,
+        0, // parent_child_count: root has no parent → 0
+        &mut rows,
+    );
+
+    rows
+}
+
+/// Recursive worker for [`build_inspector_rows`].
+///
+/// # Parameters
+/// - `node` — current node being visited.
+/// - `depth` — current indentation depth (root = 0).
+/// - `line_to_parent` — branch style (`true` = not-last child = `├─`).
+/// - `open_ticks` — mutable stack of ancestor depths that still have pending
+///   siblings; updated as we enter/leave each child list.
+/// - `expanded` — expanded node id set.
+/// - `expanded_groups` — expanded group leader id set.
+/// - `hide_implementation` — whether chain-folding is active.
+/// - `parent_child_count` — number of children on the node's parent (0 for root).
+/// - `rows` — accumulator.
+#[allow(clippy::too_many_arguments)]
+fn walk_node<'a>(
+    node: &'a DiagnosticsNode,
+    depth: usize,
+    line_to_parent: bool,
+    open_ticks: &mut Vec<usize>,
+    expanded: &HashSet<String>,
+    expanded_groups: &HashSet<String>,
+    hide_implementation: bool,
+    parent_child_count: usize,
+    rows: &mut Vec<InspectorRow<'a>>,
+) {
+    // Defence-in-depth: truncate pathologically deep trees (e.g. malformed VM
+    // Service responses).  serde_json's recursion limit (128) is the first line
+    // of defence; this cap prevents stack exhaustion in the tree walker itself.
+    if depth > MAX_TREE_WALK_DEPTH {
+        return;
+    }
+
+    // Determine the RowGroup for this node.
+    let group = if hide_implementation && !node.is_always_visible(parent_child_count) {
+        // This node is an implementation node.  Check whether it belongs to a
+        // chain (parent is always-visible-with-this-as-only-child OR parent is
+        // also an implementation node) — but in the recursive walk we model this
+        // at the *parent* side when emitting children, so here we treat every
+        // implementation node that is not already tagged as a member as a
+        // potential chain leader.
+        let subordinate_count =
+            count_visible_chain_subordinates(node, expanded, hide_implementation);
+        if subordinate_count > 0 {
+            // This is a leader node.
+            let leader_id = node.value_id.as_deref().unwrap_or("");
+            if !leader_id.is_empty() && expanded_groups.contains(leader_id) {
+                RowGroup::LeaderExpanded
+            } else {
+                RowGroup::LeaderCollapsed {
+                    hidden_count: subordinate_count,
+                }
+            }
+        } else {
+            // Lone implementation node (no subordinates) — render standalone.
+            RowGroup::None
+        }
+    } else {
+        RowGroup::None
+    };
+
+    // Snapshot ticks BEFORE any push for this node's own non-last status.
+    // Ticks record ancestors that are non-last; this node's own non-last
+    // status only matters for *its descendants*, not for itself.
+    let ticks = open_ticks.clone();
+    rows.push(InspectorRow {
+        node,
+        depth,
+        ticks,
+        line_to_parent,
+        group, // move — `group` is not used after this point
+    });
+
+    // Decide whether to recurse into children.
+    let should_expand = node
+        .value_id
+        .as_deref()
+        .is_none_or(|id| expanded.contains(id));
+
+    if !should_expand || node.children.is_empty() {
+        return;
+    }
+
+    // If this node is not the last child of its parent, push `depth - 1` (the
+    // column of this node's own branch tick) so that all descendants see a `│`
+    // at the correct column — i.e. aligned with the `├─` or `└─` tick drawn
+    // for *this* node, not at this node's glyph column.
+    //
+    // Using `depth` (before this fix) placed the guideline at `glyph_col(depth)`
+    // which is the same column as this node's *icon*, overwriting it.  The correct
+    // column is `glyph_col(depth.saturating_sub(1))` — the parent depth.
+    if line_to_parent {
+        open_ticks.push(depth.saturating_sub(1));
+    }
+
+    // Re-read the group from the last pushed row (we moved it above).
+    let group_ref = &rows.last().expect("just pushed").group;
+
+    match group_ref {
+        RowGroup::LeaderCollapsed { .. } => {
+            // Subordinates are suppressed — do not recurse.
+        }
+        RowGroup::LeaderExpanded => {
+            // Emit all subordinates as Member rows.
+            emit_chain_members(
+                node,
+                depth,
+                open_ticks,
+                expanded,
+                expanded_groups,
+                hide_implementation,
+                rows,
+            );
+        }
+        RowGroup::None | RowGroup::Member => {
+            // Normal recursive descent.
+            let children = &node.children;
+            let child_count = children.len();
+
+            for (i, child) in children.iter().enumerate() {
+                let is_last = i == child_count - 1;
+                let child_line_to_parent = !is_last;
+
+                walk_node(
+                    child,
+                    depth + 1,
+                    child_line_to_parent,
+                    open_ticks,
+                    expanded,
+                    expanded_groups,
+                    hide_implementation,
+                    child_count,
+                    rows,
+                );
+            }
+        }
+    }
+
+    if line_to_parent {
+        open_ticks.pop();
+    }
+}
+
+/// Emit the subordinate nodes of a chain whose leader is `leader_node` as
+/// [`RowGroup::Member`] rows.
+///
+/// The chain continues as long as each node is an implementation node (not
+/// always-visible, single child, no siblings) **and** the node is expanded
+/// in the regular tree expand/collapse sense.
+///
+/// This walk guard mirrors [`count_visible_chain_subordinates`] exactly: both
+/// functions stop when `!should_expand || child.children.is_empty()` so that
+/// the count badge and the number of emitted Member rows always agree.
+fn emit_chain_members<'a>(
+    leader_node: &'a DiagnosticsNode,
+    leader_depth: usize,
+    open_ticks: &mut Vec<usize>,
+    expanded: &HashSet<String>,
+    expanded_groups: &HashSet<String>,
+    hide_implementation: bool,
+    rows: &mut Vec<InspectorRow<'a>>,
+) {
+    let mut current = leader_node;
+    let mut depth = leader_depth;
+
+    loop {
+        // The chain consists of single-child nodes — if there are no children
+        // or >1 children the chain cannot continue.
+        if current.children.len() != 1 {
+            break;
+        }
+
+        let child = &current.children[0];
+        let parent_child_count = 1; // single child — no siblings
+
+        if child.is_always_visible(parent_child_count) {
+            // Chain interrupted by an always-visible node — render it normally
+            // via a regular walk_node call (standalone, not a member).
+            let ticks = open_ticks.clone();
+            // Single child → last child → line_to_parent = false.
+            rows.push(InspectorRow {
+                node: child,
+                depth: depth + 1,
+                ticks,
+                line_to_parent: false,
+                group: RowGroup::None,
+            });
+            // Continue descending from this always-visible node normally.
+            let should_expand = child
+                .value_id
+                .as_deref()
+                .is_none_or(|id| expanded.contains(id));
+            if should_expand {
+                walk_children(
+                    child,
+                    depth + 1,
+                    open_ticks,
+                    expanded,
+                    expanded_groups,
+                    hide_implementation,
+                    rows,
+                );
+            }
+            break;
+        }
+
+        // Still an implementation node — emit as Member.
+        let ticks = open_ticks.clone();
+        rows.push(InspectorRow {
+            node: child,
+            depth: depth + 1,
+            ticks,
+            line_to_parent: false,
+            group: RowGroup::Member,
+        });
+
+        // Mirror the counter's stop condition: if the child is not expanded
+        // (or has no children) we stop here — the counter would stop too, so
+        // the number of emitted members stays equal to `hidden_count`.
+        let should_expand = child
+            .value_id
+            .as_deref()
+            .is_none_or(|id| expanded.contains(id));
+        if !should_expand || child.children.is_empty() {
+            break;
+        }
+
+        current = child;
+        depth += 1;
+    }
+}
+
+/// Walk all children of `node` and emit their rows (used after an
+/// always-visible node that interrupted a chain, to continue descending).
+#[allow(clippy::too_many_arguments)]
+fn walk_children<'a>(
+    node: &'a DiagnosticsNode,
+    depth: usize,
+    open_ticks: &mut Vec<usize>,
+    expanded: &HashSet<String>,
+    expanded_groups: &HashSet<String>,
+    hide_implementation: bool,
+    rows: &mut Vec<InspectorRow<'a>>,
+) {
+    let children = &node.children;
+    let child_count = children.len();
+
+    for (i, child) in children.iter().enumerate() {
+        let is_last = i == child_count - 1;
+        let child_line_to_parent = !is_last;
+
+        walk_node(
+            child,
+            depth + 1,
+            child_line_to_parent,
+            open_ticks,
+            expanded,
+            expanded_groups,
+            hide_implementation,
+            child_count,
+            rows,
+        );
+    }
+}
+
+/// Count the number of subordinate nodes that would be hidden when `node` is
+/// treated as a chain leader.
+///
+/// A "chain" is a path of single-child nodes that are all implementation
+/// nodes (i.e. `!is_always_visible(...)`).  The count excludes the leader
+/// itself, matching DevTools' "N more widgets" badge semantics.
+///
+/// Returns `0` when `node` has no children or when the first child would
+/// break the chain (is always-visible or has siblings).
+pub(crate) fn count_visible_chain_subordinates(
+    node: &DiagnosticsNode,
+    expanded: &HashSet<String>,
+    hide_implementation: bool,
+) -> usize {
+    if !hide_implementation {
+        return 0;
+    }
+
+    let mut count = 0;
+    let mut current = node;
+
+    loop {
+        if current.children.len() != 1 {
+            break;
+        }
+
+        let child = &current.children[0];
+        let parent_child_count = 1;
+
+        if child.is_always_visible(parent_child_count) {
+            // Chain ends here — the always-visible node is not a subordinate.
+            break;
+        }
+
+        count += 1;
+
+        // If this child is not expanded we stop descending (its subtree is
+        // not visible anyway).
+        let should_expand = child
+            .value_id
+            .as_deref()
+            .is_none_or(|id| expanded.contains(id));
+        if !should_expand || child.children.is_empty() {
+            break;
+        }
+
+        current = child;
+    }
+
+    count
+}
+
+// ============================================================================
+// DetailsContext
+// ============================================================================
+
+/// Per-open-details cached predicates derived from a `DiagnosticsNode` tree.
+///
+/// Populated by [`compute_details_context`] when the user opens the Inspector
+/// Details view. Cached on `InspectorState::details_context` to avoid re-walking
+/// the tree on every render. Cleared / overwritten by every open/close cycle.
+///
+/// Field semantics:
+///
+/// - `is_flex_layout`: mirrors DevTools' `isFlexLayout` predicate
+///   (`diagnostics_node.dart:487`). True if the selected widget is `Row`,
+///   `Column`, or `Flex`, OR if its tree parent is one of those. Used to gate
+///   the Flex Explorer tab in the Details view.
+///
+/// - `parent_type`: the parent's `widget_runtime_type()` value, or `None` if
+///   the selected node is the root (has no parent). Surfaced for diagnostics
+///   / future debugging; not currently consumed by visibility logic but cheap
+///   to capture during the same DFS.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailsContext {
+    /// Whether the selected widget participates in a flex layout.
+    ///
+    /// `true` if the selected widget's `widget_runtime_type` is `Row`,
+    /// `Column`, or `Flex`, OR if its tree parent is one of those.
+    /// Mirrors DevTools' `isFlexLayout` predicate
+    /// (`diagnostics_node.dart:487`). Gates the Flex Explorer tab.
+    pub is_flex_layout: bool,
+
+    /// The tree parent's `widget_runtime_type()`, or `None` for the root.
+    ///
+    /// Captured during the same DFS as `is_flex_layout`; not consumed by
+    /// current visibility logic but surfaced for diagnostics and possible
+    /// future use.
+    pub parent_type: Option<String>,
+}
+
+/// Find the parent of the node whose `value_id == target_value_id` in `root`'s subtree.
+///
+/// Returns `None` if `root` itself matches (root has no parent), if no node in
+/// `root` matches, or if `target_value_id` is empty.
+///
+/// Implemented as a thin shim over [`find_with_parent`]. The walk is bounded by
+/// [`MAX_TREE_WALK_DEPTH`] to prevent stack exhaustion on pathological trees.
+pub fn parent_of<'a>(
+    root: &'a DiagnosticsNode,
+    target_value_id: &str,
+) -> Option<&'a DiagnosticsNode> {
+    find_with_parent(root, target_value_id).1
+}
+
+/// Compute the [`DetailsContext`] for a selected node.
+///
+/// Walks `root` in a single depth-first pass to find the node with
+/// `value_id == target_value_id` and its parent (if any), then derives
+/// the visibility predicates.
+///
+/// Returns `DetailsContext::default()` if the target is not found or
+/// `target_value_id` is empty. The walk is bounded by
+/// [`MAX_TREE_WALK_DEPTH`].
+pub fn compute_details_context(root: &DiagnosticsNode, target_value_id: &str) -> DetailsContext {
+    let (selected, parent) = find_with_parent(root, target_value_id);
+    let Some(selected_node) = selected else {
+        return DetailsContext::default();
+    };
+    DetailsContext {
+        is_flex_layout: selected_node.is_flex_layout(parent),
+        parent_type: parent
+            .and_then(|p| p.widget_runtime_type())
+            .map(|s| s.to_string()),
+    }
+}
+
+/// Walks the tree rooted at `root` in a single depth-first pass, returning
+/// `(matching_node, parent_of_matching_node)` for the node whose `value_id`
+/// equals `target_value_id`. Returns `(None, None)` if the target is not
+/// found, if `target_value_id` is empty, or if the target is the root itself
+/// (the root has no parent in this tree).
+///
+/// Bounded by [`MAX_TREE_WALK_DEPTH`] to defend against pathological trees.
+fn find_with_parent<'a>(
+    root: &'a DiagnosticsNode,
+    target_value_id: &str,
+) -> (Option<&'a DiagnosticsNode>, Option<&'a DiagnosticsNode>) {
+    if target_value_id.is_empty() {
+        return (None, None);
+    }
+    if root.value_id.as_deref() == Some(target_value_id) {
+        // Root matches — no parent in this tree.
+        return (Some(root), None);
+    }
+    find_with_parent_inner(root, target_value_id, 0)
+}
+
+fn find_with_parent_inner<'a>(
+    parent: &'a DiagnosticsNode,
+    target_value_id: &str,
+    depth: usize,
+) -> (Option<&'a DiagnosticsNode>, Option<&'a DiagnosticsNode>) {
+    if depth > MAX_TREE_WALK_DEPTH {
+        return (None, None);
+    }
+    for child in &parent.children {
+        if child.value_id.as_deref() == Some(target_value_id) {
+            return (Some(child), Some(parent));
+        }
+        let (found, found_parent) = find_with_parent_inner(child, target_value_id, depth + 1);
+        if found.is_some() {
+            return (found, found_parent);
+        }
+    }
+    (None, None)
 }
 
 // ============================================================================
@@ -141,6 +822,7 @@ impl DiagnosticsNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreationLocation {
     /// File URI (e.g., "file:///path/to/main.dart")
+    #[serde(deserialize_with = "deserialize_sanitized_string")]
     pub file: String,
 
     /// Line number (1-based)
@@ -150,6 +832,7 @@ pub struct CreationLocation {
     pub column: u32,
 
     /// Widget class name at this creation site
+    #[serde(deserialize_with = "deserialize_sanitized_option_string", default)]
     pub name: Option<String>,
 }
 
@@ -252,6 +935,142 @@ impl EdgeInsets {
 }
 
 // ============================================================================
+// Flex layout enums
+// ============================================================================
+
+/// `FlexFit` for a `Flexible`/`Expanded` child.
+///
+/// Mirrors Flutter's `FlexFit` enum:
+/// - `Tight` — the child is forced to fill the available main-axis space.
+/// - `Loose` — the child takes its intrinsic main-axis size up to the available space.
+///
+/// Source: `tmp/devtools/.../diagnostics_node.dart:78–81`. The JSON field is a
+/// string (`"tight"` / `"loose"`). Default per DevTools when missing or
+/// unrecognized is `Loose`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlexFit {
+    /// The child is forced to fill the available main-axis space.
+    Tight,
+    /// The child takes its intrinsic main-axis size up to the available space.
+    #[default]
+    Loose,
+}
+
+/// Flex container's primary direction.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:466`. Parsed from the
+/// `direction` property in `renderObject.properties` (`"horizontal"` /
+/// `"vertical"`). Default per DevTools: `Vertical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Axis {
+    /// Layout children along the horizontal axis (e.g., `Row`).
+    Horizontal,
+    /// Layout children along the vertical axis (e.g., `Column`).
+    #[default]
+    Vertical,
+}
+
+/// Flex container's main-axis alignment.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:467–469`.
+/// Field name in `renderObject.properties`: `mainAxisAlignment`. Default: `Start`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MainAxisAlignment {
+    /// Place children at the start of the main axis.
+    #[default]
+    Start,
+    /// Place children at the end of the main axis.
+    End,
+    /// Center children along the main axis.
+    Center,
+    /// Distribute children evenly, with the first at start and last at end.
+    SpaceBetween,
+    /// Distribute children evenly, with half-interval gaps at start and end.
+    SpaceAround,
+    /// Distribute children evenly, with equal gaps everywhere.
+    SpaceEvenly,
+}
+
+/// Flex container's cross-axis alignment.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:470–472`.
+/// Field name in `renderObject.properties`: `crossAxisAlignment`. Default: `Center`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CrossAxisAlignment {
+    /// Align children at the start of the cross axis.
+    Start,
+    /// Align children at the end of the cross axis.
+    End,
+    /// Center children along the cross axis.
+    #[default]
+    Center,
+    /// Stretch children to fill the cross axis.
+    Stretch,
+    /// Align children along their text baseline.
+    Baseline,
+}
+
+/// Flex container's main-axis size policy.
+///
+/// Source: `tmp/devtools/.../inspector_data_models.dart:473`.
+/// Field name in `renderObject.properties`: `mainAxisSize`. Default: `Max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MainAxisSize {
+    /// The container shrinks to fit its children along the main axis.
+    Min,
+    /// The container expands to fill the available space along the main axis.
+    #[default]
+    Max,
+}
+
+// ============================================================================
+// FlexChild
+// ============================================================================
+
+/// One child of a `Row`/`Column`/`Flex` container, as surfaced by
+/// `ext.flutter.inspector.getLayoutExplorerNode`.
+///
+/// Source: `tmp/devtools/.../diagnostics_node.dart:139–154` describes the
+/// per-child JSON shape:
+/// - `size: { width, height }`
+/// - `constraints: { minWidth, maxWidth, minHeight, maxHeight }`
+/// - `parentData: { offsetX, offsetY }`
+/// - `flexFactor: int | null`
+/// - `flexFit: "tight" | "loose" | null`
+///
+/// Phase 2's `extract_layout_info` (task 04) walks `node.children` and emits
+/// one `FlexChild` per child (whether or not it has flex; a child with
+/// `flex_factor: None` is a fixed-size child).
+///
+/// Note: This struct is populated manually by `extract_layout_info` from raw JSON,
+/// not via serde derive on the whole struct.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FlexChild {
+    /// `valueId` of the child node (for cross-reference back into the widget
+    /// tree). Optional because some children may not carry a valueId.
+    pub id: Option<String>,
+    /// Description string (widget runtime type, e.g. `"Container"`,
+    /// `"Padding"`). Sanitized at extract time.
+    pub name: String,
+    /// Child's measured size, if available.
+    pub size: Option<WidgetSize>,
+    /// Constraints the parent passed to this child.
+    pub constraints: Option<BoxConstraints>,
+    /// `flexFactor` from `parentData`. `None` means non-flex (fixed-size).
+    pub flex_factor: Option<u32>,
+    /// `flexFit`. `None` when the child is not a `Flexible`/`Expanded`.
+    pub flex_fit: Option<FlexFit>,
+    /// Pixel offset of the child within the parent (from `parentData`).
+    /// Stored as `(offset_x, offset_y)` in logical pixels.
+    pub parent_offset: Option<(f64, f64)>,
+}
+
+// ============================================================================
 // LayoutInfo
 // ============================================================================
 
@@ -270,9 +1089,11 @@ pub struct LayoutInfo {
     pub flex_factor: Option<f64>,
 
     /// Flex fit: "tight" or "loose"
+    #[serde(deserialize_with = "deserialize_sanitized_option_string", default)]
     pub flex_fit: Option<String>,
 
     /// Widget description (e.g., "Column", "SizedBox")
+    #[serde(deserialize_with = "deserialize_sanitized_option_string", default)]
     pub description: Option<String>,
 
     /// Padding applied inside this widget's box
@@ -280,6 +1101,24 @@ pub struct LayoutInfo {
 
     /// Margin applied outside this widget's box
     pub margin: Option<EdgeInsets>,
+
+    /// Flex container's primary axis (only meaningful for `Row`/`Column`/`Flex`).
+    /// `None` for non-flex widgets.
+    pub direction: Option<Axis>,
+
+    /// Main-axis alignment (only meaningful for flex containers).
+    pub main_axis_alignment: Option<MainAxisAlignment>,
+
+    /// Cross-axis alignment (only meaningful for flex containers).
+    pub cross_axis_alignment: Option<CrossAxisAlignment>,
+
+    /// Main-axis size policy (only meaningful for flex containers).
+    pub main_axis_size: Option<MainAxisSize>,
+
+    /// Children of the flex container, in render order. Empty for non-flex
+    /// widgets or when the layout response did not include children.
+    #[serde(skip)]
+    pub children: Vec<FlexChild>,
 }
 
 // ============================================================================
@@ -459,6 +1298,36 @@ impl std::str::FromStr for DiagnosticLevel {
 // Serde helpers
 // ============================================================================
 
+/// Deserialize a `String` field, stripping any ANSI escape sequences.
+///
+/// Applied to string fields on [`DiagnosticsNode`] and [`CreationLocation`]
+/// that are rendered directly to the terminal. Stripping at the deserialize
+/// boundary prevents ANSI bytes from the Dart VM Service from leaking through
+/// to Ratatui's buffer.
+///
+/// Uses [`crate::ansi::strip_ansi_codes`], which additionally removes
+/// backslash-prefixed box-drawing characters and trailing backslashes from
+/// Flutter's `--machine` mode output.
+fn deserialize_sanitized_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: String = serde::Deserialize::deserialize(deserializer)?;
+    Ok(crate::ansi::strip_ansi_codes(&raw))
+}
+
+/// Deserialize an `Option<String>` field, stripping any ANSI escape sequences.
+///
+/// `None` and JSON `null` are preserved as `None`. When a string value is
+/// present, [`crate::ansi::strip_ansi_codes`] is applied before returning.
+fn deserialize_sanitized_option_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(raw.map(|s| crate::ansi::strip_ansi_codes(&s)))
+}
+
 /// Deserialize a value that may be a string or an integer into `Option<String>`.
 ///
 /// Flutter's VM Service inspector extensions serialize some fields (e.g., `locationId`)
@@ -527,7 +1396,31 @@ mod tests {
             summary_tree: false,
             children: vec![],
             properties: vec![],
+            property_type: None,
         }
+    }
+
+    /// Build a simple chain:  root → impl1 → impl2 → … → impl_n (all
+    /// implementation nodes, single-child, non-local-project).
+    fn make_chain(descriptions: &[&str]) -> DiagnosticsNode {
+        assert!(!descriptions.is_empty());
+        let mut nodes: Vec<DiagnosticsNode> = descriptions
+            .iter()
+            .enumerate()
+            .map(|(i, &desc)| {
+                let mut n = make_test_node(desc);
+                n.value_id = Some(format!("id-{i}"));
+                n
+            })
+            .collect();
+
+        // Wire up: each node's child is the next.
+        for i in (0..nodes.len() - 1).rev() {
+            let child = nodes.remove(i + 1);
+            nodes[i].children = vec![child];
+            nodes[i].has_children = true;
+        }
+        nodes.remove(0)
     }
 
     #[test]
@@ -908,5 +1801,1165 @@ mod tests {
         let json = serde_json::to_string(&ei).unwrap();
         let restored: EdgeInsets = serde_json::from_str(&json).unwrap();
         assert_eq!(ei, restored);
+    }
+
+    // -----------------------------------------------------------------------
+    // widget_runtime_type tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_widget_runtime_type_strips_generics() {
+        let node = make_test_node("BlocProvider<AppBloc>");
+        assert_eq!(node.widget_runtime_type(), Some("BlocProvider"));
+    }
+
+    #[test]
+    fn test_widget_runtime_type_no_generics() {
+        let node = make_test_node("Container");
+        assert_eq!(node.widget_runtime_type(), Some("Container"));
+    }
+
+    #[test]
+    fn test_widget_runtime_type_empty_description_returns_none() {
+        let node = make_test_node("");
+        assert_eq!(node.widget_runtime_type(), None);
+    }
+
+    #[test]
+    fn test_widget_runtime_type_only_generics_returns_none() {
+        // Edge case: description starts with '<' — nothing before it.
+        let node = make_test_node("<Foo>");
+        assert_eq!(node.widget_runtime_type(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // is_always_visible tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_always_visible_root_node() {
+        let node = make_test_node("Root");
+        // parent_child_count == 0 → root → always visible.
+        assert!(node.is_always_visible(0));
+    }
+
+    #[test]
+    fn test_is_always_visible_local_project() {
+        let mut node = make_test_node("MyWidget");
+        node.created_by_local_project = true;
+        // Local-project node is always visible regardless of siblings/children.
+        assert!(node.is_always_visible(1));
+    }
+
+    #[test]
+    fn test_is_always_visible_multi_child() {
+        let mut node = make_test_node("Column");
+        node.children = vec![make_test_node("A"), make_test_node("B")];
+        // Node has 2 children → always visible.
+        assert!(node.is_always_visible(1));
+    }
+
+    #[test]
+    fn test_is_always_visible_has_siblings() {
+        let node = make_test_node("SiblingWidget");
+        // parent_child_count == 2 → has siblings → always visible.
+        assert!(node.is_always_visible(2));
+    }
+
+    #[test]
+    fn test_is_always_visible_false_for_lone_impl_node() {
+        // Single child, non-local, no siblings → not always visible.
+        let mut node = make_test_node("Padding");
+        node.children = vec![make_test_node("Center")];
+        // parent_child_count == 1 (only child), non-local, 1 child.
+        assert!(!node.is_always_visible(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // is_flex / is_flex_layout tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_flex_row() {
+        let node = make_test_node("Row");
+        assert!(node.is_flex());
+    }
+
+    #[test]
+    fn test_is_flex_column() {
+        let node = make_test_node("Column");
+        assert!(node.is_flex());
+    }
+
+    #[test]
+    fn test_is_flex_flex() {
+        let node = make_test_node("Flex");
+        assert!(node.is_flex());
+    }
+
+    #[test]
+    fn test_is_flex_false_for_container() {
+        let node = make_test_node("Container");
+        assert!(!node.is_flex());
+    }
+
+    #[test]
+    fn test_is_flex_layout_self_is_row() {
+        let node = make_test_node("Row");
+        assert!(node.is_flex_layout(None));
+    }
+
+    #[test]
+    fn test_is_flex_layout_parent_is_column() {
+        let parent = make_test_node("Column");
+        let child = make_test_node("Container");
+        // Child is not flex itself, but parent is.
+        assert!(child.is_flex_layout(Some(&parent)));
+    }
+
+    #[test]
+    fn test_is_flex_layout_false_when_neither() {
+        let parent = make_test_node("Scaffold");
+        let child = make_test_node("Container");
+        assert!(!child.is_flex_layout(Some(&parent)));
+    }
+
+    #[test]
+    fn test_is_flex_layout_no_parent_non_flex() {
+        let node = make_test_node("Container");
+        assert!(!node.is_flex_layout(None));
+    }
+
+    // -----------------------------------------------------------------------
+    // is_render_object_property tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_render_object_property_true() {
+        let mut node = make_test_node("size");
+        node.property_type = Some("RenderObject".to_string());
+        assert!(node.is_render_object_property());
+    }
+
+    #[test]
+    fn test_is_render_object_property_false_when_none() {
+        let node = make_test_node("padding");
+        assert!(!node.is_render_object_property());
+    }
+
+    #[test]
+    fn test_is_render_object_property_false_for_other_type() {
+        let mut node = make_test_node("color");
+        node.property_type = Some("Color".to_string());
+        assert!(!node.is_render_object_property());
+    }
+
+    // -----------------------------------------------------------------------
+    // property_type deserialization test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_diagnostics_node_deserialize_property_type() {
+        let json = r#"{"description": "size", "propertyType": "RenderObject"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.property_type.as_deref(), Some("RenderObject"));
+        assert!(node.is_render_object_property());
+    }
+
+    // -----------------------------------------------------------------------
+    // build_inspector_rows tests
+    // -----------------------------------------------------------------------
+
+    fn empty_set() -> HashSet<String> {
+        HashSet::new()
+    }
+
+    fn set_of(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_build_rows_single_root_returns_one_row() {
+        let root = make_test_node("MaterialApp");
+        let expanded = empty_set();
+        let expanded_groups = empty_set();
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &root,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: false,
+        });
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].depth, 0);
+        assert_eq!(rows[0].group, RowGroup::None);
+    }
+
+    #[test]
+    fn test_build_rows_chain_folds_when_hide_implementation() {
+        // Chain: root (non-local, single-child) → impl1 → impl2 → impl3
+        // (all implementation nodes, single children, non-local).
+        // root has no parent → always visible (parent_child_count == 0).
+        // impl1 is a single child of root and root IS always-visible, so
+        // impl1 is an implementation node → becomes leader.
+        let chain = make_chain(&["Root", "Padding", "Center", "SizedBox"]);
+        let expanded = set_of(&["id-0", "id-1", "id-2"]);
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &chain,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: true,
+        });
+
+        // Root is always visible (parent_child_count == 0) → standalone.
+        // Padding is the sole child of Root, non-local → leader.
+        assert_eq!(rows.len(), 2, "expect root + leader only");
+        assert_eq!(rows[0].group, RowGroup::None);
+        // The leader should be collapsed with 2 subordinates (Center, SizedBox).
+        assert_eq!(rows[1].group, RowGroup::LeaderCollapsed { hidden_count: 2 });
+    }
+
+    #[test]
+    fn test_build_rows_chain_all_visible_when_hide_implementation_false() {
+        let chain = make_chain(&["Root", "Padding", "Center", "SizedBox"]);
+        let expanded = set_of(&["id-0", "id-1", "id-2"]);
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &chain,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: false,
+        });
+
+        // All 4 nodes visible.
+        assert_eq!(rows.len(), 4);
+        for row in &rows {
+            assert_eq!(row.group, RowGroup::None);
+        }
+    }
+
+    #[test]
+    fn test_build_rows_chain_leader_expanded_emits_members() {
+        let chain = make_chain(&["Root", "Padding", "Center", "SizedBox"]);
+        let expanded = set_of(&["id-0", "id-1", "id-2"]);
+        // The leader is "id-1" (Padding).
+        let expanded_groups = set_of(&["id-1"]);
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &chain,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: true,
+        });
+
+        // Root (standalone) + LeaderExpanded + 2 Member rows.
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].group, RowGroup::None);
+        assert_eq!(rows[1].group, RowGroup::LeaderExpanded);
+        assert_eq!(rows[2].group, RowGroup::Member);
+        assert_eq!(rows[3].group, RowGroup::Member);
+    }
+
+    #[test]
+    fn test_build_rows_multi_child_interrupts_chain() {
+        // Root → child1 (non-local, 2 children) → grandchild_a, grandchild_b.
+        // child1 has 2 children → always visible → chain never forms.
+        let mut root = make_test_node("Root");
+        root.value_id = Some("root".to_string());
+        let mut child1 = make_test_node("Column");
+        child1.value_id = Some("col".to_string());
+        child1.children = vec![make_test_node("A"), make_test_node("B")];
+        child1.has_children = true;
+        root.children = vec![child1];
+        root.has_children = true;
+
+        let expanded = set_of(&["root", "col"]);
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &root,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: true,
+        });
+
+        // root + Column + A + B — Column has 2 children so it's always-visible.
+        assert_eq!(rows.len(), 4);
+        for row in &rows {
+            assert_eq!(row.group, RowGroup::None);
+        }
+    }
+
+    #[test]
+    fn test_build_rows_ticks_computed_correctly() {
+        // Build a two-branch tree:
+        // root
+        // ├─ child_a (not last)
+        // │  └─ grandchild_a (last child of child_a)
+        // └─ child_b (last child of root)
+        //    └─ grandchild_b (last child of child_b)
+        //
+        // Expected ticks (after C4 fix — push depth.saturating_sub(1)):
+        //
+        // When child_a (depth=1, line_to_parent=true) is visited, we push
+        // `1.saturating_sub(1) = 0` to open_ticks.  This records depth 0
+        // as the column where the guideline │ should be drawn for descendants
+        // of child_a — which is the column of child_a's own branch tick
+        // (glyph_col(0) = 0), matching where └─ or ├─ was drawn for child_a.
+        //
+        // root:          depth=0, ticks=[]
+        // child_a:       depth=1, ticks=[]      (no ancestor with pending siblings)
+        // grandchild_a:  depth=2, ticks=[0]     (tick at depth-0 because child_b follows root)
+        // child_b:       depth=1, ticks=[]      (last child of root)
+        // grandchild_b:  depth=2, ticks=[]      (no pending siblings anywhere in ancestry)
+
+        let mut root = make_test_node("Root");
+        root.value_id = Some("root".to_string());
+
+        let mut child_a = make_test_node("ChildA");
+        child_a.value_id = Some("ca".to_string());
+        let mut grandchild_a = make_test_node("GrandA");
+        grandchild_a.value_id = Some("gca".to_string());
+        child_a.children = vec![grandchild_a];
+        child_a.has_children = true;
+
+        let mut child_b = make_test_node("ChildB");
+        child_b.value_id = Some("cb".to_string());
+        let mut grandchild_b = make_test_node("GrandB");
+        grandchild_b.value_id = Some("gcb".to_string());
+        child_b.children = vec![grandchild_b];
+        child_b.has_children = true;
+
+        root.children = vec![child_a, child_b];
+        root.has_children = true;
+
+        let expanded = set_of(&["root", "ca", "cb"]);
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &root,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: false,
+        });
+
+        assert_eq!(rows.len(), 5);
+
+        // root
+        assert_eq!(rows[0].depth, 0);
+        assert!(rows[0].ticks.is_empty());
+
+        // child_a (not last → line_to_parent true); its own ticks are empty
+        // because no ancestor of child_a is a non-last sibling.
+        assert_eq!(rows[1].depth, 1);
+        assert!(rows[1].line_to_parent);
+        assert!(rows[1].ticks.is_empty());
+
+        // grandchild_a: child_a (depth 1, non-last) pushed depth.saturating_sub(1)=0
+        // to open_ticks, so grandchild_a sees a tick at depth 0.
+        // The renderer draws │ at glyph_col(0) = 0 — aligned with child_a's ├ tick.
+        assert_eq!(rows[2].depth, 2);
+        assert!(!rows[2].line_to_parent, "last child of child_a");
+        assert!(
+            rows[2].ticks.contains(&0),
+            "depth-0 tick expected (C4 fix): child_a pushed 0 not 1 to open_ticks"
+        );
+        assert!(
+            !rows[2].ticks.contains(&1),
+            "depth-1 tick must NOT be present after C4 fix"
+        );
+
+        // child_b (last child of root → line_to_parent false)
+        assert_eq!(rows[3].depth, 1);
+        assert!(!rows[3].line_to_parent);
+        assert!(rows[3].ticks.is_empty());
+
+        // grandchild_b (last child of child_b)
+        assert_eq!(rows[4].depth, 2);
+        assert!(!rows[4].line_to_parent);
+        assert!(rows[4].ticks.is_empty());
+    }
+
+    #[test]
+    fn test_build_rows_local_project_node_breaks_chain() {
+        // Chain: root → impl1 → local_widget → impl2
+        // local_widget is created_by_local_project → always visible → chain breaks.
+        let mut root = make_test_node("Root");
+        root.value_id = Some("root".to_string());
+
+        let mut impl1 = make_test_node("Padding");
+        impl1.value_id = Some("impl1".to_string());
+
+        let mut local_widget = make_test_node("MyWidget");
+        local_widget.value_id = Some("local".to_string());
+        local_widget.created_by_local_project = true;
+
+        let mut impl2 = make_test_node("Center");
+        impl2.value_id = Some("impl2".to_string());
+
+        local_widget.children = vec![impl2];
+        local_widget.has_children = true;
+        impl1.children = vec![local_widget];
+        impl1.has_children = true;
+        root.children = vec![impl1];
+        root.has_children = true;
+
+        let expanded = set_of(&["root", "impl1", "local"]);
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &root,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: true,
+        });
+
+        // root (standalone), impl1 (leader, but local breaks the chain so
+        // it sees 0 subordinates → standalone), local_widget (always-visible →
+        // standalone), impl2 (lone impl child of local → either standalone or
+        // leader).  The exact chain behaviour depends on parent_child_count;
+        // local_widget has only impl2 as child (non-local, single-child) →
+        // impl2 could be a leader.  But it has no children → count = 0 →
+        // standalone.
+        //
+        // Key assertion: local_widget must appear as a standalone row (not
+        // hidden inside a chain).
+        let local_row = rows
+            .iter()
+            .find(|r| r.node.value_id.as_deref() == Some("local"));
+        assert!(local_row.is_some(), "local_widget must appear in rows");
+        assert_eq!(
+            local_row.unwrap().group,
+            RowGroup::None,
+            "local-project node must be standalone"
+        );
+    }
+
+    #[test]
+    fn test_build_rows_last_child_line_to_parent_false() {
+        // root with two children → last child has line_to_parent == false.
+        let mut root = make_test_node("Root");
+        root.value_id = Some("root".to_string());
+        let mut a = make_test_node("A");
+        a.value_id = Some("a".to_string());
+        let mut b = make_test_node("B");
+        b.value_id = Some("b".to_string());
+        root.children = vec![a, b];
+        root.has_children = true;
+
+        let expanded = set_of(&["root"]);
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &root,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: false,
+        });
+
+        assert_eq!(rows.len(), 3);
+        assert!(rows[1].line_to_parent, "first child: not last → true");
+        assert!(!rows[2].line_to_parent, "second child: last → false");
+    }
+
+    // -----------------------------------------------------------------------
+    // M4: count/emit agreement tests
+    // -----------------------------------------------------------------------
+
+    /// Collect the number of Member rows emitted for a chain leader when the
+    /// group is expanded, to compare against the `hidden_count` badge.
+    fn count_emitted_members(
+        root: &DiagnosticsNode,
+        expanded: &HashSet<String>,
+        expanded_groups: &HashSet<String>,
+    ) -> (usize, usize) {
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root,
+            expanded,
+            expanded_groups,
+            hide_implementation: true,
+        });
+
+        // Find the hidden_count from the collapsed leader (before expansion).
+        let no_groups = empty_set();
+        let collapsed_rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root,
+            expanded,
+            expanded_groups: &no_groups,
+            hide_implementation: true,
+        });
+
+        let badge = collapsed_rows.iter().find_map(|r| {
+            if let RowGroup::LeaderCollapsed { hidden_count } = r.group {
+                Some(hidden_count)
+            } else {
+                None
+            }
+        });
+
+        let member_count = rows.iter().filter(|r| r.group == RowGroup::Member).count();
+
+        (badge.unwrap_or(0), member_count)
+    }
+
+    /// Table of (chain_length, expanded_ids) test cases for count/emit parity.
+    ///
+    /// Each entry verifies that the badge count (`hidden_count`) equals the
+    /// number of `Member` rows when the leader's group is expanded.
+    #[test]
+    fn count_and_emit_agree_for_various_chain_shapes() {
+        // Case 1: Chain of 4 nodes, all expanded.
+        // Root (always-visible) → impl1 (leader) → impl2 → impl3
+        // badge = 2, emitted members = 2.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3"]);
+            let expanded = set_of(&["id-0", "id-1", "id-2"]);
+            let expanded_groups = set_of(&["id-1"]); // leader = id-1 (Impl1)
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 1] badge={badge} members={members}: chain length 4, all expanded"
+            );
+        }
+
+        // Case 2: Chain of 5 nodes, all expanded.
+        // Root → impl1 (leader) → impl2 → impl3 → impl4
+        // badge = 3, emitted members = 3.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3", "Impl4"]);
+            let expanded = set_of(&["id-0", "id-1", "id-2", "id-3"]);
+            let expanded_groups = set_of(&["id-1"]);
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 2] badge={badge} members={members}: chain length 5, all expanded"
+            );
+        }
+
+        // Case 3: Chain of 4 nodes, middle node NOT expanded.
+        // Root → impl1 (leader) → impl2 [NOT expanded] → impl3 (unreachable).
+        // Both counter and emitter should stop at impl2 because its subtree is
+        // collapsed.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3"]);
+            // id-2 (Impl2) is NOT in expanded — its children are hidden.
+            let expanded = set_of(&["id-0", "id-1"]); // id-2 omitted
+            let expanded_groups = set_of(&["id-1"]);
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 3] badge={badge} members={members}: chain of 4 with collapsed middle node"
+            );
+        }
+
+        // Case 4: Chain of 2 nodes only (leader + 1 member).
+        // Root → impl1 (leader) → impl2 (single subordinate).
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2"]);
+            let expanded = set_of(&["id-0", "id-1"]);
+            let expanded_groups = set_of(&["id-1"]);
+            let (badge, members) = count_emitted_members(&chain, &expanded, &expanded_groups);
+            assert_eq!(
+                badge, members,
+                "[case 4] badge={badge} members={members}: chain of 3 (root + leader + 1 member)"
+            );
+        }
+
+        // Case 5: Collapsed-state only — badge must equal the count from
+        // count_visible_chain_subordinates.
+        {
+            let chain = make_chain(&["Root", "Impl1", "Impl2", "Impl3"]);
+            let expanded = set_of(&["id-0", "id-1", "id-2"]);
+            let expected_count =
+                count_visible_chain_subordinates(&chain.children[0], &expanded, true);
+            let no_groups = empty_set();
+            let collapsed_rows = build_inspector_rows(InspectorRowBuilderInputs {
+                root: &chain,
+                expanded: &expanded,
+                expanded_groups: &no_groups,
+                hide_implementation: true,
+            });
+            let badge = collapsed_rows.iter().find_map(|r| {
+                if let RowGroup::LeaderCollapsed { hidden_count } = r.group {
+                    Some(hidden_count)
+                } else {
+                    None
+                }
+            });
+            assert_eq!(
+                badge,
+                Some(expected_count),
+                "[case 5] badge must equal count_visible_chain_subordinates"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // m9: depth cap tests
+    // -----------------------------------------------------------------------
+
+    /// Build a linear chain of `n` single-child nodes (all implementation
+    /// nodes so they don't trigger chain-folding when hide_implementation is false).
+    fn make_deep_chain(n: usize) -> DiagnosticsNode {
+        let mut nodes: Vec<DiagnosticsNode> = (0..n)
+            .map(|i| {
+                let mut node = make_test_node(&format!("Node{i}"));
+                node.value_id = Some(format!("deep-{i}"));
+                node
+            })
+            .collect();
+        // Wire: each node's only child is the next one.
+        for i in (0..nodes.len() - 1).rev() {
+            let child = nodes.remove(i + 1);
+            nodes[i].children = vec![child];
+            nodes[i].has_children = true;
+        }
+        nodes.remove(0)
+    }
+
+    #[test]
+    fn walk_node_returns_early_at_max_depth() {
+        // Build a chain of MAX_TREE_WALK_DEPTH + 100 nodes.
+        let deep = make_deep_chain(MAX_TREE_WALK_DEPTH + 100);
+
+        // Expand all nodes so the walker would recurse the full depth if uncapped.
+        let expanded: HashSet<String> = (0..(MAX_TREE_WALK_DEPTH + 100))
+            .map(|i| format!("deep-{i}"))
+            .collect();
+        let expanded_groups = empty_set();
+
+        let rows = build_inspector_rows(InspectorRowBuilderInputs {
+            root: &deep,
+            expanded: &expanded,
+            expanded_groups: &expanded_groups,
+            hide_implementation: false,
+        });
+
+        // The walker should stop at MAX_TREE_WALK_DEPTH+1 (depth 0..=MAX_TREE_WALK_DEPTH).
+        // Give a small slack (+8) for any slight variance in boundary handling.
+        assert!(
+            rows.len() <= MAX_TREE_WALK_DEPTH + 8,
+            "expected at most {} rows for a deep chain (got {})",
+            MAX_TREE_WALK_DEPTH + 8,
+            rows.len()
+        );
+    }
+
+    #[test]
+    fn visible_node_count_truncated_at_max_depth() {
+        // A chain deeper than MAX_TREE_WALK_DEPTH should be truncated.
+        let deep = make_deep_chain(MAX_TREE_WALK_DEPTH + 100);
+        let count = deep.visible_node_count();
+        // Should be capped around MAX_TREE_WALK_DEPTH + 1.
+        assert!(
+            count <= MAX_TREE_WALK_DEPTH + 2,
+            "visible_node_count should be capped at max depth (got {count})"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ANSI sanitisation at deserialize boundary (M7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn deserialize_strips_ansi_escape_from_description() {
+        // JSON \u001b is the ESC byte (0x1B). serde_json decodes this before
+        // calling our deserializer, so the sanitizer receives a string with a
+        // real ESC byte and strips it.  We use a raw string literal so the
+        // \u001b is passed verbatim to serde_json as the JSON-level escape.
+        let json = r#"{"description": "\u001b[31mContainerRED\u001b[0m"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.description, "ContainerRED");
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_creation_location_file() {
+        // Embed a CSI sequence in the file path (adversarial VM Service output).
+        let json =
+            r#"{"file": "file:///path/to/\u001b[32mmain\u001b[0m.dart", "line": 10, "column": 5}"#;
+        let loc: CreationLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.file, "file:///path/to/main.dart");
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_creation_location_name() {
+        let json = r#"{"file": "file:///main.dart", "line": 1, "column": 1, "name": "My\u001b[1mWidget\u001b[0m"}"#;
+        let loc: CreationLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.name.as_deref(), Some("MyWidget"));
+    }
+
+    #[test]
+    fn deserialize_creation_location_name_none_preserved() {
+        // When name is absent, it should remain None (not default to empty string).
+        let json = r#"{"file": "file:///main.dart", "line": 1, "column": 1}"#;
+        let loc: CreationLocation = serde_json::from_str(json).unwrap();
+        assert!(loc.name.is_none());
+    }
+
+    #[test]
+    fn deserialize_preserves_unicode_box_drawing_in_description() {
+        // Box-drawing characters (U+2502, U+251C, U+2500) must survive stripping.
+        let json = r#"{"description": "\u2502 Column \u251c\u2500 child"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.description, "\u{2502} Column \u{251c}\u{2500} child");
+    }
+
+    #[test]
+    fn deserialize_strips_caret_notation_from_description() {
+        // Flutter --machine mode encodes ESC as the two-char sequence ^[ (caret + bracket),
+        // which is valid JSON text (no control characters) and must also be stripped.
+        let json = r#"{"description": "^[[31mContainer^[[0m"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.description, "Container");
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_layout_info_description() {
+        let json = r#"{"description": "\u001b[33mColumn\u001b[0m"}"#;
+        let info: LayoutInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.description.as_deref(), Some("Column"));
+    }
+
+    #[test]
+    fn deserialize_strips_ansi_from_layout_info_flex_fit() {
+        // LayoutInfo uses snake_case field names (no rename_all = "camelCase").
+        let json = r#"{"flex_fit": "\u001b[32mtight\u001b[0m"}"#;
+        let info: LayoutInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.flex_fit.as_deref(), Some("tight"));
+    }
+    // -----------------------------------------------------------------------
+    // Flex enums
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn flex_fit_deserializes_tight_and_loose() {
+        let tight: FlexFit = serde_json::from_str("\"tight\"").unwrap();
+        let loose: FlexFit = serde_json::from_str("\"loose\"").unwrap();
+        assert_eq!(tight, FlexFit::Tight);
+        assert_eq!(loose, FlexFit::Loose);
+    }
+
+    #[test]
+    fn flex_fit_default_is_loose() {
+        assert_eq!(FlexFit::default(), FlexFit::Loose);
+    }
+
+    #[test]
+    fn main_axis_alignment_deserializes_space_between() {
+        let v: MainAxisAlignment = serde_json::from_str("\"spaceBetween\"").unwrap();
+        assert_eq!(v, MainAxisAlignment::SpaceBetween);
+    }
+
+    #[test]
+    fn cross_axis_alignment_deserializes_stretch_and_baseline() {
+        let stretch: CrossAxisAlignment = serde_json::from_str("\"stretch\"").unwrap();
+        let baseline: CrossAxisAlignment = serde_json::from_str("\"baseline\"").unwrap();
+        assert_eq!(stretch, CrossAxisAlignment::Stretch);
+        assert_eq!(baseline, CrossAxisAlignment::Baseline);
+    }
+
+    #[test]
+    fn axis_default_is_vertical() {
+        assert_eq!(Axis::default(), Axis::Vertical);
+    }
+
+    #[test]
+    fn axis_horizontal_deserializes() {
+        let v: Axis = serde_json::from_str("\"horizontal\"").unwrap();
+        assert_eq!(v, Axis::Horizontal);
+    }
+
+    #[test]
+    fn cross_axis_alignment_default_is_center() {
+        assert_eq!(CrossAxisAlignment::default(), CrossAxisAlignment::Center);
+    }
+
+    #[test]
+    fn main_axis_size_default_is_max() {
+        assert_eq!(MainAxisSize::default(), MainAxisSize::Max);
+    }
+
+    // -----------------------------------------------------------------------
+    // FlexChild struct
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn flex_child_default_is_empty() {
+        let c = FlexChild::default();
+        assert!(c.id.is_none());
+        assert_eq!(c.name, "");
+        assert!(c.flex_factor.is_none());
+    }
+
+    #[test]
+    fn flex_child_clone_and_eq() {
+        let c = FlexChild {
+            id: Some("id-1".to_string()),
+            name: "Container".to_string(),
+            size: Some(WidgetSize {
+                width: 100.0,
+                height: 50.0,
+            }),
+            constraints: None,
+            flex_factor: Some(2),
+            flex_fit: Some(FlexFit::Tight),
+            parent_offset: Some((10.0, 20.0)),
+        };
+        let c2 = c.clone();
+        assert_eq!(c, c2);
+    }
+
+    #[test]
+    fn layout_info_new_fields_default_to_none() {
+        // Existing LayoutInfo tests remain valid: new fields default to None/empty.
+        let info = LayoutInfo::default();
+        assert!(info.direction.is_none());
+        assert!(info.main_axis_alignment.is_none());
+        assert!(info.cross_axis_alignment.is_none());
+        assert!(info.main_axis_size.is_none());
+        assert!(info.children.is_empty());
+    }
+
+    #[test]
+    fn layout_info_deserializes_without_new_fields() {
+        // A JSON blob that lacks the new flex fields must still deserialize cleanly.
+        let json = r#"{"description": "Column"}"#;
+        let info: LayoutInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.description.as_deref(), Some("Column"));
+        assert!(info.direction.is_none());
+        assert!(info.children.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // property_type sanitization (Phase 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn property_type_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Color",
+            "propertyType": "\u{001b}[31mRenderObject\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.property_type.as_deref(), Some("RenderObject"));
+    }
+
+    #[test]
+    fn property_type_passes_through_clean_strings() {
+        let json = serde_json::json!({
+            "description": "Color",
+            "propertyType": "RenderObject"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.property_type.as_deref(), Some("RenderObject"));
+    }
+
+    #[test]
+    fn property_type_absent_is_none() {
+        let json = serde_json::json!({ "description": "Text" });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert!(node.property_type.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // name / level / node_type / style / value_id sanitization (M4 + m9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diagnostics_node_name_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "name": "\u{001b}[31mwidget_name\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.name.as_deref(), Some("widget_name"));
+    }
+
+    #[test]
+    fn diagnostics_node_name_passes_clean_strings() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "name": "padding"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.name.as_deref(), Some("padding"));
+    }
+
+    #[test]
+    fn diagnostics_node_level_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "level": "\u{001b}[33mfine\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.level.as_deref(), Some("fine"));
+        // Verify the level filter still works after sanitization
+        assert!(matches!(node.level.as_deref(), Some("fine")));
+    }
+
+    #[test]
+    fn diagnostics_node_value_id_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "valueId": "\u{001b}[36mobjects/42\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.value_id.as_deref(), Some("objects/42"));
+    }
+
+    #[test]
+    fn diagnostics_node_node_type_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "type": "\u{001b}[32mWidgetProperty\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.node_type.as_deref(), Some("WidgetProperty"));
+    }
+
+    #[test]
+    fn diagnostics_node_style_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "style": "\u{001b}[35mdense\u{001b}[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.style.as_deref(), Some("dense"));
+    }
+
+    #[test]
+    fn diagnostics_node_name_absent_is_none() {
+        let json = serde_json::json!({ "description": "Text" });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert!(node.name.is_none());
+    }
+
+    // =========================================================================
+    // DetailsContext / parent_of / compute_details_context tests
+    // =========================================================================
+
+    #[test]
+    fn parent_of_returns_none_for_root_match() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            children: vec![],
+            ..Default::default()
+        };
+        assert!(parent_of(&root, "root-id").is_none());
+    }
+
+    #[test]
+    fn parent_of_returns_immediate_parent() {
+        let child = DiagnosticsNode {
+            description: "Container".into(),
+            value_id: Some("child-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            value_id: Some("root-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let parent = parent_of(&root, "child-id").unwrap();
+        assert_eq!(parent.widget_runtime_type(), Some("Column"));
+    }
+
+    #[test]
+    fn parent_of_returns_none_for_missing_target() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            children: vec![],
+            ..Default::default()
+        };
+        assert!(parent_of(&root, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn parent_of_returns_none_for_empty_target_id() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            children: vec![],
+            ..Default::default()
+        };
+        assert!(parent_of(&root, "").is_none());
+    }
+
+    #[test]
+    fn compute_details_context_flex_widget_is_flex_layout() {
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            value_id: Some("col-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "col-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type, None); // root has no parent
+    }
+
+    #[test]
+    fn compute_details_context_child_of_flex_is_flex_layout() {
+        let child = DiagnosticsNode {
+            description: "Container".into(),
+            value_id: Some("c-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            value_id: Some("col-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "c-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type.as_deref(), Some("Column"));
+    }
+
+    #[test]
+    fn compute_details_context_non_flex_widget_is_not_flex_layout() {
+        let child = DiagnosticsNode {
+            description: "Container".into(),
+            value_id: Some("c-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Padding".into(),
+            value_id: Some("p-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "c-id");
+        assert!(!ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type.as_deref(), Some("Padding"));
+    }
+
+    #[test]
+    fn compute_details_context_unmatched_target_returns_default() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "missing");
+        assert_eq!(ctx, DetailsContext::default());
+    }
+
+    #[test]
+    fn compute_details_context_empty_target_returns_default() {
+        let root = DiagnosticsNode {
+            description: "MyApp".into(),
+            value_id: Some("root-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "");
+        assert_eq!(ctx, DetailsContext::default());
+    }
+
+    #[test]
+    fn compute_details_context_row_widget_is_flex_layout() {
+        let root = DiagnosticsNode {
+            description: "Row".into(),
+            value_id: Some("row-id".into()),
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "row-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type, None);
+    }
+
+    #[test]
+    fn compute_details_context_child_of_row_is_flex_layout() {
+        let child = DiagnosticsNode {
+            description: "Text".into(),
+            value_id: Some("text-id".into()),
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Row".into(),
+            value_id: Some("row-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "text-id");
+        assert!(ctx.is_flex_layout);
+        assert_eq!(ctx.parent_type.as_deref(), Some("Row"));
+    }
+
+    #[test]
+    fn parent_of_finds_deeply_nested_node() {
+        let grandchild = DiagnosticsNode {
+            description: "Leaf".into(),
+            value_id: Some("leaf-id".into()),
+            ..Default::default()
+        };
+        let child = DiagnosticsNode {
+            description: "Middle".into(),
+            value_id: Some("mid-id".into()),
+            children: vec![grandchild],
+            ..Default::default()
+        };
+        let root = DiagnosticsNode {
+            description: "Root".into(),
+            value_id: Some("root-id".into()),
+            children: vec![child],
+            ..Default::default()
+        };
+        let parent = parent_of(&root, "leaf-id").unwrap();
+        assert_eq!(parent.widget_runtime_type(), Some("Middle"));
+    }
+
+    #[test]
+    fn find_with_parent_returns_none_at_max_depth() {
+        // Build a tree exactly MAX_TREE_WALK_DEPTH + 2 levels deep where the
+        // target value_id sits at the bottom. The depth guard should prevent
+        // the walker from reaching it.
+        let mut current = DiagnosticsNode {
+            description: "Leaf".into(),
+            value_id: Some("deep-target".into()),
+            ..Default::default()
+        };
+        for i in 0..(MAX_TREE_WALK_DEPTH + 2) {
+            current = DiagnosticsNode {
+                description: format!("Wrapper{}", i),
+                children: vec![current],
+                ..Default::default()
+            };
+        }
+        let ctx = compute_details_context(&current, "deep-target");
+        // Target unreachable due to depth cap → DetailsContext::default()
+        assert_eq!(ctx, DetailsContext::default());
+    }
+
+    #[test]
+    fn compute_details_context_walks_tree_once() {
+        // Regression test for the fused-walk fix: asserts that the public
+        // behavior of compute_details_context is preserved after the fuse.
+        let root = DiagnosticsNode {
+            description: "Column".into(),
+            children: vec![DiagnosticsNode {
+                description: "Container".into(),
+                value_id: Some("child".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ctx = compute_details_context(&root, "child");
+        assert!(ctx.is_flex_layout, "child of Column should be flex layout");
+        assert_eq!(ctx.parent_type.as_deref(), Some("Column"));
+    }
+
+    #[test]
+    fn diagnostics_node_object_id_strips_ansi_codes() {
+        let json = serde_json::json!({
+            "description": "Container",
+            "objectId": "[36mobjects/42[0m"
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json).unwrap();
+        assert_eq!(node.object_id.as_deref(), Some("objects/42"));
     }
 }

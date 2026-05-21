@@ -200,6 +200,17 @@ pub enum UpdateAction {
     /// Auto-save FDemon config after field changes (Phase 6, Task 05)
     AutoSaveConfig { configs: LoadedConfigs },
 
+    /// Persist the current settings to `.fdemon/config.toml` on a background
+    /// task. Used to keep the TEA event loop unblocked when a settings toggle
+    /// (e.g. `Shift+H` in the Inspector tab) flips a persisted boolean.
+    ///
+    /// Emits [`Message::SettingsPersisted`] on success, or
+    /// [`Message::SettingsPersistFailed`] on failure.
+    PersistSettings {
+        settings: crate::config::Settings,
+        project_path: std::path::PathBuf,
+    },
+
     /// Launch a new Flutter session from NewSessionDialog (Phase 6, Task 05)
     LaunchFlutterSession {
         device: Device,
@@ -212,10 +223,19 @@ pub enum UpdateAction {
     /// Discover entry points in background (Phase 3, Task 09)
     DiscoverEntryPoints { project_path: std::path::PathBuf },
 
-    /// Connect to the VM Service WebSocket for a session
+    /// Connect to the VM Service WebSocket for a session.
+    ///
+    /// `rebuilt_widgets_gate_rx` is `None` when emitted by `handler::update()` and
+    /// hydrated by `process.rs` with a `watch::Receiver<bool>` that controls whether
+    /// `Flutter.RebuiltWidgets` events are forwarded. `false` = gate closed (skip);
+    /// `true` = gate open (forward). The sender is stored in `SessionHandle` so that
+    /// panel-switch handlers can update the gate without touching the action enum.
     ConnectVmService {
         session_id: SessionId,
         ws_uri: String,
+        /// Panel-gate receiver — `None` until hydrated by `process.rs`.
+        #[allow(clippy::type_complexity)]
+        rebuilt_widgets_gate_rx: Option<tokio::sync::watch::Receiver<bool>>,
     },
 
     /// Start periodic performance monitoring for a session.
@@ -291,6 +311,21 @@ pub enum UpdateAction {
         session_id: SessionId,
         node_id: String,
         /// VM Service request handle used for the RPC call.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    /// Fetch widget properties + render-object properties for the given widget.
+    ///
+    /// Dispatched by `handle_open_details` when the selected widget changes.
+    /// The spawn task makes one `ext.flutter.inspector.getProperties` RPC, splits
+    /// the result into widget/render properties, then makes one further
+    /// `getProperties` per render-object property to fetch its sub-properties.
+    ///
+    /// `vm_handle` is `None` when emitted from a handler; the engine hydrates it
+    /// in `process.rs::hydrate_fetch_inspector_properties` before dispatch.
+    FetchInspectorProperties {
+        session_id: SessionId,
+        node_id: String,
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
 
@@ -653,6 +688,68 @@ pub enum UpdateAction {
     /// pushes an optimistic success toast; on write failure the runner pushes
     /// a warning toast on top of it.
     WriteClipboard { text: String },
+
+    // ── Phase 3: Timeline monitoring ─────────────────────────────────────────
+    /// Start the 1-Hz timeline polling task for a session.
+    ///
+    /// Spawns a background task that calls `getVMTimeline` at the given interval,
+    /// filtering via `getVMTimelineMicros` to fetch only new events since the
+    /// last poll. Sends `TimelineEventsBatchReceived` messages with parsed events.
+    ///
+    /// `handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` discards the action when it remains
+    /// `None` (VM not yet connected).
+    StartTimelineMonitoring {
+        session_id: SessionId,
+        /// VM Service request handle. `None` until hydrated by `process.rs`.
+        handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// Polling interval in milliseconds (default 1000ms = 1 Hz).
+        poll_interval_ms: u64,
+    },
+
+    /// Toggle `ext.flutter.profileWidgetBuilds` on/off for a session.
+    ///
+    /// Issues the extension call asynchronously and emits
+    /// `RebuildStatsExtensionStateChanged` on success.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs`.
+    ToggleProfileWidgetBuilds {
+        session_id: SessionId,
+        /// Target enabled state (`true` = enable, `false` = disable).
+        enabled: bool,
+        /// VM Service request handle. `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    // ── Phase 5: Frame-anchored timeline viewport ─────────────────────────────
+    /// Spawn a debounced timer that sends `ApplyFrameAnchor` after `delay_ms`.
+    ///
+    /// No cancellation mechanism is needed — the handler for `ApplyFrameAnchor`
+    /// checks `generation == state.performance.frame_anchor_generation` and
+    /// silently drops stale firings.
+    DebounceFrameAnchor {
+        /// Session the anchor belongs to.
+        session_id: crate::session::SessionId,
+        /// Monotonic generation counter at the time of dispatch.
+        generation: u64,
+        /// Frame number to anchor on, or `None` to clear the anchor.
+        frame_number: Option<u64>,
+        /// Debounce delay in milliseconds (typically 200).
+        delay_ms: u64,
+    },
+
+    /// Fetch the one-shot `widgetLocationIdMap` fallback to seed the location map.
+    ///
+    /// Emits `RebuildStatsLocationMapFetched` on success. Used when early
+    /// `Flutter.RebuiltWidgets` events (which carry inline location data) were
+    /// missed because tracking was enabled after the app started.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs`.
+    FetchWidgetLocationIdMap {
+        session_id: SessionId,
+        /// VM Service request handle. `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
 }
 
 /// Background tasks to spawn
@@ -680,8 +777,18 @@ pub enum Task {
 pub struct UpdateResult {
     /// Optional follow-up message to process
     pub message: Option<Message>,
-    /// Optional action for the event loop to perform
+    /// Optional single action for the event loop to perform.
+    ///
+    /// Kept for backward compatibility. Use [`UpdateResult::actions`] to
+    /// retrieve all actions including any pushed via [`UpdateResult::actions_vec`].
     pub action: Option<UpdateAction>,
+    /// Additional actions to perform after `action`.
+    ///
+    /// Used when a handler must dispatch more than one side-effect action in a
+    /// single TEA update cycle (e.g. `handle_open_details` dispatching both
+    /// `FetchInspectorProperties` and `FetchLayoutData`). The event loop
+    /// processes these after the primary `action`.
+    pub(crate) extra_actions: Vec<UpdateAction>,
 }
 
 impl UpdateResult {
@@ -693,6 +800,7 @@ impl UpdateResult {
         Self {
             message: Some(msg),
             action: None,
+            extra_actions: Vec::new(),
         }
     }
 
@@ -700,6 +808,7 @@ impl UpdateResult {
         Self {
             message: None,
             action: Some(action),
+            extra_actions: Vec::new(),
         }
     }
 
@@ -713,6 +822,42 @@ impl UpdateResult {
         Self {
             message: Some(msg),
             action: Some(action),
+            extra_actions: Vec::new(),
         }
+    }
+
+    /// Construct a result that carries multiple actions and no follow-up message.
+    ///
+    /// Used by handlers that must dispatch more than one side-effect in a single
+    /// TEA update cycle. The caller collects actions into a `Vec<UpdateAction>`
+    /// and passes it here; the event loop will process them in order.
+    ///
+    /// If `actions` is empty, this is equivalent to [`UpdateResult::none()`].
+    pub fn actions_vec(mut actions: Vec<UpdateAction>) -> Self {
+        if actions.is_empty() {
+            return Self::default();
+        }
+        let first = actions.remove(0);
+        Self {
+            message: None,
+            action: Some(first),
+            extra_actions: actions,
+        }
+    }
+
+    /// Return a cloned `Vec` of all actions in this result.
+    ///
+    /// Combines the primary `action` (if any) and any additional
+    /// [`extra_actions`][Self::extra_actions] into a single owned `Vec`.
+    ///
+    /// Used by tests and callers that need to inspect all side effects without
+    /// special-casing `action` vs `extra_actions`.
+    pub fn actions(&self) -> Vec<UpdateAction> {
+        let mut out: Vec<UpdateAction> = Vec::new();
+        if let Some(ref a) = self.action {
+            out.push(a.clone());
+        }
+        out.extend(self.extra_actions.iter().cloned());
+        out
     }
 }

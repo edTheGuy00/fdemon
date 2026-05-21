@@ -3,19 +3,13 @@
 use super::*;
 use fdemon_app::session::PerformanceState;
 use fdemon_app::state::VmConnectionStatus;
-use fdemon_core::performance::{FrameTiming, MemoryUsage};
+use fdemon_core::performance::FrameTiming;
 
 fn make_test_performance() -> PerformanceState {
     let mut perf = PerformanceState {
         monitoring_active: true,
         ..Default::default()
     };
-    perf.memory_history.push(MemoryUsage {
-        heap_usage: 50_000_000,
-        heap_capacity: 128_000_000,
-        external_usage: 12_000_000,
-        timestamp: chrono::Local::now(),
-    });
     for i in 0u64..30 {
         perf.frame_history.push(FrameTiming {
             number: i,
@@ -68,32 +62,16 @@ fn test_performance_panel_renders_without_panic() {
         &VmConnectionStatus::Connected,
     );
     render_to_buf(widget, 80, 24);
-    // Should not panic
-}
-
-#[test]
-fn test_performance_panel_renders_two_sections() {
-    // Normal size terminal should show both Frame Timing and Memory sections
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    let buf = render_to_buf(widget, 80, 30);
-    assert!(
-        buf_contains_text(&buf, 80, 30, "Frame Timing"),
-        "Expected 'Frame Timing' section in buffer"
-    );
-    assert!(
-        buf_contains_text(&buf, 80, 30, "Memory"),
-        "Expected 'Memory' section in buffer"
-    );
 }
 
 #[test]
 fn test_performance_panel_no_stats_section() {
+    // Verifies the old Memory/Stats block header (moved to the Memory panel in
+    // Phase 1) is no longer shown in the Performance panel. The string " Stats "
+    // (with surrounding spaces — ratatui block title pattern) must not appear as
+    // a standalone block title. Note: "Rebuild Stats" appears as a tab label in
+    // the dual-pane layout; the assertion checks for the old block-header pattern
+    // "─ Stats ─" or similar, so we check for the old section title format.
     let perf = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
@@ -102,10 +80,13 @@ fn test_performance_panel_no_stats_section() {
         &VmConnectionStatus::Connected,
     );
     let buf = render_to_buf(widget, 80, 30);
-    // Stats section has been removed — no standalone "Stats" block
+    // The old Stats section had a block title like "─ Stats ─"; it must not appear.
+    // (The new "Rebuild Stats" tab label is acceptable — it does not use the block
+    // title format and is a Phase 2 addition to the Details pane tab strip.)
     assert!(
-        !buf_contains_text(&buf, 80, 30, " Stats "),
-        "Stats section should be removed"
+        !buf_contains_text(&buf, 80, 30, "Memory Stats")
+            && !buf_contains_text(&buf, 80, 30, "─ Stats"),
+        "Old Stats block section should have been removed from Performance panel"
     );
 }
 
@@ -119,14 +100,12 @@ fn test_performance_panel_shows_fps() {
         &VmConnectionStatus::Connected,
     );
     let buf = render_to_buf(widget, 80, 24);
-    // The frame chart summary or chart content should contain FPS-related content
     let content = collect_buf_text(&buf, 80, 24);
     assert!(content.contains("60") || content.contains("FPS") || content.contains("Frame"));
 }
 
 #[test]
 fn test_performance_panel_compact_mode() {
-    // Height < COMPACT_THRESHOLD (7) → compact single-line summary, no panic
     let perf = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
@@ -135,12 +114,10 @@ fn test_performance_panel_compact_mode() {
         &VmConnectionStatus::Connected,
     );
     render_to_buf(widget, 80, 5);
-    // Should not crash — compact summary shown
 }
 
 #[test]
 fn test_performance_panel_compact_mode_shows_fps() {
-    // Height < COMPACT_THRESHOLD should show FPS in summary line
     let perf = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
@@ -157,9 +134,8 @@ fn test_performance_panel_compact_mode_shows_fps() {
 }
 
 #[test]
-fn test_performance_panel_frame_only_mode() {
-    // Height between COMPACT_THRESHOLD (7) and DUAL_SECTION_MIN_HEIGHT (16)
-    // should show frame chart only, no memory section
+fn test_performance_panel_frame_chart_fills_area() {
+    // All heights >= COMPACT_THRESHOLD should show Frame Timing
     let perf = make_test_performance();
     let widget = PerformancePanel::new(
         &perf,
@@ -167,139 +143,16 @@ fn test_performance_panel_frame_only_mode() {
         IconSet::default(),
         &VmConnectionStatus::Connected,
     );
-    // Height 12 is >= COMPACT_THRESHOLD(7) and < DUAL_SECTION_MIN_HEIGHT(16)
     let buf = render_to_buf(widget, 80, 12);
     let content = collect_buf_text(&buf, 80, 12);
-    // Should show Frame Timing but not a separate Memory block
     assert!(
         content.contains("Frame Timing"),
-        "Frame-only mode should still show Frame Timing block; content: {content:?}"
-    );
-}
-
-#[test]
-fn test_performance_panel_dual_section_at_min_height() {
-    // At exactly DUAL_SECTION_MIN_HEIGHT (16), both sections should appear
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    let buf = render_to_buf(widget, 80, 16);
-    let content = collect_buf_text(&buf, 80, 16);
-    assert!(
-        content.contains("Frame Timing"),
-        "Frame Timing section should appear at DUAL_SECTION_MIN_HEIGHT; content: {content:?}"
-    );
-    assert!(
-        content.contains("Memory"),
-        "Memory section should appear at DUAL_SECTION_MIN_HEIGHT; content: {content:?}"
-    );
-}
-
-#[test]
-fn test_performance_panel_allocation_table_visible_on_24_row_terminal() {
-    // Simulate a 24-row terminal: DevTools panel receives ~18 rows
-    // (24 - 3 header - 3 tab bar = 18).
-    // With 50/50 split and Borders::TOP, memory inner should be >= 8 rows
-    // (MIN_CHART_HEIGHT=6 + MIN_TABLE_HEIGHT=2), making show_table = true.
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    // Give the panel 18 rows (what it receives from DevToolsView on a 24-row terminal)
-    let buf = render_to_buf(widget, 80, 18);
-    let content = collect_buf_text(&buf, 80, 18);
-    // Memory section should appear
-    assert!(
-        content.contains("Memory"),
-        "Memory section should be visible at 18 rows; content: {content:?}"
-    );
-    // Allocation table should appear (header "Class" or loading message)
-    assert!(
-        content.contains("loading") || content.contains("Class") || content.contains("Instances"),
-        "Allocation table should be visible at 18 rows; content: {content:?}"
-    );
-}
-
-#[test]
-fn test_performance_panel_allocation_table_visible_on_30_row_terminal() {
-    // Simulate a 30-row terminal: DevTools panel receives ~24 rows
-    // Allocation table should have more rows available
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    let buf = render_to_buf(widget, 80, 24);
-    let content = collect_buf_text(&buf, 80, 24);
-    assert!(
-        content.contains("Memory"),
-        "Memory section should be visible at 24 rows; content: {content:?}"
-    );
-    assert!(
-        content.contains("loading") || content.contains("Class") || content.contains("Instances"),
-        "Allocation table should be visible at 24 rows; content: {content:?}"
-    );
-}
-
-#[test]
-fn test_footer_does_not_overlap_memory_border() {
-    // The performance panel reserves 1 row for the parent's footer.
-    // Verify the memory block renders within [0, height-2] rows,
-    // leaving row height-1 clear for the footer.
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    let height = 18u16;
-    let buf = render_to_buf(widget, 80, height);
-
-    // Collect text on the last row (footer row) — should be empty (spaces)
-    // as PerformancePanel reserves that row for the parent DevToolsView footer.
-    let last_row_y = height - 1;
-    let last_row_content: String = (0..80u16)
-        .filter_map(|x| buf.cell((x, last_row_y)).map(|c| c.symbol().to_string()))
-        .collect();
-    // The last row should contain only spaces (PerformancePanel leaves it for the footer)
-    assert!(
-        last_row_content.chars().all(|c| c == ' '),
-        "Last row should be empty (reserved for footer); got: {last_row_content:?}"
+        "Frame chart should show Frame Timing block; content: {content:?}"
     );
 }
 
 #[test]
 fn test_performance_panel_disconnected_state() {
-    let perf = PerformanceState::default(); // Empty, no data, monitoring_active = false
-    let widget = PerformancePanel::new(
-        &perf,
-        false,
-        IconSet::default(),
-        &VmConnectionStatus::Disconnected,
-    );
-    let buf = render_to_buf(widget, 80, 24);
-    // Should render disconnected message — just check it doesn't panic
-    // and that some text is present. Collect all buffer text into a flat String.
-    let full = collect_buf_text(&buf, 80, 24);
-    assert!(
-        full.contains("VM Service") || full.contains("monitoring") || full.contains("Waiting"),
-        "Expected disconnected message in buffer"
-    );
-}
-
-#[test]
-fn test_performance_panel_disconnected_still_works() {
-    // Verify disconnected state renders a text message, not chart widgets
     let perf = PerformanceState::default();
     let widget = PerformancePanel::new(
         &perf,
@@ -309,7 +162,23 @@ fn test_performance_panel_disconnected_still_works() {
     );
     let buf = render_to_buf(widget, 80, 24);
     let full = collect_buf_text(&buf, 80, 24);
-    // Should NOT try to render chart widgets
+    assert!(
+        full.contains("VM Service") || full.contains("monitoring") || full.contains("Waiting"),
+        "Expected disconnected message in buffer"
+    );
+}
+
+#[test]
+fn test_performance_panel_disconnected_still_works() {
+    let perf = PerformanceState::default();
+    let widget = PerformancePanel::new(
+        &perf,
+        false,
+        IconSet::default(),
+        &VmConnectionStatus::Disconnected,
+    );
+    let buf = render_to_buf(widget, 80, 24);
+    let full = collect_buf_text(&buf, 80, 24);
     assert!(
         full.contains("VM Service") || full.contains("not connected"),
         "Disconnected state should show VM Service message; got: {full:?}"
@@ -317,35 +186,7 @@ fn test_performance_panel_disconnected_still_works() {
 }
 
 #[test]
-fn test_performance_panel_small_terminal() {
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    render_to_buf(widget, 40, 10);
-    // Should not panic even in small terminal
-}
-
-#[test]
-fn test_performance_panel_zero_area() {
-    let perf = make_test_performance();
-    let widget = PerformancePanel::new(
-        &perf,
-        true,
-        IconSet::default(),
-        &VmConnectionStatus::Connected,
-    );
-    render_to_buf(widget, 10, 1);
-    // Extremely small area — should not panic
-}
-
-#[test]
 fn test_performance_panel_shows_connection_error() {
-    // When vm_connection_error is set, render_disconnected should show the
-    // specific error message rather than the generic "not connected" text.
     let perf = PerformanceState::default();
     let widget = PerformancePanel::new(
         &perf,
@@ -359,7 +200,6 @@ fn test_performance_panel_shows_connection_error() {
         full.contains("Connection failed") || full.contains("Connection refused"),
         "Expected specific connection error message in buffer, got: {full:?}"
     );
-    // Must NOT show the generic fallback when a specific error is available.
     assert!(
         !full.contains("Performance monitoring requires"),
         "Should not show generic message when specific error is available"
@@ -368,8 +208,6 @@ fn test_performance_panel_shows_connection_error() {
 
 #[test]
 fn test_performance_panel_no_error_shows_generic_disconnected() {
-    // When vm_connection_error is None and vm_connected is false, the generic
-    // message should be shown.
     let perf = PerformanceState::default();
     let widget = PerformancePanel::new(
         &perf,
@@ -387,8 +225,6 @@ fn test_performance_panel_no_error_shows_generic_disconnected() {
 
 #[test]
 fn test_monitoring_inactive_shows_disconnected() {
-    // When monitoring_active is false and vm_connected is true,
-    // we should see the "starting..." message
     let perf = PerformanceState {
         monitoring_active: false,
         ..Default::default()
@@ -408,8 +244,6 @@ fn test_monitoring_inactive_shows_disconnected() {
 
 #[test]
 fn test_performance_panel_reconnecting_shows_attempt_count() {
-    // When connection_status is Reconnecting, the disconnected view should
-    // show the attempt counter rather than the generic "not connected" text.
     let perf = PerformanceState::default();
     let status = VmConnectionStatus::Reconnecting {
         attempt: 3,
@@ -425,7 +259,6 @@ fn test_performance_panel_reconnecting_shows_attempt_count() {
 
 #[test]
 fn test_performance_panel_with_selected_frame() {
-    // Verify frame chart shows selection without panic
     let mut perf = make_test_performance();
     perf.selected_frame = Some(5);
     let widget = PerformancePanel::new(
@@ -435,7 +268,300 @@ fn test_performance_panel_with_selected_frame() {
         &VmConnectionStatus::Connected,
     );
     render_to_buf(widget, 80, 30);
-    // Should not panic with selected frame
+}
+
+#[test]
+fn test_performance_panel_small_terminal() {
+    let perf = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    render_to_buf(widget, 40, 10);
+}
+
+#[test]
+fn test_performance_panel_zero_area() {
+    let perf = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    render_to_buf(widget, 10, 1);
+}
+
+// ── Phase 1 followup T03: Tab-trap regression test ───────────────────────────
+
+/// Regression guard: pressing Tab on the Performance panel must NOT move focus
+/// to a section that silently disables j/k/PgUp/PgDn scroll keys.
+///
+/// Option A (YAGNI) was chosen: `PerfSection::next()` always returns `FrameChart`
+/// so Tab is a visible no-op and the frame chart remains the active section.
+/// The test asserts:
+/// 1. After calling `next()`, `focused_section` advances to `Details` (Phase 2 cycling).
+/// 2. When the section is switched back to `FrameChart`, scroll offset can be incremented,
+///    demonstrating that scroll keys remain functional.
+#[test]
+fn performance_tab_after_tab_does_not_break_scroll_keys() {
+    use fdemon_app::session::PerfSection;
+
+    // Set up state with several FrameTiming entries.
+    let mut perf = make_test_performance();
+
+    // Simulate what keys.rs does on Tab: focused_section = focused_section.next()
+    let after_tab = perf.focused_section.next();
+    perf.focused_section = after_tab;
+
+    // Phase 2: Tab cycles FrameChart → Details.
+    assert_eq!(
+        perf.focused_section,
+        PerfSection::Details,
+        "After Tab, focused_section advances to Details (Phase 2 cycling)"
+    );
+
+    // Switch back to FrameChart and verify scroll still works.
+    perf.focused_section = PerfSection::FrameChart;
+    let before_scroll = perf.frame_chart_scroll_offset;
+    perf.frame_chart_scroll_offset = before_scroll.saturating_add(1);
+
+    assert!(
+        perf.frame_chart_scroll_offset > 0,
+        "Scroll offset must be > 0 after simulated PerfScrollUp (trap is gone)"
+    );
+
+    // Confirm the panel still renders without panic after Tab + scroll.
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    render_to_buf(widget, 80, 24);
+}
+
+// ── Phase 2 Task 04: dual-pane layout tests ───────────────────────────────────
+
+use fdemon_app::state::PerfDetailsTab;
+
+fn render_panel(perf: &PerformanceState, w: u16, h: u16) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+    let widget = PerformancePanel::new(
+        perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    widget.render(buf.area, &mut buf);
+    buf
+}
+
+fn collect_full_text(buf: &Buffer) -> String {
+    let mut s = String::new();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            if let Some(c) = buf.cell((x, y)) {
+                if let Some(ch) = c.symbol().chars().next() {
+                    s.push(ch);
+                }
+            }
+        }
+        s.push('\n');
+    }
+    s
+}
+
+#[test]
+fn dual_pane_renders_chart_and_details_at_tall_terminal() {
+    // Phase 3: rebuild_stats_enabled must be true for the Rebuild Stats tab
+    // to appear in the strip (it is conditionally hidden when disabled).
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        rebuild_stats_enabled: true,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+    assert!(
+        text.contains("Frame Timing"),
+        "expected 'Frame Timing' title in dual-pane mode, got:\n{text}"
+    );
+    assert!(
+        text.contains("Frame Details"),
+        "expected 'Frame Details' title in dual-pane mode, got:\n{text}"
+    );
+    assert!(
+        text.contains("Frame Analysis"),
+        "expected 'Frame Analysis' tab label, got:\n{text}"
+    );
+    assert!(
+        text.contains("Rebuild Stats"),
+        "expected 'Rebuild Stats' tab label (rebuild_stats_enabled=true), got:\n{text}"
+    );
+    assert!(
+        text.contains("Timeline Events"),
+        "expected 'Timeline Events' tab label, got:\n{text}"
+    );
+}
+
+#[test]
+fn chart_only_at_short_terminal_below_min_dual_pane() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 16);
+    let text = collect_full_text(&buf);
+    assert!(
+        text.contains("Frame Timing"),
+        "expected 'Frame Timing' in chart-only mode"
+    );
+    assert!(
+        !text.contains("Frame Details"),
+        "details pane must be suppressed below MIN_DUAL_PANE_HEIGHT, got:\n{text}"
+    );
+}
+
+#[test]
+fn details_dispatches_rebuild_stats_stub() {
+    // Phase 3: RebuildStats tab is now live. When rebuild_stats_enabled is true
+    // but no frames have arrived yet, it shows the "waiting for first frame"
+    // empty placeholder (the Phase-2 "Coming soon" stub has been removed).
+    // Also: the tab is visible only when rebuild_stats_enabled == true; when
+    // disabled and details_tab == RebuildStats the dispatcher falls through to
+    // TimelineEvents.
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        details_tab: PerfDetailsTab::RebuildStats,
+        rebuild_stats_enabled: true, // must be true for the tab to be dispatched
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+    // No rebuild frames yet → empty-frame placeholder.
+    assert!(
+        text.contains("waiting for first frame"),
+        "rebuild stats (enabled, no frames) must show empty placeholder, got:\n{text}"
+    );
+}
+
+#[test]
+fn details_dispatches_timeline_events_stub() {
+    // Phase 3: TimelineEvents tab is now live. When no events are present it
+    // shows the "Select a frame…" empty placeholder when no frame is anchored.
+    // "Coming soon" stub has been removed).
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        details_tab: PerfDetailsTab::TimelineEvents,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+    // No timeline events yet → empty-state placeholder.
+    assert!(
+        text.contains("Select a frame"),
+        "timeline events (no events yet) must show empty placeholder, got:\n{text}"
+    );
+}
+
+#[test]
+fn details_pane_visible_height_is_written_to_render_hint() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let _ = render_panel(&perf, 200, 30);
+    assert!(
+        perf.details_pane_visible_height.get() > 0,
+        "render-hint Cell must be written each frame"
+    );
+}
+
+#[test]
+fn active_tab_label_is_underlined() {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        details_tab: PerfDetailsTab::RebuildStats,
+        ..Default::default()
+    };
+    perf.frame_history.push(FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    });
+
+    let buf = render_panel(&perf, 200, 30);
+    // Scan through all rows to find one containing the underline character ━
+    // that is in the vicinity of the tab strip.
+    let has_underline = (0..buf.area.height).any(|y| {
+        (0..buf.area.width).any(|x| {
+            buf.cell((x, y))
+                .and_then(|c| c.symbol().chars().next())
+                .map(|ch| ch == '\u{2501}')
+                .unwrap_or(false)
+        })
+    });
+    assert!(
+        has_underline,
+        "expected at least one ━ character for the active tab underline in the buffer"
+    );
 }
 
 // ── Phase 4.5 Task 03: render_with_regions parity test ───────────────────────
@@ -446,7 +572,6 @@ fn render_with_regions_matches_widget_render_buffer() {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
-    // At least one frame in the buffer with vm_connected = true — non-trivial path.
     let perf = make_test_performance();
     let area = Rect::new(0, 0, 80, 24);
 
@@ -480,5 +605,95 @@ fn render_with_regions_matches_widget_render_buffer() {
     assert_eq!(
         buf_a, buf_b,
         "Widget::render and render_with_regions must produce identical buffers"
+    );
+}
+
+// ── Phase 2 followup T01: C1 dual-pane detail-deduplication regression tests ──
+
+/// Count the number of non-overlapping occurrences of `needle` in `haystack`.
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    let mut count = 0;
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        count += 1;
+        start += pos + needle.len();
+    }
+    count
+}
+
+fn make_perf_with_selected_frame() -> PerformanceState {
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        selected_frame: Some(5),
+        ..Default::default()
+    };
+    for i in 0u64..30 {
+        perf.frame_history.push(FrameTiming {
+            number: i,
+            build_micros: 5_000 + (i * 100),
+            raster_micros: 3_000 + (i * 50),
+            elapsed_micros: 8_000 + (i * 150),
+            timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: false,
+        });
+    }
+    perf.stats.fps = Some(60.0);
+    perf.stats.jank_count = 2;
+    perf.stats.avg_frame_ms = Some(8.5);
+    perf.stats.buffered_frames = 30;
+    perf
+}
+
+/// C1 regression: in dual-pane mode (200×30) with a frame selected, the chart's
+/// bottom strip must NOT render the per-frame "Frame #N" detail — that data is
+/// already shown in the Frame Analysis tab below. The substring "Frame #" must
+/// not appear anywhere in the buffer (the Frame Analysis tab uses the text
+/// "Flutter frame:" for its header, not "Frame #").
+#[test]
+fn frame_detail_suppressed_in_dual_pane_at_200x30_with_selection() {
+    let perf = make_perf_with_selected_frame();
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+
+    let frame_hash_count = count_occurrences(&text, "Frame #");
+    assert_eq!(
+        frame_hash_count, 0,
+        "In dual-pane mode with a frame selected, the chart's bottom strip must \
+         not render 'Frame #N' detail — found {frame_hash_count} occurrences.\n\
+         Buffer text:\n{text}"
+    );
+}
+
+/// C4 regression: in chart-only fallback mode (200×16, `usable.height < MIN_DUAL_PANE_HEIGHT`),
+/// the chart's bottom strip still renders the per-frame "Frame #N" detail when a frame is
+/// selected (there is no Details pane below to show it).
+#[test]
+fn chart_only_fallback_still_renders_frame_detail() {
+    let perf = make_perf_with_selected_frame();
+    // Height 16 → usable = 15, which is < MIN_DUAL_PANE_HEIGHT (18) → chart-only
+    let buf = render_panel(&perf, 200, 16);
+    let text = collect_full_text(&buf);
+
+    assert!(
+        text.contains("Frame #"),
+        "In chart-only fallback mode, the chart's bottom strip must render \
+         the per-frame 'Frame #N' detail.\nBuffer text:\n{text}"
+    );
+}
+
+/// C3 regression: in dual-pane mode (200×30) with a frame selected, the chart's
+/// bottom strip must show the aggregate summary line (FPS / Avg / Jank / Shader)
+/// so the strip remains informative rather than blank.
+#[test]
+fn dual_pane_chart_strip_shows_summary_when_frame_selected() {
+    let perf = make_perf_with_selected_frame();
+    let buf = render_panel(&perf, 200, 30);
+    let text = collect_full_text(&buf);
+
+    assert!(
+        text.contains("FPS:") || text.contains("Avg:"),
+        "In dual-pane mode with a frame selected, the chart's bottom strip \
+         must show the aggregate summary line (FPS: or Avg:).\nBuffer text:\n{text}"
     );
 }

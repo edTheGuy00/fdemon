@@ -2,8 +2,9 @@
 
 use crate::input_key::InputKey;
 use crate::message::{InspectorNav, Message, NetworkNav};
+use crate::session::performance::{PerfSection, SelectionDirection};
 use crate::session::NetworkDetailTab;
-use crate::state::{AppState, DevToolsPanel, UiMode};
+use crate::state::{AppState, DevToolsPanel, PerfDetailsTab, UiMode};
 
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
@@ -437,15 +438,62 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// - `Ctrl+d` — toggle debug paint overlay
 /// - `j`/Down — scroll/navigate down (in Inspector: move selection down)
 /// - `k`/Up — scroll/navigate up (in Inspector: move selection up)
-/// - `h`/Left — in Inspector: collapse node; in Performance: previous frame
-/// - `Right`/`Enter` — in Inspector: expand node; in Performance (Right): next frame
+/// - `h`/Left — in Inspector tree mode: collapse node; in Performance: previous frame
+/// - `Right` — in Inspector tree mode: expand node; in Inspector details mode: next tab; in Performance: next frame
+/// - `Left` — in Inspector details mode: previous tab
+/// - `Enter` — in Inspector tree mode: open details view
+/// - `H` — in Inspector: toggle hide-implementation-widgets
+/// - `Tab` — in Inspector details mode: cycle tabs forward
+/// - `Shift+Tab` — in Inspector details mode: cycle tabs backward
 /// - `r` — in Inspector: refresh widget tree
 /// - `q` — request quit
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
     let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
+    let in_memory = state.devtools_view_state.active_panel == DevToolsPanel::Memory;
     let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
+    let details_open = in_inspector && state.devtools_view_state.inspector.details_open;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
+    let is_busy = state.session_manager.any_session_busy();
+
+    // ── Phase 5 T03: Timeline Events tab selection context ────────────────────
+    //
+    // Pre-computed at function entry so they are available in both the
+    // `if in_performance` early-return block AND the main `match key` block.
+    // Guards in the performance block AND in the final match reference these.
+    let on_timeline_tab = in_performance
+        && state
+            .session_manager
+            .selected()
+            .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+            .map(|h| h.session.performance.details_tab)
+            .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+    let has_selection = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_selected_event.is_some())
+            .unwrap_or(false);
+    let popup_open = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_details_popup_open)
+            .unwrap_or(false);
+    // Phase 5 T04: Timeline search — pre-computed for the input-intercept and
+    // the `n`/`N` arms below.
+    let has_query = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_search_query.is_some())
+            .unwrap_or(false);
+    let search_input_active = on_timeline_tab
+        && state
+            .session_manager
+            .selected()
+            .map(|h| h.session.performance.timeline_search_input_active)
+            .unwrap_or(false);
 
     // ── Network filter input mode ─────────────────────────────────────────────
     // When filter input is active, route keys to the filter buffer before any
@@ -478,6 +526,60 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     // Left/Right (frame selection) and `s` (sort toggle) remain in the main
     // match below with their `in_performance` guards — they are not moved here.
     if in_performance {
+        // ── Phase 5 T04: Timeline search input mode ───────────────────────────
+        //
+        // When the search input is active, ALL keys are intercepted here so that
+        // regular character keys cannot dispatch unintended actions (e.g. `j`
+        // scrolling while typing). Mirrors the Network filter input pattern above.
+        if search_input_active {
+            if let Some(session_id) = active_id {
+                return match key {
+                    InputKey::Char(c) => {
+                        Some(Message::TimelineSearchInputChar { session_id, ch: c })
+                    }
+                    InputKey::Backspace => {
+                        Some(Message::TimelineSearchInputBackspace { session_id })
+                    }
+                    InputKey::Enter => Some(Message::TimelineSearchInputCommit { session_id }),
+                    InputKey::Esc => Some(Message::TimelineSearchInputCancel { session_id }),
+                    _ => None,
+                };
+            }
+        }
+
+        // ── Timeline popup-first Esc handling ─────────────────────────────────
+        //
+        // Intercept Esc when the popup is open so the popup closes before the
+        // outer Esc handler (deselect frame / DevToolsEscape) fires.
+        if matches!(key, InputKey::Esc) {
+            if popup_open {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineClosePopup { session_id });
+                }
+            } else if has_selection {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineClearSelection { session_id });
+                }
+            }
+            // Falls through to the outer Esc handler (deselect frame / DevToolsEscape).
+        }
+
+        // ── Timeline Enter handling ────────────────────────────────────────────
+        //
+        // When on the Timeline Events tab:
+        //   - With selection and popup closed → open popup.
+        //   - Without selection → select first visible event.
+        // Falls through to the outer Enter handler when not on TimelineEvents tab.
+        if matches!(key, InputKey::Enter) && on_timeline_tab {
+            if let Some(session_id) = active_id {
+                if has_selection && !popup_open {
+                    return Some(Message::TimelineOpenPopup { session_id });
+                } else if !has_selection {
+                    return Some(Message::TimelineSelectFirstVisible { session_id });
+                }
+            }
+        }
+
         // Ctrl+C and Esc must NOT be intercepted here — they are global and
         // handled by the main match below.
         match key {
@@ -499,6 +601,28 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                 return Some(Message::PerfFocusSection(prev));
             }
 
+            // ── Selection depth/thread nav (Drift #6: MUST appear before PerfScrollUp/Down) ──
+            //
+            // When on the Timeline Events tab with an event selected, ↑/↓/j/k move
+            // the selection cursor (parent/child/thread). Without a selection, these
+            // fall through to the PerfScrollUp/PerfScrollDown arms below.
+            InputKey::Up | InputKey::Char('k') if has_selection => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineMoveSelection {
+                        session_id,
+                        dir: SelectionDirection::ParentOrUpThread,
+                    });
+                }
+            }
+            InputKey::Down | InputKey::Char('j') if has_selection => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineMoveSelection {
+                        session_id,
+                        dir: SelectionDirection::FirstChildOrDownThread,
+                    });
+                }
+            }
+
             // ── Row / bar scroll ──────────────────────────────────────────────
             InputKey::Up | InputKey::Char('k') => return Some(Message::PerfScrollUp),
             InputKey::Down | InputKey::Char('j') => return Some(Message::PerfScrollDown),
@@ -507,11 +631,196 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             InputKey::PageUp => return Some(Message::PerfPageUp),
             InputKey::PageDown => return Some(Message::PerfPageDown),
 
+            // ── Phase 5: Timeline pan/zoom — inserted BEFORE Home/End (Drift #4) ──
+            //
+            // `+`/`=` zoom in, `-`/`_` zoom out, `g` follow-latest (primary).
+            // `End` is a tab-guarded alias for follow-latest; it must appear here
+            // BEFORE the unconditional `InputKey::End => PerfJumpToEnd` arm so that
+            // pressing End on the TimelineEvents tab emits `TimelineFollowLatest`
+            // instead of `PerfJumpToEnd`. The fall-through `_ => {}` lets the End
+            // key reach the `PerfJumpToEnd` arm when on other tabs. (Drift #4)
+            InputKey::Char('+') | InputKey::Char('=') => {
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineZoomIn { session_id });
+                    }
+                }
+            }
+            InputKey::Char('-') | InputKey::Char('_') => {
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineZoomOut { session_id });
+                    }
+                }
+            }
+            InputKey::Char('g') => {
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineFollowLatest { session_id });
+                    }
+                }
+            }
+            InputKey::End => {
+                // Tab-guarded `End` alias for follow-latest (Drift #4).
+                // On the TimelineEvents tab: emit TimelineFollowLatest.
+                // On other tabs: fall through to the PerfJumpToEnd arm below.
+                let is_timeline_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab)
+                    .is_some_and(|t| t == PerfDetailsTab::TimelineEvents);
+                if is_timeline_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineFollowLatest { session_id });
+                    }
+                }
+                // Not on TimelineEvents tab — fall through to PerfJumpToEnd.
+                return Some(Message::PerfJumpToEnd);
+            }
+
             // ── Jump to oldest / live edge ────────────────────────────────────
             InputKey::Home => return Some(Message::PerfJumpToStart),
-            InputKey::End => return Some(Message::PerfJumpToEnd),
+            // Note: InputKey::End is handled above with the TimelineEvents guard.
+
+            // ── Phase-3 contextual bindings (Details section only) ───────────
+            //
+            // `f` cycles the Timeline Events filter (All → UI → Raster → All).
+            // `R` (Shift+r) toggles `ext.flutter.profileWidgetBuilds` for Rebuild Stats.
+            //
+            // IMPORTANT — `R` precedence: these early-returns MUST fire before the
+            // main `match key` block where `InputKey::Char('R') if !is_busy` maps
+            // to `Message::HotRestart`. The early-return here ensures that pressing
+            // `R` on the RebuildStats tab toggles tracking rather than hot-restarting.
+            // The regression tests in `performance_sort_key_tests` pin this ordering.
+            InputKey::Char('f') => {
+                let details_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab);
+                if let Some(PerfDetailsTab::TimelineEvents) = details_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::TimelineEventsCycleFilter { session_id });
+                    }
+                }
+            }
+            InputKey::Char('R') => {
+                let details_tab = state
+                    .session_manager
+                    .selected()
+                    .filter(|h| h.session.performance.focused_section == PerfSection::Details)
+                    .map(|h| h.session.performance.details_tab);
+                if let Some(PerfDetailsTab::RebuildStats) = details_tab {
+                    if let Some(session_id) = active_id {
+                        return Some(Message::ToggleRebuildStats { session_id });
+                    }
+                }
+            }
+
+            // ── Details tab cycling (Phase 2) ─────────────────────────────────
+            // Only active when the Details section is focused.
+            InputKey::Char(']') => {
+                let in_details = state
+                    .session_manager
+                    .selected()
+                    .is_some_and(|h| h.session.performance.focused_section == PerfSection::Details);
+                if in_details {
+                    return Some(Message::PerfCycleDetailsTab { forward: true });
+                }
+            }
+            InputKey::Char('[') => {
+                let in_details = state
+                    .session_manager
+                    .selected()
+                    .is_some_and(|h| h.session.performance.focused_section == PerfSection::Details);
+                if in_details {
+                    return Some(Message::PerfCycleDetailsTab { forward: false });
+                }
+            }
+
+            // ── Phase 5 T04: Timeline search open (`/`) ──────────────────────
+            //
+            // On the TimelineEvents tab, `/` opens the search input rather than
+            // falling through to the Network panel's `/` → NetworkEnterFilterMode.
+            // Placed here (inside `if in_performance`) so it fires before the
+            // main match arms.
+            InputKey::Char('/') if on_timeline_tab => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineSearchOpen { session_id });
+                }
+            }
+
+            // ── Phase 5 T04: Timeline search navigation (`n` / `N`) ──────────
+            //
+            // Drift #5 — these arms MUST appear before the global `n` →
+            // SwitchDevToolsPanel(Network) arm in the main match below.
+            // The guards ensure that when no query is active OR the user is not
+            // on the TimelineEvents tab, the `n` key falls through to the global
+            // Network arm (no regression).
+            InputKey::Char('n') if has_query && on_timeline_tab => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineSearchNextMatch { session_id });
+                }
+            }
+            InputKey::Char('N') if has_query && on_timeline_tab => {
+                if let Some(session_id) = active_id {
+                    return Some(Message::TimelineSearchPrevMatch { session_id });
+                }
+            }
 
             // All other keys fall through to the main match.
+            _ => {}
+        }
+    }
+
+    // ── Memory panel — section navigation and scroll ─────────────────────────
+    //
+    // These bindings MUST be evaluated before the generic `match key` block so
+    // that Tab/Shift+Tab, j/k, Up/Down, PageUp/Down, Home/End are intercepted
+    // when the Memory panel is active.
+    if in_memory {
+        match key {
+            InputKey::Tab => {
+                let next = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.memory.focused_section.next())
+                    .unwrap_or_default();
+                return Some(Message::MemFocusSection(next));
+            }
+            InputKey::BackTab => {
+                let prev = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.memory.focused_section.prev())
+                    .unwrap_or_default();
+                return Some(Message::MemFocusSection(prev));
+            }
+            InputKey::Up | InputKey::Char('k') => return Some(Message::MemScrollUp),
+            InputKey::Down | InputKey::Char('j') => return Some(Message::MemScrollDown),
+            InputKey::PageUp => return Some(Message::MemPageUp),
+            InputKey::PageDown => return Some(Message::MemPageDown),
+            InputKey::Home => return Some(Message::MemJumpToStart),
+            InputKey::End => return Some(Message::MemJumpToEnd),
             _ => {}
         }
     }
@@ -536,6 +845,16 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     return Some(Message::SelectPerformanceFrame { index: None });
                 }
             }
+            if in_memory {
+                let row_selected = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.memory.alloc_table_selected_row.is_some())
+                    .unwrap_or(false);
+                if row_selected {
+                    return Some(Message::MemSelectAllocRow { index: None });
+                }
+            }
             if in_network {
                 let has_selection = state
                     .session_manager
@@ -546,7 +865,7 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     return Some(Message::NetworkSelectRequest { index: None });
                 }
             }
-            Some(Message::ExitDevToolsMode)
+            Some(Message::DevToolsEscape)
         }
 
         // ── Sub-panel switching ───────────────────────────────────────────────
@@ -554,6 +873,9 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // 'p' always switches to Performance panel.
         InputKey::Char('p') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+
+        // 'm' always switches to Memory panel.
+        InputKey::Char('m') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory)),
 
         // 'n' always switches to Network panel.
         InputKey::Char('n') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network)),
@@ -625,37 +947,108 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Char('/') if in_network => Some(Message::NetworkEnterFilterMode),
 
         // ── Inspector navigation (only active in Inspector panel) ─────────────
+        //
+        // Navigation keys (Up/Down/j/k) are emitted in both tree and details
+        // modes; the handler returns no-op when `details_open == true` (selection
+        // frozen). See handler/devtools/inspector.rs::handle_inspector_navigate
+        // for the guard.
         InputKey::Up | InputKey::Char('k') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Up))
         }
         InputKey::Down | InputKey::Char('j') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Down))
         }
-        InputKey::Enter | InputKey::Right if in_inspector => {
+
+        // Enter opens the details view only when in tree mode.  In details
+        // mode Enter has no binding so it falls through to None.
+        InputKey::Enter if in_inspector && !details_open => {
+            Some(Message::DevToolsInspectorOpenDetails)
+        }
+
+        // Right expands a tree node in tree mode; in details mode it cycles
+        // tabs forward so the arrow keys can navigate tabs without the keyboard.
+        InputKey::Right if in_inspector && !details_open => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
         }
-        InputKey::Left | InputKey::Char('h') if in_inspector => {
+        InputKey::Right if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: true })
+        }
+
+        // Left cycles tabs backward when details are open; otherwise it
+        // collapses the currently selected tree node (same as 'h').
+        InputKey::Left if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: false })
+        }
+        InputKey::Left | InputKey::Char('h') if in_inspector && !details_open => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Collapse))
         }
+
+        // Tab / Shift+Tab cycle Details tabs; only active when Details is open.
+        InputKey::Tab if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: true })
+        }
+        InputKey::BackTab if in_inspector && details_open => {
+            Some(Message::DevToolsInspectorCycleTab { forward: false })
+        }
+
+        // 'H' (Shift+H) toggles the "hide implementation widgets" filter.
+        // 'h' (lowercase) is already bound above to tree collapse so there is
+        // no conflict; the project convention is case-sensitive `Char('H')`.
+        InputKey::Char('H') if in_inspector => {
+            Some(Message::DevToolsInspectorToggleHideImplementation)
+        }
+
         // 'r' in Inspector panel refreshes the widget tree.
         InputKey::Char('r') if in_inspector => {
             active_id.map(|session_id| Message::RequestWidgetTree { session_id })
         }
 
-        // ── Performance panel — allocation table sort ─────────────────────────
+        // ── Memory panel — allocation table sort ──────────────────────────────
         //
         // 's' toggles the allocation table sort column between BySize and
-        // ByInstances. This binding is only active in the Performance panel;
+        // ByInstances. This binding is only active in the Memory panel;
         // in the Network panel 's' switches to the ResponseBody sub-tab (handled
         // above with the `in_network` guard), so there is no conflict.
-        InputKey::Char('s') if in_performance => Some(Message::ToggleAllocationSort),
+        InputKey::Char('s') if in_memory => Some(Message::MemToggleSort),
 
         // ── Performance panel frame navigation ────────────────────────────────
         //
-        // Left and Right navigate between frames in the bar chart. The guards
-        // are exclusive with the Inspector panel guards above, so there is no
-        // conflict: Inspector uses Left/Right for tree collapse/expand, and
-        // Performance uses them for frame prev/next.
+        // Left and Right navigate the Timeline Events Gantt depending on selection
+        // state (T03), pan the Gantt without selection (T01), or navigate frames
+        // in the bar chart when not on the TimelineEvents tab. (Drift #3 + T03)
+        //
+        // Priority order (all arms share the `in_performance` guard, evaluated
+        // in order by Rust):
+        //   1. `has_selection && on_timeline_tab` → sibling selection nav (T03).
+        //   2. `!has_selection && on_timeline_tab` → pan the Gantt (T01).
+        //   3. Otherwise → navigate frame selection (SelectPerformanceFrame).
+        //
+        // `has_selection` and `on_timeline_tab` were computed before this match
+        // block and are captured by the arm guards.
+
+        // 1a. Left with selection → PrevSibling.
+        InputKey::Left if in_performance && has_selection => {
+            active_id.map(|session_id| Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::PrevSibling,
+            })
+        }
+        // 1b. Right with selection → NextSibling.
+        InputKey::Right if in_performance && has_selection => {
+            active_id.map(|session_id| Message::TimelineMoveSelection {
+                session_id,
+                dir: SelectionDirection::NextSibling,
+            })
+        }
+        // 2a. Left without selection on TimelineEvents tab → pan left.
+        InputKey::Left if in_performance && on_timeline_tab => {
+            active_id.map(|session_id| Message::TimelinePanLeft { session_id })
+        }
+        // 2b. Right without selection on TimelineEvents tab → pan right.
+        InputKey::Right if in_performance && on_timeline_tab => {
+            active_id.map(|session_id| Message::TimelinePanRight { session_id })
+        }
+        // 3. Left/Right on other Performance tabs → frame selection.
         InputKey::Left if in_performance => Some(Message::SelectPerformanceFrame {
             index: state
                 .session_manager
@@ -677,6 +1070,17 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // Force quit
         InputKey::CharCtrl('c') => Some(Message::Quit),
+
+        // ── Hot restart fallthrough ───────────────────────────────────────────
+        //
+        // `R` (Shift+r) triggers hot restart in all DevTools contexts EXCEPT
+        // Performance/Details/RebuildStats, which is intercepted earlier by the
+        // `in_performance` early-return block to emit `ToggleRebuildStats`.
+        //
+        // This arm preserves muscle-memory: pressing `R` in Inspector, Memory,
+        // Network, or Performance-with-FrameChart/FrameAnalysis/TimelineEvents
+        // focused all behave the same as in Normal mode.
+        InputKey::Char('R') if !is_busy => Some(Message::HotRestart),
 
         _ => None,
     }
@@ -1748,6 +2152,16 @@ mod performance_sort_key_tests {
         state
     }
 
+    /// Create a state with one session in DevTools / Memory panel.
+    fn make_state_in_memory_panel() -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Memory;
+        state
+    }
+
     /// Create a state with one session in DevTools / Network panel.
     fn make_state_in_network_panel() -> AppState {
         let mut state = AppState::new();
@@ -1759,12 +2173,23 @@ mod performance_sort_key_tests {
     }
 
     #[test]
-    fn test_s_in_performance_panel_emits_toggle_allocation_sort() {
-        let state = make_state_in_performance_panel();
+    fn test_s_in_memory_panel_emits_mem_toggle_sort() {
+        let state = make_state_in_memory_panel();
         let msg = handle_key_devtools(&state, InputKey::Char('s'));
         assert!(
-            matches!(msg, Some(Message::ToggleAllocationSort)),
-            "'s' in Performance panel should emit ToggleAllocationSort"
+            matches!(msg, Some(Message::MemToggleSort)),
+            "'s' in Memory panel should emit MemToggleSort"
+        );
+    }
+
+    #[test]
+    fn test_s_in_performance_panel_does_not_emit_sort() {
+        let state = make_state_in_performance_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('s'));
+        // 's' is no longer bound in the Performance panel.
+        assert!(
+            !matches!(msg, Some(Message::MemToggleSort)),
+            "'s' in Performance panel should NOT emit MemToggleSort"
         );
     }
 
@@ -1772,7 +2197,7 @@ mod performance_sort_key_tests {
     fn test_s_in_network_panel_emits_response_body_tab() {
         let state = make_state_in_network_panel();
         let msg = handle_key_devtools(&state, InputKey::Char('s'));
-        // In the Network panel 's' maps to NetworkSwitchDetailTab(ResponseBody), not ToggleAllocationSort.
+        // In the Network panel 's' maps to NetworkSwitchDetailTab(ResponseBody), not MemToggleSort.
         assert!(
             matches!(
                 msg,
@@ -1795,6 +2220,262 @@ mod performance_sort_key_tests {
         let msg = handle_key_devtools(&state, InputKey::Char('s'));
         // 's' has no binding in the Inspector panel.
         assert!(msg.is_none(), "'s' in Inspector panel should return None");
+    }
+
+    #[test]
+    fn memory_panel_tab_cycles_memory_section() {
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            matches!(msg, Some(Message::MemFocusSection(_))),
+            "Tab in Memory panel should emit MemFocusSection"
+        );
+    }
+
+    #[test]
+    fn memory_panel_j_emits_mem_scroll_down() {
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('j'));
+        assert!(
+            matches!(msg, Some(Message::MemScrollDown)),
+            "'j' in Memory panel should emit MemScrollDown"
+        );
+    }
+
+    #[test]
+    fn memory_panel_esc_without_selection_exits() {
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::DevToolsEscape)),
+            "Esc in Memory panel without selection should emit DevToolsEscape"
+        );
+    }
+
+    #[test]
+    fn memory_panel_esc_with_selection_deselects_first() {
+        let mut state = make_state_in_memory_panel();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .memory
+            .alloc_table_selected_row = Some(3);
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::MemSelectAllocRow { index: None })),
+            "Esc in Memory panel with row selected should emit MemSelectAllocRow{{index: None}}"
+        );
+    }
+
+    #[test]
+    fn bracket_close_when_details_focused_emits_cycle_forward() {
+        let mut state = make_state_in_performance_panel();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+        }
+        let msg = handle_key_devtools(&state, InputKey::Char(']'));
+        assert!(
+            matches!(msg, Some(Message::PerfCycleDetailsTab { forward: true })),
+            "']' when Details focused should emit PerfCycleDetailsTab{{forward: true}}"
+        );
+    }
+
+    #[test]
+    fn bracket_open_when_details_focused_emits_cycle_backward() {
+        let mut state = make_state_in_performance_panel();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+        }
+        let msg = handle_key_devtools(&state, InputKey::Char('['));
+        assert!(
+            matches!(msg, Some(Message::PerfCycleDetailsTab { forward: false })),
+            "'[' when Details focused should emit PerfCycleDetailsTab{{forward: false}}"
+        );
+    }
+
+    #[test]
+    fn bracket_close_when_frame_chart_focused_is_noop() {
+        let state = make_state_in_performance_panel();
+        // focused_section defaults to FrameChart
+        let msg = handle_key_devtools(&state, InputKey::Char(']'));
+        // Falls through to the outer match, which has no binding for ']' — None.
+        assert!(
+            msg.is_none(),
+            "']' when FrameChart focused should produce no message"
+        );
+    }
+
+    #[test]
+    fn bracket_open_when_frame_chart_focused_is_noop() {
+        let state = make_state_in_performance_panel();
+        // focused_section defaults to FrameChart
+        let msg = handle_key_devtools(&state, InputKey::Char('['));
+        assert!(
+            msg.is_none(),
+            "'[' when FrameChart focused should produce no message"
+        );
+    }
+
+    // ── Phase-3 contextual `f` and `R` tests ────────────────────────────────
+
+    /// Helper: state in Performance/Details with a given details_tab.
+    fn make_state_in_details(tab: crate::state::PerfDetailsTab) -> AppState {
+        let mut state = make_state_in_performance_panel();
+        if let Some(h) = state.session_manager.selected_mut() {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+            h.session.performance.details_tab = tab;
+        }
+        state
+    }
+
+    #[test]
+    fn test_f_on_timeline_events_tab_emits_filter_cycle() {
+        let state = make_state_in_details(crate::state::PerfDetailsTab::TimelineEvents);
+        let msg = handle_key_devtools(&state, InputKey::Char('f'));
+        assert!(
+            matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
+            "'f' on TimelineEvents tab should emit TimelineEventsCycleFilter; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_f_on_frame_analysis_tab_does_not_emit_filter_cycle() {
+        let state = make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
+        let msg = handle_key_devtools(&state, InputKey::Char('f'));
+        assert!(
+            !matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
+            "'f' on FrameAnalysis tab should NOT emit TimelineEventsCycleFilter; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_f_on_logs_panel_does_not_emit_filter_cycle() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        // active_panel defaults to Inspector (not Performance)
+        let msg = handle_key_devtools(&state, InputKey::Char('f'));
+        assert!(
+            !matches!(msg, Some(Message::TimelineEventsCycleFilter { .. })),
+            "'f' outside Performance panel should NOT emit TimelineEventsCycleFilter; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_rebuild_stats_tab_emits_toggle() {
+        let state = make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::ToggleRebuildStats { .. })),
+            "'R' on RebuildStats tab should emit ToggleRebuildStats; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_rebuild_stats_tab_does_not_trigger_hot_restart() {
+        let state = make_state_in_details(crate::state::PerfDetailsTab::RebuildStats);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            !matches!(msg, Some(Message::HotRestart)),
+            "'R' on RebuildStats tab must NOT emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_frame_analysis_tab_triggers_hot_restart() {
+        // `R` with FrameAnalysis tab (not RebuildStats) must emit HotRestart — it falls
+        // through the early-return block (which only fires on RebuildStats tab) and hits
+        // the global `Char('R') if !is_busy` arm in the main DevTools match.
+        let state = make_state_in_details(crate::state::PerfDetailsTab::FrameAnalysis);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on FrameAnalysis tab should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_logs_panel_triggers_hot_restart() {
+        // In Normal (logs) mode, `R` must still trigger hot restart.
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::Normal;
+        let msg = handle_key(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' in Normal (logs) mode should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_memory_panel_triggers_hot_restart() {
+        // `R` in DevTools/Memory panel must emit HotRestart — falls through the
+        // `in_performance` early-return block and hits the global `Char('R') if !is_busy`
+        // arm in the main DevTools match.
+        let state = make_state_in_memory_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on Memory panel should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_inspector_panel_triggers_hot_restart() {
+        // `R` in DevTools/Inspector panel must emit HotRestart (fallthrough to global arm).
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on Inspector panel should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_network_panel_triggers_hot_restart() {
+        // `R` in DevTools/Network panel must emit HotRestart (fallthrough to global arm).
+        let state = make_state_in_network_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on Network panel should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_frame_chart_focused_triggers_hot_restart() {
+        // `R` in Performance panel with FrameChart focused must emit HotRestart.
+        // The `in_performance` early-return only fires when Details is focused AND
+        // on the RebuildStats tab; FrameChart focus falls through to the global arm.
+        let state = make_state_in_performance_panel();
+        // focused_section defaults to FrameChart
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' in Performance/FrameChart should emit HotRestart; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_capital_r_on_timeline_events_tab_triggers_hot_restart() {
+        // `R` in Performance/Details/TimelineEvents must emit HotRestart.
+        let state = make_state_in_details(crate::state::PerfDetailsTab::TimelineEvents);
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::HotRestart)),
+            "'R' on TimelineEvents tab should emit HotRestart; got {msg:?}"
+        );
     }
 }
 
@@ -2201,5 +2882,580 @@ mod flutter_version_key_tests {
         let state = fv_state();
         let msg = handle_key(&state, InputKey::BackTab);
         assert!(msg.is_none());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inspector Phase-1 key binding tests (task 06)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod inspector_phase1_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Build a state that is in DevTools / Inspector panel.
+    ///
+    /// `details_open` controls whether the Details pane is currently visible.
+    fn make_state_in_inspector_tab(details_open: bool) -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        state.devtools_view_state.inspector.details_open = details_open;
+        state
+    }
+
+    // ── Enter ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_enter_in_inspector_tree_mode_emits_open_details() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::DevToolsInspectorOpenDetails)),
+            "Enter in tree mode should emit DevToolsInspectorOpenDetails"
+        );
+    }
+
+    #[test]
+    fn test_enter_in_inspector_details_mode_is_unbound() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            msg.is_none(),
+            "Enter in details mode should return None (no binding)"
+        );
+    }
+
+    // ── H / h ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_uppercase_h_in_inspector_emits_toggle_hide_implementation() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Char('H'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorToggleHideImplementation)
+            ),
+            "Uppercase H in Inspector should emit DevToolsInspectorToggleHideImplementation"
+        );
+    }
+
+    #[test]
+    fn test_lowercase_h_in_inspector_still_emits_collapse() {
+        // Regression guard: 'h' must remain bound to Collapse even after adding 'H'.
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Char('h'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Collapse))
+            ),
+            "'h' (lowercase) in Inspector tree mode should still emit Collapse"
+        );
+    }
+
+    // ── Tab / BackTab ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tab_in_inspector_details_mode_emits_cycle_tab_forward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: true })
+            ),
+            "Tab in details mode should emit CycleTab {{ forward: true }}"
+        );
+    }
+
+    #[test]
+    fn test_back_tab_in_inspector_details_mode_emits_cycle_tab_backward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::BackTab);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: false })
+            ),
+            "BackTab in details mode should emit CycleTab {{ forward: false }}"
+        );
+    }
+
+    #[test]
+    fn test_tab_in_inspector_tree_mode_is_unbound() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            msg.is_none(),
+            "Tab in tree mode (details closed) should return None"
+        );
+    }
+
+    // ── Left / Right in details mode ──────────────────────────────────────────
+
+    #[test]
+    fn test_left_in_inspector_details_mode_emits_cycle_tab_backward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: false })
+            ),
+            "Left arrow in details mode should emit CycleTab {{ forward: false }}"
+        );
+    }
+
+    #[test]
+    fn test_right_in_inspector_details_mode_emits_cycle_tab_forward() {
+        let state = make_state_in_inspector_tab(true);
+        let msg = handle_key_devtools(&state, InputKey::Right);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorCycleTab { forward: true })
+            ),
+            "Right arrow in details mode should emit CycleTab {{ forward: true }}"
+        );
+    }
+
+    // ── Right in tree mode still expands ─────────────────────────────────────
+
+    #[test]
+    fn test_right_in_inspector_tree_mode_emits_expand() {
+        let state = make_state_in_inspector_tab(false);
+        let msg = handle_key_devtools(&state, InputKey::Right);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
+            ),
+            "Right arrow in tree mode should still emit Expand"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_panel_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    #[test]
+    fn key_m_switches_to_memory_panel() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+
+        let msg = handle_key_devtools(&state, InputKey::Char('m'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory))
+            ),
+            "'m' in DevTools mode should emit SwitchDevToolsPanel(Memory), got: {msg:?}"
+        );
+    }
+}
+
+// ── Phase 5: Timeline pan/zoom keybinding conflict guard tests ────────────────
+//
+// Validates Drift #3 and #4: ←/→ pan only on TimelineEvents tab; Left/Right
+// still emit SelectPerformanceFrame on other tabs/sections. `End` emits
+// TimelineFollowLatest on TimelineEvents tab and PerfJumpToEnd elsewhere.
+
+#[cfg(test)]
+mod timeline_pan_zoom_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Performance panel state with FrameChart section focused (default).
+    fn make_perf_frame_chart() -> AppState {
+        let mut state = AppState::new();
+        let _id = state
+            .session_manager
+            .create_session(&test_device())
+            .unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        // Default: focused_section = FrameChart
+        state
+    }
+
+    /// Performance panel state with Details/TimelineEvents focused.
+    fn make_perf_timeline_events() -> AppState {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device())
+            .unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+            h.session.performance.details_tab = PerfDetailsTab::TimelineEvents;
+        }
+        state
+    }
+
+    /// Performance panel state with Details/FrameAnalysis focused.
+    fn make_perf_frame_analysis() -> AppState {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device())
+            .unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.focused_section =
+                crate::session::performance::PerfSection::Details;
+            h.session.performance.details_tab = PerfDetailsTab::FrameAnalysis;
+        }
+        state
+    }
+
+    /// Drift #3: Left on FrameChart section → SelectPerformanceFrame (not pan).
+    #[test]
+    fn test_left_on_frame_chart_still_selects_frame() {
+        let state = make_perf_frame_chart();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::SelectPerformanceFrame { .. })),
+            "Left on FrameChart should emit SelectPerformanceFrame, got: {msg:?}"
+        );
+    }
+
+    /// Drift #3: Left on Details/FrameAnalysis tab → SelectPerformanceFrame (not pan).
+    #[test]
+    fn test_left_on_frame_analysis_tab_still_selects_frame() {
+        let state = make_perf_frame_analysis();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::SelectPerformanceFrame { .. })),
+            "Left on Details/FrameAnalysis should emit SelectPerformanceFrame, got: {msg:?}"
+        );
+    }
+
+    /// Drift #3: Left on Details/TimelineEvents tab → TimelinePanLeft (not frame select).
+    #[test]
+    fn test_left_on_timeline_events_tab_pans() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::TimelinePanLeft { .. })),
+            "Left on TimelineEvents should emit TimelinePanLeft, got: {msg:?}"
+        );
+    }
+
+    /// Drift #4: End on FrameChart section → PerfJumpToEnd (not follow-latest).
+    #[test]
+    fn test_end_on_frame_chart_jumps_to_end() {
+        let state = make_perf_frame_chart();
+        let msg = handle_key_devtools(&state, InputKey::End);
+        assert!(
+            matches!(msg, Some(Message::PerfJumpToEnd)),
+            "End on FrameChart should emit PerfJumpToEnd, got: {msg:?}"
+        );
+    }
+
+    /// Drift #4: End on Details/TimelineEvents tab → TimelineFollowLatest (not jump).
+    #[test]
+    fn test_end_on_timeline_events_follow_latest() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::End);
+        assert!(
+            matches!(msg, Some(Message::TimelineFollowLatest { .. })),
+            "End on TimelineEvents should emit TimelineFollowLatest, got: {msg:?}"
+        );
+    }
+
+    // ── Phase 5 T03: Key ordering tests (Drift #6) ───────────────────────────
+
+    /// Build a Timeline Events state where `timeline_selected_event` is set.
+    fn make_perf_timeline_events_with_selection() -> AppState {
+        use crate::session::TimelineEventCursor;
+        let mut state = make_perf_timeline_events();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.timeline_selected_event = Some(TimelineEventCursor {
+                tid: 1,
+                depth: 0,
+                ts: 1_000_000,
+            });
+        }
+        state
+    }
+
+    /// Drift #6: Down on Details/TimelineEvents WITHOUT selection → PerfScrollDown.
+    #[test]
+    fn test_down_on_timeline_events_without_selection_scrolls() {
+        let state = make_perf_timeline_events();
+        // No selection — Down should scroll.
+        let msg = handle_key_devtools(&state, InputKey::Down);
+        assert!(
+            matches!(msg, Some(Message::PerfScrollDown)),
+            "Down on TimelineEvents without selection should emit PerfScrollDown, got: {msg:?}"
+        );
+    }
+
+    /// Drift #6: Down on Details/TimelineEvents WITH selection → TimelineMoveSelection.
+    #[test]
+    fn test_down_on_timeline_events_with_selection_moves_cursor() {
+        use crate::session::performance::SelectionDirection;
+        let state = make_perf_timeline_events_with_selection();
+        let msg = handle_key_devtools(&state, InputKey::Down);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::TimelineMoveSelection {
+                    dir: SelectionDirection::FirstChildOrDownThread,
+                    ..
+                })
+            ),
+            "Down on TimelineEvents with selection should emit TimelineMoveSelection(FirstChildOrDownThread), got: {msg:?}"
+        );
+    }
+
+    /// T03: Left on TimelineEvents WITH selection → TimelineMoveSelection(PrevSibling).
+    #[test]
+    fn test_left_on_timeline_events_with_selection_moves_prev_sibling() {
+        use crate::session::performance::SelectionDirection;
+        let state = make_perf_timeline_events_with_selection();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(
+                msg,
+                Some(Message::TimelineMoveSelection {
+                    dir: SelectionDirection::PrevSibling,
+                    ..
+                })
+            ),
+            "Left on TimelineEvents with selection should emit TimelineMoveSelection(PrevSibling), got: {msg:?}"
+        );
+    }
+
+    /// T03: Left on TimelineEvents WITHOUT selection → TimelinePanLeft.
+    #[test]
+    fn test_left_on_timeline_events_without_selection_pans() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::TimelinePanLeft { .. })),
+            "Left on TimelineEvents without selection should emit TimelinePanLeft, got: {msg:?}"
+        );
+    }
+
+    /// T03: Enter on TimelineEvents WITHOUT selection → TimelineSelectFirstVisible.
+    #[test]
+    fn test_enter_on_timeline_events_without_selection_selects_first() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::TimelineSelectFirstVisible { .. })),
+            "Enter on TimelineEvents without selection should emit TimelineSelectFirstVisible, got: {msg:?}"
+        );
+    }
+
+    /// T03: Enter on TimelineEvents WITH selection (popup closed) → TimelineOpenPopup.
+    #[test]
+    fn test_enter_on_timeline_events_with_selection_opens_popup() {
+        let state = make_perf_timeline_events_with_selection();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::TimelineOpenPopup { .. })),
+            "Enter on TimelineEvents with selection should emit TimelineOpenPopup, got: {msg:?}"
+        );
+    }
+
+    // ── Phase 5 T04: Timeline search key binding tests (Drift #5) ────────────
+
+    /// Build a Timeline Events state with a search query set (committed, not active).
+    fn make_perf_timeline_events_with_query(query: &str) -> AppState {
+        let mut state = make_perf_timeline_events();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.timeline_search_query = Some(query.to_string());
+            h.session.performance.timeline_search_input_active = false;
+        }
+        state
+    }
+
+    /// Build a Timeline Events state with search input active.
+    fn make_perf_timeline_events_search_input_active() -> AppState {
+        let mut state = make_perf_timeline_events();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            h.session.performance.timeline_search_query = Some(String::new());
+            h.session.performance.timeline_search_input_active = true;
+        }
+        state
+    }
+
+    /// AC2: `/` on TimelineEvents tab → TimelineSearchOpen.
+    #[test]
+    fn test_slash_on_timeline_events_opens_search() {
+        let state = make_perf_timeline_events();
+        let msg = handle_key_devtools(&state, InputKey::Char('/'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchOpen { .. })),
+            "'/' on TimelineEvents tab should emit TimelineSearchOpen, got: {msg:?}"
+        );
+    }
+
+    /// AC8 / Drift #5: `n` with no query on TimelineEvents tab → SwitchDevToolsPanel(Network).
+    #[test]
+    fn test_n_with_no_query_on_timeline_tab_switches_to_network() {
+        let state = make_perf_timeline_events(); // no query
+        let msg = handle_key_devtools(&state, InputKey::Char('n'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+            ),
+            "'n' with no query on TimelineEvents should switch to Network, got: {msg:?}"
+        );
+    }
+
+    /// AC6 / Drift #5: `n` with query on TimelineEvents tab → TimelineSearchNextMatch.
+    #[test]
+    fn test_n_with_query_on_timeline_tab_next_match() {
+        let state = make_perf_timeline_events_with_query("foo");
+        let msg = handle_key_devtools(&state, InputKey::Char('n'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchNextMatch { .. })),
+            "'n' with query on TimelineEvents should emit TimelineSearchNextMatch, got: {msg:?}"
+        );
+    }
+
+    /// AC8 / Drift #5: `n` with query but on FrameChart section → SwitchDevToolsPanel(Network).
+    /// The `on_timeline_tab` guard must defeat the search arm when not on TimelineEvents.
+    #[test]
+    fn test_n_with_query_on_frame_chart_switches_to_network() {
+        let mut state = make_perf_frame_chart();
+        let id = state
+            .session_manager
+            .selected_id()
+            .expect("should have a session");
+        if let Some(h) = state.session_manager.get_mut(id) {
+            // Set a query, but the user is on FrameChart (not TimelineEvents).
+            h.session.performance.timeline_search_query = Some("foo".to_string());
+            h.session.performance.timeline_search_input_active = false;
+        }
+        let msg = handle_key_devtools(&state, InputKey::Char('n'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+            ),
+            "'n' with query on FrameChart should still switch to Network, got: {msg:?}"
+        );
+    }
+
+    /// AC7: `N` with query on TimelineEvents tab → TimelineSearchPrevMatch.
+    #[test]
+    fn test_shift_n_with_query_on_timeline_tab_prev_match() {
+        let state = make_perf_timeline_events_with_query("foo");
+        let msg = handle_key_devtools(&state, InputKey::Char('N'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchPrevMatch { .. })),
+            "'N' with query on TimelineEvents should emit TimelineSearchPrevMatch, got: {msg:?}"
+        );
+    }
+
+    /// AC3: Char keys while search input active → TimelineSearchInputChar.
+    #[test]
+    fn test_char_while_search_input_active_appends() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Char('R'));
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputChar { ch: 'R', .. })),
+            "Char while search input active should emit TimelineSearchInputChar, got: {msg:?}"
+        );
+    }
+
+    /// AC3: Backspace while search input active → TimelineSearchInputBackspace.
+    #[test]
+    fn test_backspace_while_search_input_active_deletes() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Backspace);
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputBackspace { .. })),
+            "Backspace while search input active should emit TimelineSearchInputBackspace, got: {msg:?}"
+        );
+    }
+
+    /// AC4: Enter while search input active → TimelineSearchInputCommit.
+    #[test]
+    fn test_enter_while_search_input_active_commits() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputCommit { .. })),
+            "Enter while search input active should emit TimelineSearchInputCommit, got: {msg:?}"
+        );
+    }
+
+    /// AC5: Esc while search input active → TimelineSearchInputCancel.
+    #[test]
+    fn test_esc_while_search_input_active_cancels() {
+        let state = make_perf_timeline_events_search_input_active();
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::TimelineSearchInputCancel { .. })),
+            "Esc while search input active should emit TimelineSearchInputCancel, got: {msg:?}"
+        );
     }
 }

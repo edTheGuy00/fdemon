@@ -30,6 +30,11 @@ handler layer. These fields:
 - `TargetSelectorState::last_known_visible_height` — the renderer writes the actual device list area height each frame; the handler reads it for scroll calculations.
 - `AppState::mouse_regions: MouseRegionsCell` — the renderer populates a fresh `MouseRegions` registry each frame (header shortcuts, session tabs, device pill); `handler/mouse/normal.rs::handle_press` reads it for click hit-tests. Wrapped in a `MouseRegionsCell` newtype to satisfy `#[derive(Debug)]` on `AppState` (since `Cell<T>: Debug` requires `T: Copy`, which `MouseRegions` cannot be).
 - `TagFilterUiState::last_known_scroll_offset` — the renderer writes ratatui's `ListState.offset()` each frame after `render_stateful_widget`; the region recorder reads it to convert screen-row numbers to absolute tag indices for click region registration. Default 0 (safe fallback when no render has happened yet).
+- `MemoryState::memory_chart_visible_width` — the renderer writes the actual chart plot width (in columns) each frame; the chart-scroll handler reads it to clamp `memory_chart_scroll_offset` against the latest geometry. Default 0 (safe fallback when no render has happened yet).
+- `MemoryState::alloc_table_visible_height` — the renderer writes the visible data-row count (excluding header) each frame; the alloc-table page and jump handlers read it to size page-step and end-of-list navigation. Default 0 (safe fallback when no render has happened yet).
+- `PerformanceState::details_pane_visible_height` — the renderer writes the inner details-pane height (excluding borders) each frame; Phase 3 Rebuild Stats and Timeline Events scroll handlers read it. Default 0 (safe fallback when no render has happened yet).
+- `PerformanceState::frame_chart_visible_width` — the renderer writes the visible bar count each frame; the chart-scroll, page, and jump handlers read it to clamp `frame_chart_scroll_offset` and size page-step navigation. Default 0 (safe fallback when no render has happened yet).
+- `PerformanceState::timeline_visible_row_count` — the Gantt renderer writes the actual visible thread-row count each frame; the `↑/↓` timeline thread-row scroll handler reads it to bound `timeline_thread_scroll_offset`. Default 0 (safe fallback when no render has happened yet). Write site annotated with the standard `// EXCEPTION:` comment in `timeline_events/mod.rs`.
 
 New `Cell`-based render-hint fields require explicit review and documentation here.
 
@@ -98,6 +103,64 @@ See `docs/ARCHITECTURE.md` for the complete dependency matrix.
 - Use `Result<T>` type alias from prelude
 - Classify errors as `fatal` vs `recoverable`
 - Add context with `.context()` or `.with_context()`
+
+## Approved Optimizations
+
+### Forwarder Panel Gate (`forward_vm_events`)
+
+`forward_vm_events` in `fdemon-app/src/actions/vm_service.rs` consults a `watch::Receiver<bool>` (`rebuilt_widgets_gate_rx`) before parsing any `Flutter.RebuiltWidgets` event. When the value is `false`, the branch calls `continue` without parsing or allocating. This is an intentional early-return optimization, not a logic error: `Flutter.RebuiltWidgets` events arrive at ~60 fps and are only meaningful when the Performance panel is visible. The gate is managed by `handle_switch_panel` and `handle_exit_devtools_mode`.
+
+### `try_send` for `Flutter.RebuiltWidgets` (Backpressure)
+
+`Flutter.RebuiltWidgets` events are forwarded to the TEA handler via `msg_tx.try_send(...)` rather than `.send().await`. This is the canonical backpressure strategy for high-frequency VM Service events: if the handler is slow and the channel is full, the current frame is dropped and logged at `debug` level, preventing head-of-line blocking of lower-volume events (`Flutter.Frame`, error events). `TrySendError::Closed` exits the loop. Do not change this to `.send().await` without understanding the throughput implications.
+
+### `pub(super)` Module Boundary: `text_helpers`
+
+`fdemon-tui/src/widgets/devtools/performance/details/text_helpers.rs` is declared `pub(super)` and all its exports (`truncate_with_ellipsis`, `pad_right`, `pad_left`, `PLACEHOLDER_LINE_COUNT`) are also `pub(super)`. This is intentional: the helpers are shared across sibling tab renderers within the `details` module but must not leak to the broader `widgets` hierarchy. Future helpers added to this module must keep the same visibility.
+
+### Gantt Depth-Stacked Rendering
+
+Phase 4: depth-stacked timeline event rendering follows DevTools' legacy `FlameChart` pattern — depth-N child events render at row `Y+N` within their parent's row band. This is an approved exception to "one widget = one rectangular region" because depth math is bounded by `MAX_DEPTH` and the renderer always honors `Layout::vertical` parent constraints. Reviewers should not flag this.
+
+### Thread-Row Scroll Offset Semantics
+
+Phase 4: `timeline_thread_scroll_offset` measures scroll position in **thread rows**, not event lines. The Gantt has no event-level selection in Phase 4, so the scroll target is the thread row itself. Phase 5 adds event-level selection within rows via `TimelineEventCursor`.
+
+### Full-Column Frame-Chart Selection Overlay
+
+Phase 4: the frame chart's selected bar is rendered with a full-column overlay (side-marker characters `▏`/`▕` across every chart row), not a single-character tip. This is an approved replacement for the Phase 1 single-`▔` highlight, which was visually invisible.
+
+### Viewport State in `PerformanceState` (not widget-local)
+
+Phase 5: pan/zoom state (`timeline_viewport_start_micros`, `timeline_viewport_width_micros`, `timeline_follow_latest`) lives in `PerformanceState`, not as widget-internal mutable state. This preserves unidirectional data flow (TEA) — keybindings dispatch messages, handlers mutate state, the renderer is a pure function of state. Reviewers should not refactor these into widget-local fields.
+
+### Three-Mode Viewport Priority Order
+
+Phase 5: `compute_active_viewport` in `viewport.rs` resolves the Gantt window in this exact priority order: (1) manual (`!follow_latest`) → uses stored `(viewport_start_micros, viewport_start_micros + viewport_width_micros)`; (2) frame-anchored (`follow_latest && committed_frame_anchor.is_some()`) → uses `compute_frame_anchored_viewport`; (3) live-edge fallback. The order is intentional and reviewers should not reorder the arms.
+
+### Selection Cursor by `(tid, depth, ts)` not Index
+
+Phase 5: `TimelineEventCursor = { tid, depth, ts }` is chosen over an index-based path because tracks mutate between batches (new roots appended, oldest evicted). The triple is stable as long as the underlying event survives the ring-buffer eviction policy. When the event ages out, the cursor is cleared with a `tracing::debug!` entry. Reviewers should expect and approve this defensive eviction handling.
+
+### Search as Highlight, not Filter
+
+Phase 5: search highlights matching bars (BOLD + UNDERLINED) but does not hide non-matching events. This matches DevTools' search-and-jump UX. Reviewers should not propose filter-by-name behavior — that is the role of the existing `f`-key thread filter (`All → Ui → Raster → All`), which Phase 5 preserves untouched.
+
+### `n`/`N` Fallthrough Pattern (Timeline Search)
+
+Phase 5: `n` on the TimelineEvents tab dispatches `TimelineSearchNextMatch` only when `timeline_search_query.is_some()`; otherwise falls through to the global `n` → Network panel handler. Mirrors the Phase 3-followup `R`-key fallthrough for HotRestart. Reviewers should approve this pattern wherever a context-specific binding might conflict with a global one.
+
+### Minimap Dominant-Thread Coloring
+
+Phase 5: each minimap column's background color is determined by the thread with the largest total root-event duration in that column's time slice. Only depth-0 root events are walked for dominance computation (bounded cost). Reviewers should not propose per-event coloring — the macro-view's purpose is thread-balance visibility, not event identification.
+
+### `Left`/`Right` Tab-Guard Pattern (TimelineEvents)
+
+Phase 5: `←`/`→` on the TimelineEvents tab are guarded at two levels — (a) the key arm fires only `if on_timeline_tab`, and (b) within that arm, if a selection is active they dispatch `TimelineMoveSelection`; otherwise they dispatch `TimelinePanLeft`/`TimelinePanRight`. This two-level guard prevents the pan keys from conflating with the frame-chart left/right selection advance on other tabs. Reviewers should preserve both guards.
+
+### Phase 6 Deferred Scope
+
+Phase 5 closes the interactive-Gantt scope. Phase 6 will add: CPU sampling via `getCpuSamples`, cross-thread async connector lines, per-frame zoom-to-frame coupling, event annotation/pinning, and trace export. Reviewers seeing Phase 5 PRs should not expect these features.
 
 ## Performance Concerns
 

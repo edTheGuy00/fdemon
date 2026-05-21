@@ -5,6 +5,7 @@ mod collapse;
 pub mod debug_state;
 mod handle;
 pub(crate) mod log_batcher;
+pub mod memory;
 mod native_tags;
 pub(crate) mod network;
 pub(crate) mod performance;
@@ -20,10 +21,13 @@ pub use collapse::CollapseState;
 pub use debug_state::{DebugState, PauseReason, TrackedBreakpoint};
 pub use handle::{CustomSourceHandle, SessionHandle, SharedSourceHandle};
 pub use log_batcher::LogBatcher;
+pub use memory::{AllocationSortColumn, MemorySection, MemoryState};
 pub use native_tags::NativeTagState;
 pub use network::{NetworkDetailTab, NetworkState};
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
-pub use performance::{AllocationSortColumn, PerfSection, PerformanceState};
+pub use performance::{
+    PerfSection, PerformanceState, SelectionDirection, TimelineEventCursor, TimelineFilter,
+};
 pub use session::{DevToolsEndpoint, Session};
 
 // SessionId and next_session_id live here in mod.rs

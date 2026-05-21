@@ -13,7 +13,10 @@ use crate::flutter_version::FlutterVersionState;
 use crate::mouse_regions::{MouseRegions, MouseRegionsCell};
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
-use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
+use fdemon_core::{
+    build_inspector_rows, AppPhase, DetailsContext, DiagnosticsNode, InspectorRow,
+    InspectorRowBuilderInputs, LayoutInfo,
+};
 use fdemon_daemon::{AndroidAvd, Device, FlutterSdk, IosSimulator, ToolAvailability};
 
 use super::session::SharedSourceHandle;
@@ -133,6 +136,9 @@ pub enum DevToolsPanel {
     /// FPS, memory usage, and frame timing display.
     Performance,
 
+    /// Heap memory usage chart and allocation breakdown.
+    Memory,
+
     /// HTTP/WebSocket network request monitor.
     Network,
 }
@@ -159,11 +165,78 @@ impl DevToolsError {
     }
 }
 
+/// Which tab is active in the Details view of the Inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetailsTab {
+    /// Widget property list returned by `getProperties`.
+    #[default]
+    Properties,
+    /// Render-object property nodes (those with `propertyType == "RenderObject"`).
+    RenderObject,
+    /// Flex layout explorer for `Row`, `Column`, and `Flex` widgets.
+    FlexExplorer,
+}
+
+/// Which tab is active within the Performance panel's Details pane.
+///
+/// Phase 2 populates `FrameAnalysis`; `RebuildStats` and `TimelineEvents`
+/// render "Coming soon" stubs until Phase 3 adds the underlying VM Service
+/// flows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PerfDetailsTab {
+    /// Per-frame phase breakdown + refresh-rate-aware hints. Default.
+    #[default]
+    FrameAnalysis,
+    /// Widget rebuild counts per frame (Phase 3 stub in Phase 2).
+    RebuildStats,
+    /// UI / Raster thread timeline events (Phase 3 stub in Phase 2).
+    TimelineEvents,
+}
+
+impl PerfDetailsTab {
+    /// Next tab in display order (wraps from TimelineEvents → FrameAnalysis).
+    pub fn next(self) -> Self {
+        match self {
+            PerfDetailsTab::FrameAnalysis => PerfDetailsTab::RebuildStats,
+            PerfDetailsTab::RebuildStats => PerfDetailsTab::TimelineEvents,
+            PerfDetailsTab::TimelineEvents => PerfDetailsTab::FrameAnalysis,
+        }
+    }
+
+    /// Previous tab in display order (wraps from FrameAnalysis → TimelineEvents).
+    pub fn prev(self) -> Self {
+        match self {
+            PerfDetailsTab::FrameAnalysis => PerfDetailsTab::TimelineEvents,
+            PerfDetailsTab::RebuildStats => PerfDetailsTab::FrameAnalysis,
+            PerfDetailsTab::TimelineEvents => PerfDetailsTab::RebuildStats,
+        }
+    }
+
+    /// Next tab in display order, skipping `RebuildStats` when `rebuild_stats_enabled` is false.
+    ///
+    /// When `rebuild_stats_enabled == false`:
+    /// - `FrameAnalysis → TimelineEvents → FrameAnalysis` (two-step cycle).
+    ///
+    /// When `rebuild_stats_enabled == true`:
+    /// - `FrameAnalysis → RebuildStats → TimelineEvents → FrameAnalysis` (full three-step cycle).
+    pub fn next_visible(self, rebuild_stats_enabled: bool) -> Self {
+        if rebuild_stats_enabled {
+            self.next()
+        } else {
+            match self {
+                PerfDetailsTab::FrameAnalysis => PerfDetailsTab::TimelineEvents,
+                PerfDetailsTab::RebuildStats => PerfDetailsTab::TimelineEvents,
+                PerfDetailsTab::TimelineEvents => PerfDetailsTab::FrameAnalysis,
+            }
+        }
+    }
+}
+
 /// State for the widget inspector tree view.
 ///
 /// Also holds layout data for the currently selected widget (merged into this struct
 /// in Phase 2). Layout fields use a `layout_` prefix to avoid conflicts with inspector fields.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct InspectorState {
     /// The root widget tree node (fetched on-demand via VM Service RPC).
     pub root: Option<DiagnosticsNode>,
@@ -264,6 +337,115 @@ pub struct InspectorState {
     /// If the user refreshes before the inspector has ever loaded a tree the
     /// flag will be `false` and `Initial` is used so polling still applies.
     pub has_ever_rendered_tree: bool,
+
+    // ── Chain-folding / "Hide implementation widgets" ─────────────────────────
+    /// Set of leader `value_id`s whose hideable chain is currently expanded.
+    ///
+    /// Independent of `expanded` (which tracks regular tree expand/collapse).
+    /// A leader whose id is present here renders as
+    /// [`fdemon_core::RowGroup::LeaderExpanded`] with `Member` sub-rows visible;
+    /// otherwise it renders as [`fdemon_core::RowGroup::LeaderCollapsed`] and
+    /// its sub-rows are suppressed.
+    pub expanded_groups: HashSet<String>,
+
+    /// When `true`, contiguous chains of non-local-project wrapper widgets are
+    /// folded into a leader row.
+    ///
+    /// Mirrors DevTools' "Hide implementation widgets" toggle.
+    /// Defaults to `true`. Persisted via `[devtools]` in settings (the
+    /// startup-time application happens in task 03; the field itself lives here).
+    ///
+    /// **Preserved** across [`Self::reset`] calls (user preference).
+    pub hide_implementation_widgets: bool,
+
+    // ── Details view ──────────────────────────────────────────────────────────
+    /// `true` when the user has opened the Details view (Enter pressed).
+    pub details_open: bool,
+
+    /// Which tab is currently active in the Details view.
+    pub details_tab: DetailsTab,
+
+    /// `value_id` of the widget whose details are currently displayed.
+    ///
+    /// Snapshotted from the selected row at Open time; not updated by
+    /// navigation (selection is frozen while details are open).
+    pub details_node_id: Option<String>,
+
+    /// Widget property nodes returned by `getProperties` for the
+    /// `details_node_id` widget.
+    ///
+    /// Populated in Phase 2; empty in Phase 1.
+    pub properties: Vec<DiagnosticsNode>,
+
+    /// Render-object diagnostics property nodes (those with
+    /// `propertyType == "RenderObject"`) extracted from `properties`.
+    ///
+    /// Populated in Phase 2; empty in Phase 1.
+    pub render_properties: Vec<DiagnosticsNode>,
+
+    /// `true` when a properties fetch is in flight (Phase 2).
+    pub properties_loading: bool,
+
+    /// User-friendly error from the last properties fetch (Phase 2).
+    pub properties_error: Option<DevToolsError>,
+
+    /// `value_id` of the last widget whose properties were successfully fetched.
+    /// Used as a cache key by `handle_open_details` to skip re-dispatch when the
+    /// user closes + reopens Details on the same node.
+    pub last_fetched_properties_node_id: Option<String>,
+
+    /// `value_id` of the in-flight properties fetch, if any. Used as a stale
+    /// guard in `handle_properties_fetched`: if the user closes Details or
+    /// switches to a different node mid-flight, the late response is discarded.
+    pub pending_properties_node_id: Option<String>,
+
+    /// Cached tree-derived predicates for the open details session.
+    ///
+    /// Populated by `handle_open_details` via
+    /// [`fdemon_core::widget_tree::compute_details_context`]. Used by
+    /// [`Self::visible_tabs`] to decide which tabs render. Cleared by
+    /// [`Self::reset`] and [`Self::reset_details_and_groups`]; overwritten on
+    /// every successful `handle_open_details`.
+    ///
+    /// Default value (`DetailsContext::default()`) is harmless because
+    /// `visible_tabs` is only consumed while `details_open == true`, and
+    /// `handle_open_details` always writes here before flipping `details_open`.
+    pub details_context: DetailsContext,
+}
+
+impl Default for InspectorState {
+    fn default() -> Self {
+        Self {
+            root: None,
+            expanded: HashSet::new(),
+            selected_index: 0,
+            loading: false,
+            error: None,
+            has_object_group: false,
+            last_fetch_time: None,
+            layout: None,
+            layout_loading: false,
+            layout_error: None,
+            has_layout_object_group: false,
+            last_fetched_node_id: None,
+            pending_node_id: None,
+            layout_last_fetch_time: None,
+            has_ever_rendered_tree: false,
+            // Matches DevTools default: implementation widgets are hidden.
+            hide_implementation_widgets: true,
+            expanded_groups: HashSet::new(),
+            details_open: false,
+            details_tab: DetailsTab::Properties,
+            details_node_id: None,
+            properties: Vec::new(),
+            render_properties: Vec::new(),
+            properties_loading: false,
+            properties_error: None,
+            last_fetched_properties_node_id: None,
+            pending_properties_node_id: None,
+            details_context: DetailsContext::default(),
+        }
+    }
 }
 
 impl InspectorState {
@@ -284,6 +466,14 @@ impl InspectorState {
     }
 
     /// Reset state (e.g., on session change or refresh).
+    ///
+    /// # Preserved fields
+    /// - `hide_implementation_widgets`: user preference; survives session switches.
+    /// - `has_ever_rendered_tree`: sticky flag; only cleared on hot restart.
+    ///
+    /// # Cleared fields
+    /// All other fields including the new details-view state and chain-group
+    /// expansion set are reset to their defaults.
     pub fn reset(&mut self) {
         self.root = None;
         self.expanded.clear();
@@ -303,6 +493,47 @@ impl InspectorState {
         self.last_fetched_node_id = None;
         self.pending_node_id = None;
         self.layout_last_fetch_time = None;
+        // Chain-folding: clear per-session group expansion state.
+        // hide_implementation_widgets is intentionally NOT reset — user preference.
+        self.expanded_groups.clear();
+        // Details view
+        self.details_open = false;
+        self.details_tab = DetailsTab::Properties;
+        self.details_node_id = None;
+        self.details_context = DetailsContext::default();
+        self.properties.clear();
+        self.render_properties.clear();
+        self.properties_loading = false;
+        self.properties_error = None;
+        self.last_fetched_properties_node_id = None;
+        self.pending_properties_node_id = None;
+    }
+
+    /// Clears state that does not survive a tree refresh or hot restart.
+    ///
+    /// Unlike [`Self::reset`], this preserves the user's tree-shape preferences
+    /// (`hide_implementation_widgets`) and the sticky `has_ever_rendered_tree`
+    /// flag. It clears state that points at specific widget identities that
+    /// would be invalidated by a new tree (group leader ids, details snapshot)
+    /// or a new Dart isolate (Dart object ids referenced by `details_node_id`).
+    ///
+    /// Called from:
+    /// - [`crate::handler::devtools::handle_widget_tree_fetched`] — on each
+    ///   successful tree refresh, to discard stale details pointing at old nodes.
+    /// - The `Message::SessionRestartCompleted` handler — after hot restart,
+    ///   because a new isolate invalidates all Dart object ids.
+    pub fn reset_details_and_groups(&mut self) {
+        self.details_open = false;
+        self.details_node_id = None;
+        self.details_tab = DetailsTab::Properties;
+        self.details_context = DetailsContext::default();
+        self.expanded_groups.clear();
+        self.properties.clear();
+        self.render_properties.clear();
+        self.properties_loading = false;
+        self.properties_error = None;
+        self.last_fetched_properties_node_id = None;
+        self.pending_properties_node_id = None;
     }
 
     /// Returns `true` after the first successful widget tree render.
@@ -375,80 +606,122 @@ impl InspectorState {
         self.last_fetch_time = None;
     }
 
-    /// Build a flat list of visible nodes based on expand/collapse state.
-    /// Returns (node_ref, depth) pairs for rendering.
-    pub fn visible_nodes(&self) -> Vec<(&DiagnosticsNode, usize)> {
+    /// Build the list of rendered rows with vertical-guideline + branch-tick
+    /// metadata and chain-collapse applied.
+    ///
+    /// Respects `hide_implementation_widgets` and `expanded_groups` so that
+    /// collapsed leader rows suppress their subordinates from the output.
+    pub fn inspector_rows(&self) -> Vec<InspectorRow<'_>> {
         let Some(root) = &self.root else {
             return vec![];
         };
-        let mut result = Vec::new();
-        self.collect_visible(root, 0, &mut result);
-        result
+        build_inspector_rows(InspectorRowBuilderInputs {
+            root,
+            expanded: &self.expanded,
+            expanded_groups: &self.expanded_groups,
+            hide_implementation: self.hide_implementation_widgets,
+        })
     }
 
-    fn collect_visible<'a>(
-        &self,
-        node: &'a DiagnosticsNode,
-        depth: usize,
-        result: &mut Vec<(&'a DiagnosticsNode, usize)>,
-    ) {
-        // Skip hidden nodes
-        if !node.is_visible() {
-            return;
-        }
-        result.push((node, depth));
-        if let Some(value_id) = &node.value_id {
-            if self.is_expanded(value_id) {
-                for child in &node.children {
-                    self.collect_visible(child, depth + 1, result);
-                }
-            }
-        }
+    /// Backwards-compatible shim for callers that only need `(node, depth)` tuples.
+    ///
+    /// Built on [`Self::inspector_rows`] so it respects chain folding.
+    /// Collapsed group-leader subordinates are absent from the returned slice,
+    /// matching the visible row count used for navigation bounds.
+    pub fn visible_nodes(&self) -> Vec<(&DiagnosticsNode, usize)> {
+        self.inspector_rows()
+            .into_iter()
+            .map(|row| (row.node, row.depth))
+            .collect()
     }
 
-    /// Return the description of the currently selected visible node.
+    /// Return the description of the currently selected visible row.
     ///
-    /// Traverses the tree in pre-order (same order as [`Self::visible_nodes`])
-    /// and returns the `description` of the node at [`Self::selected_index`].
-    /// Returns `None` when no tree is loaded, or when `selected_index` is out
-    /// of bounds.
+    /// Delegates to [`Self::inspector_rows`] so that the result is consistent
+    /// with chain-folding: a node hidden inside a collapsed group does not
+    /// occupy an index and the leader row counts as exactly one row.
     ///
-    /// Unlike [`Self::visible_nodes`], this method does **not** allocate a
-    /// `Vec`. It is O(n) in the number of visible nodes but avoids the
-    /// allocation cost, making it suitable for the render path where only a
-    /// single description is needed.
+    /// Returns `None` when no tree is loaded or `selected_index` is out of
+    /// bounds.
     pub fn selected_node_description(&self) -> Option<String> {
-        let root = self.root.as_ref()?;
-        let mut remaining = self.selected_index;
-        self.find_nth_description(root, &mut remaining)
-            .map(|s| s.to_string())
+        let rows = self.inspector_rows();
+        rows.get(self.selected_index)
+            .map(|r| r.node.description.clone())
     }
 
-    /// Recursive pre-order traversal that counts down `remaining` and returns
-    /// the description when `remaining` hits zero.
-    fn find_nth_description<'a>(
-        &self,
-        node: &'a DiagnosticsNode,
-        remaining: &mut usize,
-    ) -> Option<&'a str> {
-        if !node.is_visible() {
-            return None;
-        }
-        if *remaining == 0 {
-            return Some(&node.description);
-        }
-        *remaining -= 1;
+    /// Returns the currently-selected row from the active row list, or `None`
+    /// if the selection is out of bounds.
+    ///
+    /// The returned row carries its [`fdemon_core::RowGroup`] which callers can
+    /// match on to decide whether the row is a chain leader, member, or
+    /// standalone.
+    ///
+    /// Returns `None` when no tree is loaded or `selected_index` is out of
+    /// bounds.
+    pub fn selected_row(&self) -> Option<InspectorRow<'_>> {
+        let rows = self.inspector_rows();
+        rows.into_iter().nth(self.selected_index)
+    }
 
-        if let Some(value_id) = &node.value_id {
-            if self.is_expanded(value_id) {
-                for child in &node.children {
-                    if let Some(found) = self.find_nth_description(child, remaining) {
-                        return Some(found);
-                    }
-                }
-            }
+    /// Return the `value_id` of the currently selected visible row.
+    ///
+    /// Used by handler code to obtain the identifier needed for RPC calls
+    /// (e.g., `getProperties`, `getLayoutData`) for the selected widget.
+    ///
+    /// Returns `None` when no tree is loaded, `selected_index` is out of
+    /// bounds, or the node at that position has no `value_id`.
+    pub fn selected_value_id(&self) -> Option<String> {
+        self.selected_row().and_then(|r| r.node.value_id.clone())
+    }
+
+    /// Return the ordered list of tabs that should be visible in the Details
+    /// strip given current state.
+    ///
+    /// Visibility rules (DevTools parity, parent PLAN §5.4):
+    /// - [`DetailsTab::Properties`] is always included.
+    /// - [`DetailsTab::RenderObject`] is included iff
+    ///   `!self.render_properties.is_empty()`.
+    /// - [`DetailsTab::FlexExplorer`] is included iff
+    ///   `self.details_context.is_flex_layout` (precomputed by
+    ///   `handle_open_details` via `compute_details_context`).
+    ///
+    /// Returned in display order. Caller is free to assume the first element
+    /// is always `Properties` and to use the order for cycling.
+    ///
+    /// Pure: does not walk the tree, does not allocate beyond the returned vec,
+    /// and never mutates state. Safe to call from the TUI renderer.
+    pub fn visible_tabs(&self) -> Vec<DetailsTab> {
+        let mut tabs = Vec::with_capacity(3);
+        tabs.push(DetailsTab::Properties);
+        if !self.render_properties.is_empty() {
+            tabs.push(DetailsTab::RenderObject);
         }
-        None
+        if self.details_context.is_flex_layout {
+            tabs.push(DetailsTab::FlexExplorer);
+        }
+        tabs
+    }
+
+    /// Ensure `self.details_tab` is in [`Self::visible_tabs`]; if not, set it
+    /// to the first visible tab (always `Properties`).
+    ///
+    /// Call this after any state transition that may have removed the active
+    /// tab from the visible set:
+    /// - `handle_inspector_properties_fetched` (fetch may yield empty
+    ///   `render_properties` → Render Object tab disappears).
+    /// - `handle_inspector_properties_fetch_failed` (same, depending on
+    ///   pre-failure cache state).
+    ///
+    /// `handle_open_details` already sets `details_tab = Properties` directly
+    /// and does not need to call this method.
+    ///
+    /// `handle_close_details` does not need this — the renderer never sees
+    /// state while `details_open == false`.
+    pub fn clamp_details_tab(&mut self) {
+        let visible = self.visible_tabs();
+        if !visible.contains(&self.details_tab) {
+            self.details_tab = visible.first().copied().unwrap_or(DetailsTab::Properties);
+        }
     }
 }
 
@@ -1252,6 +1525,13 @@ impl AppState {
 
         let mouse_capture_active = settings.ui.enable_mouse;
 
+        let mut devtools_view_state = DevToolsViewState::default();
+        // Bridge settings into DevTools state at startup. The InspectorState
+        // Default impl is settings-agnostic (per task 03 requirements), so we
+        // propagate persisted preferences here, at the single bridge site.
+        devtools_view_state.inspector.hide_implementation_widgets =
+            settings.devtools.hide_implementation_widgets;
+
         Self {
             ui_mode: UiMode::Normal,
             session_manager: SessionManager::new(),
@@ -1269,7 +1549,7 @@ impl AppState {
             android_avds_cache: None,
             bootable_last_updated: None,
             tool_availability: ToolAvailability::default(),
-            devtools_view_state: DevToolsViewState::default(),
+            devtools_view_state,
             dap_status: DapStatus::Off,
             file_watcher_suspended: false,
             pending_file_changes: 0,
@@ -1690,17 +1970,23 @@ mod tests {
     // ─────────────────────────────────────────────────────────
 
     /// Build a three-node tree: root → child-1 → child-2.
-    /// The root is auto-expanded so that all three nodes are visible.
+    ///
+    /// All nodes have `created_by_local_project: true` so they are "always
+    /// visible" and are **not** folded by the implementation-widget hiding
+    /// logic, regardless of the `hide_implementation_widgets` default.
     fn make_tree_with_three_nodes() -> DiagnosticsNode {
         DiagnosticsNode {
             description: "RootNode".to_string(),
             value_id: Some("root-id".to_string()),
+            created_by_local_project: true,
             children: vec![DiagnosticsNode {
                 description: "SecondNode".to_string(),
                 value_id: Some("child-1-id".to_string()),
+                created_by_local_project: true,
                 children: vec![DiagnosticsNode {
                     description: "ThirdNode".to_string(),
                     value_id: Some("child-2-id".to_string()),
+                    created_by_local_project: true,
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -1713,6 +1999,7 @@ mod tests {
         DiagnosticsNode {
             description: "SingleNode".to_string(),
             value_id: Some("single-id".to_string()),
+            created_by_local_project: true,
             ..Default::default()
         }
     }
@@ -1813,6 +2100,302 @@ mod tests {
                 "Mismatch at index {i}"
             );
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // inspector_rows / DetailsTab / selected_value_id Tests
+    // (devtools-inspector-parity Phase 1, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    /// Build a 5-deep single-child chain where every node is an implementation
+    /// widget (not created by the local project).  Each node has a unique
+    /// `value_id` of the form `"chain-N"` (N = 0..4).
+    fn make_chain(depth: usize) -> DiagnosticsNode {
+        fn build(remaining: usize, idx: usize) -> DiagnosticsNode {
+            DiagnosticsNode {
+                description: format!("Widget{idx}"),
+                value_id: Some(format!("chain-{idx}")),
+                created_by_local_project: false,
+                children: if remaining > 0 {
+                    vec![build(remaining - 1, idx + 1)]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            }
+        }
+        build(depth - 1, 0)
+    }
+
+    /// Collect all `value_id`s reachable from `root` into a `HashSet`.
+    fn collect_value_ids(root: &Option<DiagnosticsNode>) -> HashSet<String> {
+        fn recurse(node: &DiagnosticsNode, out: &mut HashSet<String>) {
+            if let Some(id) = &node.value_id {
+                out.insert(id.clone());
+            }
+            for child in &node.children {
+                recurse(child, out);
+            }
+        }
+        let mut ids = HashSet::new();
+        if let Some(root) = root {
+            recurse(root, &mut ids);
+        }
+        ids
+    }
+
+    #[test]
+    fn inspector_rows_returns_empty_when_no_root() {
+        let state = InspectorState::default();
+        assert!(state.inspector_rows().is_empty());
+    }
+
+    #[test]
+    fn inspector_rows_folds_chain_when_hide_implementation_true() {
+        let mut state = InspectorState::default();
+        // Build a 5-deep wrapper chain (single child each, no createdByLocalProject)
+        state.root = Some(make_chain(5));
+        // Expand all nodes in the regular expanded set
+        state.expanded = collect_value_ids(&state.root);
+        // hide_implementation_widgets defaults to true
+
+        let rows = state.inspector_rows();
+        // At least one leader-collapsed row should exist
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r.group, fdemon_core::RowGroup::LeaderCollapsed { .. })),
+            "Expected a LeaderCollapsed row but got: {:?}",
+            rows.iter().map(|r| &r.group).collect::<Vec<_>>()
+        );
+        assert!(rows.len() < 5, "chain should fold, got {} rows", rows.len());
+    }
+
+    #[test]
+    fn inspector_rows_renders_full_chain_when_hide_implementation_false() {
+        let mut state = InspectorState {
+            hide_implementation_widgets: false,
+            ..Default::default()
+        };
+        state.root = Some(make_chain(5));
+        state.expanded = collect_value_ids(&state.root);
+
+        let rows = state.inspector_rows();
+        // All rows should be standalone (no folding)
+        assert!(
+            rows.iter().all(|r| r.group == fdemon_core::RowGroup::None),
+            "Expected all RowGroup::None rows, got: {:?}",
+            rows.iter().map(|r| &r.group).collect::<Vec<_>>()
+        );
+        assert_eq!(rows.len(), 5, "Expected 5 rows, got {}", rows.len());
+    }
+
+    #[test]
+    fn visible_nodes_shim_matches_inspector_rows_node_depth_pairs() {
+        let mut state = InspectorState {
+            hide_implementation_widgets: false,
+            ..Default::default()
+        };
+        state.root = Some(make_tree_with_three_nodes());
+        state.expanded.insert("root-id".to_string());
+        state.expanded.insert("child-1-id".to_string());
+
+        let rows = state.inspector_rows();
+        let shim = state.visible_nodes();
+
+        assert_eq!(rows.len(), shim.len(), "row counts must match");
+        for (row, (node, depth)) in rows.iter().zip(shim.iter()) {
+            assert!(
+                std::ptr::eq(row.node, *node),
+                "node pointer mismatch at depth {depth}"
+            );
+            assert_eq!(
+                row.depth, *depth,
+                "depth mismatch for node '{}'",
+                node.description
+            );
+        }
+    }
+
+    #[test]
+    fn reset_preserves_hide_implementation_widgets_and_has_ever_rendered_tree() {
+        let mut state = InspectorState {
+            // Explicitly override the default (true) to verify preservation.
+            hide_implementation_widgets: false,
+            has_ever_rendered_tree: true,
+            root: Some(make_single_node()),
+            loading: true,
+            ..Default::default()
+        };
+
+        state.reset();
+
+        assert!(
+            !state.hide_implementation_widgets,
+            "hide_implementation_widgets must be preserved across reset"
+        );
+        assert!(
+            state.has_ever_rendered_tree,
+            "has_ever_rendered_tree must be preserved across reset"
+        );
+        assert!(state.root.is_none(), "root should be cleared");
+        assert!(!state.loading, "loading should be cleared");
+    }
+
+    #[test]
+    fn reset_clears_details_state() {
+        let mut state = InspectorState {
+            details_open: true,
+            details_tab: DetailsTab::RenderObject,
+            details_node_id: Some("some-id".to_string()),
+            properties: vec![DiagnosticsNode {
+                description: "prop".to_string(),
+                ..Default::default()
+            }],
+            render_properties: vec![DiagnosticsNode {
+                description: "render-prop".to_string(),
+                ..Default::default()
+            }],
+            properties_loading: true,
+            properties_error: Some(DevToolsError::new("err", "hint")),
+            ..Default::default()
+        };
+        state.expanded_groups.insert("leader-id".to_string());
+
+        state.reset();
+
+        assert!(!state.details_open, "details_open should be cleared");
+        assert_eq!(
+            state.details_tab,
+            DetailsTab::Properties,
+            "details_tab should reset to default"
+        );
+        assert!(
+            state.details_node_id.is_none(),
+            "details_node_id should be cleared"
+        );
+        assert!(state.properties.is_empty(), "properties should be cleared");
+        assert!(
+            state.render_properties.is_empty(),
+            "render_properties should be cleared"
+        );
+        assert!(
+            !state.properties_loading,
+            "properties_loading should be cleared"
+        );
+        assert!(
+            state.properties_error.is_none(),
+            "properties_error should be cleared"
+        );
+        assert!(
+            state.expanded_groups.is_empty(),
+            "expanded_groups should be cleared"
+        );
+    }
+
+    #[test]
+    fn selected_value_id_returns_none_when_no_tree() {
+        let state = InspectorState::default();
+        assert!(state.selected_value_id().is_none());
+    }
+
+    #[test]
+    fn selected_value_id_returns_node_id_for_current_selection() {
+        let mut state = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
+        // Root is visible at index 0
+        assert_eq!(
+            state.selected_value_id().as_deref(),
+            Some("root-id"),
+            "index 0 should be root"
+        );
+        // Expand root → SecondNode visible at index 1
+        state.expanded.insert("root-id".to_string());
+        state.selected_index = 1;
+        assert_eq!(
+            state.selected_value_id().as_deref(),
+            Some("child-1-id"),
+            "index 1 should be SecondNode"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // selected_row() Tests (phase-1-fixes Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    /// Build a root wrapper node (local-project) with a 3-deep implementation
+    /// chain (non-local-project, single child each) as its sole child.
+    /// The wrapper is always visible; the chain starts at index 1 when the
+    /// wrapper is expanded.
+    fn make_root_with_chain() -> DiagnosticsNode {
+        // Chain: chain-0 → chain-1 → chain-2 (all non-local-project)
+        let chain = make_chain(3);
+        DiagnosticsNode {
+            description: "RootWrapper".to_string(),
+            value_id: Some("wrapper-id".to_string()),
+            created_by_local_project: true,
+            children: vec![chain],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn selected_row_returns_row_with_group_for_chain_leader() {
+        let mut inspector = InspectorState::default();
+        // Build a tree with a foldable chain (non-local-project, single-child)
+        let root = make_root_with_chain();
+        inspector.root = Some(root);
+        // Expand the wrapper so the chain leader is visible at index 1
+        inspector.expanded.insert("wrapper-id".to_string());
+        inspector.hide_implementation_widgets = true;
+        inspector.selected_index = 1; // the leader row
+        let row = inspector.selected_row().expect("row should exist");
+        assert!(
+            matches!(row.group, fdemon_core::RowGroup::LeaderCollapsed { .. }),
+            "Expected LeaderCollapsed but got: {:?}",
+            row.group
+        );
+    }
+
+    #[test]
+    fn selected_row_returns_none_when_index_out_of_bounds() {
+        let inspector = InspectorState {
+            root: Some(make_single_node()),
+            selected_index: 99,
+            ..Default::default()
+        };
+        assert!(
+            inspector.selected_row().is_none(),
+            "index 99 should be out of bounds for a single-node tree"
+        );
+    }
+
+    #[test]
+    fn selected_row_returns_row_for_standalone_widget() {
+        let inspector = InspectorState {
+            root: Some(make_single_node()),
+            hide_implementation_widgets: true,
+            selected_index: 0,
+            ..Default::default()
+        };
+        let row = inspector
+            .selected_row()
+            .expect("row should exist at index 0");
+        assert_eq!(
+            row.group,
+            fdemon_core::RowGroup::None,
+            "standalone widget should have RowGroup::None"
+        );
+    }
+
+    #[test]
+    fn inspector_state_default_has_hide_implementation_true() {
+        let state = InspectorState::default();
+        assert!(
+            state.hide_implementation_widgets,
+            "default should match DevTools' default (hide implementation widgets)"
+        );
     }
 
     // Helper to create a test device
@@ -2516,6 +3099,242 @@ mod tests {
         assert!(
             !state.mouse_capture_active,
             "mouse_capture_active should be false when settings.ui.enable_mouse is false"
+        );
+    }
+
+    // ── hide_implementation_widgets wire-up tests (task 03) ──────────────────
+
+    #[test]
+    fn test_appstate_propagates_hide_implementation_true_from_settings() {
+        let mut settings = crate::config::Settings::default();
+        settings.devtools.hide_implementation_widgets = true;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "inspector.hide_implementation_widgets should mirror settings on startup"
+        );
+    }
+
+    #[test]
+    fn test_appstate_propagates_hide_implementation_false_from_settings() {
+        let mut settings = crate::config::Settings::default();
+        settings.devtools.hide_implementation_widgets = false;
+        let state = AppState::with_settings(std::path::PathBuf::new(), settings);
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .hide_implementation_widgets,
+            "inspector.hide_implementation_widgets should mirror settings (false) on startup"
+        );
+    }
+
+    // ── Properties cache-field reset tests (phase-2-task-03) ──────────────────
+
+    #[test]
+    fn reset_clears_properties_cache_fields() {
+        let mut state = InspectorState {
+            last_fetched_properties_node_id: Some("objects/42".into()),
+            pending_properties_node_id: Some("objects/43".into()),
+            ..Default::default()
+        };
+        state.reset();
+        assert!(
+            state.last_fetched_properties_node_id.is_none(),
+            "reset() must clear last_fetched_properties_node_id"
+        );
+        assert!(
+            state.pending_properties_node_id.is_none(),
+            "reset() must clear pending_properties_node_id"
+        );
+    }
+
+    #[test]
+    fn reset_details_and_groups_clears_properties_cache_fields() {
+        let mut state = InspectorState {
+            last_fetched_properties_node_id: Some("objects/42".into()),
+            pending_properties_node_id: Some("objects/43".into()),
+            ..Default::default()
+        };
+        state.reset_details_and_groups();
+        assert!(
+            state.last_fetched_properties_node_id.is_none(),
+            "reset_details_and_groups() must clear last_fetched_properties_node_id"
+        );
+        assert!(
+            state.pending_properties_node_id.is_none(),
+            "reset_details_and_groups() must clear pending_properties_node_id"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // visible_tabs / clamp_details_tab / details_context tests
+    // (Phase 3, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn visible_tabs_default_is_properties_only() {
+        let state = InspectorState::default();
+        assert_eq!(state.visible_tabs(), vec![DetailsTab::Properties]);
+    }
+
+    #[test]
+    fn visible_tabs_includes_render_object_when_render_properties_non_empty() {
+        let state = InspectorState {
+            render_properties: vec![DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            state.visible_tabs(),
+            vec![DetailsTab::Properties, DetailsTab::RenderObject]
+        );
+    }
+
+    #[test]
+    fn visible_tabs_includes_flex_explorer_when_context_is_flex_layout() {
+        let state = InspectorState {
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: None,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            state.visible_tabs(),
+            vec![DetailsTab::Properties, DetailsTab::FlexExplorer]
+        );
+    }
+
+    #[test]
+    fn visible_tabs_includes_all_three_when_both_conditions_hold() {
+        let state = InspectorState {
+            render_properties: vec![DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }],
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: Some("Column".into()),
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            state.visible_tabs(),
+            vec![
+                DetailsTab::Properties,
+                DetailsTab::RenderObject,
+                DetailsTab::FlexExplorer
+            ]
+        );
+    }
+
+    #[test]
+    fn clamp_details_tab_snaps_to_properties_when_render_object_hidden() {
+        let mut state = InspectorState {
+            details_tab: DetailsTab::RenderObject,
+            // render_properties intentionally empty → RenderObject hidden
+            ..Default::default()
+        };
+        state.clamp_details_tab();
+        assert_eq!(state.details_tab, DetailsTab::Properties);
+    }
+
+    #[test]
+    fn clamp_details_tab_snaps_to_properties_when_flex_explorer_hidden() {
+        let mut state = InspectorState {
+            details_tab: DetailsTab::FlexExplorer,
+            // details_context.is_flex_layout intentionally false → FlexExplorer hidden
+            ..Default::default()
+        };
+        state.clamp_details_tab();
+        assert_eq!(state.details_tab, DetailsTab::Properties);
+    }
+
+    #[test]
+    fn clamp_details_tab_noop_when_active_tab_visible() {
+        let mut state = InspectorState {
+            details_tab: DetailsTab::RenderObject,
+            render_properties: vec![DiagnosticsNode {
+                description: "RenderFlex".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        state.clamp_details_tab();
+        assert_eq!(state.details_tab, DetailsTab::RenderObject);
+    }
+
+    #[test]
+    fn reset_clears_details_context() {
+        let mut state = InspectorState {
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: Some("Column".into()),
+            },
+            ..Default::default()
+        };
+        state.reset();
+        assert_eq!(state.details_context, DetailsContext::default());
+    }
+
+    #[test]
+    fn reset_details_and_groups_clears_details_context() {
+        let mut state = InspectorState {
+            details_context: DetailsContext {
+                is_flex_layout: true,
+                parent_type: Some("Row".into()),
+            },
+            ..Default::default()
+        };
+        state.reset_details_and_groups();
+        assert_eq!(state.details_context, DetailsContext::default());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // PerfDetailsTab Tests
+    // (devtools-performance-memory-split Phase 2, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn perf_details_tab_default_is_frame_analysis() {
+        assert_eq!(PerfDetailsTab::default(), PerfDetailsTab::FrameAnalysis);
+    }
+
+    #[test]
+    fn perf_details_tab_next_wraps() {
+        assert_eq!(
+            PerfDetailsTab::FrameAnalysis.next(),
+            PerfDetailsTab::RebuildStats
+        );
+        assert_eq!(
+            PerfDetailsTab::RebuildStats.next(),
+            PerfDetailsTab::TimelineEvents
+        );
+        assert_eq!(
+            PerfDetailsTab::TimelineEvents.next(),
+            PerfDetailsTab::FrameAnalysis
+        );
+    }
+
+    #[test]
+    fn perf_details_tab_prev_wraps() {
+        assert_eq!(
+            PerfDetailsTab::FrameAnalysis.prev(),
+            PerfDetailsTab::TimelineEvents
+        );
+        assert_eq!(
+            PerfDetailsTab::TimelineEvents.prev(),
+            PerfDetailsTab::RebuildStats
+        );
+        assert_eq!(
+            PerfDetailsTab::RebuildStats.prev(),
+            PerfDetailsTab::FrameAnalysis
         );
     }
 }

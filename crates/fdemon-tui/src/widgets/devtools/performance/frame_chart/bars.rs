@@ -19,6 +19,12 @@ use crate::widgets::MouseCtx;
 /// [`PerformancePanel`] so per-bar selection wins on overlap.
 const BAR_CLICK_Z_INDEX: u8 = 1;
 
+/// Minimum half-block height for a nonzero frame.
+///
+/// Prevents fast frames (e.g. ~1 ms) from becoming invisible at small terminal
+/// heights. A nonzero `ms` value always renders at least one half-block.
+const MIN_BAR_HALF_BLOCKS: u16 = 1;
+
 // ── Bar chart methods ─────────────────────────────────────────────────────────
 
 impl FrameChart<'_> {
@@ -51,15 +57,11 @@ impl FrameChart<'_> {
         }
 
         // Determine the visible window of frames.
-        // scroll_offset > 0: frozen-scroll mode anchored at len - offset.
-        // scroll_offset == 0 with selection: keep selected frame visible.
-        // scroll_offset == 0 without selection: live-edge (most recent frames).
-        let (start_idx, end_idx) = compute_visible_range(
-            total_frames,
-            max_visible,
-            self.selected_frame,
-            self.scroll_offset,
-        );
+        // scroll_offset is always the viewport authority (Model A — "frames back
+        // from the live edge"). The selection highlight is applied on top of
+        // whatever window scroll_offset designates.
+        let (start_idx, end_idx) =
+            compute_visible_range(total_frames, max_visible, self.scroll_offset);
 
         // Collect visible frames (oldest first so they render left-to-right)
         let visible: Vec<&FrameTiming> = self
@@ -69,30 +71,44 @@ impl FrameChart<'_> {
             .take(end_idx - start_idx)
             .collect();
 
-        // Compute y-axis scale based on max elapsed_ms in visible frames
-        let max_ms = visible
+        // Compute y-axis scale: scale to ~1.5× the slowest visible frame so
+        // bars use the chart's full vertical range, with a small floor
+        // (MIN_Y_RANGE_MS) to avoid flat charts when the visible frames are
+        // uniformly tiny. Picking the rounding unit by magnitude keeps axis
+        // labels readable across very different frame rates.
+        let max_ms_observed = visible
             .iter()
             .map(|f| f.elapsed_ms())
-            .fold(MIN_Y_RANGE_MS, f64::max);
-
-        // Round up to nearest 10ms boundary for a clean axis
-        let y_range_ms = (max_ms / 10.0).ceil() * 10.0;
+            .fold(0.0_f64, f64::max);
+        let target = (max_ms_observed * 1.5).max(MIN_Y_RANGE_MS);
+        let unit = if target <= 5.0 {
+            1.0
+        } else if target <= 20.0 {
+            2.0
+        } else {
+            10.0
+        };
+        let y_range_ms = (target / unit).ceil() * unit;
 
         // Each character row represents 2 "half-block" units.
         // Total half-block units available = chart_height * 2.
         let total_half_blocks = (area.height as f64) * 2.0;
 
-        // Budget line y position (in chart row coordinates from top)
-        let budget_frac = BUDGET_LINE_MS / y_range_ms;
-        let budget_row_from_bottom = (budget_frac * total_half_blocks / 2.0).round() as u16;
-        let budget_y = area
-            .bottom()
-            .saturating_sub(1)
-            .saturating_sub(budget_row_from_bottom);
-        let budget_y = budget_y.clamp(area.y, area.bottom().saturating_sub(1));
-
-        // Draw budget dashed line
-        self.render_budget_line(area, buf, budget_y);
+        // Budget line: only render when 16.667ms falls inside the visible range.
+        // When all visible frames are well under the 60-FPS budget (fast app on
+        // a fast device), the line would sit above the chart and just clutter
+        // the view; suppressing it makes more vertical space available for the
+        // bars.
+        if BUDGET_LINE_MS <= y_range_ms {
+            let budget_frac = BUDGET_LINE_MS / y_range_ms;
+            let budget_row_from_bottom = (budget_frac * total_half_blocks / 2.0).round() as u16;
+            let budget_y = area
+                .bottom()
+                .saturating_sub(1)
+                .saturating_sub(budget_row_from_bottom);
+            let budget_y = budget_y.clamp(area.y, area.bottom().saturating_sub(1));
+            self.render_budget_line(area, buf, budget_y);
+        }
 
         // Render each visible frame as a pair of bars
         for (slot, frame) in visible.iter().enumerate() {
@@ -129,19 +145,32 @@ impl FrameChart<'_> {
                 area.y,
             );
 
-            // Selection highlight: draw a `▔` (upper one-eighth block) above the taller bar
-            if is_selected && area.y < area.bottom() {
-                let highlight_y = area.y;
-                // Write highlight indicator on the top row for both bar columns
+            // Selection highlight: paint left-eighth (▏) and right-eighth (▕) side
+            // markers on every row of the chart area to frame the selected bar
+            // without obscuring its content (Option A).
+            if is_selected {
                 let hl_style = Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD);
-                if let Some(cell) = buf.cell_mut((x, highlight_y)) {
-                    cell.set_char('▔').set_style(hl_style);
-                }
-                if x + 1 < area.right() {
-                    if let Some(cell) = buf.cell_mut((x + 1, highlight_y)) {
-                        cell.set_char('▔').set_style(hl_style);
+                // Left marker column: one column to the left of the UI bar (if in bounds)
+                let left_marker_x = x.saturating_sub(1);
+                // Right marker column: one column to the right of the Raster bar
+                let right_marker_x = x + 2;
+
+                // Paint markers on every row of the chart area.
+                // left_marker_x is only distinct from x when x > 0 (saturating_sub).
+                let has_left_marker = left_marker_x < x && left_marker_x >= area.x;
+                let has_right_marker = right_marker_x < area.right();
+                for row_y in area.y..area.bottom() {
+                    if has_left_marker {
+                        if let Some(cell) = buf.cell_mut((left_marker_x, row_y)) {
+                            cell.set_char('\u{258F}').set_style(hl_style); // ▏ left eighth
+                        }
+                    }
+                    if has_right_marker {
+                        if let Some(cell) = buf.cell_mut((right_marker_x, row_y)) {
+                            cell.set_char('\u{2595}').set_style(hl_style); // ▕ right eighth
+                        }
                     }
                 }
             }
@@ -214,39 +243,25 @@ impl FrameChart<'_> {
 ///
 /// Returns `(start_idx, end_idx)` — exclusive end, i.e. `frame_history[start..end]`.
 ///
-/// Three modes (Model A — `scroll_offset` is "frames back from the live edge"):
+/// `scroll_offset` is the sole viewport authority (Model A — "frames back from the
+/// live edge"). Selection highlighting is applied on top of whatever window
+/// `scroll_offset` designates; this function does not need to know about the
+/// selected frame index.
 ///
-/// 1. `scroll_offset > 0`: frozen-scroll mode. The window anchors at
-///    `frame_count - scroll_offset`. As new frames arrive the absolute window
-///    drifts forward by the same amount, preserving the "N frames back from
-///    latest" mental model.
-/// 2. `scroll_offset == 0` and `selected_frame.is_some()`: anchor at the
-///    selected frame so it stays visible at the right edge of the window.
-/// 3. `scroll_offset == 0` and `selected_frame.is_none()`: live-edge mode —
-///    always shows the most recent `visible_width` frames.
+/// - `scroll_offset == 0`: live-edge mode — always shows the most recent
+///   `visible_width` frames.
+/// - `scroll_offset > 0`: frozen-scroll mode. The window anchors at
+///   `frame_count - scroll_offset`. As new frames arrive the absolute window
+///   drifts forward by the same amount, preserving the "N frames back from
+///   latest" mental model.
 pub fn compute_visible_range(
     frame_count: usize,
     visible_width: usize,
-    selected_frame: Option<usize>,
     scroll_offset: usize,
 ) -> (usize, usize) {
-    if scroll_offset > 0 {
-        // Frozen-scroll mode: anchor at len - offset
-        let end = frame_count.saturating_sub(scroll_offset);
-        let start = end.saturating_sub(visible_width);
-        (start, end)
-    } else if let Some(sel) = selected_frame {
-        // Keep selected frame in view — prefer showing it at the right side
-        // but scroll left if near the start.
-        let end = (sel + 1).min(frame_count);
-        let start = end.saturating_sub(visible_width);
-        (start, end)
-    } else {
-        // Live-edge: show the most recent frames
-        let end = frame_count;
-        let start = end.saturating_sub(visible_width);
-        (start, end)
-    }
+    let end = frame_count.saturating_sub(scroll_offset);
+    let start = end.saturating_sub(visible_width);
+    (start, end)
 }
 
 /// Determine the UI and Raster bar colours for a frame.
@@ -267,12 +282,17 @@ pub(crate) fn bar_colors(frame: &FrameTiming) -> (Color, Color) {
 /// Each terminal row is 2 half-block units tall, so using half-blocks
 /// doubles the vertical resolution.
 ///
+/// Nonzero `ms` values are clamped to at least [`MIN_BAR_HALF_BLOCKS`] (1) so
+/// that fast frames (~1 ms) never become invisible at small terminal heights.
+///
 /// `pub(crate)` to allow re-export from `mod.rs` into tests via `use super::*`.
 pub(crate) fn ms_to_half_blocks(ms: f64, y_range_ms: f64, total_half_blocks: f64) -> u16 {
     if y_range_ms <= 0.0 || ms <= 0.0 {
         return 0;
     }
-    ((ms / y_range_ms) * total_half_blocks).round() as u16
+    let raw = ((ms / y_range_ms) * total_half_blocks).round() as u16;
+    // Never let a nonzero frame become invisible — clamp to at least MIN_BAR_HALF_BLOCKS.
+    raw.max(MIN_BAR_HALF_BLOCKS)
 }
 
 /// Render a vertical bar using half-block Unicode characters for 2× vertical resolution.
