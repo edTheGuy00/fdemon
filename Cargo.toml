@@ -58,6 +58,9 @@ percent-encoding = "2"
 which = "8"
 dunce = "1"
 
+# HTTP client (HTTPS-capable, used by version_check)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
 # Misc
 rand = "0.8"
 
