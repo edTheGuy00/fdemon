@@ -585,9 +585,7 @@ pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()> {
                     )));
                 }
                 pending = persist_err.file;
-                std::thread::sleep(std::time::Duration::from_millis(
-                    10u64 << (attempt - 1),
-                ));
+                std::thread::sleep(std::time::Duration::from_millis(10u64 << (attempt - 1)));
             }
         }
     }
