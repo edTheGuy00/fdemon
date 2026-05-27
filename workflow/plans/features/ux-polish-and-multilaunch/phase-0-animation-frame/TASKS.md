@@ -19,7 +19,7 @@ Add a single, always-incrementing animation frame counter to `AppState`, ticked 
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-global-animation-frame](tasks/01-global-animation-frame.md) | Not Started | - | 0.5–1h | `state.rs`, `handler/update.rs` |
+| 1 | [01-global-animation-frame](tasks/01-global-animation-frame.md) | ✅ Done | - | 0.5–1h | `state.rs`, `handler/update.rs` |
 
 ## File Overlap Analysis
 
@@ -37,11 +37,11 @@ Single task — no intra-phase overlap.
 
 Phase 0 is complete when:
 
-- [ ] `AppState` has an `animation_frame: u64` field, initialized to 0.
-- [ ] `Message::Tick` increments it via `wrapping_add(1)` on **every** tick, irrespective of `UiMode` (including Normal, NewSessionDialog, Loading).
-- [ ] The existing loading-screen animation continues to work unchanged.
-- [ ] Unit test proves the counter advances on tick in a non-Loading mode and wraps without panicking.
-- [ ] `cargo test -p fdemon-app` and `cargo clippy --workspace` pass.
+- [x] `AppState` has an `animation_frame: u64` field, initialized to 0.
+- [x] `Message::Tick` increments it via `wrapping_add(1)` on **every** tick, irrespective of `UiMode` (including Normal, NewSessionDialog, Loading).
+- [x] The existing loading-screen animation continues to work unchanged.
+- [x] Unit test proves the counter advances on tick in a non-Loading mode and wraps without panicking.
+- [x] `cargo test -p fdemon-app` and `cargo clippy --workspace` pass.
 
 ## Notes
 

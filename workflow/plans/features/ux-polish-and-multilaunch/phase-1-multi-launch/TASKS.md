@@ -26,10 +26,12 @@ Let the user check multiple **connected** devices in the new-session dialog and 
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-multi-select-state](tasks/01-multi-select-state.md) | Not Started | - | 2–3h | `target_selector_state.rs` |
-| 2 | [02-keys-and-messages](tasks/02-keys-and-messages.md) | Not Started | 1 | 2–3h | `message.rs`, `handler/keys.rs`, `handler/new_session/target_selector.rs`, `handler/update.rs` |
-| 3 | [03-launch-n-sessions](tasks/03-launch-n-sessions.md) | Not Started | 1 | 3–4h | `handler/new_session/launch_context.rs`, `new_session_dialog/state.rs` |
-| 4 | [04-render-checkboxes](tasks/04-render-checkboxes.md) | Not Started | 1 | 2–3h | `widgets/new_session_dialog/device_list.rs`, `widgets/new_session_dialog/target_selector.rs` |
+| 1 | [01-multi-select-state](tasks/01-multi-select-state.md) | ✅ Done | - | 2–3h | `target_selector_state.rs` |
+| 2 | [02-keys-and-messages](tasks/02-keys-and-messages.md) | ✅ Done | 1 | 2–3h | `message.rs`, `handler/keys.rs`, `handler/new_session/target_selector.rs`, `handler/update.rs` |
+| 3 | [03-launch-n-sessions](tasks/03-launch-n-sessions.md) | ✅ Done (concern) | 1 | 3–4h | `handler/new_session/launch_context.rs`, `new_session_dialog/state.rs` |
+| 4 | [04-render-checkboxes](tasks/04-render-checkboxes.md) | ✅ Done | 1 | 2–3h | `widgets/new_session_dialog/device_list.rs`, `widgets/new_session_dialog/target_selector.rs` |
+
+> **Validation note (task 03):** PASS-with-CONCERN. Production code handles AC#4 (session-cap hit mid-loop → return partial actions + "launched X of Y" toast) correctly, but no dedicated unit test exercises that specific path. Recommend a follow-up test for the cap-hit-mid-loop scenario. Also a documented known limitation: a mid-loop SDK-resolution failure can leave an orphaned session.
 
 ## File Overlap Analysis
 
@@ -59,13 +61,13 @@ Let the user check multiple **connected** devices in the new-session dialog and 
 
 Phase 1 is complete when:
 
-- [ ] User can check ≥2 connected devices (`Space`) and launch all of them with one confirm.
-- [ ] `a` toggles select-all / clear-all across the current Connected list.
-- [ ] Zero devices checked → launch uses the cursor device exactly as today (no regression).
-- [ ] Devices already running a session are skipped; over-capacity (>9) launches up to the cap and reports "launched X of Y".
-- [ ] Checkboxes render per connected device; checked count is visible; footer hint reflects the new keys.
-- [ ] Selection set prunes ids that disappear on device-list refresh.
-- [ ] All new state/handler logic has unit tests; `cargo test --workspace` and `cargo clippy --workspace` pass.
+- [x] User can check ≥2 connected devices (`Space`) and launch all of them with one confirm.
+- [x] `a` toggles select-all / clear-all across the current Connected list.
+- [x] Zero devices checked → launch uses the cursor device exactly as today (no regression).
+- [x] Devices already running a session are skipped; over-capacity (>9) launches up to the cap and reports "launched X of Y". *(code complete; cap-hit-mid-loop path lacks a dedicated test — see task 03 note)*
+- [x] Checkboxes render per connected device; checked count is visible; footer hint reflects the new keys.
+- [x] Selection set prunes ids that disappear on device-list refresh.
+- [x] All new state/handler logic has unit tests; `cargo test --workspace` and `cargo clippy --workspace` pass.
 
 ## Keyboard Shortcuts
 

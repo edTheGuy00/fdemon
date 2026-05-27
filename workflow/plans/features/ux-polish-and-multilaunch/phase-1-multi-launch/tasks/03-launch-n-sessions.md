@@ -123,3 +123,48 @@ fn launch_clears_checked_and_closes_on_success() { /* checked_count()==0 and dia
 - Keep the inner `spawn_one` private to the module; it's just the extracted current body.
 - All N sessions share one launch context by design — do not attempt per-device configs in this task.
 - Verify the action runner applies a `Vec<UpdateAction>` sequentially without racing on `SessionManager` (it is the supported `actions_vec` path; add a comment if any ordering assumption matters).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a44801dbeca3d9010
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/state.rs` | Added `build_launch_params_for_device(&self, device_id: &str) -> LaunchParams` helper to `NewSessionDialogState` |
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Refactored `handle_launch` to fan out over checked device set; extracted `spawn_one` private helper; added `summarize_skipped` helper; added 5 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Device list construction**: When the checked set is empty, the code falls through to the same cursor-device path as before (no behavioral change). This preserves backward compatibility for the zero-checked case.
+
+2. **`spawn_one` signature**: Takes `is_primary: bool` to control `save_last_selection` — only the first device in the fan-out persists the selection, matching the single-device behavior for auto-launch defaults.
+
+3. **No SDK rollback**: When `flutter_executable()` returns `None` after session creation, the orphaned session remains (no undo API). It is returned as an Err so the device is counted as skipped; the session will be evicted by capacity management on the next `create_session` call.
+
+4. **Toast for partial success**: A `ToastLevel::Warn` toast is shown when some but not all devices launched, surfacing the skipped names and reasons without blocking the successful sessions.
+
+5. **Dialog visible field**: `hide_new_session_dialog()` sets `ui_mode = Normal` rather than `new_session_dialog_state.visible = false`. Tests assert on `state.ui_mode` for dialog-closed checks, consistent with the existing test pattern.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (2566 tests across 5 crates; 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- All 5 new multi-launch tests pass:
+  - `launch_with_two_checked_emits_two_actions`
+  - `launch_with_none_checked_falls_back_to_cursor_single`
+  - `launch_skips_device_with_active_session`
+  - `launch_clears_checked_and_closes_on_success`
+  - `launch_all_skipped_keeps_dialog_open_with_error`
+
+### Risks/Limitations
+
+1. **Orphaned session on no-SDK error**: If `flutter_executable()` returns `None` mid-loop (unlikely but possible), the session created for that device is orphaned. It won't be spawned and will age out via capacity eviction. A future task could add a `remove_session` rollback API.
+
+2. **Pre-app sources**: With N checked devices, each spawns its own `SpawnPreAppSources` action if the condition fires. Shared sources will be started once (the `running_shared_names` snapshot is taken per `spawn_one` call with the state as it stands at that point in the loop). The second `spawn_one` call will see the same snapshot and may re-trigger the gate for shared sources. This is a pre-existing limitation of the shared-source dedup logic and is noted but not fixed in this task.

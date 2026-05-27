@@ -81,3 +81,36 @@ fn renders_checked_glyph_for_checked_device() {
 - Prefer a `with_checked(..)` builder if `ConnectedDeviceList::new` has multiple call sites, to minimize churn and conflict surface.
 - This task is TUI-only; it does not import from the app handler layer beyond the existing `&TargetSelectorState` the widget already receives.
 - Bootable list rendering is unchanged (no multi-select there).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a9f7ce0b4ee1242d4
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/device_list.rs` | Added `checked: Option<&'a BTreeSet<String>>` field to `ConnectedDeviceList`; added `with_checked()` builder; updated `render_item` to prepend `[x]`/`[ ]` checkbox span per device row with ACCENT/TEXT_MUTED colours; deducts checkbox width (4 cols) from reserved width for correct name truncation; added 4 unit tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Pass `&state.checked_device_ids` via `.with_checked()` in both `render_full` and `render_compact`; updated `render_footer` to show `"Space select · a all · Enter launch · r refresh"` (with `(N selected)` suffix when count > 0) |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Updated inline `render_target_selector_regions` path: pass `with_checked()` for `ConnectedDeviceList`; update inline footer string to match the new hint |
+
+### Notable Decisions/Tradeoffs
+
+1. **Builder pattern (`with_checked`)**: `ConnectedDeviceList::new` has multiple call sites (TargetSelector widget, NewSessionDialog region-aware path). Using a builder avoids churning `new`'s signature and minimises merge surface — consistent with the task's instruction.
+2. **Checkbox style**: Checked rows use `ACCENT` colour; unchecked use `TEXT_MUTED`. The checkbox is rendered as a plain `Span` before the existing icon prefix span, orthogonal to the cursor highlight.
+3. **Backward compatibility**: `checked` defaults to `None`; without `with_checked()` no checkbox characters appear, preserving the existing rendering contract for any future callers.
+4. **Header rows**: The match arm for `DeviceListItem::Header` is unchanged — checkbox logic is entirely inside the `DeviceListItem::Device` arm.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui --lib` — Passed (1301 tests)
+- `cargo test --workspace --lib` — Passed (6029 tests across all crates)
+- `cargo clippy -p fdemon-tui` — No warnings
+
+### Risks/Limitations
+
+1. **Width accounting uses byte length for `icon_prefix`**: The existing code uses `prefix.len()` (bytes) not char count for width reservation. The task preserves this behaviour unchanged — emoji icons are ASCII substitutes in the Unicode icon set so the byte length matches the display width. If Nerd Font glyphs are later added with multi-byte sequences this could need revisiting, but that is a pre-existing issue outside this task's scope.

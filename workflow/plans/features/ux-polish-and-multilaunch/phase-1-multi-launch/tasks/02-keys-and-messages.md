@@ -105,3 +105,37 @@ fn handle_select_all_devices_checks_all() { /* ... */ }
 - Do not intercept `Space`/`a` outside the TargetSelector pane — leave `LaunchContext` text/field handling untouched.
 - Keep handlers thin; all selection logic lives in task 01.
 - Optional: a mouse click on a row could also toggle in multi mode (see `handler/new_session/clicks.rs`), but defer unless trivial — keyboard is the acceptance path.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-adc366c884196df4f
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `NewSessionDialogToggleDeviceSelection` and `NewSessionDialogSelectAllDevices` variants |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `Space` and `a` mappings in `handle_target_selector_key`; added `target_selector_multiselect_key_tests` test module |
+| `crates/fdemon-app/src/handler/new_session/target_selector.rs` | Added `handle_toggle_device_selection` and `handle_select_all_devices` handlers with full test coverage |
+| `crates/fdemon-app/src/handler/update.rs` | Dispatched both new messages to the new handlers |
+| `docs/KEYBINDINGS.md` | Documented `Space` and `a` in the Target Selector (Left Pane) section |
+
+### Notable Decisions/Tradeoffs
+
+1. **Re-export path**: Since `target_selector` is a private module with `pub use target_selector::*` in `new_session/mod.rs`, the dispatch in `update.rs` uses `new_session::handle_toggle_device_selection` (flat re-export) rather than `new_session::target_selector::handle_toggle_device_selection`.
+
+2. **Test device setup**: The handler tests use all-android devices to avoid the multi-platform grouping complication (where the flat list interleaves iOS and Android headers). This keeps the flat-list index arithmetic predictable for test assertions.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib handler::new_session::target_selector` - 19 tests, all passed
+- `cargo test -p fdemon-app --lib target_selector_multiselect_key_tests` - 3 tests, all passed
+- `cargo test --workspace --lib` - 6,034 tests total, 0 failures
+- `cargo clippy --workspace` - no warnings or errors
+
+### Risks/Limitations
+
+1. **Mouse clicks deferred**: Mouse click toggling on device rows is noted in the task as optional/deferred. Not implemented in this task as per instructions.

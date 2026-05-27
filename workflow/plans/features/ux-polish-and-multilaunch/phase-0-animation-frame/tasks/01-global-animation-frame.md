@@ -99,3 +99,34 @@ mod tests {
 - Do not remove or merge `LoadingState::animation_frame`; the two counters serve different layers.
 - A public field matches existing `AppState` conventions; an accessor is optional sugar for the render layer.
 - No keybinding, config, or doc changes required.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `pub animation_frame: u64` field to `AppState` struct (with doc comment); initialized to `0` in `with_settings()` |
+| `crates/fdemon-app/src/handler/update.rs` | Added `state.animation_frame = state.animation_frame.wrapping_add(1);` at the top of the `Message::Tick` arm; added two tests in `mod tests` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field placement**: `animation_frame` was placed just before `pending_runner_actions` in the struct, keeping it near other late-added UI/animation fields and avoiding disruption to the surrounding field ordering.
+2. **No accessor added**: The task notes it as optional sugar; the public field matches existing `AppState` convention and is sufficient.
+3. **LoadingState::animation_frame preserved**: Not merged or removed — both counters serve different layers as specified.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app -- tick_advances_global_animation_frame_in_normal_mode animation_frame_wraps_without_panic` - Passed (2 tests)
+- `cargo test -p fdemon-app` - Passed (2548 + 2 = 2550 unit tests, 0 failed)
+- `cargo clippy -p fdemon-app` - Passed (no warnings or errors)
+
+### Risks/Limitations
+
+1. **None identified**: This is a purely additive change with no behavioral impact on existing code paths.
