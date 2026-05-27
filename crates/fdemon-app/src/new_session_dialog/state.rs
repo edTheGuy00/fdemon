@@ -921,6 +921,31 @@ impl NewSessionDialogState {
         })
     }
 
+    /// Build launch params for a specific connected device, reusing the shared
+    /// launch context (mode/flavor/dart-defines/config/entry-point/extra-args).
+    ///
+    /// This is used by the multi-launch fan-out in `handle_launch` to build one
+    /// `LaunchParams` per checked device while sharing a single launch context.
+    pub fn build_launch_params_for_device(&self, device_id: &str) -> LaunchParams {
+        LaunchParams {
+            device_id: device_id.to_string(),
+            mode: self.launch_context.mode,
+            flavor: self.launch_context.flavor.clone(),
+            dart_defines: self
+                .launch_context
+                .dart_defines
+                .iter()
+                .map(|d| d.to_arg())
+                .collect(),
+            config_name: self
+                .launch_context
+                .selected_config()
+                .map(|c| c.display_name.clone()),
+            entry_point: self.launch_context.entry_point.clone(),
+            extra_args: self.launch_context.extra_args.clone(),
+        }
+    }
+
     // ─────────────────────────────────────────────────────────
     // Dialog Visibility
     // ─────────────────────────────────────────────────────────

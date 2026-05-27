@@ -460,192 +460,282 @@ pub fn handle_entry_point_selected(state: &mut AppState, selected: Option<String
 
 /// Launches a Flutter session with the current dialog configuration.
 ///
-/// Validates that a device is selected and builds launch parameters
-/// from the dialog state. Returns an error to the user if validation fails.
+/// When ≥1 devices are checked in the target selector, spawns one session per
+/// checked device sharing the same launch context. When zero devices are checked,
+/// behavior is identical to the legacy single-device path (cursor device).
+///
+/// Returns an error to the user if validation fails for all devices.
 pub fn handle_launch(state: &mut AppState) -> UpdateResult {
-    use crate::config::LaunchConfig;
+    // Build the device list: checked set if non-empty, otherwise cursor device.
+    let checked: Vec<fdemon_daemon::Device> = state
+        .new_session_dialog_state
+        .target_selector
+        .checked_devices()
+        .into_iter()
+        .cloned()
+        .collect();
 
-    // Try to build launch params
-    if let Some(params) = state.new_session_dialog_state.build_launch_params() {
-        // Get device reference without unwrap
-        let device = match state.new_session_dialog_state.selected_device() {
+    let devices: Vec<fdemon_daemon::Device> = if checked.is_empty() {
+        // Single-device path — unchanged behavior: use cursor device.
+        let cursor_device = match state.new_session_dialog_state.selected_device() {
             Some(d) => d.clone(),
             None => {
-                state
+                // No device selected at all — show a context-sensitive error.
+                use crate::new_session_dialog::TargetTab;
+                let active_tab = state.new_session_dialog_state.target_selector.active_tab;
+                let connected_count = state
                     .new_session_dialog_state
                     .target_selector
-                    .set_error("Device no longer available".to_string());
-                return UpdateResult::none();
-            }
-        };
+                    .connected_devices
+                    .len();
 
-        // Check if device already has an active session (skip stopped sessions)
-        if state
-            .session_manager
-            .find_active_by_device_id(&device.id)
-            .is_some()
-        {
-            state
-                .new_session_dialog_state
-                .target_selector
-                .set_error(format!(
-                    "Device '{}' already has an active session",
-                    device.name
-                ));
-            return UpdateResult::none();
-        }
-
-        // Build launch config if we have parameters
-        let config = if params.config_name.is_some()
-            || params.flavor.is_some()
-            || !params.dart_defines.is_empty()
-            || params.entry_point.is_some()
-            || !params.extra_args.is_empty()
-        {
-            let mut cfg = LaunchConfig {
-                name: params.config_name.unwrap_or_else(|| "Session".to_string()),
-                device: device.id.clone(),
-                mode: params.mode,
-                flavor: params.flavor,
-                entry_point: params.entry_point,
-                extra_args: params.extra_args,
-                ..Default::default()
-            };
-
-            // Parse dart_defines into HashMap
-            for define in params.dart_defines {
-                if let Some((key, value)) = define.split_once('=') {
-                    cfg.dart_defines.insert(key.to_string(), value.to_string());
-                }
-            }
-
-            Some(cfg)
-        } else {
-            None
-        };
-
-        // Create session in manager (using devtools settings for network config)
-        let devtools = state.settings.devtools.clone();
-        let session_result = if let Some(ref cfg) = config {
-            state.session_manager.create_session_with_config_configured(
-                &device,
-                cfg.clone(),
-                &devtools,
-            )
-        } else {
-            state
-                .session_manager
-                .create_session_configured(&device, &devtools)
-        };
-
-        match session_result {
-            Ok(session_id) => {
-                tracing::info!(
-                    "Session created for {} (id: {}, device: {})",
-                    device.name,
-                    session_id,
-                    device.id
-                );
-
-                // Persist the user's device and config choice for future auto-launch.
-                // Failures are non-fatal: a disk or permission issue must not block
-                // the launch that the user just confirmed.
-                if let Err(e) = crate::config::save_last_selection(
-                    &state.project_path,
-                    config.as_ref().map(|c| c.name.as_str()),
-                    Some(&device.id),
-                ) {
-                    tracing::warn!("handle_launch: failed to persist last selection: {e}");
-                }
-
-                // Auto-switch to the newly created session
-                state.session_manager.select_by_id(session_id);
-
-                // Close the dialog and switch to Normal mode
-                state.hide_new_session_dialog();
-                state.ui_mode = crate::state::UiMode::Normal;
-
-                // Check if any custom sources need to start before the app.
-                // A shared source that is already running does not need to be
-                // spawned again — skip the gate for those.
-                let needs_pre_app_spawn = state.settings.native_logs.enabled
-                    && state
-                        .settings
-                        .native_logs
-                        .pre_app_sources()
-                        .any(|s| !s.shared || !state.is_shared_source_running(&s.name));
-
-                let action = if needs_pre_app_spawn {
-                    UpdateAction::SpawnPreAppSources {
-                        session_id,
-                        device,
-                        config: config.map(Box::new),
-                        settings: state.settings.native_logs.clone(),
-                        project_path: state.project_path.clone(),
-                        running_shared_names: state.running_shared_source_names(),
+                let error_msg = match active_tab {
+                    TargetTab::Bootable => {
+                        if connected_count == 0 {
+                            "No connected devices. Boot a device first, or switch to Connected tab."
+                        } else {
+                            "Switch to Connected tab to select a running device for launch."
+                        }
                     }
-                } else {
-                    let Some(flutter) = state.flutter_executable() else {
-                        tracing::warn!("handle_launch: no Flutter SDK — cannot spawn session");
-                        state
-                            .new_session_dialog_state
-                            .target_selector
-                            .set_error("No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter.".to_string());
-                        return UpdateResult::none();
-                    };
-                    UpdateAction::SpawnSession {
-                        session_id,
-                        device,
-                        config: config.map(Box::new),
-                        flutter,
+                    TargetTab::Connected => {
+                        if connected_count == 0 {
+                            "No connected devices. Connect a device or start an emulator."
+                        } else {
+                            "Please select a device from the list."
+                        }
                     }
                 };
 
-                return UpdateResult::action(action);
-            }
-            Err(e) => {
-                // Max sessions reached or other error
                 state
                     .new_session_dialog_state
                     .target_selector
-                    .set_error(format!("Failed to create session: {}", e));
+                    .set_error(error_msg.to_string());
                 return UpdateResult::none();
             }
-        }
-    } else {
-        // Provide context-specific error message
-        use crate::new_session_dialog::TargetTab;
-        let active_tab = state.new_session_dialog_state.target_selector.active_tab;
-        let connected_count = state
-            .new_session_dialog_state
-            .target_selector
-            .connected_devices
-            .len();
-
-        let error_msg = match active_tab {
-            TargetTab::Bootable => {
-                if connected_count == 0 {
-                    "No connected devices. Boot a device first, or switch to Connected tab."
-                } else {
-                    "Switch to Connected tab to select a running device for launch."
-                }
-            }
-            TargetTab::Connected => {
-                if connected_count == 0 {
-                    "No connected devices. Connect a device or start an emulator."
-                } else {
-                    "Please select a device from the list."
-                }
-            }
         };
+        vec![cursor_device]
+    } else {
+        checked
+    };
 
+    // Fan out: attempt to spawn one session per device.
+    // The first device also gets `save_last_selection` called so that
+    // auto-launch remembers a sensible default.
+    let mut actions: Vec<UpdateAction> = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new(); // (device_name, reason)
+    let mut first_session_id: Option<crate::session::SessionId> = None;
+
+    for (i, device) in devices.iter().enumerate() {
+        let params = state
+            .new_session_dialog_state
+            .build_launch_params_for_device(&device.id);
+
+        let is_primary = i == 0;
+        match spawn_one(state, device, params, is_primary) {
+            Ok((session_id, action)) => {
+                if first_session_id.is_none() {
+                    first_session_id = Some(session_id);
+                }
+                actions.push(action);
+            }
+            Err(reason) => {
+                skipped.push((device.name.clone(), reason));
+            }
+        }
+    }
+
+    // If all devices were skipped, surface the error and keep the dialog open.
+    if actions.is_empty() {
+        let error = summarize_skipped(&skipped);
         state
             .new_session_dialog_state
             .target_selector
-            .set_error(error_msg.to_string());
+            .set_error(error);
+        return UpdateResult::none();
     }
 
-    UpdateResult::none()
+    // At least one session was created: switch to the first new session,
+    // close the dialog, and clear the checked set.
+    if let Some(session_id) = first_session_id {
+        state.session_manager.select_by_id(session_id);
+    }
+    state
+        .new_session_dialog_state
+        .target_selector
+        .clear_checked();
+    state.hide_new_session_dialog();
+    state.ui_mode = crate::state::UiMode::Normal;
+
+    // Surface a non-fatal warning when some devices were skipped.
+    if !skipped.is_empty() {
+        let launched = actions.len();
+        let total = launched + skipped.len();
+        let toast_msg = format!(
+            "Launched {} of {} device(s). Skipped: {}",
+            launched,
+            total,
+            skipped
+                .iter()
+                .map(|(name, reason)| format!("{} ({})", name, reason))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        state.push_toast(crate::state::ToastLevel::Warn, toast_msg);
+    }
+
+    UpdateResult::actions_vec(actions)
+}
+
+/// Try to create a session for `device` using `params` and return the
+/// appropriate spawn action (or a reason string on failure).
+///
+/// `is_primary` controls whether `save_last_selection` is called — only the
+/// first device in the fan-out loop gets persisted so that auto-launch
+/// remembers a sensible default.
+///
+/// # Errors
+/// Returns `Err(reason)` when the device is skipped due to an active session
+/// already running on it, when the session cap is reached, or when the
+/// Flutter SDK is not available.
+fn spawn_one(
+    state: &mut AppState,
+    device: &fdemon_daemon::Device,
+    params: crate::new_session_dialog::LaunchParams,
+    is_primary: bool,
+) -> Result<(crate::session::SessionId, UpdateAction), String> {
+    use crate::config::LaunchConfig;
+
+    // Dedup: skip devices that already have an active session.
+    if state
+        .session_manager
+        .find_active_by_device_id(&device.id)
+        .is_some()
+    {
+        return Err("already has an active session".to_string());
+    }
+
+    // Build a LaunchConfig if any non-default parameters are present.
+    let config = if params.config_name.is_some()
+        || params.flavor.is_some()
+        || !params.dart_defines.is_empty()
+        || params.entry_point.is_some()
+        || !params.extra_args.is_empty()
+    {
+        let mut cfg = LaunchConfig {
+            name: params.config_name.unwrap_or_else(|| "Session".to_string()),
+            device: device.id.clone(),
+            mode: params.mode,
+            flavor: params.flavor,
+            entry_point: params.entry_point,
+            extra_args: params.extra_args,
+            ..Default::default()
+        };
+
+        // Parse dart_defines into HashMap
+        for define in params.dart_defines {
+            if let Some((key, value)) = define.split_once('=') {
+                cfg.dart_defines.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        Some(cfg)
+    } else {
+        None
+    };
+
+    // Create session in manager (using devtools settings for network config).
+    // `create_session_*` enforces MAX_SESSIONS internally, evicting oldest
+    // stopped sessions first. Treat its Err as a capacity/skip reason.
+    let devtools = state.settings.devtools.clone();
+    let session_result = if let Some(ref cfg) = config {
+        state
+            .session_manager
+            .create_session_with_config_configured(device, cfg.clone(), &devtools)
+    } else {
+        state
+            .session_manager
+            .create_session_configured(device, &devtools)
+    };
+
+    let session_id = match session_result {
+        Ok(id) => id,
+        Err(e) => {
+            return Err(format!("{}", e));
+        }
+    };
+
+    tracing::info!(
+        "Session created for {} (id: {}, device: {})",
+        device.name,
+        session_id,
+        device.id
+    );
+
+    // Persist the primary device's selection for future auto-launch.
+    // Failures are non-fatal: a disk or permission issue must not block launch.
+    if is_primary {
+        if let Err(e) = crate::config::save_last_selection(
+            &state.project_path,
+            config.as_ref().map(|c| c.name.as_str()),
+            Some(&device.id),
+        ) {
+            tracing::warn!("handle_launch: failed to persist last selection: {e}");
+        }
+    }
+
+    // Decide whether pre-app custom sources need to start before spawning the app.
+    // A shared source already running does not need to be re-spawned.
+    let needs_pre_app_spawn = state.settings.native_logs.enabled
+        && state
+            .settings
+            .native_logs
+            .pre_app_sources()
+            .any(|s| !s.shared || !state.is_shared_source_running(&s.name));
+
+    let action = if needs_pre_app_spawn {
+        UpdateAction::SpawnPreAppSources {
+            session_id,
+            device: device.clone(),
+            config: config.map(Box::new),
+            settings: state.settings.native_logs.clone(),
+            project_path: state.project_path.clone(),
+            running_shared_names: state.running_shared_source_names(),
+        }
+    } else {
+        let Some(flutter) = state.flutter_executable() else {
+            // Roll back the session creation so the manager stays consistent.
+            // (There is no undo API — the session remains but will never be
+            // spawned; it will be garbage-collected by the capacity eviction on
+            // the next create_session call.)
+            tracing::warn!("handle_launch: no Flutter SDK — cannot spawn session");
+            return Err(
+                "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
+                    .to_string(),
+            );
+        };
+        UpdateAction::SpawnSession {
+            session_id,
+            device: device.clone(),
+            config: config.map(Box::new),
+            flutter,
+        }
+    };
+
+    Ok((session_id, action))
+}
+
+/// Format a non-empty list of `(device_name, reason)` skipped entries into a
+/// single user-facing error string.
+fn summarize_skipped(skipped: &[(String, String)]) -> String {
+    if skipped.len() == 1 {
+        let (name, reason) = &skipped[0];
+        return format!("Device '{}' skipped: {}", name, reason);
+    }
+    let details: Vec<String> = skipped
+        .iter()
+        .map(|(name, reason)| format!("{} ({})", name, reason))
+        .collect();
+    format!("All selected devices skipped: {}", details.join(", "))
 }
 
 /// Handles successful configuration auto-save completion.
@@ -2262,6 +2352,234 @@ mod tests {
             state.new_session_dialog_state.launch_context.focused_field,
             LaunchContextField::Mode,
             "focused_field should be Mode after handle_set_mode"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Multi-launch fan-out tests (Phase 1, Task 03)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Build a device with a given platform (all physical, non-emulator).
+    fn make_device(id: &str, name: &str) -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Seed `state` with `devices` in the connected tab and mark them all as
+    /// checked.  Returns the seeded device list.
+    fn seed_checked_devices(state: &mut AppState, devices: Vec<fdemon_daemon::Device>) {
+        let ids: Vec<String> = devices.iter().map(|d| d.id.clone()).collect();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(devices);
+        // selected_index = 1 so the cursor lands on the first device (index 0
+        // is the platform group header).
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+        for id in ids {
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_device_ids
+                .insert(id);
+        }
+    }
+
+    #[test]
+    fn launch_with_two_checked_emits_two_actions() {
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
+        seed_checked_devices(&mut state, devices);
+
+        let result = handle_launch(&mut state);
+
+        let actions = result.actions();
+        assert_eq!(
+            actions.len(),
+            2,
+            "Two checked devices should produce two spawn actions"
+        );
+    }
+
+    #[test]
+    fn launch_with_none_checked_falls_back_to_cursor_single() {
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add two connected devices but check NONE of them.
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(devices);
+        // Place cursor on the first device (index 1 due to group header).
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+        // Checked set remains empty.
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0
+        );
+
+        let result = handle_launch(&mut state);
+
+        // Single action for the cursor device only.
+        let actions = result.actions();
+        assert_eq!(
+            actions.len(),
+            1,
+            "Zero checked devices should fall back to a single cursor-device action"
+        );
+    }
+
+    #[test]
+    fn launch_skips_device_with_active_session() {
+        use fdemon_core::AppPhase;
+
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Create a Running session for dev-a.
+        let dev_a = make_device("dev-a", "Device A");
+        let id_a = state
+            .session_manager
+            .create_session(&dev_a)
+            .expect("should create session for dev-a");
+        state.session_manager.get_mut(id_a).unwrap().session.phase = AppPhase::Running;
+
+        // Seed both devices as checked.
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
+        seed_checked_devices(&mut state, devices);
+
+        let result = handle_launch(&mut state);
+
+        // dev-a is skipped, dev-b launches → exactly one action.
+        let actions = result.actions();
+        assert_eq!(
+            actions.len(),
+            1,
+            "Device with active session should be skipped; remaining device should launch"
+        );
+
+        // A warning toast should be visible.
+        assert!(
+            !state.toasts.is_empty(),
+            "A warn toast should be pushed when a device is skipped"
+        );
+    }
+
+    #[test]
+    fn launch_clears_checked_and_closes_on_success() {
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
+        seed_checked_devices(&mut state, devices);
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            !result.actions().is_empty(),
+            "Should have at least one action"
+        );
+
+        // Dialog must be dismissed after success (ui_mode transitions to Normal).
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "ui_mode should be Normal after a successful launch"
+        );
+
+        // Checked set must be cleared.
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0,
+            "Checked set must be cleared after a successful launch"
+        );
+    }
+
+    #[test]
+    fn launch_all_skipped_keeps_dialog_open_with_error() {
+        use fdemon_core::AppPhase;
+
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+
+        // Create Running sessions for both devices so both get skipped.
+        for (id, name) in [("dev-a", "Device A"), ("dev-b", "Device B")] {
+            let d = make_device(id, name);
+            let sid = state
+                .session_manager
+                .create_session(&d)
+                .expect("should create session");
+            state.session_manager.get_mut(sid).unwrap().session.phase = AppPhase::Running;
+        }
+
+        // Seed both as checked.
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
+        seed_checked_devices(&mut state, devices);
+
+        let result = handle_launch(&mut state);
+
+        // No actions emitted.
+        assert!(
+            result.actions().is_empty(),
+            "All skipped should produce no actions"
+        );
+
+        // Dialog stays open (ui_mode remains NewSessionDialog).
+        assert_eq!(
+            state.ui_mode,
+            UiMode::NewSessionDialog,
+            "ui_mode must remain NewSessionDialog when all devices are skipped"
+        );
+
+        // An error is set on the target selector.
+        assert!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .error
+                .is_some(),
+            "An error should be set on the target selector when all devices are skipped"
         );
     }
 }
