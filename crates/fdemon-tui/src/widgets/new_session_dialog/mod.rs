@@ -977,7 +977,8 @@ impl NewSessionDialog<'_> {
                             state.selected_index,
                             is_focused,
                             corrected_scroll,
-                        );
+                        )
+                        .with_checked(&state.checked_device_ids);
                         device_list::connected_device_list_render_with_regions(
                             chunks[1],
                             buf,
@@ -1003,11 +1004,21 @@ impl NewSessionDialog<'_> {
 
             // Footer (no regions)
             let hints = match state.active_tab {
-                TargetTab::Connected => "[Enter] Select  [r] Refresh",
-                TargetTab::Bootable => "[Enter] Boot  [r] Refresh",
+                TargetTab::Connected => {
+                    let checked = state.checked_count();
+                    if checked > 0 {
+                        format!(
+                            "Space select · a all · Enter launch · r refresh  ({} selected)",
+                            checked
+                        )
+                    } else {
+                        "Space select · a all · Enter launch · r refresh".to_string()
+                    }
+                }
+                TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
             };
             use ratatui::widgets::Paragraph;
-            Paragraph::new(hints)
+            Paragraph::new(hints.as_str())
                 .style(Style::default().fg(palette::BORDER_DIM))
                 .alignment(Alignment::Center)
                 .render(chunks[2], buf);

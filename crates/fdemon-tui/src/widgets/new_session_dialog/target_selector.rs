@@ -134,7 +134,8 @@ impl TargetSelector<'_> {
                         self.state.selected_index,
                         self.is_focused,
                         corrected_scroll,
-                    );
+                    )
+                    .with_checked(&self.state.checked_device_ids);
                     list.render(chunks[1], buf);
                 }
                 TargetTab::Bootable => {
@@ -220,7 +221,8 @@ impl TargetSelector<'_> {
                         self.state.selected_index,
                         self.is_focused,
                         corrected_scroll,
-                    );
+                    )
+                    .with_checked(&self.state.checked_device_ids);
                     list.render(chunks[1], buf);
                 }
                 TargetTab::Bootable => {
@@ -330,11 +332,21 @@ impl TargetSelector<'_> {
 
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         let hints = match self.state.active_tab {
-            TargetTab::Connected => "[Enter] Select  [r] Refresh",
-            TargetTab::Bootable => "[Enter] Boot  [r] Refresh",
+            TargetTab::Connected => {
+                let checked = self.state.checked_count();
+                if checked > 0 {
+                    format!(
+                        "Space select · a all · Enter launch · r refresh  ({} selected)",
+                        checked
+                    )
+                } else {
+                    "Space select · a all · Enter launch · r refresh".to_string()
+                }
+            }
+            TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
         };
 
-        let text = Paragraph::new(hints)
+        let text = Paragraph::new(hints.as_str())
             .style(Style::default().fg(palette::BORDER_DIM))
             .alignment(Alignment::Center);
         text.render(area, buf);

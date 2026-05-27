@@ -64,6 +64,8 @@ pub struct ConnectedDeviceList<'a> {
     is_focused: bool,
     scroll_offset: usize,
     icons: IconSet,
+    /// Device ids that are checked for multi-launch. Independent of the cursor.
+    checked: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl<'a> ConnectedDeviceList<'a> {
@@ -79,12 +81,22 @@ impl<'a> ConnectedDeviceList<'a> {
             is_focused,
             scroll_offset,
             icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
+            checked: None,
         }
     }
 
     /// Set the icon mode (chainable builder)
     pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
         self.icons = IconSet::new(icon_mode);
+        self
+    }
+
+    /// Attach the checked-device set (chainable builder).
+    ///
+    /// When set, each connected-device row displays a `[x]` or `[ ]` checkbox
+    /// prefix that reflects membership in `checked`. Orthogonal to the cursor highlight.
+    pub fn with_checked(mut self, checked: &'a std::collections::BTreeSet<String>) -> Self {
+        self.checked = Some(checked);
         self
     }
 
@@ -108,6 +120,10 @@ impl<'a> ConnectedDeviceList<'a> {
             }
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
+                let is_checked = self
+                    .checked
+                    .map(|set| set.contains(&device.id))
+                    .unwrap_or(false);
 
                 // Updated selection highlighting
                 let style = if is_selected && self.is_focused {
@@ -123,6 +139,19 @@ impl<'a> ConnectedDeviceList<'a> {
                     Style::default().fg(palette::TEXT_SECONDARY)
                 };
 
+                // Checkbox prefix — only rendered when a checked set is attached
+                let checkbox_span: Option<Span> = self.checked.map(|_| {
+                    let glyph = if is_checked { "[x] " } else { "[ ] " };
+                    let color = if is_checked {
+                        palette::ACCENT
+                    } else {
+                        palette::TEXT_MUTED
+                    };
+                    Span::styled(glyph, Style::default().fg(color))
+                });
+                // Checkbox width (4 cols: "[x] " or "[ ] ") — 0 when not shown
+                let checkbox_width: usize = if checkbox_span.is_some() { 4 } else { 0 };
+
                 // Platform icon - use platform_type if available, fallback to platform
                 let platform = device.platform_type.as_deref().unwrap_or(&device.platform);
                 let icon = device_icon(platform, device.emulator, &self.icons);
@@ -137,10 +166,10 @@ impl<'a> ConnectedDeviceList<'a> {
                 };
 
                 // Calculate available width for device name
-                // Format: " <icon> <name> (<type>)"
-                let prefix = format!(" {} ", icon);
+                // Format: "[x] <icon> <name> (<type>)" or " <icon> <name> (<type>)"
+                let icon_prefix = format!(" {} ", icon);
                 let type_suffix = format!(" ({})", device_type);
-                let reserved = prefix.len() + type_suffix.len();
+                let reserved = checkbox_width + icon_prefix.len() + type_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -150,11 +179,17 @@ impl<'a> ConnectedDeviceList<'a> {
                     device.name.clone()
                 };
 
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(name, style),
-                    Span::styled(type_suffix, Style::default().fg(palette::TEXT_MUTED)),
-                ]))
+                let mut spans: Vec<Span> = Vec::new();
+                if let Some(cb) = checkbox_span {
+                    spans.push(cb);
+                }
+                spans.push(Span::styled(icon_prefix, style));
+                spans.push(Span::styled(name, style));
+                spans.push(Span::styled(
+                    type_suffix,
+                    Style::default().fg(palette::TEXT_MUTED),
+                ));
+                ListItem::new(Line::from(spans))
             }
         }
     }
@@ -797,6 +832,106 @@ mod tests {
         assert!(
             indices.contains(&2),
             "expected flat-list index 2 (second device)"
+        );
+    }
+
+    // ─── Checkbox rendering tests ────────────────────────────────────────────
+
+    #[test]
+    fn renders_checkbox_for_each_device() {
+        // When with_checked() is provided with an empty set, every device row
+        // shows the unchecked glyph "[ ]".
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 8", "android", false),
+        ];
+        let checked = std::collections::BTreeSet::new();
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0).with_checked(&checked);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("[ ]"),
+            "unchecked rows should display '[ ]'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("[x]"),
+            "no device is checked — '[x]' must not appear"
+        );
+    }
+
+    #[test]
+    fn renders_checked_glyph_for_checked_device() {
+        // When a device id is in the checked set its row shows "[x]".
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 8", "android", false),
+        ];
+        let mut checked = std::collections::BTreeSet::new();
+        checked.insert("1".to_string()); // iPhone 15 is checked
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0).with_checked(&checked);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("[x]"),
+            "checked device should display '[x]'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content.contains("[ ]"),
+            "unchecked device should still display '[ ]'"
+        );
+    }
+
+    #[test]
+    fn renders_no_checkbox_when_checked_set_not_provided() {
+        // Without with_checked(), no checkbox glyphs appear (backward compatibility).
+        let devices = vec![test_device_full("1", "iPhone 15", "ios", false)];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            !content.contains("[ ]") && !content.contains("[x]"),
+            "without with_checked(), no checkbox glyphs should appear; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn header_rows_render_without_checkbox() {
+        // Headers must never carry a checkbox prefix even when with_checked is set.
+        let devices = vec![test_device_full("1", "iPhone 15", "ios", false)];
+        let mut checked = std::collections::BTreeSet::new();
+        checked.insert("1".to_string());
+
+        // Render into a small buffer to isolate the first row (the header).
+        let area = Rect::new(0, 0, 50, 1);
+        let mut buf = Buffer::empty(area);
+        let list = ConnectedDeviceList::new(&devices, 0, true, 0).with_checked(&checked);
+        connected_device_list_render_with_regions(area, &mut buf, &list, None);
+
+        // The flat list is: [Header("IOS DEVICES"), Device("iPhone 15")]
+        // At height=1, only the first row (header) is rendered.
+        let header_content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            !header_content.contains("[x]") && !header_content.contains("[ ]"),
+            "header row must not display a checkbox; got: {}",
+            header_content
         );
     }
 
