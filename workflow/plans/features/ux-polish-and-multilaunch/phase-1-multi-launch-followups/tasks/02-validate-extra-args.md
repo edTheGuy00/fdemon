@@ -65,3 +65,27 @@ for arg in &self.extra_args {
 - Validate at `build_flutter_args` (not at load time) because it is the tightest single chokepoint covering both config sources for every spawn.
 - Do not change the on-disk config schema or reject whole configs — silently dropping individual malformed args with a warn log is the least-surprising behavior for a local tool.
 - If deferring: update `TASKS.md` to mark this task `Deferred` with the trust-model rationale rather than deleting it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ada7cf520b1eee4af
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/launch.rs` | Added `MAX_EXTRA_ARG_LEN` constant with derivation comment; replaced raw `args.extend(self.extra_args.clone())` with a validated filter loop that drops NUL-containing, over-length, and non-dash-prefixed args with `warn!` logging; added 4 unit tests covering all drop conditions and the pass-through case. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`starts_with('-')` vs `starts_with("--")`**: Used `starts_with('-')` as the task specifies, to allow single-dash flags (`-d`, `-t`) without false rejects. The goal is to block free-text/file-content injection, not enforce strict grammar.
+2. **Warn-and-drop vs error**: Consistent with the task mandate — never reject the whole config for a single malformed arg. Each bad entry is logged at `warn` and silently skipped.
+3. **Test for `lib/main.dart` in the valid-flags test**: Added a fifth item (`lib/main.dart`, no dash) to the valid-flags test to confirm non-dash entries are dropped even when mixed with valid flags, making the pass-through test more meaningful.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — Passed (2575 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (0 warnings)

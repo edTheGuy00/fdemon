@@ -35,10 +35,20 @@ All four tasks are independent (no dependencies, no shared write files).
 
 | # | Task | Status | Depends On | Est. Hours | Priority | Items |
 |---|------|--------|------------|------------|----------|-------|
-| 1 | [01-harden-multilaunch-fanout](tasks/01-harden-multilaunch-fanout.md) | Not Started | - | 3–4h | High | M1, M2, m3, m4, m6 |
-| 2 | [02-validate-extra-args](tasks/02-validate-extra-args.md) | Not Started | - | 1–2h | Low (optional) | m7 |
-| 3 | [03-remove-platform-icons](tasks/03-remove-platform-icons.md) | Not Started | - | 2–3h | Medium | UI #8 |
-| 4 | [04-document-multilaunch-resources](tasks/04-document-multilaunch-resources.md) | Not Started | - | 0.5h | Low | m5 |
+| 1 | [01-harden-multilaunch-fanout](tasks/01-harden-multilaunch-fanout.md) | ✅ Done (Validated: PASS) | - | 3–4h | High | M1, M2, m3, m4, m6 |
+| 2 | [02-validate-extra-args](tasks/02-validate-extra-args.md) | ✅ Done (Validated: PASS) | - | 1–2h | Low (optional) | m7 |
+| 3 | [03-remove-platform-icons](tasks/03-remove-platform-icons.md) | ✅ Done (Validated: CONCERN) | - | 2–3h | Medium | UI #8 |
+| 4 | [04-document-multilaunch-resources](tasks/04-document-multilaunch-resources.md) | ✅ Done (Validated: PASS) | - | 0.5h | Low | m5 |
+
+### Validation Concern (Task 03)
+
+Task 03 functional removal is correct and complete (icons gone, dead code removed,
+all builds/tests green), but validation flagged a **test-quality gap**: AC #5 asks for
+an explicit assertion that the `[M]`/`[W]`/`[D]` glyphs are **absent** from rendered
+output, and no such "assert absence" test was added. Existing checkbox tests pass
+because they never asserted icon presence. Impact: a future regression re-introducing
+icons would not be caught by the suite. Recommend adding an absence assertion in a
+cleanup pass or during deep review.
 
 ## File Overlap Analysis
 

@@ -137,3 +137,34 @@ fn launch_partial_when_cap_hit_mid_loop_emits_toast_no_panic() {
 - Keep the zero-checked single-device path byte-for-byte unchanged (it must still pass the legacy single-launch tests).
 - If you hoist the SDK check, ensure the pre-app-sources branch (`SpawnPreAppSources`) still behaves correctly — it does not consume `flutter`, so resolving the SDK early must not change that branch's output.
 - Do not address the pre-app shared-source double-trigger here (tracked separately); only the orphan/persist/ANSI/test items are in scope.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a86780470af0f8be5
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Fixed orphan leak (M1), moved save_last_selection post-loop (m4), added eviction comment (m3), ANSI-stripped toast + summarize_skipped (m6), added 3 new tests (M2 + AC1 + AC3) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Preferred fix (hoist SDK check) with belt-and-suspenders rollback**: The SDK check is now resolved at the top of `spawn_one` via `let flutter_opt = state.flutter_executable()` before `create_session_*` runs. For the `SpawnSession` branch, `flutter_opt` is consumed via `let Some(flutter) = flutter_opt else { ... }`. If it's `None`, `remove_session(session_id)` is called to roll back the already-created session. This is belt-and-suspenders — the early resolution means `create_session_*` never runs if SDK is absent for the `SpawnSession` path, but the rollback code is present for completeness.
+
+2. **`spawn_one` signature change**: Added `Option<String>` (config_name) to the `Ok` return tuple so `handle_launch` can call `save_last_selection` once with the correct config name from the first successful device, without needing to pass `is_primary` into `spawn_one`. The `is_primary` parameter was removed entirely.
+
+3. **`SpawnPreAppSources` path is safe**: The `flutter_opt` is resolved early but only consumed in the `SpawnSession` branch. The `SpawnPreAppSources` branch does not use it, so its behavior is unchanged.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib -- handler::new_session::launch_context::tests` — PASS (47 tests, up from 45)
+- `cargo test -p fdemon-app --lib` — PASS (2574 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS (0 warnings)
+
+### Risks/Limitations
+
+1. **Pre-app shared-source double-trigger**: Still not addressed as per task scope — tracked separately in the plan.

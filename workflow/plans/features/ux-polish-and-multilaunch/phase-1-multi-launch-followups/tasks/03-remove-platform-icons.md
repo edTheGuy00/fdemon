@@ -60,3 +60,31 @@ Research findings (grounding the dead-code removal):
 - TUI-only change; no app/handler/state changes.
 - If any existing test asserts on the `[M]`/`[W]`/`[D]` text, update it to assert absence instead.
 - Bootable list keeps its existing layout otherwise (no checkbox there — multi-select is Connected-tab only).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/device_list.rs` | Removed `device_icon`, `bootable_device_icon` functions; removed `icons: IconSet` field and `with_icons` builder from both `ConnectedDeviceList` and `BootableDeviceList`; removed icon prefix spans from both `render_item` methods; updated `reserved` width math in both lists; removed unused `IconSet`, `IconMode` imports |
+
+### Notable Decisions/Tradeoffs
+
+1. **No visual indent added**: The task noted considering adding a 1–2 column indent in place of the icon to maintain visual nesting. Since the header already provides two-space indentation (`Span::raw("  ")`), and the checkbox/device-name now starts at column 0 (or column 4 when a checkbox is present), the alignment is clean. Adding extra padding would have misaligned the checkbox from the edge unnecessarily.
+2. **`platform` variable removed**: After removing the `device_icon` call, the `platform` variable that was computed from `device.platform_type`/`device.platform` is no longer needed, so it was dropped along with its use.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` — Passed (1301 unit tests, 7 doc tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all` — No format changes needed
+
+### Risks/Limitations
+
+1. **Visual regression**: The icon prefix is removed entirely; terminals with large device lists may look slightly more dense. However, the group headers continue to label every group, so no platform information is lost.
