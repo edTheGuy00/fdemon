@@ -127,7 +127,6 @@ impl TargetSelector<'_> {
             self.is_focused,
             self.state.refreshing,
             self.state.bootable_refreshing,
-            &self.icons,
         )
         .animation_frame(self.animation_frame);
         tab_bar.render(chunks[0], buf);

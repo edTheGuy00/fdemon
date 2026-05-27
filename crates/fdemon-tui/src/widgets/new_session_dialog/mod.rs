@@ -965,7 +965,6 @@ impl NewSessionDialog<'_> {
                 is_focused,
                 state.refreshing,
                 state.bootable_refreshing,
-                self.icons,
             )
             .animation_frame(self.animation_frame);
             tab_bar::render_with_regions(chunks[0], buf, tb, ctx.as_deref_mut());
