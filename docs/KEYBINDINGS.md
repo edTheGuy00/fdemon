@@ -232,6 +232,8 @@ When the Target Selector pane is focused:
 | `↑` / `k` | Navigate Up | Move up in device list |
 | `↓` / `j` | Navigate Down | Move down in device list |
 | `Enter` | Select/Boot | Select device (Connected tab) or Boot device (Bootable tab) |
+| `Space` | Toggle Selection | Toggle multi-launch checked state for cursor device (Connected tab only) |
+| `a` | Select All / Clear | Check all connected devices for multi-launch; clears if all are already checked |
 | `r` | Refresh | Refresh device list |
 
 ### Launch Context (Right Pane)
