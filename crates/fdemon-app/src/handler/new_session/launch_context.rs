@@ -767,9 +767,7 @@ fn summarize_skipped(skipped: &[(String, String)]) -> String {
     }
     let details: Vec<String> = skipped
         .iter()
-        .map(|(name, reason)| {
-            format!("{} ({})", strip_ansi_codes(name), strip_ansi_codes(reason))
-        })
+        .map(|(name, reason)| format!("{} ({})", strip_ansi_codes(name), strip_ansi_codes(reason)))
         .collect();
     format!("All selected devices skipped: {}", details.join(", "))
 }
@@ -2629,7 +2627,10 @@ mod tests {
             ui_mode: UiMode::NewSessionDialog,
             ..Default::default()
         };
-        assert!(state.flutter_executable().is_none(), "pre-condition: no SDK");
+        assert!(
+            state.flutter_executable().is_none(),
+            "pre-condition: no SDK"
+        );
 
         let session_count_before = state.session_manager.len();
 
@@ -2720,7 +2721,10 @@ mod tests {
         }
 
         // Two fresh checked devices: first fills slot 9, second hits the cap.
-        let devices = vec![make_device("dev-a", "Device A"), make_device("dev-b", "Device B")];
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
         seed_checked_devices(&mut state, devices);
 
         let result = handle_launch(&mut state);

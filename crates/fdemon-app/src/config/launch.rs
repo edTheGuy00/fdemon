@@ -345,8 +345,7 @@ impl LaunchConfig {
         // single malformed arg, and there is no shell-evaluation risk because args
         // reach `Command::args()` as separate, non-shell-evaluated elements.
         for arg in &self.extra_args {
-            let ok =
-                arg.starts_with('-') && !arg.contains('\0') && arg.len() <= MAX_EXTRA_ARG_LEN;
+            let ok = arg.starts_with('-') && !arg.contains('\0') && arg.len() <= MAX_EXTRA_ARG_LEN;
             if ok {
                 args.push(arg.clone());
             } else {
@@ -1404,10 +1403,7 @@ EMPTY = ""
 
         let args = config.build_flutter_args("device-id");
 
-        assert!(
-            !args.contains(&long_arg),
-            "over-length arg must be dropped"
-        );
+        assert!(!args.contains(&long_arg), "over-length arg must be dropped");
     }
 
     /// A free-text extra_arg not starting with '-' must be dropped.
