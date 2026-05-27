@@ -11,10 +11,17 @@ use crate::stack_trace::ParsedStackTrace;
 /// Application state enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppPhase {
-    /// Application is initializing
+    /// Application is initializing (created, before any spawn work)
     #[default]
     Initializing,
-    /// Flutter process is running
+    /// Waiting for pre-app native-log sources to pass their `ready_check`
+    /// (e.g. `start_before_app` HTTP health poll) before the Flutter
+    /// process is spawned.
+    Preparing,
+    /// Flutter process has attached and is building/compiling/first-running;
+    /// not yet confirmed up (the `app.started` daemon event flips to Running).
+    Launching,
+    /// Flutter app is actually running
     Running,
     /// Application is reloading
     Reloading,

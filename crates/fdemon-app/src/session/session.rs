@@ -604,6 +604,8 @@ impl Session {
     pub fn status_icon(&self) -> &'static str {
         match self.phase {
             AppPhase::Initializing => "○",
+            AppPhase::Preparing => "◌",
+            AppPhase::Launching => "◐",
             AppPhase::Running => "●",
             AppPhase::Reloading => "↻",
             AppPhase::Stopped => "○",
