@@ -466,6 +466,8 @@ pub fn handle_entry_point_selected(state: &mut AppState, selected: Option<String
 ///
 /// Returns an error to the user if validation fails for all devices.
 pub fn handle_launch(state: &mut AppState) -> UpdateResult {
+    use fdemon_core::strip_ansi_codes;
+
     // Build the device list: checked set if non-empty, otherwise cursor device.
     let checked: Vec<fdemon_daemon::Device> = state
         .new_session_dialog_state
@@ -519,22 +521,22 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
     };
 
     // Fan out: attempt to spawn one session per device.
-    // The first device also gets `save_last_selection` called so that
-    // auto-launch remembers a sensible default.
     let mut actions: Vec<UpdateAction> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new(); // (device_name, reason)
     let mut first_session_id: Option<crate::session::SessionId> = None;
+    // Track the first successfully-launched device for save_last_selection.
+    let mut first_success: Option<(String, Option<String>)> = None; // (device_id, config_name)
 
-    for (i, device) in devices.iter().enumerate() {
+    for device in devices.iter() {
         let params = state
             .new_session_dialog_state
             .build_launch_params_for_device(&device.id);
 
-        let is_primary = i == 0;
-        match spawn_one(state, device, params, is_primary) {
-            Ok((session_id, action)) => {
+        match spawn_one(state, device, params) {
+            Ok((session_id, action, config_name)) => {
                 if first_session_id.is_none() {
                     first_session_id = Some(session_id);
+                    first_success = Some((device.id.clone(), config_name));
                 }
                 actions.push(action);
             }
@@ -554,6 +556,20 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
         return UpdateResult::none();
     }
 
+    // Persist the first successfully-launched device for future auto-launch.
+    // Done here (not inside spawn_one) so that a skipped device-0 is never
+    // persisted — only the first device that actually creates a session counts.
+    // Failures are non-fatal: a disk or permission issue must not block launch.
+    if let Some((dev_id, cfg_name)) = first_success {
+        if let Err(e) = crate::config::save_last_selection(
+            &state.project_path,
+            cfg_name.as_deref(),
+            Some(&dev_id),
+        ) {
+            tracing::warn!("handle_launch: failed to persist last selection: {e}");
+        }
+    }
+
     // At least one session was created: switch to the first new session,
     // close the dialog, and clear the checked set.
     if let Some(session_id) = first_session_id {
@@ -567,6 +583,8 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
     state.ui_mode = crate::state::UiMode::Normal;
 
     // Surface a non-fatal warning when some devices were skipped.
+    // ANSI-strip names and reasons: device.name can come from `flutter devices`
+    // stdout which may contain terminal colour codes.
     if !skipped.is_empty() {
         let launched = actions.len();
         let total = launched + skipped.len();
@@ -576,7 +594,11 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
             total,
             skipped
                 .iter()
-                .map(|(name, reason)| format!("{} ({})", name, reason))
+                .map(|(name, reason)| format!(
+                    "{} ({})",
+                    strip_ansi_codes(name),
+                    strip_ansi_codes(reason)
+                ))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -589,9 +611,10 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
 /// Try to create a session for `device` using `params` and return the
 /// appropriate spawn action (or a reason string on failure).
 ///
-/// `is_primary` controls whether `save_last_selection` is called — only the
-/// first device in the fan-out loop gets persisted so that auto-launch
-/// remembers a sensible default.
+/// Returns `Ok((session_id, action, config_name))` on success, where
+/// `config_name` is the name of the launch configuration (if any) that was
+/// used — the caller uses this to persist the auto-launch default for the
+/// first successfully launched device.
 ///
 /// # Errors
 /// Returns `Err(reason)` when the device is skipped due to an active session
@@ -601,8 +624,7 @@ fn spawn_one(
     state: &mut AppState,
     device: &fdemon_daemon::Device,
     params: crate::new_session_dialog::LaunchParams,
-    is_primary: bool,
-) -> Result<(crate::session::SessionId, UpdateAction), String> {
+) -> Result<(crate::session::SessionId, UpdateAction, Option<String>), String> {
     use crate::config::LaunchConfig;
 
     // Dedup: skip devices that already have an active session.
@@ -613,6 +635,15 @@ fn spawn_one(
     {
         return Err("already has an active session".to_string());
     }
+
+    // Fail fast: resolve the Flutter SDK before creating any session so that
+    // a missing SDK never leaves an orphaned Initializing session in the
+    // manager. flutter_executable() is state-global — the result is the same
+    // for every device in the fan-out loop.
+    //
+    // Note: the SpawnPreAppSources branch (below) does not consume `flutter`,
+    // so resolving it here does not change that branch's behaviour.
+    let flutter_opt = state.flutter_executable();
 
     // Build a LaunchConfig if any non-default parameters are present.
     let config = if params.config_name.is_some()
@@ -643,9 +674,11 @@ fn spawn_one(
         None
     };
 
-    // Create session in manager (using devtools settings for network config).
-    // `create_session_*` enforces MAX_SESSIONS internally, evicting oldest
-    // stopped sessions first. Treat its Err as a capacity/skip reason.
+    // Cap handling: create_session_* enforces MAX_SESSIONS, evicting only the
+    // oldest *Stopped* session. Sessions created earlier in THIS fan-out loop are
+    // Initializing and therefore never evicted, so already-built actions can never
+    // reference an evicted session id. If the eviction policy ever changes to evict
+    // active sessions, this loop must be revisited (dangling-action-id risk).
     let devtools = state.settings.devtools.clone();
     let session_result = if let Some(ref cfg) = config {
         state
@@ -671,18 +704,6 @@ fn spawn_one(
         device.id
     );
 
-    // Persist the primary device's selection for future auto-launch.
-    // Failures are non-fatal: a disk or permission issue must not block launch.
-    if is_primary {
-        if let Err(e) = crate::config::save_last_selection(
-            &state.project_path,
-            config.as_ref().map(|c| c.name.as_str()),
-            Some(&device.id),
-        ) {
-            tracing::warn!("handle_launch: failed to persist last selection: {e}");
-        }
-    }
-
     // Decide whether pre-app custom sources need to start before spawning the app.
     // A shared source already running does not need to be re-spawned.
     let needs_pre_app_spawn = state.settings.native_logs.enabled
@@ -691,6 +712,8 @@ fn spawn_one(
             .native_logs
             .pre_app_sources()
             .any(|s| !s.shared || !state.is_shared_source_running(&s.name));
+
+    let config_name = config.as_ref().map(|c| c.name.clone());
 
     let action = if needs_pre_app_spawn {
         UpdateAction::SpawnPreAppSources {
@@ -702,11 +725,12 @@ fn spawn_one(
             running_shared_names: state.running_shared_source_names(),
         }
     } else {
-        let Some(flutter) = state.flutter_executable() else {
-            // Roll back the session creation so the manager stays consistent.
-            // (There is no undo API — the session remains but will never be
-            // spawned; it will be garbage-collected by the capacity eviction on
-            // the next create_session call.)
+        let Some(flutter) = flutter_opt else {
+            // Roll back the session creation: remove_session undoes the insert
+            // so the slot is reclaimed immediately rather than waiting for the
+            // next capacity eviction (which only reclaims Stopped sessions, not
+            // Initializing ones).
+            state.session_manager.remove_session(session_id);
             tracing::warn!("handle_launch: no Flutter SDK — cannot spawn session");
             return Err(
                 "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
@@ -721,19 +745,31 @@ fn spawn_one(
         }
     };
 
-    Ok((session_id, action))
+    Ok((session_id, action, config_name))
 }
 
 /// Format a non-empty list of `(device_name, reason)` skipped entries into a
 /// single user-facing error string.
+///
+/// Both `device_name` and `reason` may originate from `flutter devices` stdout
+/// and can therefore contain ANSI escape codes; these are stripped before
+/// display so the message is clean in the TUI.
 fn summarize_skipped(skipped: &[(String, String)]) -> String {
+    use fdemon_core::strip_ansi_codes;
+
     if skipped.len() == 1 {
         let (name, reason) = &skipped[0];
-        return format!("Device '{}' skipped: {}", name, reason);
+        return format!(
+            "Device '{}' skipped: {}",
+            strip_ansi_codes(name),
+            strip_ansi_codes(reason)
+        );
     }
     let details: Vec<String> = skipped
         .iter()
-        .map(|(name, reason)| format!("{} ({})", name, reason))
+        .map(|(name, reason)| {
+            format!("{} ({})", strip_ansi_codes(name), strip_ansi_codes(reason))
+        })
         .collect();
     format!("All selected devices skipped: {}", details.join(", "))
 }
@@ -2581,5 +2617,128 @@ mod tests {
                 .is_some(),
             "An error should be set on the target selector when all devices are skipped"
         );
+    }
+
+    /// AC1 — No orphaned session: when spawn_one fails due to missing SDK
+    /// (SpawnSession branch), the session must be rolled back so the
+    /// SessionManager slot count is unchanged.
+    #[test]
+    fn launch_no_sdk_leaves_no_orphaned_session() {
+        // State without SDK — flutter_executable() returns None.
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+        assert!(state.flutter_executable().is_none(), "pre-condition: no SDK");
+
+        let session_count_before = state.session_manager.len();
+
+        let device = make_device("dev-a", "Device A");
+        seed_checked_devices(&mut state, vec![device]);
+
+        let result = handle_launch(&mut state);
+
+        // All devices skipped — no action.
+        assert!(result.actions().is_empty(), "no action without SDK");
+        // No orphaned Initializing session left behind.
+        assert_eq!(
+            state.session_manager.len(),
+            session_count_before,
+            "session count must be unchanged after SDK-check failure"
+        );
+    }
+
+    /// AC3 — `save_last_selection` persists the first *successfully launched*
+    /// device.  When device 0 is skipped (has a Running session) and device 1
+    /// succeeds, device 1's id must be written to settings.local.toml.
+    #[test]
+    fn launch_skipped_primary_persists_second_device() {
+        use fdemon_core::AppPhase;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join(".fdemon")).expect("create .fdemon");
+
+        let mut state = state_with_sdk_and_project(tmp.path());
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // device 0 ("dev-a") has an active Running session — it will be skipped.
+        let dev_a = make_device("dev-a", "Device A");
+        let id_a = state
+            .session_manager
+            .create_session(&dev_a)
+            .expect("create session for dev-a");
+        state.session_manager.get_mut(id_a).unwrap().session.phase = AppPhase::Running;
+
+        // Seed both devices as checked.
+        let devices = vec![
+            make_device("dev-a", "Device A"),
+            make_device("dev-b", "Device B"),
+        ];
+        seed_checked_devices(&mut state, devices);
+
+        let result = handle_launch(&mut state);
+
+        // dev-b should have launched (one action).
+        assert_eq!(
+            result.actions().len(),
+            1,
+            "dev-b should launch after dev-a is skipped"
+        );
+
+        // settings.local.toml must contain dev-b's id, NOT dev-a's.
+        let prefs_path = tmp.path().join(".fdemon/settings.local.toml");
+        assert!(
+            prefs_path.exists(),
+            "settings.local.toml should have been created"
+        );
+        let contents = std::fs::read_to_string(&prefs_path).expect("read settings.local.toml");
+        assert!(
+            contents.contains("dev-b"),
+            "settings.local.toml should contain dev-b (first successful device), got: {contents}"
+        );
+        assert!(
+            !contents.contains("dev-a"),
+            "settings.local.toml must NOT contain dev-a (skipped device), got: {contents}"
+        );
+    }
+
+    /// M2 — Cap-hit mid-loop: first device fills the last slot; second device
+    /// hits `ensure_capacity` Err and is skipped.  The handler should emit
+    /// exactly one action, push a warn toast, and close the dialog.
+    #[test]
+    fn launch_partial_when_cap_hit_mid_loop_emits_toast_no_panic() {
+        use fdemon_core::AppPhase;
+
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Fill 8 of 9 slots with active (non-evictable) Running sessions.
+        for i in 0..8 {
+            let d = make_device(&format!("filler-{i}"), &format!("Filler {i}"));
+            let sid = state.session_manager.create_session(&d).expect("create");
+            state.session_manager.get_mut(sid).unwrap().session.phase = AppPhase::Running;
+        }
+
+        // Two fresh checked devices: first fills slot 9, second hits the cap.
+        let devices = vec![make_device("dev-a", "Device A"), make_device("dev-b", "Device B")];
+        seed_checked_devices(&mut state, devices);
+
+        let result = handle_launch(&mut state);
+
+        assert_eq!(
+            result.actions().len(),
+            1,
+            "exactly one device should launch before the cap"
+        );
+        assert!(
+            !state.toasts.is_empty(),
+            "a warn toast should report the skipped device"
+        );
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "dialog closes on partial success"
+        );
+        // No panic reaching this point is itself part of the assertion.
     }
 }
