@@ -236,6 +236,14 @@ When the Target Selector pane is focused:
 | `a` | Select All / Clear | Check all connected devices for multi-launch; clears if all are already checked |
 | `r` | Refresh | Refresh device list |
 
+> **Multi-launch resource note:** Confirming with multiple devices checked starts
+> one Flutter session per checked device (up to the 9-session limit), each running
+> its own `flutter run` build, VM Service connection, and native-log capture.
+> Launching many cold-build targets at once can spike CPU/memory and contend for
+> build tools (Gradle, Xcode). Check only the devices you need. Sessions launch
+> concurrently — there is currently no staggering. Devices already running a
+> session are skipped; a toast reports "Launched X of Y" when some are skipped.
+
 ### Launch Context (Right Pane)
 
 When the Launch Context pane is focused:
