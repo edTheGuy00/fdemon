@@ -16,46 +16,14 @@ use super::device_groups::{
     GroupedBootableDevice,
 };
 use fdemon_app::message::Message;
-use fdemon_app::{config::IconMode, AndroidAvd, Device, IosSimulator, ToolAvailability};
+use fdemon_app::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 use fdemon_app::{MouseAction, MouseRect};
 
-use crate::theme::{icons::IconSet, palette};
+use crate::theme::palette;
 
 /// Minimum width (in columns) to show verbose scroll indicators ("↑ more").
 /// Below this threshold, compact indicators ("↑") are shown.
 const VERBOSE_INDICATOR_WIDTH_THRESHOLD: u16 = 50;
-
-/// Determine icon for a device based on platform_type
-fn device_icon(platform_type: &str, _is_emulator: bool, icons: &IconSet) -> &'static str {
-    let platform_lower = platform_type.to_lowercase();
-
-    if platform_lower.contains("ios") || platform_lower.contains("android") {
-        icons.smartphone()
-    } else if platform_lower.contains("web") || platform_lower.contains("chrome") {
-        icons.globe()
-    } else if platform_lower.contains("macos")
-        || platform_lower.contains("linux")
-        || platform_lower.contains("windows")
-        || platform_lower.contains("darwin")
-    {
-        icons.monitor()
-    } else {
-        icons.cpu()
-    }
-}
-
-/// Determine icon for a bootable device based on platform
-fn bootable_device_icon(platform: &str, icons: &IconSet) -> &'static str {
-    let platform_lower = platform.to_lowercase();
-
-    if platform_lower.contains("ios") || platform_lower.contains("android") {
-        icons.smartphone()
-    } else if platform_lower.contains("web") {
-        icons.globe()
-    } else {
-        icons.cpu()
-    }
-}
 
 /// Widget for rendering connected devices with grouping
 pub struct ConnectedDeviceList<'a> {
@@ -63,7 +31,6 @@ pub struct ConnectedDeviceList<'a> {
     selected_index: usize,
     is_focused: bool,
     scroll_offset: usize,
-    icons: IconSet,
     /// Device ids that are checked for multi-launch. Independent of the cursor.
     checked: Option<&'a std::collections::BTreeSet<String>>,
 }
@@ -80,15 +47,8 @@ impl<'a> ConnectedDeviceList<'a> {
             selected_index,
             is_focused,
             scroll_offset,
-            icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
             checked: None,
         }
-    }
-
-    /// Set the icon mode (chainable builder)
-    pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
-        self.icons = IconSet::new(icon_mode);
-        self
     }
 
     /// Attach the checked-device set (chainable builder).
@@ -152,9 +112,6 @@ impl<'a> ConnectedDeviceList<'a> {
                 // Checkbox width (4 cols: "[x] " or "[ ] ") — 0 when not shown
                 let checkbox_width: usize = if checkbox_span.is_some() { 4 } else { 0 };
 
-                // Platform icon - use platform_type if available, fallback to platform
-                let platform = device.platform_type.as_deref().unwrap_or(&device.platform);
-                let icon = device_icon(platform, device.emulator, &self.icons);
                 let device_type = if device.emulator {
                     device
                         .emulator_id
@@ -166,10 +123,9 @@ impl<'a> ConnectedDeviceList<'a> {
                 };
 
                 // Calculate available width for device name
-                // Format: "[x] <icon> <name> (<type>)" or " <icon> <name> (<type>)"
-                let icon_prefix = format!(" {} ", icon);
+                // Format: "[x] <name> (<type>)" or "<name> (<type>)"
                 let type_suffix = format!(" ({})", device_type);
-                let reserved = checkbox_width + icon_prefix.len() + type_suffix.len();
+                let reserved = checkbox_width + type_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -183,7 +139,6 @@ impl<'a> ConnectedDeviceList<'a> {
                 if let Some(cb) = checkbox_span {
                     spans.push(cb);
                 }
-                spans.push(Span::styled(icon_prefix, style));
                 spans.push(Span::styled(name, style));
                 spans.push(Span::styled(
                     type_suffix,
@@ -307,7 +262,6 @@ pub struct BootableDeviceList<'a> {
     is_focused: bool,
     scroll_offset: usize,
     tool_availability: &'a ToolAvailability,
-    icons: IconSet,
 }
 
 impl<'a> BootableDeviceList<'a> {
@@ -326,14 +280,7 @@ impl<'a> BootableDeviceList<'a> {
             is_focused,
             scroll_offset,
             tool_availability,
-            icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
         }
-    }
-
-    /// Set the icon mode (chainable builder)
-    pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
-        self.icons = IconSet::new(icon_mode);
-        self
     }
 
     fn render_item(
@@ -371,15 +318,12 @@ impl<'a> BootableDeviceList<'a> {
                     Style::default().fg(palette::TEXT_SECONDARY)
                 };
 
-                // Platform icon
-                let icon = bootable_device_icon(device.platform(), &self.icons);
                 let runtime = device.runtime_info();
 
                 // Calculate available width for device name
-                // Format: " <icon> <name> (<runtime>)"
-                let prefix = format!(" {} ", icon);
+                // Format: "<name> (<runtime>)"
                 let runtime_suffix = format!(" ({})", runtime);
-                let reserved = prefix.len() + runtime_suffix.len();
+                let reserved = runtime_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -390,7 +334,6 @@ impl<'a> BootableDeviceList<'a> {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
                     Span::styled(name, style),
                     Span::styled(runtime_suffix, Style::default().fg(palette::TEXT_MUTED)),
                 ]))
