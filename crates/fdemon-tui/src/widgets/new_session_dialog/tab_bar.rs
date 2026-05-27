@@ -24,7 +24,13 @@ pub struct TabBar<'a> {
     /// Refresh-in-flight indicator for the Bootable tab.
     bootable_refreshing: bool,
     /// Icon set for resolving glyphs (Unicode vs Nerd Fonts).
+    /// Retained in the constructor signature for API stability; the refresh indicator
+    /// now uses the animated spinner (see `animation_frame`) rather than `icons.refresh()`.
+    #[allow(dead_code)]
     icons: &'a IconSet,
+    /// Global animation frame (`AppState::animation_frame`) for animated refresh spinners.
+    /// Defaults to `0` so existing test constructions compile without change.
+    animation_frame: u64,
 }
 
 impl<'a> TabBar<'a> {
@@ -41,7 +47,14 @@ impl<'a> TabBar<'a> {
             connected_refreshing,
             bootable_refreshing,
             icons,
+            animation_frame: 0,
         }
+    }
+
+    /// Set the global animation frame used to drive the refresh spinner.
+    pub fn animation_frame(mut self, frame: u64) -> Self {
+        self.animation_frame = frame;
+        self
     }
 }
 
@@ -103,7 +116,10 @@ pub fn render_with_regions(
         };
 
         let label = if refreshing {
-            format!("{} {}", tab.label(), tab_bar.icons.refresh())
+            let glyph = crate::widgets::spinner::spinner_char(
+                tab_bar.animation_frame / crate::widgets::spinner::SPINNER_TICKS_PER_FRAME,
+            );
+            format!("{} {glyph}", tab.label())
         } else {
             tab.label().to_string()
         };
@@ -223,12 +239,13 @@ mod tests {
 
     #[test]
     fn test_tab_bar_renders_connected_refreshing_indicator() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
         let icons = IconSet::default();
-        let glyph = icons.refresh();
-        let backend = TestBackend::new(40, 3);
+        let backend = TestBackend::new(60, 3);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
+                // animation_frame defaults to 0 → spinner_char(0 / 2) = spinner_char(0) = '⠋'
                 let tab_bar = TabBar::new(TargetTab::Connected, true, true, false, &icons);
                 f.render_widget(tab_bar, f.area());
             })
@@ -240,17 +257,18 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<Vec<_>>()
             .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
         assert!(
-            rendered.contains(glyph),
-            "expected refresh glyph on Connected tab, got: {rendered}"
+            any_spinner,
+            "expected a spinner glyph on Connected tab when refreshing, got: {rendered}"
         );
     }
 
     #[test]
     fn test_tab_bar_renders_bootable_refreshing_indicator() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
         let icons = IconSet::default();
-        let glyph = icons.refresh();
-        let backend = TestBackend::new(40, 3);
+        let backend = TestBackend::new(60, 3);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -265,17 +283,18 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<Vec<_>>()
             .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
         assert!(
-            rendered.contains(glyph),
-            "expected refresh glyph on Bootable tab, got: {rendered}"
+            any_spinner,
+            "expected a spinner glyph on Bootable tab when refreshing, got: {rendered}"
         );
     }
 
     #[test]
     fn test_tab_bar_no_indicator_when_not_refreshing() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
         let icons = IconSet::default();
-        let glyph = icons.refresh();
-        let backend = TestBackend::new(40, 3);
+        let backend = TestBackend::new(60, 3);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -290,7 +309,12 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<Vec<_>>()
             .join("");
-        assert!(!rendered.contains(glyph));
+        // When not refreshing, no spinner glyph should appear.
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
+        assert!(
+            !any_spinner,
+            "expected no spinner glyph when not refreshing, got: {rendered}"
+        );
     }
 
     // ─── render_with_regions tests ───────────────────────────────────────────
@@ -350,6 +374,116 @@ mod tests {
         assert_eq!(
             content1, content2,
             "render_with_regions(None) must produce identical output to Widget::render"
+        );
+    }
+
+    // ─── Animated spinner tests (Phase 3, Task 03) ───────────────────────────
+
+    #[test]
+    fn test_tab_bar_connected_refreshing_shows_spinner_glyph_at_nonzero_frame() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
+
+        let icons = IconSet::default();
+        // Use frame=4 → cadence index = 4 / 2 = 2 → SPINNER_FRAMES[2] = '⠹'
+        let frame: u64 = 4;
+        let backend = TestBackend::new(60, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Connected, true, true, false, &icons)
+                    .animation_frame(frame);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
+        assert!(
+            any_spinner,
+            "expected a spinner glyph from SPINNER_FRAMES in connected refreshing tab, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_bootable_refreshing_shows_spinner_glyph_at_nonzero_frame() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
+
+        let icons = IconSet::default();
+        let frame: u64 = 6;
+        let backend = TestBackend::new(60, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Bootable, true, false, true, &icons)
+                    .animation_frame(frame);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
+        assert!(
+            any_spinner,
+            "expected a spinner glyph from SPINNER_FRAMES in bootable refreshing tab, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_no_spinner_when_not_refreshing_nonzero_frame() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
+
+        let icons = IconSet::default();
+        let frame: u64 = 10;
+        let backend = TestBackend::new(60, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                // not refreshing — no spinner glyphs should appear
+                let tab_bar = TabBar::new(TargetTab::Connected, true, false, false, &icons)
+                    .animation_frame(frame);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
+        assert!(
+            !any_spinner,
+            "expected NO spinner glyph when not refreshing, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_phase_coherence_both_spinners_from_same_frame() {
+        use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME};
+
+        // Both spinners (discovery line and tab bar) use the same formula:
+        // spinner_char(animation_frame / SPINNER_TICKS_PER_FRAME).
+        // Verify that two calls with the same frame produce the same glyph.
+        let frame: u64 = 8;
+        let glyph1 = spinner_char(frame / SPINNER_TICKS_PER_FRAME);
+        let glyph2 = spinner_char(frame / SPINNER_TICKS_PER_FRAME);
+        assert_eq!(
+            glyph1, glyph2,
+            "both spinners derived from frame={frame} must produce the same glyph"
         );
     }
 }

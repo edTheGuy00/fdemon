@@ -254,7 +254,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &icons,
             )
             .startup_notice(state.startup_notice.as_ref())
-            .enable_mouse(state.settings.ui.enable_mouse);
+            .enable_mouse(state.settings.ui.enable_mouse)
+            .animation_frame(state.animation_frame);
             widgets::new_session_dialog::render_with_regions(
                 area,
                 frame.buffer_mut(),
