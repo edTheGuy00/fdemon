@@ -8,8 +8,7 @@
 /// Braille throbber frames, in sweep order. Lifted verbatim from the inline
 /// `SPINNER` constant previously in `render_loading_screen` so the startup
 /// screen has zero visual change after task 02 adopts this helper.
-pub const SPINNER_FRAMES: &[char] =
-    &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// Ticks per spinner frame for callers driving the spinner off the global
 /// `AppState::animation_frame` (which advances every ~50 ms / 20 fps tick).
@@ -69,8 +68,7 @@ mod tests {
             "SPINNER_FRAMES must have exactly 10 glyphs"
         );
         assert_eq!(
-            SPINNER_FRAMES,
-            expected,
+            SPINNER_FRAMES, expected,
             "SPINNER_FRAMES must match legacy SPINNER constant order"
         );
     }

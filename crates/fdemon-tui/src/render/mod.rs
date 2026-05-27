@@ -519,12 +519,8 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[fdemon_app::state::Toa
 /// - Animated spinner
 /// - Current loading message
 fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingState, area: Rect) {
-    // Braille spinner characters for smooth animation
-    const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-    // Direct modulo - each tick is 100ms, each frame shows next spinner char
-    let spinner_idx = (loading.animation_frame as usize) % SPINNER.len();
-    let spinner_char = SPINNER[spinner_idx];
+    // Use shared spinner helper — zero visual change; SPINNER_FRAMES[0] == '⠋'
+    let glyph = crate::widgets::spinner::spinner_char(loading.animation_frame);
 
     // Create centered content box - smaller modal overlay
     let vertical_center = Layout::default()
@@ -572,7 +568,7 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
     // Spinner and message
     lines.push(Line::from(vec![
         Span::styled(
-            spinner_char,
+            glyph.to_string(),
             Style::default()
                 .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
