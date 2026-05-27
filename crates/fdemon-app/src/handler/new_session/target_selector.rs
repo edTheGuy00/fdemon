@@ -679,7 +679,10 @@ mod tests {
             .target_selector
             .set_connected_devices(devices);
         // Move cursor to first device (flat index 1, after the header at index 0).
-        state.new_session_dialog_state.target_selector.selected_index = 1;
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
         state
     }
 
@@ -772,24 +775,18 @@ mod tests {
                 .checked_count(),
             3
         );
-        assert!(
-            state
-                .new_session_dialog_state
-                .target_selector
-                .is_checked("dev-1")
-        );
-        assert!(
-            state
-                .new_session_dialog_state
-                .target_selector
-                .is_checked("dev-2")
-        );
-        assert!(
-            state
-                .new_session_dialog_state
-                .target_selector
-                .is_checked("dev-3")
-        );
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .is_checked("dev-1"));
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .is_checked("dev-2"));
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .is_checked("dev-3"));
     }
 
     #[test]

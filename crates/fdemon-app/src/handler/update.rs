@@ -1205,11 +1205,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::NewSessionDialogDeviceSelect => new_session::handle_device_select(state),
 
-        Message::NewSessionDialogToggleDeviceSelection =>
-            new_session::handle_toggle_device_selection(state),
+        Message::NewSessionDialogToggleDeviceSelection => {
+            new_session::handle_toggle_device_selection(state)
+        }
 
-        Message::NewSessionDialogSelectAllDevices =>
-            new_session::handle_select_all_devices(state),
+        Message::NewSessionDialogSelectAllDevices => new_session::handle_select_all_devices(state),
 
         Message::NewSessionDialogRefreshDevices => new_session::handle_refresh_devices(state),
 
