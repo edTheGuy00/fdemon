@@ -1189,6 +1189,7 @@ fn test_auto_reload_marks_sessions_as_reloading() {
 
     if let Some(handle) = state.session_manager.get_mut(session_id) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
 

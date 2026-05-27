@@ -79,6 +79,11 @@ pub struct Session {
     /// Current phase of this session
     pub phase: AppPhase,
 
+    /// Latest human-readable launch progress line (Flutter `app.progress`
+    /// build messages, or pre-app source readiness updates). `None` once
+    /// the app is running or when there is nothing in flight.
+    pub current_progress: Option<String>,
+
     /// Log buffer for this session
     /// Log entries stored in a ring buffer for bounded memory usage
     pub logs: VecDeque<LogEntry>,
@@ -211,6 +216,7 @@ impl Session {
             id: next_session_id(),
             name: device_name.clone(),
             phase: AppPhase::Initializing,
+            current_progress: None,
             logs: VecDeque::with_capacity(10_000),
             log_view_state: LogViewState::new(),
             max_logs: 10_000,
@@ -523,16 +529,41 @@ impl Session {
         self.logs.len()
     }
 
-    /// Mark session as started
+    /// Mark the session as launching: the `app.start` daemon event captured the
+    /// app id, but the app is still building/starting. Phase flips to `Running`
+    /// only when [`mark_running`](Self::mark_running) is called from the
+    /// `app.started` event.
+    ///
+    /// Note: `started_at` is intentionally set here (at `app.start` / Launching)
+    /// rather than at `app.started` / Running, so `session_duration` counts from
+    /// the beginning of the launch, not from the first frame.
     pub fn mark_started(&mut self, app_id: String) {
         self.app_id = Some(app_id);
         self.started_at = Some(Local::now());
-        self.phase = AppPhase::Running;
+        self.phase = AppPhase::Launching;
     }
 
-    /// Mark session as stopped
+    /// Mark the session as actually running (the `app.started` daemon event).
+    /// Clears any in-flight build/readiness progress text.
+    pub fn mark_running(&mut self) {
+        self.phase = AppPhase::Running;
+        self.current_progress = None;
+    }
+
+    /// Mark session as stopped. Clears any in-flight progress text.
     pub fn mark_stopped(&mut self) {
         self.phase = AppPhase::Stopped;
+        self.current_progress = None;
+    }
+
+    /// Set the current launch progress line (shown next to a transient phase label).
+    pub fn set_progress(&mut self, message: impl Into<String>) {
+        self.current_progress = Some(message.into());
+    }
+
+    /// Clear the current launch progress line.
+    pub fn clear_progress(&mut self) {
+        self.current_progress = None;
     }
 
     /// Called when a reload starts
@@ -594,8 +625,8 @@ impl Session {
     /// Check if session is actively in use (not stopped/quitting).
     ///
     /// Unlike `is_running()` which only matches `Running | Reloading`,
-    /// this also includes `Initializing` — a session that is starting up
-    /// but hasn't emitted `app.start` yet.
+    /// this also includes `Initializing`, `Preparing`, and `Launching` —
+    /// phases where the session is alive but the app is not yet interactive.
     pub fn is_active(&self) -> bool {
         !matches!(self.phase, AppPhase::Stopped | AppPhase::Quitting)
     }

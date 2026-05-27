@@ -563,12 +563,11 @@ mod tests {
         // Create a running session
         let device = test_device_full("1", "iPhone", "ios", false);
         let session_id = state.session_manager.create_session(&device).unwrap();
-        state
-            .session_manager
-            .get_mut(session_id)
-            .unwrap()
-            .session
-            .mark_started("app-1".to_string());
+        {
+            let session = &mut state.session_manager.get_mut(session_id).unwrap().session;
+            session.mark_started("app-1".to_string());
+            session.mark_running();
+        }
 
         let result = handle_new_session_dialog_escape(&mut state);
 

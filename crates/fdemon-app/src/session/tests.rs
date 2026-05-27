@@ -77,10 +77,15 @@ mod tests {
         assert_eq!(session.phase, AppPhase::Initializing);
         assert!(session.app_id.is_none());
 
+        // mark_started sets Launching (not Running) — app is still building
         session.mark_started("app-123".to_string());
-        assert_eq!(session.phase, AppPhase::Running);
+        assert_eq!(session.phase, AppPhase::Launching);
         assert_eq!(session.app_id, Some("app-123".to_string()));
         assert!(session.started_at.is_some());
+
+        // mark_running transitions to Running on app.started
+        session.mark_running();
+        assert_eq!(session.phase, AppPhase::Running);
 
         session.start_reload();
         assert_eq!(session.phase, AppPhase::Reloading);
@@ -1905,6 +1910,107 @@ mod tests {
         assert!(
             !session.devtools_serve_pending,
             "devtools_serve_pending should start as false"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Launch-state helpers and progress field tests (Phase 2.5, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn mark_started_sets_launching_not_running() {
+        let mut session = Session::new("d".into(), "Device".into(), "ios".into(), false);
+
+        session.mark_started("flutter-app-42".to_string());
+
+        assert_eq!(
+            session.phase,
+            AppPhase::Launching,
+            "mark_started should set phase to Launching, not Running"
+        );
+        assert_eq!(session.app_id, Some("flutter-app-42".to_string()));
+        assert!(session.started_at.is_some(), "started_at should be set");
+    }
+
+    #[test]
+    fn mark_running_sets_running_and_clears_progress() {
+        let mut session = Session::new("d".into(), "Device".into(), "ios".into(), false);
+        session.mark_started("app-id".to_string());
+        session.set_progress("Building for iOS...");
+
+        assert_eq!(
+            session.current_progress,
+            Some("Building for iOS...".to_string())
+        );
+
+        session.mark_running();
+
+        assert_eq!(session.phase, AppPhase::Running);
+        assert!(
+            session.current_progress.is_none(),
+            "mark_running should clear current_progress"
+        );
+    }
+
+    #[test]
+    fn set_and_clear_progress_roundtrip() {
+        let mut session = Session::new("d".into(), "Device".into(), "ios".into(), false);
+
+        assert!(session.current_progress.is_none(), "starts as None");
+
+        session.set_progress("Compiling Dart...");
+        assert_eq!(
+            session.current_progress,
+            Some("Compiling Dart...".to_string())
+        );
+
+        session.set_progress("Linking...");
+        assert_eq!(session.current_progress, Some("Linking...".to_string()));
+
+        session.clear_progress();
+        assert!(session.current_progress.is_none(), "cleared to None");
+    }
+
+    #[test]
+    fn new_variants_are_active_not_running_not_busy() {
+        let mut session = Session::new("d".into(), "Device".into(), "ios".into(), false);
+
+        // Preparing
+        session.phase = AppPhase::Preparing;
+        assert!(session.is_active(), "Preparing should be active");
+        assert!(!session.is_running(), "Preparing should not be running");
+        assert!(!session.is_busy(), "Preparing should not be busy");
+
+        // Launching
+        session.phase = AppPhase::Launching;
+        assert!(session.is_active(), "Launching should be active");
+        assert!(!session.is_running(), "Launching should not be running");
+        assert!(!session.is_busy(), "Launching should not be busy");
+    }
+
+    #[test]
+    fn mark_stopped_clears_progress() {
+        let mut session = Session::new("d".into(), "Device".into(), "ios".into(), false);
+        session.mark_started("app-id".to_string());
+        session.set_progress("Some progress message");
+
+        assert!(session.current_progress.is_some());
+
+        session.mark_stopped();
+
+        assert_eq!(session.phase, AppPhase::Stopped);
+        assert!(
+            session.current_progress.is_none(),
+            "mark_stopped should clear current_progress"
+        );
+    }
+
+    #[test]
+    fn current_progress_defaults_to_none_on_new_session() {
+        let session = Session::new("d".into(), "Device".into(), "ios".into(), false);
+        assert!(
+            session.current_progress.is_none(),
+            "current_progress should default to None"
         );
     }
 }
