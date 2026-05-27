@@ -267,6 +267,33 @@ pub fn handle_session_message_state(
         }
     }
 
+    // Handle app.started event — the app is actually running now.
+    if let DaemonMessage::AppStarted(app_started) = msg {
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            if handle.session.app_id.as_ref() == Some(&app_started.app_id) {
+                handle.session.mark_running();
+                tracing::info!(
+                    "Session {} app is running: app_id={}",
+                    session_id,
+                    app_started.app_id
+                );
+            }
+        }
+    }
+
+    // Handle app.progress events — feed build/launch progress text while not running.
+    if let DaemonMessage::AppProgress(progress) = msg {
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            if !handle.session.is_running() {
+                match (&progress.message, progress.finished) {
+                    (Some(m), false) => handle.session.set_progress(m.clone()),
+                    (_, true) => handle.session.clear_progress(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // Handle app.debugPort event — capture VM Service URI
     if let DaemonMessage::AppDebugPort(debug_port) = msg {
         if let Some(handle) = state.session_manager.get_mut(session_id) {
@@ -525,7 +552,9 @@ pub fn maybe_start_native_log_capture(
 mod tests {
     use super::*;
     use crate::state::AppState;
-    use fdemon_core::{AppDebugPort, AppStart, AppStop, DaemonMessage, LogSource};
+    use fdemon_core::{
+        AppDebugPort, AppProgress, AppStart, AppStarted, AppStop, DaemonMessage, LogSource,
+    };
 
     /// Helper to create a test Device
     fn test_device(id: &str) -> fdemon_daemon::Device {
@@ -779,5 +808,138 @@ mod tests {
         );
         assert!(rid1.contains(&sid1.to_string()), "rid1 should embed sid1");
         assert!(rid2.contains(&sid2.to_string()), "rid2 should embed sid2");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // AppStarted / AppProgress lifecycle tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// `app.started` with matching app_id calls `mark_running()` → `Running` phase,
+    /// and clears any in-flight progress text.
+    #[test]
+    fn app_started_event_sets_running() {
+        let (mut state, session_id) = state_with_session("my-app");
+
+        // Confirm we start in Launching (mark_started sets Launching)
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.session.phase, fdemon_core::AppPhase::Launching);
+
+        // Simulate in-flight progress text
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.session.set_progress("Building…");
+        }
+
+        // Feed AppStarted for the same app_id
+        let msg = DaemonMessage::AppStarted(AppStarted {
+            app_id: "my-app".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.phase,
+            fdemon_core::AppPhase::Running,
+            "phase should be Running after AppStarted"
+        );
+        assert!(
+            handle.session.current_progress.is_none(),
+            "mark_running should clear current_progress"
+        );
+    }
+
+    /// `app.started` with a different app_id is ignored — phase stays Launching.
+    #[test]
+    fn app_started_event_ignores_wrong_app_id() {
+        let (mut state, session_id) = state_with_session("my-app");
+
+        let msg = DaemonMessage::AppStarted(AppStarted {
+            app_id: "other-app".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.phase,
+            fdemon_core::AppPhase::Launching,
+            "wrong app_id should leave phase unchanged"
+        );
+    }
+
+    /// `app.progress` with `finished:false` and a message sets `current_progress`
+    /// while the session is not yet running (Launching).
+    #[test]
+    fn app_progress_sets_progress_while_launching() {
+        let (mut state, session_id) = state_with_session("my-app");
+
+        let msg = DaemonMessage::AppProgress(AppProgress {
+            app_id: "my-app".to_string(),
+            id: "1".to_string(),
+            progress_id: None,
+            message: Some("Building debug APK…".to_string()),
+            finished: false,
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.current_progress.as_deref(),
+            Some("Building debug APK…"),
+            "current_progress should be set from AppProgress"
+        );
+    }
+
+    /// `app.progress` with `finished:true` clears `current_progress`.
+    #[test]
+    fn app_progress_finished_clears_progress() {
+        let (mut state, session_id) = state_with_session("my-app");
+
+        // First set progress
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.session.set_progress("Building…");
+        }
+
+        let msg = DaemonMessage::AppProgress(AppProgress {
+            app_id: "my-app".to_string(),
+            id: "1".to_string(),
+            progress_id: None,
+            message: None,
+            finished: true,
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.current_progress.is_none(),
+            "finished:true should clear current_progress"
+        );
+    }
+
+    /// `app.progress` is ignored once the session is Running.
+    #[test]
+    fn app_progress_ignored_when_running() {
+        let (mut state, session_id) = state_with_session("my-app");
+
+        // Move to Running
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.session.mark_running();
+        }
+
+        let msg = DaemonMessage::AppProgress(AppProgress {
+            app_id: "my-app".to_string(),
+            id: "1".to_string(),
+            progress_id: None,
+            message: Some("Should be ignored".to_string()),
+            finished: false,
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.current_progress.is_none(),
+            "AppProgress should be ignored once running"
+        );
     }
 }

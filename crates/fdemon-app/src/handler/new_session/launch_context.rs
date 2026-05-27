@@ -716,6 +716,12 @@ fn spawn_one(
     let config_name = config.as_ref().map(|c| c.name.clone());
 
     let action = if needs_pre_app_spawn {
+        // Mark the session as Preparing so the UI shows a transient phase label
+        // while waiting for pre-app sources to become ready.
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.phase = fdemon_core::AppPhase::Preparing;
+            handle.session.set_progress("Waiting for services…");
+        }
         UpdateAction::SpawnPreAppSources {
             session_id,
             device: device.clone(),
@@ -2059,6 +2065,60 @@ mod tests {
             matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
             "Expected SpawnPreAppSources when shared pre-app source is not yet running, got {:?}",
             result.action
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase-2.5 AC5: pre-app spawn sets session to Preparing
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// AC5: When a launch needs pre-app sources, the freshly-created session
+    /// phase must be `Preparing` after `handle_launch` returns.
+    #[test]
+    fn pre_app_spawn_sets_preparing() {
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+
+        // Enable native logs with a pre-app source
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("test-server"));
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // The action must be SpawnPreAppSources
+        let session_id = match &result.action {
+            Some(UpdateAction::SpawnPreAppSources { session_id, .. }) => *session_id,
+            other => panic!("expected SpawnPreAppSources, got {:?}", other),
+        };
+
+        // The session phase must be Preparing
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.phase,
+            fdemon_core::AppPhase::Preparing,
+            "session must be Preparing when SpawnPreAppSources is returned"
+        );
+        // And progress text must be set
+        assert!(
+            handle.session.current_progress.is_some(),
+            "current_progress must be set in Preparing state"
         );
     }
 

@@ -110,7 +110,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::HotReload => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy
+                // Gate: session must be fully running (not Preparing/Launching).
+                // is_running() returns true only for Running | Reloading.
+                if !handle.session.is_running() {
+                    return UpdateResult::none();
+                }
+                // Check if THIS session is busy (Reloading)
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
@@ -140,7 +145,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::HotRestart => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy
+                // Gate: session must be fully running (not Preparing/Launching).
+                // is_running() returns true only for Running | Reloading.
+                if !handle.session.is_running() {
+                    return UpdateResult::none();
+                }
+                // Check if THIS session is busy (Reloading)
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
@@ -170,7 +180,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::StopApp => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy
+                // Gate: session must be fully running (not Preparing/Launching).
+                // is_running() returns true only for Running | Reloading.
+                if !handle.session.is_running() {
+                    return UpdateResult::none();
+                }
+                // Check if THIS session is busy (Reloading)
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
@@ -2912,12 +2927,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        // Progress update from a pre-app source startup — add to session log buffer.
+        // Progress update from a pre-app source startup — add to session log buffer
+        // and update the transient `current_progress` field so the Preparing phase
+        // label shows "Pre-app sources: N/M ready…" in the status bar / tabs.
         Message::PreAppSourceProgress {
             session_id,
             message,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.set_progress(message.clone());
                 handle.session.add_log(fdemon_core::LogEntry::new(
                     LogLevel::Info,
                     LogSource::Daemon,

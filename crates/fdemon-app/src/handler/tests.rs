@@ -374,9 +374,10 @@ fn test_session_started_updates_session_state() {
         },
     );
 
-    // Session should be running
+    // Session should be Launching (process pipe open, not yet confirmed Running).
+    // Running is only set when DaemonMessage::AppStarted is processed.
     let handle = state.session_manager.get(session_id).unwrap();
-    assert_eq!(handle.session.phase, AppPhase::Running);
+    assert_eq!(handle.session.phase, AppPhase::Launching);
     assert!(handle.session.started_at.is_some());
 }
 
@@ -998,10 +999,10 @@ fn test_multiple_sessions_have_independent_start_state() {
         },
     );
 
-    // Session 1 should be running
+    // Session 1 should be Launching (process pipe open, not yet Running).
     assert_eq!(
         state.session_manager.get(session1).unwrap().session.phase,
-        AppPhase::Running
+        AppPhase::Launching
     );
 
     // Session 2 should still be initializing
@@ -1219,13 +1220,15 @@ fn test_manual_reload_still_uses_selected_session() {
     let session1 = state.session_manager.create_session(&device1).unwrap();
     let session2 = state.session_manager.create_session(&device2).unwrap();
 
-    // Mark both as running with app_ids
+    // Mark both as fully running with app_ids (mark_started → Launching, then mark_running → Running)
     if let Some(handle) = state.session_manager.get_mut(session1) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
     if let Some(handle) = state.session_manager.get_mut(session2) {
         handle.session.mark_started("app-2".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
 
@@ -13317,6 +13320,240 @@ mod fetch_trigger_tests {
             "VmServiceConnected with auto_enable_rebuild_tracking=false must NOT queue \
              ToggleProfileWidgetBuilds; got actions: {:?}",
             all_actions
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase-2.5 Launch Lifecycle — acceptance-criteria tests (Task 03)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// AC1: `Message::SessionStarted` sets `phase == AppPhase::Launching` (not Running).
+    #[test]
+    fn session_started_sets_launching() {
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Pixel 7");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id,
+                device_id: "dev-1".to_string(),
+                device_name: "Pixel 7".to_string(),
+                platform: "android".to_string(),
+                pid: Some(42),
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.phase,
+            AppPhase::Launching,
+            "SessionStarted must set Launching, not Running"
+        );
+    }
+
+    /// AC2 / AC3: `app.start` → `Launching`; `app.started` → `Running`.
+    #[test]
+    fn app_started_event_sets_running() {
+        use crate::handler::session::handle_session_message_state;
+        use fdemon_core::{AppStart, AppStarted, DaemonMessage};
+
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Pixel 7");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Feed app.start
+        let app_start_msg = DaemonMessage::AppStart(AppStart {
+            app_id: "flutter-app-1".to_string(),
+            device_id: "dev-1".to_string(),
+            directory: "/tmp/app".to_string(),
+            launch_mode: None,
+            supports_restart: true,
+        });
+        handle_session_message_state(&mut state, session_id, &app_start_msg);
+
+        {
+            let h = state.session_manager.get(session_id).unwrap();
+            assert_eq!(
+                h.session.phase,
+                AppPhase::Launching,
+                "app.start → Launching"
+            );
+            assert_eq!(
+                h.session.app_id.as_deref(),
+                Some("flutter-app-1"),
+                "app_id captured on app.start"
+            );
+        }
+
+        // Feed app.started
+        let app_started_msg = DaemonMessage::AppStarted(AppStarted {
+            app_id: "flutter-app-1".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &app_started_msg);
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert_eq!(h.session.phase, AppPhase::Running, "app.started → Running");
+    }
+
+    /// AC4: `app.progress(finished:false)` sets `current_progress`; `app.started` clears it.
+    #[test]
+    fn app_progress_updates_current_progress() {
+        use crate::handler::session::handle_session_message_state;
+        use fdemon_core::{AppProgress, AppStart, AppStarted, DaemonMessage};
+
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Pixel 7");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Start the session (sets Launching + app_id)
+        let start_msg = DaemonMessage::AppStart(AppStart {
+            app_id: "app-x".to_string(),
+            device_id: "dev-1".to_string(),
+            directory: "/tmp/app".to_string(),
+            launch_mode: None,
+            supports_restart: true,
+        });
+        handle_session_message_state(&mut state, session_id, &start_msg);
+
+        // Feed progress
+        let progress_msg = DaemonMessage::AppProgress(AppProgress {
+            app_id: "app-x".to_string(),
+            id: "build-1".to_string(),
+            progress_id: None,
+            message: Some("Compiling lib/main.dart…".to_string()),
+            finished: false,
+        });
+        handle_session_message_state(&mut state, session_id, &progress_msg);
+
+        {
+            let h = state.session_manager.get(session_id).unwrap();
+            assert_eq!(
+                h.session.current_progress.as_deref(),
+                Some("Compiling lib/main.dart…"),
+                "current_progress set from AppProgress"
+            );
+        }
+
+        // app.started clears it
+        let started_msg = DaemonMessage::AppStarted(AppStarted {
+            app_id: "app-x".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &started_msg);
+
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.session.current_progress.is_none(),
+            "app.started (mark_running) must clear current_progress"
+        );
+    }
+
+    /// AC6: Hot reload is a no-op while the session is `Launching`.
+    #[test]
+    fn reload_is_noop_while_launching() {
+        use crate::handler::session::handle_session_message_state;
+        use fdemon_core::{AppStart, DaemonMessage};
+
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Pixel 7");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Mark as Launching by feeding app.start
+        let start_msg = DaemonMessage::AppStart(AppStart {
+            app_id: "launching-app".to_string(),
+            device_id: "dev-1".to_string(),
+            directory: "/tmp/app".to_string(),
+            launch_mode: None,
+            supports_restart: true,
+        });
+        handle_session_message_state(&mut state, session_id, &start_msg);
+        // Attach a fake cmd_sender so the only reason to bail is the phase gate
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
+        }
+
+        let phase_before = state.session_manager.get(session_id).unwrap().session.phase;
+        assert_eq!(phase_before, AppPhase::Launching);
+
+        // HotReload must be a no-op
+        state.session_manager.select_by_index(0);
+        let result = update(&mut state, Message::HotReload);
+
+        // Phase must still be Launching, not Reloading
+        let h = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            h.session.phase,
+            AppPhase::Launching,
+            "HotReload while Launching must not transition to Reloading"
+        );
+        assert!(
+            result.action.is_none(),
+            "HotReload while Launching must produce no action"
+        );
+    }
+
+    /// AC7: `Launching → Running` does NOT emit a `ReloadCompleted` engine event.
+    ///
+    /// The `emit_events` guard in engine.rs fires `ReloadCompleted` only when
+    /// `pre.phase == Reloading`. We verify this by confirming that:
+    /// - `Reloading → Running` triggers `complete_reload()` (which is the only
+    ///   path that calls `emit_events` with `pre=Reloading`).
+    /// - `Launching → Running` via `mark_running()` leaves the phase correct
+    ///   without going through `Reloading`, so the engine guard cannot fire.
+    ///
+    /// The state machine invariant is: only `start_reload()` sets `Reloading`;
+    /// `mark_running()` (called from `app.started`) does not pass through
+    /// `Reloading`, so `pre.phase != Reloading` and the guard is never true.
+    #[test]
+    fn launching_to_running_no_reload_completed() {
+        use crate::handler::session::handle_session_message_state;
+        use fdemon_core::{AppStart, AppStarted, DaemonMessage};
+
+        let mut state = AppState::new();
+        let device = test_device("dev-1", "Test Device");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Drive app.start → Launching
+        let start_msg = DaemonMessage::AppStart(AppStart {
+            app_id: "app-1".to_string(),
+            device_id: "dev-1".to_string(),
+            directory: "/tmp/app".to_string(),
+            launch_mode: None,
+            supports_restart: true,
+        });
+        handle_session_message_state(&mut state, session_id, &start_msg);
+
+        let phase_after_start = state.session_manager.get(session_id).unwrap().session.phase;
+        assert_eq!(
+            phase_after_start,
+            AppPhase::Launching,
+            "app.start → Launching"
+        );
+
+        // Drive app.started → Running  (NOT through Reloading)
+        let started_msg = DaemonMessage::AppStarted(AppStarted {
+            app_id: "app-1".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &started_msg);
+
+        let phase_after_started = state.session_manager.get(session_id).unwrap().session.phase;
+        assert_eq!(
+            phase_after_started,
+            AppPhase::Running,
+            "app.started → Running"
+        );
+
+        // Verify the transition path: reload_start_time was never set (no Reloading phase),
+        // which is the structural proof that ReloadCompleted cannot fire in emit_events.
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.session.reload_start_time.is_none(),
+            "reload_start_time must not be set during Launching→Running transition"
+        );
+        assert_eq!(
+            h.session.reload_count, 0,
+            "reload_count must be 0 — no reload occurred"
         );
     }
 }
