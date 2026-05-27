@@ -54,6 +54,9 @@ pub struct StatusInfo<'a> {
     pub mouse_capture_active: bool,
     /// Global animation frame, drives the shimmer on transient status labels.
     pub animation_frame: u64,
+    /// Live launch progress line (build / pre-app readiness); shown next to
+    /// a transient phase label. `None` when nothing is in flight.
+    pub progress: Option<&'a str>,
 }
 
 /// Log view widget with rich formatting
@@ -889,7 +892,11 @@ impl<'a> LogView<'a> {
         let is_transient = status.is_busy
             || matches!(
                 status.phase,
-                AppPhase::Initializing | AppPhase::Reloading | AppPhase::Quitting
+                AppPhase::Initializing
+                    | AppPhase::Preparing
+                    | AppPhase::Launching
+                    | AppPhase::Reloading
+                    | AppPhase::Quitting
             );
 
         // Left side: icon (always static) + shimmered or static label
@@ -904,6 +911,17 @@ impl<'a> LogView<'a> {
             is_transient,
             status.animation_frame,
         ));
+
+        // Progress suffix: shown only in transient phases when progress text is available.
+        // The text is rendered muted (not shimmered) — only the phase label shimmers.
+        if is_transient {
+            if let Some(progress) = status.progress {
+                spans.push(Span::styled(
+                    format!("  {progress}"),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ));
+            }
+        }
 
         // For compact mode, only show phase indicator and errors (if > 0)
         if compact {

@@ -992,6 +992,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1210,6 +1211,7 @@ fn test_status_bar_no_dap_badge_when_off() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1244,6 +1246,7 @@ fn test_status_bar_shows_dap_badge_with_port() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1277,6 +1280,7 @@ fn test_status_bar_dap_badge_different_port() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1311,6 +1315,7 @@ fn test_dap_badge_hidden_in_compact_mode() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1348,6 +1353,7 @@ fn test_status_bar_shows_dap_with_ide_name() {
         dap_config_ide: Some("VS Code".to_string()),
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1385,6 +1391,7 @@ fn test_status_bar_shows_dap_without_ide_name() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1423,6 +1430,7 @@ fn test_status_bar_no_dap_with_ide_name_when_port_absent() {
         dap_config_ide: Some("VS Code".to_string()),
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2481,6 +2489,7 @@ fn test_status_info_renders_mouse_on_badge() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2519,6 +2528,7 @@ fn test_status_info_renders_mouse_off_badge() {
         dap_config_ide: None,
         mouse_capture_active: false,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2562,6 +2572,7 @@ fn test_status_info_drops_badge_when_width_too_narrow() {
         dap_config_ide: None,
         mouse_capture_active: true,
         animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2663,5 +2674,142 @@ fn shimmer_advances_with_animation_frame() {
     assert_ne!(
         fgs_a, fgs_b,
         "different animation_frame values must yield different shimmer fg distributions"
+    );
+}
+
+// ── Phase 2.5 Task 04: Launching/Preparing shimmer + progress tests ───────────
+
+#[test]
+fn launching_label_shimmers_across_chars() {
+    // Launching is a transient phase — the label must produce one span per
+    // character with varying fg colours (shimmer sweep).
+    use ratatui::style::{Color, Modifier, Style};
+
+    let phase_style = Style::default()
+        .fg(palette::STATUS_BLUE)
+        .add_modifier(Modifier::BOLD);
+
+    // Frame 3 → head somewhere in the middle of "Launching"
+    let spans = LogView::status_label_spans_inner("Launching", phase_style, true, 3);
+
+    assert_eq!(
+        spans.len(),
+        "Launching".chars().count(),
+        "Launching label must produce one span per char (shimmer)"
+    );
+
+    let fg_values: Vec<Color> = spans.iter().filter_map(|s| s.style.fg).collect();
+    assert_eq!(
+        fg_values.len(),
+        spans.len(),
+        "every shimmer span must carry an fg colour"
+    );
+    let all_same = fg_values.windows(2).all(|w| w[0] == w[1]);
+    assert!(
+        !all_same,
+        "shimmer must produce a gradient — not all fg colours are equal"
+    );
+}
+
+#[test]
+fn preparing_label_shimmers_across_chars() {
+    // Preparing is a transient phase — the label must produce one span per
+    // character with varying fg colours (shimmer sweep).
+    use ratatui::style::{Color, Style};
+
+    let phase_style = Style::default().fg(palette::STATUS_BLUE);
+
+    // Frame 7 → head somewhere in the middle of "Preparing"
+    let spans = LogView::status_label_spans_inner("Preparing", phase_style, true, 7);
+
+    assert_eq!(
+        spans.len(),
+        "Preparing".chars().count(),
+        "Preparing label must produce one span per char (shimmer)"
+    );
+
+    let fg_values: Vec<Color> = spans.iter().filter_map(|s| s.style.fg).collect();
+    assert_eq!(
+        fg_values.len(),
+        spans.len(),
+        "every shimmer span must carry an fg colour"
+    );
+    let all_same = fg_values.windows(2).all(|w| w[0] == w[1]);
+    assert!(
+        !all_same,
+        "shimmer must produce a gradient — not all fg colours are equal"
+    );
+}
+
+#[test]
+fn progress_suffix_rendered_when_present() {
+    // When phase is Launching and progress is Some, the progress text must
+    // appear in the rendered bottom metadata bar with muted fg.
+    use crate::test_utils::TestTerminal;
+    use std::time::Duration;
+
+    let mut term = TestTerminal::with_size(120, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Launching,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: Some(Duration::from_secs(2)),
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+        animation_frame: 0,
+        progress: Some("Running Gradle task"),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("Running Gradle task"),
+        "Progress suffix 'Running Gradle task' should appear in the status bar when present"
+    );
+}
+
+#[test]
+fn running_has_no_progress_suffix() {
+    // When phase is Running (steady state), progress text must NOT appear
+    // even if progress is Some — steady states ignore the progress field.
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(120, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+        animation_frame: 0,
+        progress: Some("this should not appear"),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        !term.buffer_contains("this should not appear"),
+        "Running (steady state) must not render progress suffix even when progress is Some"
     );
 }

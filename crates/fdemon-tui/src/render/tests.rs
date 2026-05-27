@@ -1319,6 +1319,30 @@ fn snapshot_normal_mode_stopped() {
     });
 }
 
+#[test]
+fn snapshot_normal_mode_launching() {
+    let mut state = create_base_state();
+    state.ui_mode = UiMode::Normal;
+    state.phase = AppPhase::Launching;
+
+    let content = render_screen(&mut state);
+    insta::with_settings!({ filters => VERSION_FILTER.to_vec() }, {
+        assert_snapshot!("normal_launching", content);
+    });
+}
+
+#[test]
+fn snapshot_normal_mode_preparing() {
+    let mut state = create_base_state();
+    state.ui_mode = UiMode::Normal;
+    state.phase = AppPhase::Preparing;
+
+    let content = render_screen(&mut state);
+    insta::with_settings!({ filters => VERSION_FILTER.to_vec() }, {
+        assert_snapshot!("normal_preparing", content);
+    });
+}
+
 // ===========================================================================
 // Toast overlay tests (Minor #15)
 // ===========================================================================

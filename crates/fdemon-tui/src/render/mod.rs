@@ -214,6 +214,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             dap_config_ide: state.dap_config_status.as_ref().map(|s| s.ide_name.clone()),
             mouse_capture_active: state.mouse_capture_active,
             animation_frame: state.animation_frame,
+            progress: handle.session.current_progress.as_deref(),
         };
         log_view = log_view.with_status(status_info);
 
