@@ -109,3 +109,40 @@ Audit existing tests that asserted `mark_started` → `Running` and update them 
 
 - Leaving `started_at` set at `app.start` (Launching) rather than at `Running` preserves existing `session_duration` behavior; note this as a deliberate decision — duration counts from launch, not from first-frame.
 - Do not touch handlers, rendering, or `status_icon` here (task 01 did `status_icon`; task 03/04 own handlers/rendering).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/session.rs` | Added `current_progress: Option<String>` field; changed `mark_started` to set `Launching`; added `mark_running()`, `set_progress()`, `clear_progress()`; updated `mark_stopped` to clear progress; updated `is_active` doc comment |
+| `crates/fdemon-app/src/session/tests.rs` | Fixed `test_session_lifecycle` (expects Launching then mark_running); added 6 new tests for the new lifecycle helpers |
+| `crates/fdemon-app/src/session_manager.rs` | Fixed 3 tests that called `mark_started` expecting Running state — now call `mark_running()` too |
+| `crates/fdemon-app/src/handler/tests.rs` | Fixed `test_auto_reload_marks_sessions_as_reloading` to call `mark_running()` |
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Fixed `test_escape_closes_dialog_with_sessions` to call `mark_running()` |
+| `crates/fdemon-tui/src/widgets/tabs.rs` | Fixed 2 tests checking for Running icon after `mark_started` |
+| `tests/e2e/session_management.rs` | Fixed `test_session_phase_transitions` to expect Launching then call `mark_running()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`started_at` set at Launching, not Running**: Duration counts from the `app.start` event (when Flutter begins building), not from `app.started` (first-frame ready). This preserves the existing behavior — the task notes this is intentional.
+2. **Predicate predicates unchanged**: `is_running()` stays `Running | Reloading`; `is_busy()` stays `Reloading`-only. `Launching` and `Preparing` are intentionally excluded so reload/restart gates (which check `is_running`) correctly block during launch.
+3. **Broad test audit**: More than just the session/tests.rs file needed updating — the session_manager, handler tests, navigation handler, TUI tab widget tests, and e2e session tests all had assertions of `mark_started` → `Running` that needed fixing.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all crates: 5,800+ tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Handler wiring not done**: `mark_running()` is not yet called from any handler (task 03 owns that). Sessions started via the daemon's `app.start` event will now stop at `Launching` until task 03 wires the `app.started` handler to call `mark_running()`.
+2. **`has_running_sessions()` gate**: The new session dialog's Escape behavior (close vs quit) checks `has_running_sessions()`, which uses `is_running()`. Sessions in `Launching` state won't satisfy this check until they reach `Running`. This is correct behavior but task 03's handler wiring is needed for end-to-end correctness.

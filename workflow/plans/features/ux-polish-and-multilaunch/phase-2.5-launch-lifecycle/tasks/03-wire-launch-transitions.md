@@ -108,3 +108,41 @@ Audit existing handler tests that assumed `SessionStarted`/`app.start` ⇒ `Runn
 
 - This task touches only `fdemon-app/handler/*` — it shares **no** write files with task 04 (tui), so the two run in parallel worktrees.
 - Match `AppStarted`/`AppProgress` by `app_id` exactly as the existing `AppStop`/`AppDebugPort` arms do, to avoid cross-session bleed in multi-session setups.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad71634ce17713266
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | `SessionStarted` → sets `AppPhase::Launching` (not `Running`) with comment |
+| `crates/fdemon-app/src/handler/session.rs` | Added `AppStarted` → `mark_running()` and `AppProgress(finished:false)` → `set_progress()` arms in `handle_session_message_state`; added 4 unit tests |
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | `spawn_one` sets `Preparing` + `set_progress("Waiting for services…")` when pre-app spawn needed; added `pre_app_spawn_sets_preparing` test |
+| `crates/fdemon-app/src/handler/update.rs` | `PreAppSourceProgress` feeds `set_progress()` for transient label; added `is_running()` guard to `HotReload`/`HotRestart`/`StopApp` |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated 2 existing tests (`test_session_started_updates_session_state`, `test_session_started_in_only_one_session`) from `Running` → `Launching`; fixed `test_manual_reload_still_uses_selected_session` to call `mark_running()`; added 5 new tests (`session_started_sets_launching`, `app_started_event_sets_running`, `app_progress_updates_current_progress`, `reload_is_noop_while_launching`, `launching_to_running_no_reload_completed`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **AC7 test avoids Engine**: `launching_to_running_no_reload_completed` proves the invariant through state inspection (`reload_start_time == None`, `reload_count == 0`) rather than requiring a Tokio reactor. This avoids the `signals.rs` panic when Engine is created outside a runtime.
+
+2. **`StopApp` also gated on `is_running()`**: The task scoped the gate to `HotReload`/`HotRestart`/`StopApp` — all three now require `is_running()` so a user can't send a stop command before the app is up.
+
+3. **`reloadable_sessions()` not changed**: `AutoReloadTriggered` uses `reloadable_sessions()` which gates only on `is_busy()`. The task scoped the fix to the three manual control messages; auto-reload via file watcher still only checks `is_busy()`, preserving existing behaviour.
+
+4. **Existing `mark_started`-based tests**: Tests that called `mark_started()` to simulate a "running" session for HotReload tests now also call `mark_running()` — matching the new two-step lifecycle.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all suites; 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No `PreAppSourcesReady` phase reset**: When `PreAppSourcesReady` fires and triggers `SpawnSession`, the phase stays `Preparing` until the process attaches and `SessionStarted` moves it to `Launching`. This is correct — no phantom `Running` window.

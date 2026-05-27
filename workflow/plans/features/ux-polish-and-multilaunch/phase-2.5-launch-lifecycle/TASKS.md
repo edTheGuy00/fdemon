@@ -51,11 +51,11 @@ dialog launch
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-add-launch-phases](tasks/01-add-launch-phases.md) | ⬜ Todo | - | 1h | `core/types.rs`, `tui/theme/styles.rs`, `app/session/session.rs` (status_icon) |
-| 2 | [02-session-launch-state](tasks/02-session-launch-state.md) | ⬜ Todo | 1 | 1–1.5h | `app/session/session.rs`, `app/session/tests.rs` |
-| 3 | [03-wire-launch-transitions](tasks/03-wire-launch-transitions.md) | ⬜ Todo | 2 | 1.5h | `app/handler/session_lifecycle.rs`, `app/handler/session.rs`, `app/handler/new_session/launch_context.rs`, `app/handler/update.rs` |
-| 4 | [04-render-launch-phases](tasks/04-render-launch-phases.md) | ⬜ Todo | 2 | 1.5h | `tui/widgets/log_view/mod.rs`, `tui/widgets/log_view/tests.rs`, `tui/render/mod.rs`, `tui/render/tests.rs` |
-| 5 | [05-doc-launch-lifecycle](tasks/05-doc-launch-lifecycle.md) | ⬜ Todo | 1,2,3 | 0.5h | `docs/ARCHITECTURE.md` |
+| 1 | [01-add-launch-phases](tasks/01-add-launch-phases.md) | ✅ Done | - | 1h | `core/types.rs`, `tui/theme/styles.rs`, `app/session/session.rs` (status_icon) |
+| 2 | [02-session-launch-state](tasks/02-session-launch-state.md) | ✅ Done | 1 | 1–1.5h | `app/session/session.rs`, `app/session/tests.rs` |
+| 3 | [03-wire-launch-transitions](tasks/03-wire-launch-transitions.md) | ✅ Done | 2 | 1.5h | `app/handler/session_lifecycle.rs`, `app/handler/session.rs`, `app/handler/new_session/launch_context.rs`, `app/handler/update.rs` |
+| 4 | [04-render-launch-phases](tasks/04-render-launch-phases.md) | ✅ Done | 2 | 1.5h | `tui/widgets/log_view/mod.rs`, `tui/widgets/log_view/tests.rs`, `tui/render/mod.rs`, `tui/render/tests.rs` |
+| 5 | [05-doc-launch-lifecycle](tasks/05-doc-launch-lifecycle.md) | ✅ Done | 1,2,3 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

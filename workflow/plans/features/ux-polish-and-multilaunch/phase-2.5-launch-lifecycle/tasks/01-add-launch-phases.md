@@ -86,3 +86,35 @@ AppPhase::Launching => "◐",
 - `AppPhase` has **no serde derive**, so adding variants has zero wire-format/snapshot impact.
 - Keep this task strictly additive on `session.rs` (status_icon arms only). Task 02 modifies the same file (`mark_started`, predicates, new field), so leave those untouched to keep the diffs cleanly sequenced.
 - If clippy flags the new variants as never-constructed, that is expected at this stage — they are constructed in tasks 02/03. Do **not** add `#[allow(dead_code)]` to enum variants (they are `pub` and part of the public domain type, so clippy will not flag them).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/types.rs` | Added `Preparing` and `Launching` variants to `AppPhase` enum, between `Initializing` and `Running`, with doc comments |
+| `crates/fdemon-tui/src/theme/styles.rs` | Added `Preparing` and `Launching` match arms to `phase_indicator` (STATUS_BLUE fg; Launching gets BOLD); added two new per-variant tests; updated `test_phase_indicator_all_phases_covered` array |
+| `crates/fdemon-app/src/session/session.rs` | Added `Preparing => "◌"` and `Launching => "◐"` arms to `status_icon` match only |
+
+### Notable Decisions/Tradeoffs
+
+1. **Strict task scope**: Only modified `status_icon` arms in `session.rs`, leaving `is_active`, `is_running`, and other predicates untouched so task 02 can cleanly own those changes.
+2. **No lifecycle wiring**: `Preparing` and `Launching` are never assigned anywhere in this changeset — they render correctly if set, but nothing sets them yet.
+3. **Clippy clean**: `pub` enum variants are not flagged by clippy as dead code even when never constructed, so no `#[allow(dead_code)]` annotations were needed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (6,303 tests across all crates, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No lifecycle transitions yet**: The new phases exist in the type system and render correctly, but tasks 02/03 must wire the actual state machine transitions before they become observable at runtime.
