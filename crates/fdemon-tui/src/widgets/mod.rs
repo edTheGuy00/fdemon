@@ -9,6 +9,7 @@ pub mod modal_overlay;
 pub mod new_session_dialog;
 mod search_input;
 pub mod settings_panel;
+pub mod shimmer;
 mod tabs;
 pub mod tag_filter;
 
@@ -20,6 +21,7 @@ pub use log_view::{LogView, StatusInfo};
 pub use new_session_dialog::*;
 pub use search_input::SearchInput;
 pub use settings_panel::SettingsPanel;
+pub use shimmer::{lerp_color, shimmer_phase, shimmer_spans};
 pub use tabs::SessionTabs;
 pub use tag_filter::{render_tag_filter, render_tag_filter_with_regions};
 
