@@ -23,8 +23,8 @@ Add a subtle left-to-right color sweep ("shimmer") to **transient** status label
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-shimmer-helper](tasks/01-shimmer-helper.md) | ⬜ Todo | - | 1–1.5h | `widgets/shimmer.rs`, `widgets/mod.rs` |
-| 2 | [02-apply-shimmer-status](tasks/02-apply-shimmer-status.md) | ⬜ Todo | 1 | 1–1.5h | `widgets/log_view/mod.rs`, `render/mod.rs`, `widgets/log_view/tests.rs` |
+| 1 | [01-shimmer-helper](tasks/01-shimmer-helper.md) | ✅ Done | - | 1–1.5h | `widgets/shimmer.rs`, `widgets/mod.rs` |
+| 2 | [02-apply-shimmer-status](tasks/02-apply-shimmer-status.md) | ✅ Done | 1 | 1–1.5h | `widgets/log_view/mod.rs`, `render/mod.rs`, `widgets/log_view/tests.rs` |
 
 ## File Overlap Analysis
 
@@ -47,12 +47,12 @@ Add a subtle left-to-right color sweep ("shimmer") to **transient** status label
 
 Phase 2 is complete when:
 
-- [ ] A new `widgets/shimmer.rs` exposes a pure RGB `lerp_color`, a `shimmer_phase(frame)` that wraps over a fixed period, and a span builder that tints each character's fg between a base and a highlight color based on distance from a moving head.
-- [ ] `lerp_color`, `shimmer_phase`, and the span builder have unit tests (endpoint colors, phase wrap, empty/short text, non-RGB graceful fallback).
-- [ ] The bottom metadata bar's phase label shimmers **only** while the session is in a transient phase (`Initializing`, `Reloading`, `Quitting`, or `is_busy`); `Running`/`Stopped` render the existing static style with no visual change.
-- [ ] The shimmer is driven by `AppState::animation_frame` (threaded through `StatusInfo`), so it advances with the existing 50 ms tick loop and needs no new timer.
-- [ ] Bold/other modifiers on the phase style are preserved under shimmer; only fg color is animated.
-- [ ] `cargo test -p fdemon-tui`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+- [x] A new `widgets/shimmer.rs` exposes a pure RGB `lerp_color`, a `shimmer_phase(frame)` that wraps over a fixed period, and a span builder that tints each character's fg between a base and a highlight color based on distance from a moving head.
+- [x] `lerp_color`, `shimmer_phase`, and the span builder have unit tests (endpoint colors, phase wrap, empty/short text, non-RGB graceful fallback).
+- [x] The bottom metadata bar's phase label shimmers **only** while the session is in a transient phase (`Initializing`, `Reloading`, `Quitting`, or `is_busy`); `Running`/`Stopped` render the existing static style with no visual change.
+- [x] The shimmer is driven by `AppState::animation_frame` (threaded through `StatusInfo`), so it advances with the existing 50 ms tick loop and needs no new timer.
+- [x] Bold/other modifiers on the phase style are preserved under shimmer; only fg color is animated.
+- [x] `cargo test -p fdemon-tui`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ## Notes
 

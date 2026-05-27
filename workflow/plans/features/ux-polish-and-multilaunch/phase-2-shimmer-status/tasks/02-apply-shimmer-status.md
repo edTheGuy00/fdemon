@@ -118,3 +118,37 @@ Update all existing `StatusInfo { .. }` constructions in `tests.rs` (11 sites: l
 - If task 01 left `#[allow(dead_code)]` on the shimmer API, remove it now that it's consumed.
 - No `docs/` updates: shimmer is purely visual with no new key/config surface. Leave the "animations off" toggle for PLAN Future Enhancements.
 - Watch the 50-line function limit: `render_bottom_metadata` is already long (pre-existing). Keep the added transient-label logic tight; if it pushes the function materially larger, extract a small `fn status_label_spans(...) -> Vec<Span>` helper in the same file rather than inlining.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `animation_frame: u64` to `StatusInfo`; added `status_label_spans_inner` helper; replaced static label span with shimmer/static dispatch in `render_bottom_metadata`; added `use crate::widgets::shimmer` import |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `animation_frame: state.animation_frame` to `StatusInfo` construction |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `animation_frame: 0` to all 11 existing `StatusInfo` literals; added 3 new shimmer tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Helper extracted as `status_label_spans_inner`**: The task noted `render_bottom_metadata` is already long. The shimmer logic was factored into a private `fn status_label_spans_inner` method on `LogView`, keeping `render_bottom_metadata` tight and making the helper directly testable from `tests.rs` via `LogView::status_label_spans_inner`.
+
+2. **`Span::styled(label.to_owned(), phase_style)` in else branch**: `shimmer_spans` returns `Vec<Span<'static>>` (owned content), so the static path must also produce an owned string to match the return type. The one allocation is only on the non-shimmer path and is negligible.
+
+3. **Tests use direct helper calls**: Rather than rendering to a terminal buffer and scanning cell colors, the shimmer tests call `LogView::status_label_spans_inner` directly. This is simpler, faster, and directly validates the logic without depending on layout details.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui` - Passed (1313 tests: 1310 existing + 3 new)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No "animations off" path**: As noted in the task, there is no toggle to disable shimmer. This is intentional — left for Future Enhancements per the plan.

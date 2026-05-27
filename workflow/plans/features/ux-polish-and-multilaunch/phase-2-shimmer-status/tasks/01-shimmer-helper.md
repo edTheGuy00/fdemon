@@ -130,3 +130,34 @@ fn shimmer_spans_preserves_modifier() { /* every span carries BOLD when requeste
 - `SHIMMER_PERIOD_FRAMES` and `SHIMMER_HEAD_WIDTH` are named constants with derivation doc comments (no magic numbers, per CODE_STANDARDS Principle 4).
 - Returning `Vec<Span<'static>>` (owned `String` content) avoids borrowing-lifetime friction at the call site; the label text is short, so allocation cost is negligible.
 - Do not wire any caller here — task 02 owns the integration. This task must build and pass tests on its own (the new `pub` items will be unused until task 02; add `#[allow(dead_code)]` only if clippy flags them, and remove it in task 02).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/shimmer.rs` | New file — `lerp_color`, `shimmer_phase`, `shimmer_spans`, named constants, 9 inline unit tests |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `pub mod shimmer;` and re-export of `lerp_color`, `shimmer_phase`, `shimmer_spans` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Clippy manual_range_contains**: The range check in the shimmer_phase test was written as `p >= 0.0 && p < 1.0` then updated to `(0.0..1.0).contains(&p)` to satisfy `-D warnings` with the `manual_range_contains` lint.
+2. **Extra tests beyond spec**: Added `lerp_clamps_t_outside_range`, `shimmer_phase_no_panic_near_u64_max`, and `shimmer_spans_unicode_multibyte` beyond the 6 required tests. These exercise the acceptance criteria edge cases more thoroughly and added no complexity.
+3. **No `#[allow(dead_code)]` needed**: Clippy did not flag the re-exported public items as dead code — the `pub use` in `widgets/mod.rs` is sufficient to silence the lint.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-tui` — Passed (1310 unit tests + 7 doc-tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No callers yet**: `lerp_color`, `shimmer_phase`, and `shimmer_spans` are unused until task 02 wires them into the status bar; this is expected per task design.

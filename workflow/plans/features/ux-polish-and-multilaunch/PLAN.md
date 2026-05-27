@@ -143,6 +143,27 @@ The theme is true-color RGB (`theme/palette.rs`), which makes per-character colo
 
 ---
 
+### Phase 2.5: Launch lifecycle phases (Preparing → Launching → Running)
+
+**Goal**: Stop showing `Running` the instant the OS process attaches. Surface the real pre-run lifecycle so the user sees a distinct, shimmering transient state while the app is still building/compiling — which can take seconds to minutes on large apps — and while pre-app native-log sources (`start_before_app` + `ready_check`, e.g. `example/app5`) are coming up. Sequenced immediately after Phase 2 because these long-lived transient states are where the Phase 2 shimmer first becomes visible (reload/restart are too fast to notice).
+
+**Duration**: ~4–6h (multi-task; touches a core domain enum)
+
+**Problem (confirmed by research)**: `AppPhase::Running` is set optimistically on `Message::SessionStarted` (`handler/session_lifecycle.rs:21`) the moment the Flutter process pipe opens, and re-affirmed on the `app.start` daemon event via `Session::mark_started` (`session/session.rs:530`). The daemon's true "app is up" signal — `app.started` (`DaemonMessage::AppStarted`) — is parsed but drives **no** phase change. Flutter's build-progress events (`app.progress`, `finished:false`) are parsed but silently dropped (`daemon/protocol.rs:306`). During pre-app `ready_check` polling the session sits at `Initializing` ("Starting") with no distinct indication.
+
+#### Steps
+
+1. **Two new `AppPhase` variants** — `Preparing` (pre-app `ready_check` polling, before Flutter spawns) and `Launching` (process attached / building / first run, before `app.started`). Both render in `STATUS_BLUE`, both shimmer (reuse Phase 2's `shimmer` helper / `is_transient`).
+2. **Re-map the lifecycle**: `SpawnPreAppSources` → `Preparing`; process attach (`SessionStarted`) → `Launching`; `app.start` keeps `Launching` (still captures `app_id`); **`app.started` → `Running`** (the fix). Steady `Running`/`Stopped` and the reload/restart path are unchanged.
+3. **Surface progress text**: add `Session::current_progress: Option<String>`, fed by `app.progress(finished:false)` build messages ("Running Gradle task…") and pre-app readiness updates ("Waiting for services 1/2"); cleared on `Running`. Rendered as a dim suffix next to the shimmering label.
+4. **Gate input**: hot reload/restart stay no-ops until `Running` (they already key off `is_running()`, which excludes the new variants — verify and tighten if needed). `is_busy` stays `Reloading`-only so the busy-label path doesn't mislabel the new phases as "Reloading".
+
+**Milestone**: Launching a session shows `Preparing` (if pre-app sources) → shimmering `Launching` (with live build text) and only flips to `Running` when the Flutter app is actually up.
+
+**Tasks**: see `phase-2.5-launch-lifecycle/TASKS.md`.
+
+---
+
 ### Phase 3: Spinner in more states
 
 **Goal**: Use the existing braille throbber consistently wherever the UI is waiting, not just at startup.
@@ -281,6 +302,15 @@ The theme is true-color RGB (`theme/palette.rs`), which makes per-character colo
 ### Phase 2 Complete When:
 - [ ] Transient status labels shimmer while their condition holds and are static otherwise.
 - [ ] `shimmer_phase` / `lerp` have unit tests (phase wrap, endpoint colors, non-RGB fallback).
+
+### Phase 2.5 Complete When:
+- [ ] `AppPhase` gains `Preparing` and `Launching`; all exhaustive matches (`phase_indicator`, `status_icon`) and the phase-coverage test array are updated.
+- [ ] A freshly launched session shows `Launching` (not `Running`) until the `app.started` daemon event arrives; `app.started` is the sole trigger for `Running` on initial launch.
+- [ ] Sessions with `start_before_app` pre-app sources show `Preparing` while `ready_check` polls, before Flutter spawns.
+- [ ] The `Launching`/`Preparing` labels shimmer (reuse Phase 2) and render in `STATUS_BLUE`; `Running`/`Stopped`/`Reloading` are visually unchanged.
+- [ ] Live build/readiness progress text is shown next to the label and cleared when `Running` is reached.
+- [ ] Hot reload/restart remain no-ops while `Preparing`/`Launching`; `is_busy` still matches `Reloading` only (no "Reloading" mislabel of the new phases).
+- [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ### Phase 3 Complete When:
 - [ ] Startup screen uses the shared spinner with no visual regression.
