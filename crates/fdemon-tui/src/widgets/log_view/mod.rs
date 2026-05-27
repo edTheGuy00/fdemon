@@ -24,6 +24,7 @@ use ratatui::{
 use crate::theme::icons::IconSet;
 use crate::theme::palette;
 use crate::theme::styles as theme_styles;
+use crate::widgets::shimmer;
 use crate::widgets::MouseCtx;
 
 /// Stack trace styling constants
@@ -51,6 +52,8 @@ pub struct StatusInfo<'a> {
     /// Whether terminal mouse capture is currently active.
     /// Renders `[mouse]` (dim) when active, `[mouse-off]` (warning) when inactive.
     pub mouse_capture_active: bool,
+    /// Global animation frame, drives the shimmer on transient status labels.
+    pub animation_frame: u64,
 }
 
 /// Log view widget with rich formatting
@@ -840,6 +843,29 @@ impl<'a> LogView<'a> {
         buf.set_line(area.x, area.y, &line, area.width);
     }
 
+    /// Build the label spans for the phase indicator.
+    ///
+    /// For transient phases (`Initializing`, `Reloading`, `Quitting`, or `is_busy`),
+    /// returns per-character shimmered spans so the label sweeps with a bright
+    /// highlight. For steady states (`Running`, `Stopped`) returns a single static
+    /// styled span identical to the pre-shimmer behaviour.
+    fn status_label_spans_inner(
+        label: &str,
+        phase_style: Style,
+        is_transient: bool,
+        animation_frame: u64,
+    ) -> Vec<Span<'static>> {
+        if is_transient {
+            let phase = shimmer::shimmer_phase(animation_frame);
+            let base = phase_style.fg.unwrap_or(palette::TEXT_SECONDARY);
+            let highlight = palette::TEXT_BRIGHT;
+            let modifier = phase_style.add_modifier; // preserve BOLD etc.
+            shimmer::shimmer_spans(label, base, highlight, phase, modifier)
+        } else {
+            vec![Span::styled(label.to_owned(), phase_style)]
+        }
+    }
+
     /// Render the bottom metadata bar with status info
     fn render_bottom_metadata(
         area: Rect,
@@ -859,13 +885,25 @@ impl<'a> LogView<'a> {
             theme_styles::phase_indicator(status.phase, icons)
         };
 
-        // Left side: phase indicator
+        // Transient = work in progress; steady = Running/Stopped.
+        let is_transient = status.is_busy
+            || matches!(
+                status.phase,
+                AppPhase::Initializing | AppPhase::Reloading | AppPhase::Quitting
+            );
+
+        // Left side: icon (always static) + shimmered or static label
         let mut spans = vec![
             Span::raw(" "),
             Span::styled(icon, phase_style),
             Span::raw(" "),
-            Span::styled(label, phase_style),
         ];
+        spans.extend(Self::status_label_spans_inner(
+            label,
+            phase_style,
+            is_transient,
+            status.animation_frame,
+        ));
 
         // For compact mode, only show phase indicator and errors (if > 0)
         if compact {

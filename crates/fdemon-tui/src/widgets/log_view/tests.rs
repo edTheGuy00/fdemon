@@ -991,6 +991,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1208,6 +1209,7 @@ fn test_status_bar_no_dap_badge_when_off() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1241,6 +1243,7 @@ fn test_status_bar_shows_dap_badge_with_port() {
         dap_port: Some(4711),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1273,6 +1276,7 @@ fn test_status_bar_dap_badge_different_port() {
         dap_port: Some(54321),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1306,6 +1310,7 @@ fn test_dap_badge_hidden_in_compact_mode() {
         dap_port: Some(4711),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1342,6 +1347,7 @@ fn test_status_bar_shows_dap_with_ide_name() {
         dap_port: Some(4711),
         dap_config_ide: Some("VS Code".to_string()),
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1378,6 +1384,7 @@ fn test_status_bar_shows_dap_without_ide_name() {
         dap_port: Some(4711),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1415,6 +1422,7 @@ fn test_status_bar_no_dap_with_ide_name_when_port_absent() {
         dap_port: None,
         dap_config_ide: Some("VS Code".to_string()),
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2472,6 +2480,7 @@ fn test_status_info_renders_mouse_on_badge() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2509,6 +2518,7 @@ fn test_status_info_renders_mouse_off_badge() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: false,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2551,6 +2561,7 @@ fn test_status_info_drops_badge_when_width_too_narrow() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2570,5 +2581,87 @@ fn test_status_info_drops_badge_when_width_too_narrow() {
     assert!(
         !term.buffer_contains("[mouse-off]"),
         "Off-state mouse badge should also be absent in compact mode (terminal width 40 < 60)"
+    );
+}
+
+// ── shimmer label tests ────────────────────────────────────────────────────
+
+#[test]
+fn reloading_label_shimmers_across_chars() {
+    // For a transient phase the label should produce one span per character
+    // (the shimmer sweep) whose fg colours are not all identical.
+    use ratatui::style::{Color, Modifier, Style};
+
+    let phase_style = Style::default()
+        .fg(Color::Rgb(200, 170, 0)) // STATUS_YELLOW-ish
+        .add_modifier(Modifier::BOLD);
+
+    // Frame 5 → head somewhere in the middle of "Reloading"
+    let spans = LogView::status_label_spans_inner("Reloading", phase_style, true, 5);
+
+    // One span per character
+    assert_eq!(
+        spans.len(),
+        "Reloading".chars().count(),
+        "transient label must produce one span per char (shimmer)"
+    );
+
+    // Collect all fg values; the sweep must produce at least two distinct colours
+    let fg_values: Vec<Color> = spans.iter().filter_map(|s| s.style.fg).collect();
+    assert_eq!(
+        fg_values.len(),
+        spans.len(),
+        "every shimmer span must carry an fg colour"
+    );
+    let all_same = fg_values.windows(2).all(|w| w[0] == w[1]);
+    assert!(
+        !all_same,
+        "shimmer must produce a gradient — not all fg colours are equal"
+    );
+}
+
+#[test]
+fn running_label_is_static_single_style() {
+    // For a steady state the label must be a single span with the phase style's fg.
+    use ratatui::style::{Color, Style};
+
+    let base_fg = Color::Rgb(63, 185, 80); // STATUS_GREEN
+    let phase_style = Style::default().fg(base_fg);
+
+    let spans = LogView::status_label_spans_inner("Running", phase_style, false, 42);
+
+    assert_eq!(spans.len(), 1, "steady state must produce exactly one span");
+    assert_eq!(
+        spans[0].style.fg,
+        Some(base_fg),
+        "steady state span fg must match the phase style"
+    );
+    assert_eq!(
+        spans[0].content.as_ref(),
+        "Running",
+        "steady state span must carry the full label text"
+    );
+}
+
+#[test]
+fn shimmer_advances_with_animation_frame() {
+    // Two renders with different animation_frame values must produce different
+    // fg distributions (the shimmer head has moved).
+    use ratatui::style::{Color, Modifier, Style};
+
+    let phase_style = Style::default()
+        .fg(Color::Rgb(200, 100, 0))
+        .add_modifier(Modifier::BOLD);
+    let label = "Reloading";
+
+    let spans_a = LogView::status_label_spans_inner(label, phase_style, true, 0);
+    let spans_b = LogView::status_label_spans_inner(label, phase_style, true, 10);
+
+    let fgs_a: Vec<Option<Color>> = spans_a.iter().map(|s| s.style.fg).collect();
+    let fgs_b: Vec<Option<Color>> = spans_b.iter().map(|s| s.style.fg).collect();
+
+    assert_ne!(
+        fgs_a, fgs_b,
+        "different animation_frame values must yield different shimmer fg distributions"
     );
 }
