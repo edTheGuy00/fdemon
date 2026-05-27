@@ -87,6 +87,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::ScrollToLineEnd => scroll::handle_scroll_to_line_end(state),
 
         Message::Tick => {
+            // Global animation clock — drives shimmer/spinner/flash everywhere,
+            // independent of the loading screen's own frame counter.
+            state.animation_frame = state.animation_frame.wrapping_add(1);
+
             // Tick loading screen animation with message cycling (Task 08d)
             if state.ui_mode == UiMode::Loading && state.loading_state.is_some() {
                 state.tick_loading_animation_with_cycling(true);
@@ -3336,6 +3340,23 @@ fn scroll_to_log_entry(session: &mut crate::session::Session, entry_index: usize
 mod tests {
     use super::*;
     use crate::state::StartupNotice;
+
+    #[test]
+    fn tick_advances_global_animation_frame_in_normal_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        let before = state.animation_frame;
+        let _ = update(&mut state, Message::Tick);
+        assert_eq!(state.animation_frame, before + 1);
+    }
+
+    #[test]
+    fn animation_frame_wraps_without_panic() {
+        let mut state = AppState::new();
+        state.animation_frame = u64::MAX;
+        let _ = update(&mut state, Message::Tick);
+        assert_eq!(state.animation_frame, 0);
+    }
 
     #[test]
     fn new_version_available_sets_startup_notice_when_dialog_visible() {
