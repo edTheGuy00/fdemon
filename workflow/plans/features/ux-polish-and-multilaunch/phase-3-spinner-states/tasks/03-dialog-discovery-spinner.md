@@ -115,3 +115,40 @@ Add `animation_frame: u64` to `TabBar` (constructor arg or builder; default 0 in
 - **Cadence:** use `SPINNER_TICKS_PER_FRAME` (from task 01) so the dialog spinner is calm (~100 ms/frame), distinct from the loading screen's raw per-tick cadence. Do not introduce a second magic divisor.
 - **In scope only:** discovery line + tab-bar refresh. Do **not** add spinners to main-view session/phase rows (PLAN "Optional"; deferred to avoid conflicting with the Phase 2/2.5 status-label shimmer).
 - **Ordering:** this task edits `render/mod.rs` after task 02. Run on the same branch, after 02 — not in a parallel worktree (see TASKS.md Overlap Matrix).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Added `.animation_frame(state.animation_frame)` to `NewSessionDialog` builder chain |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `animation_frame: u64` field + `.animation_frame()` builder to `NewSessionDialog`; threaded frame into all 3 `TargetSelector` call sites and the inline loading Paragraph in `render_target_selector_regions`; updated `TabBar::new()` call to chain `.animation_frame()`; updated 2 existing iconset-threading tests to check for SPINNER_FRAMES glyphs |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Added `animation_frame: u64` field + builder to `TargetSelector`; animated `render_loading` to prefix glyph via `spinner_char(animation_frame / SPINNER_TICKS_PER_FRAME)`; threaded frame into `TabBar::new()` in `render_full`; updated 3 existing refresh-indicator tests to check for spinner glyphs; added 2 new tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/tab_bar.rs` | Added `animation_frame: u64` field + builder to `TabBar`; replaced `icons.refresh()` in label with `spinner_char(animation_frame / SPINNER_TICKS_PER_FRAME)`; added `#[allow(dead_code)]` to `icons` field (retained for API stability); updated 3 existing tests to check SPINNER_FRAMES; added 4 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **icons field retention in TabBar**: The `icons` parameter is kept in `TabBar::new()` for API stability (many call sites). The field is marked `#[allow(dead_code)]` since the refresh indicator now uses `spinner_char()` rather than `icons.refresh()`. This avoids a widespread breaking signature change while keeping clippy clean.
+
+2. **Inline loading Paragraph in render_target_selector_regions**: The regions path in `mod.rs` has a duplicated loading renderer separate from `TargetSelector::render_loading`. Both are now updated to use the spinner glyph for consistency.
+
+3. **Phase coherence by construction**: Both `render_loading` and `TabBar` use the exact same expression `spinner_char(animation_frame / SPINNER_TICKS_PER_FRAME)` with the same divisor, so they advance in lockstep automatically — no shared mutable state needed.
+
+4. **Compact tab bar not animated**: `render_tabs_compact` in `target_selector.rs` still uses `icons.refresh()` for the static compact-mode refresh indicator. The task spec scopes this to the full `TabBar` widget only; the compact path is an out-of-scope deferred item.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` — 1331 passed, 0 failed
+- `cargo test --workspace` — all crates pass
+- `cargo fmt --all -- --check` — passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed
+
+### Risks/Limitations
+
+1. **Compact tab bar uses static icon**: `render_tabs_compact` still uses `icons.refresh()` for the compact refresh indicator. This is intentional per task scope but means compact mode shows a static icon while full mode shows an animated spinner.

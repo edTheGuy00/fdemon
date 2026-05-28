@@ -64,3 +64,32 @@ Notes on the swap:
 
 - This is the "no visual regression" success criterion — the point is purely to dedupe the glyph set onto the shared helper, not to change behavior. Resist any cadence/cosmetic tweak here; the dialog (task 03) is where new animation appears.
 - Both this task and task 03 edit `render/mod.rs`. Run **02 before 03 on the same branch** — do not run them in parallel worktrees (see TASKS.md Overlap Matrix).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Removed local `SPINNER` const, `spinner_idx`, and `spinner_char` vars; replaced with `let glyph = crate::widgets::spinner::spinner_char(loading.animation_frame);` and updated span to `glyph.to_string()` |
+| `crates/fdemon-tui/src/widgets/spinner.rs` | `cargo fmt` line-length fix from task 01 (no logic change) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`glyph.to_string()` for Span content**: `spinner_char` returns `char`, but `Span::styled` accepts `Into<String>`. Used `.to_string()` as directed by the task spec to produce an owned value.
+2. **fmt fix included**: `spinner.rs` from task 01 had a rustfmt diff; fixed it in the same commit since it was the only other change and `cargo fmt --all -- --check` must pass.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` — 1325 passed; 0 failed; 1 ignored (including `render::tests` loading snapshot — `⠋` at frame 0 unchanged)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **None**: Pure refactor with zero behavior change. The snapshot test provides the regression guard.

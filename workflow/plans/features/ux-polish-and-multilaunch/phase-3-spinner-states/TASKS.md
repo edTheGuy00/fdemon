@@ -36,9 +36,9 @@ This phase extracts a pure, reusable `widgets/spinner.rs` helper (mirroring the 
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-spinner-helper](tasks/01-spinner-helper.md) | ⬜ Todo | - | 0.5–1h | `widgets/spinner.rs` (new), `widgets/mod.rs` |
-| 2 | [02-loading-screen-spinner](tasks/02-loading-screen-spinner.md) | ⬜ Todo | 1 | 0.5h | `render/mod.rs` |
-| 3 | [03-dialog-discovery-spinner](tasks/03-dialog-discovery-spinner.md) | ⬜ Todo | 1 | 1–1.5h | `render/mod.rs`, `widgets/new_session_dialog/mod.rs`, `target_selector.rs`, `tab_bar.rs` |
+| 1 | [01-spinner-helper](tasks/01-spinner-helper.md) | ✅ Done | - | 0.5–1h | `widgets/spinner.rs` (new), `widgets/mod.rs` |
+| 2 | [02-loading-screen-spinner](tasks/02-loading-screen-spinner.md) | ✅ Done | 1 | 0.5h | `render/mod.rs` |
+| 3 | [03-dialog-discovery-spinner](tasks/03-dialog-discovery-spinner.md) | ✅ Done ⚠️ | 1 | 1–1.5h | `render/mod.rs`, `widgets/new_session_dialog/mod.rs`, `target_selector.rs`, `tab_bar.rs` |
 
 ## File Overlap Analysis
 
@@ -69,6 +69,12 @@ Phase 3 is complete when (from PLAN.md):
 - [ ] The new-session dialog's "Discovering devices…" line shows an animated spinner; the tab-bar refresh indicator shows motion instead of a frozen glyph.
 - [ ] Concurrent dialog spinners are computed from a single frame value per render so they pulse **in phase**.
 - [ ] `cargo test -p fdemon-tui`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+
+## Orchestration Status
+
+**Completed 2026-05-28.** All 3 tasks done on branch `feat/ux-polish-and-multilaunch` (strictly linear, same branch — no worktrees). Validation: 01 PASS, 02 PASS (loading snapshot byte-identical, no visual regression), 03 PASS with one concern.
+
+⚠️ **Open concern (task 03, non-blocking):** Replacing the static `icons.refresh()` glyph in `TabBar` with the animated spinner left the `TabBar.icons` field dead; it is retained with a narrowly-scoped `#[allow(dead_code)]` for API stability (15 `TabBar::new()` call sites). Follow-up: either drop the `icons` parameter from `TabBar::new()` (and update call sites) or give `icons` a real use within `TabBar`. Functional and clippy-clean as-is.
 
 ## Notes / Scope Decisions
 

@@ -86,3 +86,33 @@ fn spinner_frames_match_legacy_constant() { /* assert the 10 glyphs, in order */
 - Keep this module pure and dependency-free, exactly like `shimmer.rs`. This is what makes the "advances deterministically per frame (unit-tested)" success criterion trivial.
 - The new `pub` items are unused until tasks 02/03 wire them. If clippy flags dead code, add a temporary `#[allow(dead_code)]` and remove it in task 02 — but the `pub use` re-export usually suffices (it did for `shimmer.rs`).
 - Do **not** edit `render/mod.rs` or any dialog widget here — those are tasks 02 and 03. This task must build and pass tests on its own.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/spinner.rs` | New file — pure spinner helper with `SPINNER_FRAMES`, `SPINNER_TICKS_PER_FRAME`, `spinner_char()`, and 4 inline unit tests |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `pub mod spinner;` declaration and `pub use spinner::{spinner_char, SPINNER_FRAMES, SPINNER_TICKS_PER_FRAME};` re-export, mirroring the shimmer lines |
+
+### Notable Decisions/Tradeoffs
+
+1. **Glyph type is `char` not `&str`**: The task spec uses `&[char]` matching the acceptance criteria; the legacy constant in `render/mod.rs` uses `&[&str]`. The `char` representation is strictly more correct for single Unicode scalar values and matches what task 02 will need when converting to a `String` for rendering.
+2. **No `#[allow(dead_code)]` needed**: The `pub use` re-export in `mod.rs` satisfies clippy — confirmed zero warnings.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui widgets::spinner` - Passed (4 tests)
+- `cargo test -p fdemon-tui` - Passed (1325 tests total, 0 failed)
+- `cargo clippy -p fdemon-tui` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **No risk**: Module is pure with zero external dependencies, exactly as specified. Tasks 02 and 03 consume it.
