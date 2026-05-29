@@ -18,7 +18,13 @@ pub fn handle_scroll_up(state: &mut AppState) -> UpdateResult {
 /// Handle scroll down message
 pub fn handle_scroll_down(state: &mut AppState) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
+        let was_following = handle.session.log_view_state.auto_scroll;
         handle.session.log_view_state.scroll_down(1);
+        // If scroll_down naturally re-engaged auto-scroll (false → true),
+        // also clear the unseen counter so the jump-to-latest pill disappears.
+        if !was_following && handle.session.log_view_state.auto_scroll {
+            handle.session.mark_tail_followed();
+        }
     }
     rescan_links_if_active(state);
     UpdateResult::none()
@@ -37,6 +43,7 @@ pub fn handle_scroll_to_top(state: &mut AppState) -> UpdateResult {
 pub fn handle_scroll_to_bottom(state: &mut AppState) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         handle.session.log_view_state.scroll_to_bottom();
+        handle.session.mark_tail_followed();
     }
     rescan_links_if_active(state);
     UpdateResult::none()
@@ -309,5 +316,77 @@ mod tests {
             120, // 200 - 80
             "scroll_to_line_end should jump to max h_offset when wrap is disabled"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — unseen_log_count wiring (Phase 4, Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn handle_scroll_to_bottom_clears_unseen_count() {
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.log_view_state.auto_scroll = false;
+        handle.session.unseen_log_count = 7;
+
+        let _ = handle_scroll_to_bottom(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn handle_scroll_down_clears_unseen_count_on_natural_follow() {
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        // Position one line above the bottom with auto_scroll off.
+        // max_offset = total_lines - visible_lines = 10 - 5 = 5
+        // offset = 4, so one scroll_down(1) hits 5 == max_offset → auto_scroll = true
+        handle.session.log_view_state.total_lines = 10;
+        handle.session.log_view_state.visible_lines = 5;
+        handle.session.log_view_state.offset = 4;
+        handle.session.log_view_state.auto_scroll = false;
+        handle.session.unseen_log_count = 3;
+
+        let _ = handle_scroll_down(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn handle_scroll_down_preserves_unseen_count_when_not_yet_at_bottom() {
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.log_view_state.total_lines = 100;
+        handle.session.log_view_state.visible_lines = 5;
+        handle.session.log_view_state.offset = 10; // far from bottom (max_offset = 95)
+        handle.session.log_view_state.auto_scroll = false;
+        handle.session.unseen_log_count = 3;
+
+        let _ = handle_scroll_down(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(!handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 3); // unchanged
+    }
+
+    #[test]
+    fn handle_scroll_down_no_op_when_already_following() {
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.log_view_state.total_lines = 10;
+        handle.session.log_view_state.visible_lines = 5;
+        handle.session.log_view_state.offset = 5;
+        handle.session.log_view_state.auto_scroll = true; // already following
+        handle.session.unseen_log_count = 0;
+
+        let _ = handle_scroll_down(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 0);
     }
 }

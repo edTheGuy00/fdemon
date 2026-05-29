@@ -202,6 +202,18 @@ pub struct Session {
     // ─────────────────────────────────────────────────────────
     /// Per-session debug state (pause status, breakpoints, exception mode).
     pub debug: DebugState,
+
+    // ─────────────────────────────────────────────────────────
+    // Jump-to-latest indicator (Phase 4, Task 01)
+    // ─────────────────────────────────────────────────────────
+    /// Count of log entries appended while the view was scrolled away from the
+    /// tail (i.e., `log_view_state.auto_scroll == false`). Advisory only — used
+    /// by the log view to render a "↓ N new · G to jump" indicator. Reset to
+    /// zero whenever auto-scroll re-engages via `mark_tail_followed()`.
+    ///
+    /// Ring-buffer eviction does not decrement this counter: evicted entries
+    /// are old (front), unseen entries are new (back). The two are independent.
+    pub unseen_log_count: usize,
 }
 
 impl Session {
@@ -247,6 +259,7 @@ impl Session {
             memory: MemoryState::default(),
             network: NetworkState::default(),
             debug: DebugState::default(),
+            unseen_log_count: 0,
         }
     }
 
@@ -359,6 +372,13 @@ impl Session {
             // Adjust scroll offset
             self.log_view_state.offset = self.log_view_state.offset.saturating_sub(1);
         }
+
+        // Track unseen logs for the jump-to-latest indicator.
+        // Only increment while the user is not following the tail; ring-buffer
+        // eviction is intentionally independent of this counter.
+        if !self.log_view_state.auto_scroll {
+            self.unseen_log_count = self.unseen_log_count.saturating_add(1);
+        }
     }
 
     /// Add an info log
@@ -369,6 +389,14 @@ impl Session {
     /// Add an error log
     pub fn log_error(&mut self, source: LogSource, message: impl Into<String>) {
         self.add_log(LogEntry::error(source, message));
+    }
+
+    /// Reset the unseen log counter, called when the view re-engages tail-follow
+    /// (either via `Message::ScrollToBottom` or by scrolling down to the natural
+    /// bottom). Idempotent — safe to call when `unseen_log_count` is already 0
+    /// or when `auto_scroll` is already true.
+    pub fn mark_tail_followed(&mut self) {
+        self.unseen_log_count = 0;
     }
 
     /// Clear all logs and reset error count
@@ -833,5 +861,80 @@ impl Session {
     /// Check if a specific entry's stack trace should be shown expanded
     pub fn is_stack_trace_expanded(&self, entry_id: u64, default_collapsed: bool) -> bool {
         self.collapse_state.is_expanded(entry_id, default_collapsed)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests — unseen_log_count and mark_tail_followed (Phase 4, Task 01)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fdemon_core::{LogEntry, LogSource};
+
+    fn make_session() -> Session {
+        Session::new("d".into(), "Device".into(), "android".into(), false)
+    }
+
+    fn make_log_entry(msg: &str) -> LogEntry {
+        LogEntry::info(LogSource::Flutter, msg)
+    }
+
+    #[test]
+    fn unseen_log_count_does_not_increment_while_following() {
+        let mut s = make_session();
+        assert!(s.log_view_state.auto_scroll);
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn unseen_log_count_increments_while_scrolled_up() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        s.add_log(make_log_entry("c"));
+        assert_eq!(s.unseen_log_count, 3);
+    }
+
+    #[test]
+    fn unseen_log_count_unaffected_by_ring_buffer_eviction() {
+        let mut s = make_session();
+        s.max_logs = 2; // tight buffer
+        s.log_view_state.auto_scroll = false;
+        for i in 0..5 {
+            s.add_log(make_log_entry(&format!("log {i}")));
+        }
+        assert_eq!(s.logs.len(), 2);
+        assert_eq!(s.unseen_log_count, 5); // all 5 appends counted
+    }
+
+    #[test]
+    fn mark_tail_followed_resets_counter() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        assert_eq!(s.unseen_log_count, 2);
+        s.mark_tail_followed();
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn unseen_log_count_saturates_at_max() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.unseen_log_count = usize::MAX;
+        s.add_log(make_log_entry("overflow"));
+        assert_eq!(s.unseen_log_count, usize::MAX);
+    }
+
+    #[test]
+    fn unseen_log_count_zero_by_default() {
+        let s = make_session();
+        assert_eq!(s.unseen_log_count, 0);
     }
 }
