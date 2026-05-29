@@ -175,9 +175,7 @@ impl<'a> LogView<'a> {
     }
 
     /// Set the count of log entries that arrived while the view was scrolled away
-    /// from the tail. When non-zero and `auto_scroll` is false, renders a
-    /// `↓ N new · G to jump` pill at the bottom-right of the content area.
-    /// Default 0 (pill suppressed).
+    /// from the tail. Drives the jump-to-latest pill. Default 0 (no pill drawn).
     pub fn unseen_log_count(mut self, count: usize) -> Self {
         self.unseen_log_count = count;
         self
@@ -1805,10 +1803,10 @@ const JUMP_HINT_MAX_DISPLAY: usize = 999;
 
 /// Static suffix advertising the keybinding. Middle-dot separator is used over
 /// em-dash for narrower terminals (see planning notes in `TASKS.md`).
-const JUMP_HINT_SUFFIX: &str = " \u{00b7} G to jump";
+const JUMP_HINT_SUFFIX: &str = " · G to jump";
 
 /// Down-arrow glyph + a single space prefix.
-const JUMP_HINT_PREFIX: &str = "\u{2193} ";
+const JUMP_HINT_PREFIX: &str = "↓ ";
 
 /// Render a floating right-aligned `↓ N new · G to jump` pill on the last row
 /// of `content_area`. The pill overwrites whatever the Paragraph rendered there
@@ -1854,8 +1852,15 @@ fn render_jump_to_latest_pill(
         return;
     }
 
-    let y = content_area.y + content_area.height - 1;
-    let x = content_area.x + content_area.width - pill_width - 1; // 1-col right margin
+    let y = content_area
+        .y
+        .saturating_add(content_area.height)
+        .saturating_sub(1);
+    let x = content_area
+        .x
+        .saturating_add(content_area.width)
+        .saturating_sub(pill_width)
+        .saturating_sub(1); // 1-col right margin
 
     let pill_style = ratatui::style::Style::default()
         .fg(styles::JUMP_HINT_FG)
@@ -1865,9 +1870,11 @@ fn render_jump_to_latest_pill(
     buf.set_line(x, y, &line, pill_width);
 
     // Mouse routing: clicking the pill emits Message::ScrollToBottom.
+    // Registered at z=1 so it wins over the z=0 per-row ClickLogRow region that
+    // also covers the pill's cell (hit_test is max-by (z_index, push_index)).
     if let Some(ctx) = mouse_ctx {
         let rect = MouseRect::new(x, y, pill_width, 1);
-        ctx.click(rect, MouseAction::emit(Message::ScrollToBottom));
+        ctx.click_at_z(rect, MouseAction::emit(Message::ScrollToBottom), 1);
     }
 }
 

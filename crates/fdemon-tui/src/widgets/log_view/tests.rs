@@ -2987,15 +2987,24 @@ fn jump_hint_suppressed_when_terminal_too_narrow() {
 fn jump_hint_click_emits_scroll_to_bottom() {
     use crate::render::MouseCtx;
     use fdemon_app::message::Message;
-    use fdemon_app::{MouseAction, MouseRegions};
+    use fdemon_app::{MouseAction, MouseButton, MouseRegions};
     use ratatui::{buffer::Buffer, layout::Rect};
 
     // Wide enough to render the pill (≥ 21 columns needed for "↓ 3 new · G to jump" + 1 margin).
+    // For a 60x10 area (no status footer):
+    //   area = Rect(0, 0, 60, 10)
+    //   inner (after border) = Rect(1, 1, 58, 8)
+    //   top_meta(1) + gap(1) = y offset 2; content_area = Rect(1, 3, 58, 6)
+    //   last content row y = 3 + 6 - 1 = 8
+    //   pill label "↓ 3 new · G to jump" = 19 chars → pill_width = 19
+    //   pill x = 1 + 58 - 19 - 1 = 39
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);
     let mut state = LogViewState::new();
     state.auto_scroll = false;
-    let logs = make_logs(2);
+    // 10 log entries so that a ClickLogRow region also covers row y=8,
+    // letting us verify the pill's z=1 wins over the row's z=0.
+    let logs = make_logs(10);
     let view = LogView::new(&logs, default_icons()).unseen_log_count(3);
 
     let mut regions = MouseRegions::with_capacity();
@@ -3005,36 +3014,137 @@ fn jump_hint_click_emits_scroll_to_bottom() {
         super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
     }
 
-    // Find the ScrollToBottom region.
-    let scroll_bottom_region = regions.iter().find(|e| {
-        matches!(
-            &e.on_left,
-            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ScrollToBottom)
-        )
-    });
+    // For count=3 the pill label "↓ 3 new · G to jump" is 19 chars wide.
+    // content_area.x=1, content_area.width=58 → pill x = 1 + 58 - 19 - 1 = 39, y = 8.
+    // We pick a cell in the middle of the pill to be safe.
+    let pill_y: u16 = 8;
+    let pill_x: u16 = 45; // well inside pill (x=39..57)
 
+    // hit_test must resolve to ScrollToBottom at pill coordinates, even though
+    // a ClickLogRow region (z=0) also covers that cell.  The pill is at z=1.
+    let hit = regions.hit_test(pill_x, pill_y, MouseButton::Left);
     assert!(
-        scroll_bottom_region.is_some(),
-        "a ScrollToBottom click region must be registered when the pill is visible"
+        matches!(
+            hit.and_then(|e| e.on_left.as_ref()),
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ScrollToBottom)
+        ),
+        "hit_test at the pill cell must resolve to ScrollToBottom (z=1 wins over ClickLogRow z=0); \
+         hit = {:?}",
+        hit.map(|e| &e.on_left)
+    );
+}
+
+/// n1 — pill and scrollbar render simultaneously without collision.
+///
+/// Conditions: scrolled up, total_lines > visible_lines, auto_scroll == false,
+/// unseen_log_count > 0.  Asserts that the keybind text "G to jump" is fully
+/// intact on the last content row and that the scrollbar end-cap "▼" appears
+/// in the buffer.
+#[test]
+fn jump_hint_pill_and_scrollbar_render_together() {
+    use ratatui::layout::Rect;
+
+    // 60-wide, 10-tall, no status footer.
+    // content_area = Rect(1, 3, 58, 6), visible_lines = 6.
+    // With 20 log entries total_lines = 20 > 6 → scrollbar drawn.
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = make_buffer(60, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // Scroll up so offset > 0 (ensures scrollbar position is non-trivial).
+    state.offset = 10;
+    let logs = make_logs(20);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(5);
+    super::render_with_regions(area, &mut buf, &mut state, view, None);
+
+    // The pill must be fully intact on the last content row (y=8).
+    let last_content_row = read_row(&buf, 8);
+    assert!(
+        last_content_row.contains("G to jump"),
+        "pill keybind text must be intact when pill and scrollbar render together; row y=8: {:?}",
+        last_content_row
     );
 
-    // Verify the region is on the last row of the content area.
-    // For a 60x10 area with no status footer:
-    //   border(1) + meta(1) + gap(1) + content(6) + border(1) = 10 rows
-    //   last content row = y=8.
-    if let Some(entry) = scroll_bottom_region {
-        assert_eq!(
-            entry.rect.y, 8,
-            "ScrollToBottom region must be on the last content row (y=8), got y={}",
-            entry.rect.y
-        );
-        assert_eq!(
-            entry.rect.height, 1,
-            "ScrollToBottom region must be exactly 1 row tall"
-        );
+    // The scrollbar end-cap "▼" must appear somewhere in the buffer (rightmost column).
+    let scrollbar_col = 59u16; // area.x + area.width - 1
+    let has_end_cap = (0..10u16)
+        .map(|row| buf[(scrollbar_col, row)].symbol().to_string())
+        .any(|sym| sym == "▼");
+    assert!(
+        has_end_cap,
+        "scrollbar end-cap '▼' must appear in column 59 when content overflows"
+    );
+}
+
+/// n3 — narrow-terminal exact boundary: pill suppressed at width == pill_width,
+/// rendered at width == pill_width + 1.
+///
+/// Uses count=1 so pill_width is derived from the public constants rather than
+/// a hardcoded literal.  The suppression condition is
+/// `content_area.width < pill_width + 1`, i.e. the pill is:
+///   - suppressed: content_area.width == pill_width   (minimum-content test)
+///   - rendered:   content_area.width == pill_width + 1
+///
+/// content_area.width = area.width - 2 (border columns).
+#[test]
+fn jump_hint_suppressed_at_exact_pill_width() {
+    use ratatui::layout::Rect;
+
+    // Derive pill_width for count=1: "↓ 1 new · G to jump".
+    let label = format!("{}1 new{}", JUMP_HINT_PREFIX, JUMP_HINT_SUFFIX);
+    let pill_width = label.chars().count() as u16;
+
+    // content_area.width == pill_width  →  suppressed.
+    // area.width = pill_width + 2 (left border + right border).
+    let area_width = pill_width + 2;
+    let area = Rect::new(0, 0, area_width, 10);
+    let mut buf = make_buffer(area_width, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(1);
+    super::render_with_regions(area, &mut buf, &mut state, view, None);
+
+    // Verify no row contains the keybind text.
+    for row in 0..10u16 {
+        let r = read_row(&buf, row);
         assert!(
-            entry.rect.width > 0,
-            "ScrollToBottom region must have non-zero width"
+            !r.contains("G to jump"),
+            "pill must be suppressed when content_area.width == pill_width ({}); row {}: {:?}",
+            pill_width,
+            row,
+            r
         );
     }
+}
+
+#[test]
+fn jump_hint_rendered_at_pill_width_plus_one() {
+    use ratatui::layout::Rect;
+
+    // Derive pill_width for count=1: "↓ 1 new · G to jump".
+    let label = format!("{}1 new{}", JUMP_HINT_PREFIX, JUMP_HINT_SUFFIX);
+    let pill_width = label.chars().count() as u16;
+
+    // content_area.width == pill_width + 1  →  rendered.
+    // area.width = pill_width + 3 (left border + 1 col margin + right border).
+    let area_width = pill_width + 3;
+    let area = Rect::new(0, 0, area_width, 10);
+    let mut buf = make_buffer(area_width, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(1);
+    super::render_with_regions(area, &mut buf, &mut state, view, None);
+
+    // The pill must appear on the last content row.
+    // Layout for area_width x 10, no footer:
+    //   inner.height=8, content_area.height = 8 - 2 = 6, last content row y=8.
+    let last_content_row = read_row(&buf, 8);
+    assert!(
+        last_content_row.contains("G to jump"),
+        "pill must render when content_area.width == pill_width + 1 ({}); row y=8: {:?}",
+        pill_width + 1,
+        last_content_row
+    );
 }
