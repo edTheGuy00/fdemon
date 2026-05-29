@@ -241,24 +241,44 @@ If the existing test scaffold differs (e.g., no `make_log_entry` / `add_test_ses
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/ux-polish-and-multilaunch
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/session/session.rs` | _(pending)_ |
-| `crates/fdemon-app/src/handler/scroll.rs` | _(pending)_ |
+| `crates/fdemon-app/src/session/session.rs` | Added `pub unseen_log_count: usize` field (defaulting to 0), saturating increment in `add_log` after ring-buffer trim, `mark_tail_followed()` method, and 6 inline unit tests in a new `#[cfg(test)] mod tests` block at the bottom of the file. |
+| `crates/fdemon-app/src/handler/scroll.rs` | Added `mark_tail_followed()` call in `handle_scroll_to_bottom` (unconditional after `scroll_to_bottom`), added pre-state capture and false→true transition guard in `handle_scroll_down`, and 4 new tests covering all three transition cases plus the already-following no-op case. |
 
 ### Notable Decisions/Tradeoffs
 
-_(filled on completion)_
+1. **Inline test block in session.rs vs. session/tests.rs**: The existing `tests.rs` is a separate module with a `#[allow(clippy::module_inception)]` wrapping. The task specified "inline `#[cfg(test)] mod tests`" so a new inline block was added at the bottom of `session.rs`. Both test files coexist without conflict.
+
+2. **LogLevel import omitted from test imports**: `LogLevel` was not directly referenced in the test code (only `LogEntry::info` and `LogSource` are used directly), so it was left out to keep imports clean and avoid clippy unused-import warnings.
+
+3. **Scroll handler test scaffold reuse**: The existing `create_test_state_with_session()` helper was used instead of an `add_test_session()` helper, following the conventions already in the test module.
 
 ### Testing Performed
 
-_(filled on completion)_
+- `cargo test -p fdemon-app` — Passed (2605 tests, 4 ignored)
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (zero warnings)
+
+New tests run and pass:
+- `session::session::tests::unseen_log_count_does_not_increment_while_following`
+- `session::session::tests::unseen_log_count_increments_while_scrolled_up`
+- `session::session::tests::unseen_log_count_unaffected_by_ring_buffer_eviction`
+- `session::session::tests::mark_tail_followed_resets_counter`
+- `session::session::tests::unseen_log_count_saturates_at_max`
+- `session::session::tests::unseen_log_count_zero_by_default`
+- `handler::scroll::tests::handle_scroll_to_bottom_clears_unseen_count`
+- `handler::scroll::tests::handle_scroll_down_clears_unseen_count_on_natural_follow`
+- `handler::scroll::tests::handle_scroll_down_preserves_unseen_count_when_not_yet_at_bottom`
+- `handler::scroll::tests::handle_scroll_down_no_op_when_already_following`
 
 ### Risks/Limitations
 
-_(filled on completion)_
+1. **Advisory counter only**: As documented, the counter is independent of ring-buffer eviction — if the buffer evicts entries while the user is scrolled away, the counter says "N new" even though only the most recent slice is retained. This is the intended behavior per the task notes.
+
+2. **page_down**: `LogViewState::page_down` calls `scroll_down(visible_lines)` internally, so the `handle_scroll_down` false→true guard also covers natural bottom-reach via page-down (via `handle_page_down` → `LogViewState::page_down` → `scroll_down`). However, `handle_page_down` does not have the explicit transition-check wrapper — only `handle_scroll_down` does. If `handle_page_down` is called independently and happens to land on the bottom, the pill won't clear. Per the task spec ("scroll_down is the only such method"), this is acceptable; the G/End key (`handle_scroll_to_bottom`) will always clear it unconditionally.

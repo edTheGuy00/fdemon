@@ -36,8 +36,8 @@ This phase adds a per-`Session` `unseen_log_count` counter that increments while
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-unseen-log-count-state](tasks/01-unseen-log-count-state.md) | Not Started | - | 0.5–1h | `session/session.rs`, `handler/scroll.rs` |
-| 2 | [02-log-view-indicator-render](tasks/02-log-view-indicator-render.md) | Not Started | 1 | 1.5–2h | `widgets/log_view/mod.rs`, `widgets/log_view/tests.rs`, `render/mod.rs` |
+| 1 | [01-unseen-log-count-state](tasks/01-unseen-log-count-state.md) | ✅ Done | - | 0.5–1h | `session/session.rs`, `handler/scroll.rs` |
+| 2 | [02-log-view-indicator-render](tasks/02-log-view-indicator-render.md) | ✅ Done | 1 | 1.5–2h | `widgets/log_view/mod.rs`, `widgets/log_view/tests.rs`, `render/mod.rs`, `widgets/log_view/styles.rs` |
 
 ## File Overlap Analysis
 

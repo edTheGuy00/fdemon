@@ -273,25 +273,36 @@ If `make_buffer`, `read_row`, `make_logs`, `default_icons` helpers don't exist, 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/ux-polish-and-multilaunch
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | _(pending)_ |
-| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | _(pending)_ |
-| `crates/fdemon-tui/src/render/mod.rs` | _(pending)_ |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `unseen_log_count: usize` struct field + builder method; added `JUMP_HINT_MAX_DISPLAY`, `JUMP_HINT_SUFFIX`, `JUMP_HINT_PREFIX` constants; added `render_jump_to_latest_pill` helper; wired call in `render_inner` after Paragraph and before scrollbar; changed `render_inner` parameter to `mut mouse_ctx` |
+| `crates/fdemon-tui/src/widgets/log_view/styles.rs` | Added `JUMP_HINT_FG` and `JUMP_HINT_BG` color constants; added `Color` to imports |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added 6 new tests: `jump_hint_visible_when_scrolled_up_with_unseen_logs`, `jump_hint_hidden_when_following_tail`, `jump_hint_hidden_when_count_zero`, `jump_hint_caps_display_at_999_plus`, `jump_hint_suppressed_when_terminal_too_narrow`, `jump_hint_click_emits_scroll_to_bottom`; added `read_row`, `make_buffer`, `make_logs`, `default_icons` local test helpers |
+| `crates/fdemon-tui/src/render/mod.rs` | Reads `handle.session.unseen_log_count` into `unseen` local and passes it to `LogView::unseen_log_count(unseen)` in the builder chain |
 
 ### Notable Decisions/Tradeoffs
 
-_(filled on completion)_
+1. **`mut mouse_ctx` parameter**: The `render_inner` signature needed `mut mouse_ctx` (instead of `mouse_ctx`) to allow `mouse_ctx.as_deref_mut()` inside the function body. This was a minor change with no semantic impact.
+
+2. **Row coordinate in tests**: The pill renders on the last row of `content_area` (y=8 for a 40x10 terminal with no status footer), not the outer area's last row (y=9 which is the border). Tests were adjusted to read the correct row after initial failure revealed this.
+
+3. **Style uses `ratatui::style::Style::default()` inline**: The `render_jump_to_latest_pill` function constructs its style inline using the named constants from `styles.rs` (`JUMP_HINT_FG`, `JUMP_HINT_BG`) rather than a pre-built `Style` constant, since `Style::default().fg(...).bg(...)` is not const-evaluable in Rust.
 
 ### Testing Performed
 
-_(filled on completion)_
+- `cargo test -p fdemon-tui` — 1337 passed, 0 failed (includes 6 new tests)
+- `cargo fmt --all -- --check` — no formatting issues
+- `cargo clippy --workspace --all-targets -- -D warnings` — no warnings
 
 ### Risks/Limitations
 
-_(filled on completion)_
+1. **Pill overlays last log line tail**: By design (per spec), the pill overwrites the rightmost portion of the last visible log row's text. No `Clear` is used.
+
+2. **Unicode width assumed single-column**: The down-arrow `↓` and middle-dot `·` are both assumed to be 1-column wide. If `unicode-width` were used, the pill width calculation would be more precise, but `chars().count()` is correct for the specific characters chosen here.
+
+3. **No snapshot test updates needed**: All existing snapshot tests use `auto_scroll = true` (default) or zero count, so no snapshots changed.
