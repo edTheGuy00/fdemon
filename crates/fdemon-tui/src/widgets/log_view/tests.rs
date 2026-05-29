@@ -2813,3 +2813,228 @@ fn running_has_no_progress_suffix() {
         "Running (steady state) must not render progress suffix even when progress is Some"
     );
 }
+
+// ─────────────────────────────────────────────────────────
+// Jump-to-latest indicator pill tests (Phase 4, Task 02)
+// ─────────────────────────────────────────────────────────
+
+/// Read the content of a single row from a raw `Buffer` as a `String`.
+///
+/// Used by the jump-to-latest pill tests which operate directly on `Buffer`
+/// instances (rather than `TestTerminal`) so they can control exact coordinates.
+fn read_row(buf: &ratatui::buffer::Buffer, row: u16) -> String {
+    let mut s = String::new();
+    if row < buf.area.height {
+        for x in 0..buf.area.width {
+            s.push_str(buf[(x, row)].symbol());
+        }
+    }
+    s
+}
+
+/// Helper: create a `Buffer` of the given dimensions (origin 0, 0).
+fn make_buffer(width: u16, height: u16) -> ratatui::buffer::Buffer {
+    ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, height))
+}
+
+/// Helper: create `count` plain log entries with no stack traces.
+fn make_logs(count: usize) -> std::collections::VecDeque<LogEntry> {
+    make_logs_no_traces(count)
+}
+
+/// Helper: return the default `IconSet` for rendering tests.
+fn default_icons() -> crate::theme::icons::IconSet {
+    test_icons()
+}
+
+#[test]
+fn jump_hint_visible_when_scrolled_up_with_unseen_logs() {
+    use ratatui::layout::Rect;
+
+    // Layout for 40x10, no status footer:
+    //   border(1) + meta(1) + gap(1) + content(6) + border(1) = 10 rows
+    //   content rows: y=3..=8; last content row = y=8.
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(7);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // The pill is on the last row of content_area (y=8); row y=9 is the border.
+    let bottom_content_row = read_row(&buf, 8);
+    assert!(
+        bottom_content_row.contains("G to jump"),
+        "pill should be visible; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+    assert!(
+        bottom_content_row.contains("7 new"),
+        "pill should show count 7; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+}
+
+#[test]
+fn jump_hint_hidden_when_following_tail() {
+    use ratatui::layout::Rect;
+
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = true; // default, but explicit
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(50);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // Check both the last content row (y=8) and the border row (y=9).
+    let bottom_content_row = read_row(&buf, 8);
+    let border_row = read_row(&buf, 9);
+    assert!(
+        !bottom_content_row.contains("G to jump"),
+        "pill must not appear when auto_scroll is true; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+    assert!(
+        !border_row.contains("G to jump"),
+        "pill must not appear on border row; border row (y=9): {:?}",
+        border_row
+    );
+}
+
+#[test]
+fn jump_hint_hidden_when_count_zero() {
+    use ratatui::layout::Rect;
+
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(0);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // Check the last content row (y=8).
+    let bottom_content_row = read_row(&buf, 8);
+    assert!(
+        !bottom_content_row.contains("G to jump"),
+        "pill must not appear when unseen_log_count is 0; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+}
+
+#[test]
+fn jump_hint_caps_display_at_999_plus() {
+    use ratatui::layout::Rect;
+
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(12_345);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // Last content row is y=8 (border is y=9).
+    let bottom_content_row = read_row(&buf, 8);
+    assert!(
+        bottom_content_row.contains("999+"),
+        "pill should display '999+' for counts > 999; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+    assert!(
+        !bottom_content_row.contains("12345"),
+        "pill must not show the raw count when > 999; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+}
+
+#[test]
+fn jump_hint_suppressed_when_terminal_too_narrow() {
+    use ratatui::layout::Rect;
+
+    // Pill text "↓ 5 new · G to jump" = 20 chars; need ≥ 21 width to render.
+    // A 10-column terminal is far too narrow.
+    let mut buf = make_buffer(10, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(5);
+    super::render_with_regions(Rect::new(0, 0, 10, 10), &mut buf, &mut state, view, None);
+
+    // Check both the last content row (y=8) and entire buffer.
+    let bottom_content_row = read_row(&buf, 8);
+    let border_row = read_row(&buf, 9);
+    assert!(
+        !bottom_content_row.contains("G to jump"),
+        "pill must be suppressed when terminal is too narrow; last content row: {:?}",
+        bottom_content_row
+    );
+    assert!(
+        !border_row.contains("G to jump"),
+        "pill must not appear on border row either; border row: {:?}",
+        border_row
+    );
+    // Check the entire buffer doesn't contain the down-arrow or the suffix.
+    for row in 0..10u16 {
+        let r = read_row(&buf, row);
+        assert!(
+            !r.contains("G to jump"),
+            "pill must not appear anywhere; row {row}: {:?}",
+            r
+        );
+    }
+}
+
+#[test]
+fn jump_hint_click_emits_scroll_to_bottom() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // Wide enough to render the pill (≥ 21 columns needed for "↓ 3 new · G to jump" + 1 margin).
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(3);
+
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    // Find the ScrollToBottom region.
+    let scroll_bottom_region = regions.iter().find(|e| {
+        matches!(
+            &e.on_left,
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ScrollToBottom)
+        )
+    });
+
+    assert!(
+        scroll_bottom_region.is_some(),
+        "a ScrollToBottom click region must be registered when the pill is visible"
+    );
+
+    // Verify the region is on the last row of the content area.
+    // For a 60x10 area with no status footer:
+    //   border(1) + meta(1) + gap(1) + content(6) + border(1) = 10 rows
+    //   last content row = y=8.
+    if let Some(entry) = scroll_bottom_region {
+        assert_eq!(
+            entry.rect.y, 8,
+            "ScrollToBottom region must be on the last content row (y=8), got y={}",
+            entry.rect.y
+        );
+        assert_eq!(
+            entry.rect.height, 1,
+            "ScrollToBottom region must be exactly 1 row tall"
+        );
+        assert!(
+            entry.rect.width > 0,
+            "ScrollToBottom region must have non-zero width"
+        );
+    }
+}

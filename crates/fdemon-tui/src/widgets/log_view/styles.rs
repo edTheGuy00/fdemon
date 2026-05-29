@@ -1,6 +1,6 @@
 //! Stack trace styling constants for log view rendering
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 
 use crate::theme::palette;
 
@@ -37,3 +37,20 @@ pub const PUNCTUATION: Style = Style::new().fg(palette::STACK_PUNCTUATION);
 
 /// Indentation for stack frames
 pub const INDENT: &str = "    ";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Jump-to-latest indicator pill (Phase 4, Task 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Foreground color for the jump-to-latest pill (`↓ N new · G to jump`).
+///
+/// Uses the accent blue (`ACCENT`) so it matches the LIVE-FEED badge and the
+/// blinking cursor, tying it visually to the "live/following" concept.
+pub const JUMP_HINT_FG: Color = palette::ACCENT;
+
+/// Background color for the jump-to-latest pill.
+///
+/// Uses `DEEPEST_BG` to create a subtle inset effect that distinguishes the
+/// pill from the log content it overlays without introducing a harsh contrast
+/// block. Matches the LIVE-FEED badge background used in `render_metadata_bar`.
+pub const JUMP_HINT_BG: Color = palette::DEEPEST_BG;

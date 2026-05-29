@@ -83,6 +83,10 @@ pub struct LogView<'a> {
     icons: IconSet,
     /// Whether line wrap mode is enabled. When true, horizontal scroll is skipped.
     wrap_mode: bool,
+    /// Pending count of log entries that arrived while the view was scrolled away
+    /// from the tail. Used to render the jump-to-latest pill (Phase 4, Task 02).
+    /// Default 0 — pill is suppressed when the count is zero.
+    unseen_log_count: usize,
 }
 
 impl<'a> LogView<'a> {
@@ -101,6 +105,7 @@ impl<'a> LogView<'a> {
             status_info: None,
             icons,
             wrap_mode: false,
+            unseen_log_count: 0,
         }
     }
 
@@ -166,6 +171,15 @@ impl<'a> LogView<'a> {
     /// Set wrap mode. When enabled, long lines wrap at terminal width instead of scrolling.
     pub fn wrap_mode(mut self, enabled: bool) -> Self {
         self.wrap_mode = enabled;
+        self
+    }
+
+    /// Set the count of log entries that arrived while the view was scrolled away
+    /// from the tail. When non-zero and `auto_scroll` is false, renders a
+    /// `↓ N new · G to jump` pill at the bottom-right of the content area.
+    /// Default 0 (pill suppressed).
+    pub fn unseen_log_count(mut self, count: usize) -> Self {
+        self.unseen_log_count = count;
         self
     }
 
@@ -1225,7 +1239,7 @@ impl<'a> LogView<'a> {
         area: Rect,
         buf: &mut Buffer,
         state: &mut LogViewState,
-        mouse_ctx: Option<&mut MouseCtx<'_>>,
+        mut mouse_ctx: Option<&mut MouseCtx<'_>>,
     ) {
         // Handle empty state specially
         if self.logs.is_empty() {
@@ -1620,6 +1634,20 @@ impl<'a> LogView<'a> {
             Paragraph::new(final_lines).render(content_area, buf);
         }
 
+        // Jump-to-latest indicator (Phase 4, Task 02). Only visible when the
+        // user is scrolled away from the tail AND new logs have arrived since.
+        // Rendered after the Paragraph (so it overlays the last log row's tail)
+        // and before the scrollbar (so the scrollbar can still draw on the
+        // rightmost column).
+        if !state.auto_scroll && self.unseen_log_count > 0 {
+            render_jump_to_latest_pill(
+                content_area,
+                buf,
+                self.unseen_log_count,
+                mouse_ctx.as_deref_mut(),
+            );
+        }
+
         // Render scrollbar if content exceeds visible area
         if total_lines > visible_lines {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -1767,6 +1795,79 @@ impl<'a> LogView<'a> {
                 ctx.click(rect, MouseAction::emit(Message::SelectLink(b.shortcut)));
             }
         }
+    }
+}
+
+/// Maximum exact count rendered in the jump-to-latest pill. Counts above this
+/// display as `"999+"`. Keeps the pill width bounded for layout sanity even
+/// after a long unattended scroll-away.
+const JUMP_HINT_MAX_DISPLAY: usize = 999;
+
+/// Static suffix advertising the keybinding. Middle-dot separator is used over
+/// em-dash for narrower terminals (see planning notes in `TASKS.md`).
+const JUMP_HINT_SUFFIX: &str = " \u{00b7} G to jump";
+
+/// Down-arrow glyph + a single space prefix.
+const JUMP_HINT_PREFIX: &str = "\u{2193} ";
+
+/// Render a floating right-aligned `↓ N new · G to jump` pill on the last row
+/// of `content_area`. The pill overwrites whatever the Paragraph rendered there
+/// (no `Clear` needed — cells are overwritten with the pill's own background).
+///
+/// Registers a click region that emits `Message::ScrollToBottom` when a
+/// `MouseCtx` is provided.
+///
+/// # Suppression conditions
+/// - `content_area.height == 0`: nothing to render.
+/// - `content_area.width < pill_width + 1`: pill does not fit cleanly with a
+///   1-column right margin; suppress rather than truncate (the truncated form
+///   would hide the keybinding, defeating discoverability).
+fn render_jump_to_latest_pill(
+    content_area: Rect,
+    buf: &mut Buffer,
+    unseen: usize,
+    mouse_ctx: Option<&mut MouseCtx<'_>>,
+) {
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRect};
+
+    if content_area.height == 0 {
+        return;
+    }
+
+    let display_count = if unseen > JUMP_HINT_MAX_DISPLAY {
+        format!("{JUMP_HINT_MAX_DISPLAY}+")
+    } else {
+        unseen.to_string()
+    };
+    let label = format!("{JUMP_HINT_PREFIX}{display_count} new{JUMP_HINT_SUFFIX}");
+
+    // Width is character-count of the label (all chars are single-column in
+    // standard monospace: the down-arrow `↓` and middle-dot `·` are both 1 col).
+    let pill_width = label.chars().count() as u16;
+
+    // Narrow-terminal fallback: skip the pill if it doesn't fit cleanly with
+    // a 1-column right margin. Better to suppress than to truncate — truncating
+    // would hide the keybinding, defeating the discoverability purpose.
+    let min_required = pill_width.saturating_add(1);
+    if content_area.width < min_required {
+        return;
+    }
+
+    let y = content_area.y + content_area.height - 1;
+    let x = content_area.x + content_area.width - pill_width - 1; // 1-col right margin
+
+    let pill_style = ratatui::style::Style::default()
+        .fg(styles::JUMP_HINT_FG)
+        .bg(styles::JUMP_HINT_BG);
+
+    let line = Line::from(vec![Span::styled(label, pill_style)]);
+    buf.set_line(x, y, &line, pill_width);
+
+    // Mouse routing: clicking the pill emits Message::ScrollToBottom.
+    if let Some(ctx) = mouse_ctx {
+        let rect = MouseRect::new(x, y, pill_width, 1);
+        ctx.click(rect, MouseAction::emit(Message::ScrollToBottom));
     }
 }
 

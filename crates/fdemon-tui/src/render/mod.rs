@@ -175,9 +175,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // so that clicks that miss the modal's z=1 rects cannot fall through to the
     // underlying log-view z=0 regions.
     if let Some(handle) = state.session_manager.selected_mut() {
+        let unseen = handle.session.unseen_log_count;
         let mut log_view = widgets::LogView::new(&handle.session.logs, icons)
             .filter_state(&handle.session.filter_state)
-            .wrap_mode(handle.session.log_view_state.wrap_mode);
+            .wrap_mode(handle.session.log_view_state.wrap_mode)
+            .unseen_log_count(unseen);
 
         // Add search state if there's an active search
         if !handle.session.search_state.query.is_empty() {
