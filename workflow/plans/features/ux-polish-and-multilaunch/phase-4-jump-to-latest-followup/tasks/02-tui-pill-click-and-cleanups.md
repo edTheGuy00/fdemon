@@ -164,24 +164,33 @@ existing helpers (`make_buffer`, `make_logs`, `default_icons`, `read_row`) for t
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/ux-polish-and-multilaunch
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | _(pending)_ |
-| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | _(pending)_ |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | M1: pill click at z=1; m2: updated builder doc; m3: saturating arithmetic on x/y coords; m4: literal ↓ and · glyphs in constants |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Strengthened click test to use hit_test (M1 verification); added n1 pill+scrollbar co-render test; added n3 boundary tests |
 
 ### Notable Decisions/Tradeoffs
 
-_(filled on completion)_
+1. **hit_test in click test**: The strengthened test uses `make_logs(10)` so that a `ClickLogRow` region actually covers the pill's cell at y=8, making the z=1 assertion meaningful. With only 2 entries, no row region would cover that cell and the test would pass trivially.
+
+2. **n3 test uses count=1**: Using the single-digit count means pill_width is derived directly from `JUMP_HINT_PREFIX.chars().count() + 1 + " new".len() + JUMP_HINT_SUFFIX.chars().count()` via the format string, avoiding brittle hardcoded literals. The label computation mirrors the production code exactly.
+
+3. **n1 scrollbar verification**: Rather than checking the exact scrollbar column char (which depends on ratatui internals for the thumb position), the test checks any row in the scrollbar column (x=59) for `▼` (the end-cap). This is stable regardless of offset/thumb position.
+
+4. **Saturating arithmetic format**: The `y` computation was reformatted as a multi-line chain to pass `cargo fmt --check` (the single-line version exceeded the line width limit).
 
 ### Testing Performed
 
-_(filled on completion)_
+- `cargo test -p fdemon-tui -- jump_hint` — 9 tests, all pass
+- `cargo test -p fdemon-tui` — 1340 tests pass, 0 failed
+- `cargo fmt --all -- --check` — pass
+- `cargo clippy --workspace --all-targets -- -D warnings` — pass
 
 ### Risks/Limitations
 
-_(filled on completion)_
+1. **n1 scrollbar column**: If Ratatui changes the scrollbar rendering to use a different column, the test would need updating. The column x=59 is `area.width - 1` for a 60-wide area; this is unlikely to change.

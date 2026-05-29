@@ -59,8 +59,8 @@ out of scope — see Notes.)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-app-state-and-handler-fixes](tasks/01-app-state-and-handler-fixes.md) | Not Started | - | 1–1.5h | `session/session.rs`, `handler/scroll.rs` |
-| 2 | [02-tui-pill-click-and-cleanups](tasks/02-tui-pill-click-and-cleanups.md) | Not Started | - | 1–1.5h | `widgets/log_view/mod.rs`, `widgets/log_view/tests.rs` |
+| 1 | [01-app-state-and-handler-fixes](tasks/01-app-state-and-handler-fixes.md) | ✅ Done (validated, merged) | - | 1–1.5h | `session/session.rs`, `handler/scroll.rs` |
+| 2 | [02-tui-pill-click-and-cleanups](tasks/02-tui-pill-click-and-cleanups.md) | ✅ Done (validated, merged) | - | 1–1.5h | `widgets/log_view/mod.rs`, `widgets/log_view/tests.rs` |
 
 ## File Overlap Analysis
 
@@ -81,13 +81,13 @@ out of scope — see Notes.)
 
 This follow-up is complete when:
 
-- [ ] Clicking the pill emits `Message::ScrollToBottom` — verified by a hit-test assertion at the pill cell (not mere region existence) with a log present on that row (M1).
-- [ ] `clear_logs` zeroes `unseen_log_count`; the pill is not rendered over an empty buffer (M2).
-- [ ] `handle_page_down` clears `unseen_log_count` iff `auto_scroll` transitions false→true (M3); mouse wheel-down (which dispatches `PageDown`/`ScrollDown`) inherits the fix.
-- [ ] `add_log` increments `unseen_log_count` only for entries passing `filter_state.matches(&entry)`; the field doc comment documents filter-gating alongside the eviction note (m1).
-- [ ] `LogView::unseen_log_count` builder has a `///` doc; pill coordinates use saturating arithmetic; pill constants use literal `↓`/`·` glyphs (m2, m3, m4).
-- [ ] Tests cover: pill+scrollbar co-render (n1), narrow-terminal boundary at `width == pill_width` and `width == pill_width + 1` (n3).
-- [ ] `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` all pass.
+- [x] Clicking the pill emits `Message::ScrollToBottom` — verified by a hit-test assertion at the pill cell (not mere region existence) with a log present on that row (M1).
+- [x] `clear_logs` zeroes `unseen_log_count`; the pill is not rendered over an empty buffer (M2).
+- [x] `handle_page_down` clears `unseen_log_count` iff `auto_scroll` transitions false→true (M3); mouse wheel-down (which dispatches `PageDown`/`ScrollDown`) inherits the fix.
+- [x] `add_log` increments `unseen_log_count` only for entries passing `filter_state.matches(&entry)`; the field doc comment documents filter-gating alongside the eviction note (m1).
+- [x] `LogView::unseen_log_count` builder has a `///` doc; pill coordinates use saturating arithmetic; pill constants use literal `↓`/`·` glyphs (m2, m3, m4).
+- [x] Tests cover: pill+scrollbar co-render (n1), narrow-terminal boundary at `width == pill_width` and `width == pill_width + 1` (n3).
+- [x] `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` all pass (per-task, in each isolated worktree).
 
 ## Notes / Scope Decisions
 

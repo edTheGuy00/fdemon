@@ -187,24 +187,33 @@ Match the helper names already used in each test module (`make_log_entry`, `add_
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/ux-polish-and-multilaunch
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/session/session.rs` | _(pending)_ |
-| `crates/fdemon-app/src/handler/scroll.rs` | _(pending)_ |
+| `crates/fdemon-app/src/session/session.rs` | Reset `unseen_log_count` in `clear_logs` (M2); gate `add_log` increment on `filter_state.matches` evaluated before push (m1); update field doc comment; add 5 new inline tests |
+| `crates/fdemon-app/src/handler/scroll.rs` | Add false→true `auto_scroll` transition guard to `handle_page_down` (M3); add 3 new page-down tests |
 
 ### Notable Decisions/Tradeoffs
 
-_(filled on completion)_
+1. **Filter evaluation before push_back**: The task noted a borrow issue — `entry` is moved into `self.logs.push_back(entry)`. The fix evaluates `self.filter_state.matches(&entry)` into `let passes_filter = ...` before the push, then reuses the bool after the eviction loop. This keeps a single clear borrow per the task recommendation.
+
+2. **Comment placement**: `clear_logs` reset moved the inline comment `// M2: ...` to a separate comment line above `self.unseen_log_count = 0;` to satisfy `rustfmt` (which would have aligned it oddly with the next comment).
+
+3. **Test geometry for page_down**: `total_lines=10, visible_lines=5` gives `page = 5-2 = 3` and `max_offset = 5`. Starting at `offset=2`, one `page_down` lands at `min(5,5) = 5 == max_offset`, engaging `auto_scroll=true`. This matches the "natural follow" acceptance criterion.
+
+4. **No refactor to shared helper**: The task made extracting `clear_pill_if_reengaged` optional. Since the pattern is only in two call sites and the code is minimal, no helper was extracted — inline guards are clearer here.
 
 ### Testing Performed
 
-_(filled on completion)_
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2612 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
 
 ### Risks/Limitations
 
-_(filled on completion)_
+1. **Filter change while scrolled up**: The counter is not retroactively recomputed when the user changes the filter while scrolled away from the tail. This is an accepted limitation documented in the field doc comment.
