@@ -213,6 +213,12 @@ pub struct Session {
     ///
     /// Ring-buffer eviction does not decrement this counter: evicted entries
     /// are old (front), unseen entries are new (back). The two are independent.
+    ///
+    /// Filter-gated: only entries that pass `filter_state.matches(&entry)` at
+    /// the time of insertion are counted. This ensures the pill number matches
+    /// what the user actually sees when they jump to the tail. Note: changing
+    /// the filter while scrolled away does **not** retroactively recompute this
+    /// counter — the value reflects the filter state at insertion time only.
     pub unseen_log_count: usize,
 }
 
@@ -305,6 +311,10 @@ impl Session {
                 self.block_state.block_max_level.max_severity(entry.level);
         }
 
+        // Evaluate filter match BEFORE pushing (entry not yet moved).
+        // Used later to gate the unseen_log_count increment.
+        let passes_filter = self.filter_state.matches(&entry);
+
         // Track error count before adding
         if entry.is_error() {
             self.error_count += 1;
@@ -373,10 +383,11 @@ impl Session {
             self.log_view_state.offset = self.log_view_state.offset.saturating_sub(1);
         }
 
-        // Track unseen logs for the jump-to-latest indicator.
-        // Only increment while the user is not following the tail; ring-buffer
-        // eviction is intentionally independent of this counter.
-        if !self.log_view_state.auto_scroll {
+        // Track unseen logs for the jump-to-latest indicator (issue #31).
+        // Only count entries that are (a) arriving while scrolled away from the tail
+        // AND (b) visible under the active filter — so the pill matches what `G` reveals.
+        // Ring-buffer eviction is intentionally independent of this counter.
+        if !self.log_view_state.auto_scroll && passes_filter {
             self.unseen_log_count = self.unseen_log_count.saturating_add(1);
         }
     }
@@ -404,6 +415,8 @@ impl Session {
         self.logs.clear();
         self.log_view_state.offset = 0;
         self.error_count = 0;
+        // M2: no unseen entries remain after a wipe
+        self.unseen_log_count = 0;
         // Clear search matches since logs are gone
         self.search_state.matches.clear();
         self.search_state.current_match = None;
@@ -936,5 +949,60 @@ mod tests {
     fn unseen_log_count_zero_by_default() {
         let s = make_session();
         assert_eq!(s.unseen_log_count, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — M2: clear_logs resets unseen_log_count
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn clear_logs_resets_unseen_log_count() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        assert!(s.unseen_log_count > 0);
+        s.clear_logs();
+        assert_eq!(s.unseen_log_count, 0);
+        assert!(s.logs.is_empty());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — m1: filter-gated unseen_log_count increment
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn unseen_log_count_skips_filtered_out_entries() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        // Errors-only filter: info entries (from make_log_entry) are filtered out
+        s.filter_state.level_filter = fdemon_core::LogLevelFilter::Errors;
+        s.add_log(make_log_entry("info line that is filtered out"));
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn unseen_log_count_counts_filter_matching_entries() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        // Default match-all filter: info entries pass
+        s.add_log(make_log_entry("visible line"));
+        assert_eq!(s.unseen_log_count, 1);
+    }
+
+    #[test]
+    fn unseen_log_count_counts_only_matching_entries_mixed() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        // Errors-only filter
+        s.filter_state.level_filter = fdemon_core::LogLevelFilter::Errors;
+        s.add_log(make_log_entry("info — filtered out"));
+        s.add_log(LogEntry::error(LogSource::Flutter, "error — passes filter"));
+        s.add_log(make_log_entry("another info — filtered out"));
+        s.add_log(LogEntry::error(
+            LogSource::Flutter,
+            "another error — passes filter",
+        ));
+        assert_eq!(s.unseen_log_count, 2);
     }
 }

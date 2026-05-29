@@ -61,7 +61,13 @@ pub fn handle_page_up(state: &mut AppState) -> UpdateResult {
 /// Handle page down message
 pub fn handle_page_down(state: &mut AppState) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
+        let was_following = handle.session.log_view_state.auto_scroll;
         handle.session.log_view_state.page_down();
+        // If page_down naturally re-engaged auto-scroll (false → true),
+        // also clear the unseen counter so the jump-to-latest pill disappears.
+        if !was_following && handle.session.log_view_state.auto_scroll {
+            handle.session.mark_tail_followed();
+        }
     }
     rescan_links_if_active(state);
     UpdateResult::none()
@@ -384,6 +390,66 @@ mod tests {
         handle.session.unseen_log_count = 0;
 
         let _ = handle_scroll_down(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — M3: handle_page_down transition guard
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn handle_page_down_clears_unseen_count_on_natural_follow() {
+        // Geometry: total_lines=10, visible_lines=5 → max_offset=5, page=3
+        // Starting at offset=2: scroll_down(3) → offset=min(5,5)=5 → auto_scroll=true
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.log_view_state.total_lines = 10;
+        handle.session.log_view_state.visible_lines = 5;
+        handle.session.log_view_state.offset = 2;
+        handle.session.log_view_state.auto_scroll = false;
+        handle.session.unseen_log_count = 4;
+
+        let _ = handle_page_down(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn handle_page_down_preserves_unseen_count_when_not_yet_at_bottom() {
+        // Geometry: total_lines=1000, visible_lines=5 → max_offset=995, page=3
+        // Starting at offset=0: scroll_down(3) → offset=3, not at bottom
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.log_view_state.total_lines = 1000;
+        handle.session.log_view_state.visible_lines = 5;
+        handle.session.log_view_state.offset = 0;
+        handle.session.log_view_state.auto_scroll = false;
+        handle.session.unseen_log_count = 4;
+
+        let _ = handle_page_down(&mut state);
+
+        let handle = state.session_manager.selected().unwrap();
+        assert!(!handle.session.log_view_state.auto_scroll);
+        assert_eq!(handle.session.unseen_log_count, 4);
+    }
+
+    #[test]
+    fn handle_page_down_no_op_when_already_following() {
+        // pre-true → true: no mark_tail_followed called (was_following = true)
+        let mut state = create_test_state_with_session();
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.log_view_state.total_lines = 10;
+        handle.session.log_view_state.visible_lines = 5;
+        handle.session.log_view_state.offset = 5;
+        handle.session.log_view_state.auto_scroll = true;
+        handle.session.unseen_log_count = 0;
+
+        let _ = handle_page_down(&mut state);
 
         let handle = state.session_manager.selected().unwrap();
         assert!(handle.session.log_view_state.auto_scroll);
