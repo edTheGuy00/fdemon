@@ -128,10 +128,15 @@ impl PlatformGroup {
 }
 
 /// Group connected devices by platform
+///
+/// Unsupported devices (`is_supported == false`) are excluded from the result.
+/// This is the single shared chokepoint used by `compute_flat_list`,
+/// `selected_connected_device`, and the TUI widget — filtering here keeps
+/// the flat list, cursor, checked-set, and click-regions consistent.
 pub fn group_connected_devices(devices: &[Device]) -> Vec<DeviceGroup<&Device>> {
     let mut groups: BTreeMap<PlatformGroup, Vec<&Device>> = BTreeMap::new();
 
-    for device in devices {
+    for device in devices.iter().filter(|d| d.is_supported) {
         let group = PlatformGroup::from_device(device);
         groups.entry(group).or_default().push(device);
     }
