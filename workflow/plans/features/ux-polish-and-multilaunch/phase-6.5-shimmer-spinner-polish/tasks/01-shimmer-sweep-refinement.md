@@ -129,3 +129,33 @@ and pause briefly before repeating, rather than blinking back to the start.
   keep both as named, commented constants.
 - **No managed-doc change.** Pure-math tweak inside an existing helper — no
   architecture/standards/dev-doc update required.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-adda65f9360d666d3
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/shimmer.rs` | Changed `SHIMMER_HEAD_WIDTH` from `4.0` to `3.5`; added `SHIMMER_LEAD = 3.0` constant with doc comment; updated `shimmer_spans` to use `[-LEAD, n+LEAD)` head range; rewrote `shimmer_spans_head_is_brightest` test for new range (phase=0.4375, head at interior index 4); added `shimmer_spans_no_pop_in_at_phase_zero` and `shimmer_spans_rest_gap_all_at_base` tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Phase derivation for `shimmer_spans_head_is_brightest`**: Chose `phase = 7/16 = 0.4375` which places the head exactly at index 4 of a 10-char string. At that phase, chars 0 and 9 are both >3.5 units away (dist=4 and dist=5 respectively) and equal `base`, while index 4 is at full highlight. This gives a clean, exact assertion without floating-point ambiguity.
+2. **Rest gap boundary**: The math shows the rest gap begins at `phase > 15.5/16 ≈ 0.96875`. Using `phase=0.97` places the head at 12.52, which puts the rightmost character (index 9) at dist=3.52, just beyond `SHIMMER_HEAD_WIDTH=3.5`, making `t=0` and every char equal `base`.
+3. **No call-site changes required**: The `shimmer_spans` signature is unchanged; callers pass the same `phase` value from `shimmer_phase()`. The improved sweep behavior is purely internal to the math.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib widgets::shimmer` - Passed (11 tests)
+- `cargo test -p fdemon-tui --lib` - Passed (1350 tests)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+
+### Risks/Limitations
+
+1. **Floating-point determinism**: Test at `phase=0.97` relies on `12.52 - 9.0 = 3.52 > 3.5` being true in f32. At single precision these values are well within exact representability, but this is noted for awareness.

@@ -153,3 +153,33 @@ existing status tests construct `icons`.
   task only changes which glyph is chosen at render time.
 - **No managed-doc change.** No `AppPhase`/`Message`/module change — no
   architecture/standards/dev-doc update required.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad6e93e1f24338fff
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME}` import; replaced static `Span::styled(icon, phase_style)` with `icon_span` computed by `is_launch_phase` guard: spinner glyph for `Initializing`/`Preparing`/`Launching` (when `!is_busy`), static icon otherwise. |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added three tests: `launch_phases_show_spinner_glyph`, `non_launch_phases_keep_static_icon`, `launch_spinner_advances_with_frame`. Added `spinner_status` helper that uses `Box::leak` to produce a `&'static AppPhase` for `StatusInfo<'static>`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Box::leak` in test helper**: `StatusInfo<'a>` requires `&'a AppPhase`. Since `AppPhase: Copy`, leaking a small heap allocation per test invocation is the simplest way to satisfy the lifetime without restructuring existing tests. Memory is reclaimed on process exit; no impact on non-test code.
+2. **Gate on `!status.is_busy`**: Ensures the `phase_indicator_busy` path (Reloading / `↻`) is never spinner-ized, even if `phase` is technically `Launching`. This matches the task spec exactly.
+3. **String allocation for spinner glyph**: `spinner_char` returns `char`; `.to_string()` produces a small `String` per render, consistent with dialog call sites.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib` — 1351 passed (3 new tests added)
+- `cargo fmt --all -- --check` — clean
+- `cargo clippy -p fdemon-tui --lib -- -D warnings` — clean
+
+### Risks/Limitations
+
+1. **None identified**: The change is purely render-time glyph selection with no state mutations or new message types.

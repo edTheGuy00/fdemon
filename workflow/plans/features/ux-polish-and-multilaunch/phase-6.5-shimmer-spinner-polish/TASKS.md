@@ -45,8 +45,8 @@ dependency on each other.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-shimmer-sweep-refinement](tasks/01-shimmer-sweep-refinement.md) | Pending | - | 1–1.5h | `crates/fdemon-tui/src/widgets/shimmer.rs` |
-| 2 | [02-launch-spinner-icon](tasks/02-launch-spinner-icon.md) | Pending | - | 0.5–1h | `crates/fdemon-tui/src/widgets/log_view/mod.rs` |
+| 1 | [01-shimmer-sweep-refinement](tasks/01-shimmer-sweep-refinement.md) | ✅ Done | - | 1–1.5h | `crates/fdemon-tui/src/widgets/shimmer.rs` |
+| 2 | [02-launch-spinner-icon](tasks/02-launch-spinner-icon.md) | ✅ Done | - | 0.5–1h | `crates/fdemon-tui/src/widgets/log_view/mod.rs` |
 
 ## File Overlap Analysis
 
@@ -73,20 +73,20 @@ is already merged, so there is no live conflict. Task 02 only *reads* `spinner.r
 
 Phase 6.5 is complete when:
 
-- [ ] The status-label shimmer sweeps in from off-screen, exits off-screen, and has
+- [x] The status-label shimmer sweeps in from off-screen, exits off-screen, and has
       a visible rest gap between cycles (no pop-in/snap-back); the change is confined
       to `shimmer_spans` and shared by all call sites with no call-site edit.
-- [ ] `shimmer_spans` unit tests are updated for the new sweep range and `3.5`
+- [x] `shimmer_spans` unit tests are updated for the new sweep range and `3.5`
       falloff and pass (the existing `shimmer_spans_head_is_brightest` assertions
       change under the new range — re-derive them).
-- [ ] The bottom status bar shows the braille spinner in place of the static icon
+- [x] The bottom status bar shows the braille spinner in place of the static icon
       for `Initializing`, `Preparing`, and `Launching` only; `Reloading`, `Quitting`,
       `Running`, and `Stopped` keep their static icons (incl. the `is_busy` path).
-- [ ] The status-bar spinner advances in unison with the new-session dialog spinner
+- [x] The status-bar spinner advances in unison with the new-session dialog spinner
       (same `SPINNER_TICKS_PER_FRAME` divisor off the global `animation_frame`).
-- [ ] The label shimmer (`is_transient`) behaviour is unchanged — only the leading
+- [x] The label shimmer (`is_transient`) behaviour is unchanged — only the leading
       glyph changes for the three launch phases.
-- [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and
+- [x] `cargo test --workspace`, `cargo fmt --all -- --check`, and
       `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ## Notes
