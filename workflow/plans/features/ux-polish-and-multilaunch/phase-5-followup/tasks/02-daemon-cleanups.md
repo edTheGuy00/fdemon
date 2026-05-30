@@ -58,3 +58,33 @@ modules in the crate import tracing macros. Do not change any parsing logic or e
 
 - Pure non-functional cleanup; no behavior change for callers.
 - Do not add `DeviceCapabilities` to any new serialized/persisted type — it is parse-and-store only this phase (see TASKS.md deferred note n1).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a6d77b5fb7e80f06e
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/lib.rs` | Added `DeviceCapabilities` to `pub use devices::{...}` re-export list; added `DeviceCapabilities` bullet to the `### Device Discovery` module doc comment |
+| `crates/fdemon-daemon/src/devices.rs` | Demoted full stdout `debug!` to `trace!`; added concise `debug!` summary with byte count |
+
+### Notable Decisions/Tradeoffs
+
+1. **`trace!` import**: `trace!` is already part of `fdemon_core::prelude::*` (re-exported from `tracing`), which `devices.rs` already imports. No additional import was needed.
+2. **Log summary format**: Used `stdout.len()` (byte count) as the short `debug!` summary, matching the exact form suggested in the task spec.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo test -p fdemon-daemon` - Passed (820 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo doc -p fdemon-daemon --no-deps` - Passed; `DeviceCapabilities` appears in `fdemon_daemon/index.html`
+
+### Risks/Limitations
+
+1. **None**: Pure non-functional cleanup with no behavior change for callers.

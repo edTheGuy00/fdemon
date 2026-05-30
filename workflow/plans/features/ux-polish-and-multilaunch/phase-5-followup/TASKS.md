@@ -38,10 +38,10 @@ closes the review's two MAJOR items plus the agreed minor/UX cleanups.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-app-test-and-cleanups](tasks/01-app-test-and-cleanups.md) | Not Started | - | 1–2h | `fdemon-app/src/new_session_dialog/target_selector_state.rs`, `device_groups.rs` |
-| 2 | [02-daemon-cleanups](tasks/02-daemon-cleanups.md) | Not Started | - | 0.5–1h | `fdemon-daemon/src/lib.rs`, `devices.rs` |
-| 3 | [03-connected-hidden-footer](tasks/03-connected-hidden-footer.md) | Not Started | - | 1–2h | `fdemon-tui/src/widgets/new_session_dialog/device_list.rs` |
-| 4 | [04-document-filter-scope](tasks/04-document-filter-scope.md) | Not Started | - | 0.5h | `docs/REVIEW_FOCUS.md` |
+| 1 | [01-app-test-and-cleanups](tasks/01-app-test-and-cleanups.md) | ✅ Done | - | 1–2h | `fdemon-app/src/new_session_dialog/target_selector_state.rs`, `device_groups.rs` |
+| 2 | [02-daemon-cleanups](tasks/02-daemon-cleanups.md) | ✅ Done | - | 0.5–1h | `fdemon-daemon/src/lib.rs`, `devices.rs` |
+| 3 | [03-connected-hidden-footer](tasks/03-connected-hidden-footer.md) | ✅ Done | - | 1–2h | `fdemon-tui/src/widgets/new_session_dialog/device_list.rs` |
+| 4 | [04-document-filter-scope](tasks/04-document-filter-scope.md) | ✅ Done | - | 0.5h | `docs/REVIEW_FOCUS.md` |
 
 ## File Overlap Analysis
 
@@ -72,11 +72,11 @@ footer math is self-contained in `device_list.rs`; it only *reads* the already-m
 
 This follow-up is complete when:
 
-- [ ] (M1) `toggle_checked_cursor_skips_unsupported` actually invokes `toggle_checked_cursor()` and asserts the checked-set is unmodified — the production guard path is covered.
-- [ ] (M2) `docs/REVIEW_FOCUS.md` records that `is_supported` filtering is dialog-scoped by design and `find_auto_launch_target` is exempt.
-- [ ] (m1/UX) When the Connected tab has ≥1 supported device AND ≥1 hidden unsupported device, a muted "(N hidden: not runnable for this project)" footer is shown; absent when nothing is hidden.
-- [ ] (minors) `.any()` idiom, direct-`BTreeSet` collect, `DeviceCapabilities` re-export, defensive `.get()`/`.last()` indexing, and `debug!`→`trace!` stdout demotion are applied.
-- [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+- [x] (M1) `toggle_checked_cursor_skips_unsupported` actually invokes `toggle_checked_cursor()` and asserts the checked-set is unmodified — the production guard path is covered.
+- [x] (M2) `docs/REVIEW_FOCUS.md` records that `is_supported` filtering is dialog-scoped by design and `find_auto_launch_target` is exempt.
+- [x] (m1/UX) When the Connected tab has ≥1 supported device AND ≥1 hidden unsupported device, a muted "(N hidden: not runnable for this project)" footer is shown; absent when nothing is hidden.
+- [x] (minors) `.any()` idiom, direct-`BTreeSet` collect, `DeviceCapabilities` re-export, defensive `.get()`/`.last()` indexing, and `debug!`→`trace!` stdout demotion are applied.
+- [x] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ## Keyboard Shortcuts
 

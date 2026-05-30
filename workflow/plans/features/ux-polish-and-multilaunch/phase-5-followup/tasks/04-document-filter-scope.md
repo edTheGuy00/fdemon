@@ -60,3 +60,32 @@ short rationale + explicit reviewer instruction). Keep it concise (one short sub
   the filter system-wide. See `workflow/reviews/features/phase-5-runnable-filtering/ACTION_ITEMS.md` item M2.
 - `docs/REVIEW_FOCUS.md` is explicitly an unmanaged doc per the planner's doc-routing rules, so
   this stays an `implementor` task (no `doc_maintainer` involvement, no core-doc boundary check).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/REVIEW_FOCUS.md` | Added "Approved Exception: `is_supported` Filtering is Dialog-Scoped by Design (Phase 5)" subsection in the Approved Optimizations area, after the version_check Network I/O exception |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement**: Inserted the new subsection immediately after the `fdemon-app::version_check Network I/O` approved exception, before the "Performance Concerns" section. This keeps all "Approved Exception" entries together in the Approved Optimizations area, matching the document's existing structure.
+2. **Accuracy**: Verified `group_connected_devices` is indeed the single chokepoint in `device_groups.rs` (line 136) and that `find_auto_launch_target` in `spawn.rs` operates on the raw `devices` slice without any `is_supported` check — both confirmed by reading the source files.
+3. **Future-task shape included**: The reviewer guidance specifically calls out the three implementation steps a future system-wide feature task would require (shared helper, default-true fallback filter, tests for unsupported first device and unsupported cached device), matching exactly what was specified in the task file.
+
+### Testing Performed
+
+- Documentation-only change; no build/test impact.
+- Verified the new heading and content fit the document's existing structure.
+- Verified only `docs/REVIEW_FOCUS.md` was modified (no source code changes).
+
+### Risks/Limitations
+
+1. **None**: This is a pure documentation change with no functional risk.

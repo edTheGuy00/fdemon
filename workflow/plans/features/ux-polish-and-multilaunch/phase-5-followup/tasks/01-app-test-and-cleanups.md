@@ -117,3 +117,29 @@ Behavior must be identical; this only hardens against future refactors removing 
 
 - All changes are behavior-preserving except the test rewrite (which adds coverage, not behavior).
 - Do **not** touch the single filter chokepoint in `group_connected_devices` (the `is_supported` filter) — only the index-accessor style on lines ~266/286/309.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | M1: Rewrote `toggle_checked_cursor_skips_unsupported` to call `toggle_checked_cursor()` and verify checked-set unchanged. m2: Replaced `is_connected_device_supported` with `.any()` idiom. m3: `toggle_select_all` now collects directly into `BTreeSet<String>`, eliminating intermediate Vec. |
+| `crates/fdemon-app/src/new_session_dialog/device_groups.rs` | m6: Replaced bare index access `selectable[...]` at three sites with `.last().copied().unwrap_or(0)` and `.get(n).copied().unwrap_or(0)`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **n3 skipped**: The `get_or_insert_with` refactor for `flat_list()` was skipped as directed — `compute_flat_list(&self)` borrows `self` immutably while `get_or_insert_with` would already hold a mutable borrow of `self.cached_flat_list` (part of `self`), causing a borrow-checker conflict. The existing pattern is correct and pre-existing.
+
+2. **M1 test shape**: The test now pre-seeds `checked_device_ids` with `"a"` before calling `toggle_checked_cursor()`, confirming neither addition nor removal happens. The original helper assertions (`is_connected_device_supported`) are preserved to document the unknown-id behavior.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — Passed (2618 unit tests, 0 failures)
+- `cargo fmt --all` — No formatting changes needed
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)

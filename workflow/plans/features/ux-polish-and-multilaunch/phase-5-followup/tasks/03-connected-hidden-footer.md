@@ -106,3 +106,37 @@ fn connected_click_maps_correctly_with_footer_present() {
 - The footer is presentation-only; no new state, message, or keybinding.
 - Keep the message wording aligned with the existing "none runnable" empty-state for consistency.
 - If reserving the footer row meaningfully shrinks a tiny dialog, the `Constraint::Min(0)` list slot + `Length(1)` footer ordering ensures the list absorbs remaining space and the footer is the first to clip gracefully under extreme height pressure.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1a05fb33481a7b1b
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/device_list.rs` | Added hidden-devices footer, hoisted scoped imports (n2), fixed em dash literal (n4), added 3 render tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Layout splitting via `Layout::vertical`**: Used `[Constraint::Min(0), Constraint::Length(1)]` as specified. The `Min(0)` list slot absorbs available space; the footer is first to clip under extreme height pressure. This matches Principle 2 from CODE_STANDARDS.md (include every element in the layout system).
+
+2. **Footer only in non-empty case**: The `hidden` count is computed before the empty-state early-return. When `items.is_empty()`, the empty-state renders to the full `area` (unchanged). The footer logic only runs for the non-empty path.
+
+3. **Click-region loop uses `list_area`**: The region loop now iterates `0..visible_height` where `visible_height = list_area.height` (the reduced height). This ensures no region is registered in the footer row — verified by `connected_click_maps_correctly_with_footer_present`.
+
+4. **Scoped imports removed from all methods in BootableDeviceList too**: The n2 nitpick said to hoist from the connected empty-state block. Since we added `Alignment`, `Constraint`, `Layout`, and `Paragraph` to the top-level imports, we also cleaned up the equivalent scoped imports in `render_unavailable_message` and the bootable `items.is_empty()` block, keeping the file consistent.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (1346 unit tests + 7 doc-tests)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Workspace tests pending**: The workspace-wide `cargo test --workspace` was launched as a background task but the crate-scoped tests all pass. No cross-crate changes were made, so workspace test results are expected clean.
