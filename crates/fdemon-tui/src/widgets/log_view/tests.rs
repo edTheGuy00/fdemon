@@ -3186,7 +3186,7 @@ fn launch_phases_show_spinner_glyph() {
         for frame in [0u64, 1, 4, 10, 19] {
             let mut term = TestTerminal::with_size(80, 10);
             let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
-            let status = spinner_status(phase.clone(), false, frame);
+            let status = spinner_status(phase, false, frame);
             let view = LogView::new(&logs, test_icons()).with_status(status);
             let mut state = LogViewState::new();
             term.render_stateful_widget(view, term.area(), &mut state);
@@ -3224,7 +3224,7 @@ fn non_launch_phases_keep_static_icon() {
     for (phase, expected_icon) in cases {
         let mut term = TestTerminal::with_size(80, 10);
         let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
-        let status = spinner_status(phase.clone(), false, 0);
+        let status = spinner_status(*phase, false, 0);
         let view = LogView::new(&logs, test_icons()).with_status(status);
         let mut state = LogViewState::new();
         term.render_stateful_widget(view, term.area(), &mut state);
@@ -3277,14 +3277,14 @@ fn launch_spinner_advances_with_frame() {
     ] {
         let mut term_a = TestTerminal::with_size(80, 10);
         let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
-        let status_a = spinner_status(phase.clone(), false, frame_a);
+        let status_a = spinner_status(phase, false, frame_a);
         let view_a = LogView::new(&logs, test_icons()).with_status(status_a);
         let mut state_a = LogViewState::new();
         term_a.render_stateful_widget(view_a, term_a.area(), &mut state_a);
 
         let mut term_b = TestTerminal::with_size(80, 10);
         let logs2 = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
-        let status_b = spinner_status(phase.clone(), false, frame_b);
+        let status_b = spinner_status(phase, false, frame_b);
         let view_b = LogView::new(&logs2, test_icons()).with_status(status_b);
         let mut state_b = LogViewState::new();
         term_b.render_stateful_widget(view_b, term_b.area(), &mut state_b);
