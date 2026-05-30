@@ -19,6 +19,7 @@
 //!
 //! ### Device Discovery
 //! - [`Device`] - Connected Flutter device (physical or emulator)
+//! - [`DeviceCapabilities`] - Per-device capability flags (hot reload / hot restart)
 //! - [`discover_devices()`] - List connected devices via `flutter devices`
 //!
 //! ### Emulator Management
@@ -72,7 +73,7 @@ pub use avds::{
 pub use commands::{CommandResponse, CommandSender, DaemonCommand, RequestTracker};
 pub use devices::{
     discover_devices, discover_devices_with_timeout, filter_by_platform, find_device,
-    group_by_platform, has_devices, Device, DeviceDiscoveryResult,
+    group_by_platform, has_devices, Device, DeviceCapabilities, DeviceDiscoveryResult,
 };
 pub use emulators::{
     android_emulators, discover_emulators, discover_emulators_with_timeout, has_emulators,

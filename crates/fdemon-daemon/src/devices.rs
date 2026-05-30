@@ -235,7 +235,8 @@ async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutpu
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    debug!("flutter devices stdout: {}", stdout);
+    debug!("flutter devices: {} bytes of stdout", stdout.len());
+    trace!("flutter devices stdout: {}", stdout);
     if !stderr.is_empty() {
         debug!("flutter devices stderr: {}", stderr);
     }
