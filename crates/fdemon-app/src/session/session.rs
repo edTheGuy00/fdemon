@@ -222,6 +222,10 @@ pub struct Session {
     pub unseen_log_count: usize,
 }
 
+/// Duration of the post-reload success flash in milliseconds. The header tint
+/// fades from full intensity to none over this window.
+const RELOAD_FLASH_DURATION_MS: i64 = 500;
+
 impl Session {
     /// Create a new session for a device
     pub fn new(
@@ -653,14 +657,10 @@ impl Session {
             .map(|t| t.format("%H:%M:%S").to_string())
     }
 
-    /// Duration of the post-reload success flash. The header tint fades from full
-    /// to none over this window.
-    const RELOAD_FLASH_DURATION_MS: i64 = 500;
-
     /// Intensity of the reload-success flash at wall-clock `now`, in `[0.0, 1.0]`.
     ///
     /// Returns `1.0` at the instant of `complete_reload()` and decays linearly to
-    /// `0.0` over [`Self::RELOAD_FLASH_DURATION_MS`], staying `0.0` afterwards.
+    /// `0.0` over [`RELOAD_FLASH_DURATION_MS`], staying `0.0` afterwards.
     /// Returns `0.0` when the session never reloaded or is not in a steady
     /// `Running` phase (so the flash never bleeds into `Stopped`/`Quitting`/error
     /// states — a failed reload leaves the phase at `Running` and does not stamp
@@ -676,10 +676,10 @@ impl Session {
             return 0.0;
         };
         let elapsed_ms = (now - reloaded_at).num_milliseconds();
-        if !(0..Self::RELOAD_FLASH_DURATION_MS).contains(&elapsed_ms) {
+        if !(0..RELOAD_FLASH_DURATION_MS).contains(&elapsed_ms) {
             return 0.0; // future timestamp (clock skew) or window elapsed
         }
-        1.0 - (elapsed_ms as f32 / Self::RELOAD_FLASH_DURATION_MS as f32)
+        1.0 - (elapsed_ms as f32 / RELOAD_FLASH_DURATION_MS as f32)
     }
 
     /// Check if session is running

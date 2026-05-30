@@ -64,9 +64,12 @@ impl<'a> MainHeader<'a> {
     ///
     /// When `alpha` is `0.0` the header renders with the standard `CARD_BG`
     /// background. At `1.0` the background is blended by `RELOAD_FLASH_BLEND_CAP`
-    /// toward `STATUS_GREEN`. Values outside `[0.0, 1.0]` are clamped.
+    /// toward `STATUS_GREEN`. The value is clamped to `[0.0, 1.0]` on store, so
+    /// `self.reload_flash` is always a valid intensity even if a future caller
+    /// passes an out-of-range value. (The sole current caller,
+    /// `Session::reload_flash_alpha`, already returns a value in range.)
     pub fn reload_flash(mut self, alpha: f32) -> Self {
-        self.reload_flash = alpha;
+        self.reload_flash = alpha.clamp(0.0, 1.0);
         self
     }
 }
@@ -774,7 +777,10 @@ mod tests {
         // Row 0, col 0 is the top-left border cell. Row 1, col 1 is the first
         // inner cell — inside the rounded glass_block border — which carries the
         // block background style.
-        buf[(1, 1)].style().bg.unwrap_or(ratatui::style::Color::Reset)
+        buf[(1, 1)]
+            .style()
+            .bg
+            .unwrap_or(ratatui::style::Color::Reset)
     }
 
     #[test]
@@ -803,13 +809,20 @@ mod tests {
             palette::STATUS_GREEN,
             "expected partial blend (not full STATUS_GREEN) with reload_flash=1.0"
         );
-        // Verify the tint is an RGB interpolation within the expected range.
-        // CARD_BG = Rgb(18, 21, 28), STATUS_GREEN = Rgb(16, 185, 129)
-        // At t = 1.0 * 0.35, green channel: 21 + (185 - 21) * 0.35 ≈ 78
+        // Verify the tint is an RGB interpolation between the two palette colors.
+        // Derive the bounds from the constants themselves so this stays correct
+        // if the palette changes. At t = 1.0 * 0.35 the green channel lands
+        // strictly between CARD_BG.g and STATUS_GREEN.g.
+        let ratatui::style::Color::Rgb(_, card_g, _) = palette::CARD_BG else {
+            panic!("CARD_BG must be an Rgb color");
+        };
+        let ratatui::style::Color::Rgb(_, green_g, _) = palette::STATUS_GREEN else {
+            panic!("STATUS_GREEN must be an Rgb color");
+        };
         if let ratatui::style::Color::Rgb(_r, g, _b) = bg {
             assert!(
-                g > 21 && g < 185,
-                "green channel {g} should be between CARD_BG.g (21) and STATUS_GREEN.g (185)"
+                g > card_g && g < green_g,
+                "green channel {g} should be between CARD_BG.g ({card_g}) and STATUS_GREEN.g ({green_g})"
             );
         } else {
             panic!("expected Rgb color, got {bg:?}");

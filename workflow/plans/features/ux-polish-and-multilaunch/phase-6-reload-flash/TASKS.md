@@ -36,8 +36,8 @@ already drives redraws. The work splits along the crate boundary:
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-reload-flash-alpha](tasks/01-reload-flash-alpha.md) | ⬜ Pending | - | 0.5–1h | `crates/fdemon-app/src/session/session.rs` |
-| 2 | [02-tint-header-flash](tasks/02-tint-header-flash.md) | ⬜ Pending | 1 | 0.5–1h | `crates/fdemon-tui/src/widgets/header.rs`, `crates/fdemon-tui/src/render/mod.rs` |
+| 1 | [01-reload-flash-alpha](tasks/01-reload-flash-alpha.md) | ✅ Done | - | 0.5–1h | `crates/fdemon-app/src/session/session.rs` |
+| 2 | [02-tint-header-flash](tasks/02-tint-header-flash.md) | ✅ Done | 1 | 0.5–1h | `crates/fdemon-tui/src/widgets/header.rs`, `crates/fdemon-tui/src/render/mod.rs` |
 
 ## File Overlap Analysis
 
@@ -65,20 +65,21 @@ this phase writes is touched by any other phase's open tasks.
 
 Phase 6 is complete when:
 
-- [ ] `Session::reload_flash_alpha(now)` returns `1.0` immediately after
+- [x] `Session::reload_flash_alpha(now)` returns `1.0` immediately after
       `complete_reload()` and decays linearly to `0.0` over ~500 ms, then stays
       `0.0`; unit-tested at the boundaries (just-reloaded, mid-decay, expired,
       never-reloaded).
-- [ ] The alpha is suppressed (returns `0.0`) when the session is not in a steady
+- [x] The alpha is suppressed (returns `0.0`) when the session is not in a steady
       `Running` phase — i.e. it does not bleed into `Stopped`/`Quitting`/error
       states — verified by a unit test.
-- [ ] A successful hot reload briefly tints the main header background toward
-      `STATUS_GREEN` and fades back within ~500 ms.
-- [ ] The flash is driven entirely by `last_reload_time` + the existing tick loop
+- [~] A successful hot reload briefly tints the main header background toward
+      `STATUS_GREEN` and fades back within ~500 ms. _(Verified by construction +
+      unit tests; live-terminal visual confirmation still recommended.)_
+- [x] The flash is driven entirely by `last_reload_time` + the existing tick loop
       (no new timer, no new `AppState`/`Session` field beyond the helper).
-- [ ] The blend reuses Phase 2's `lerp_color` (no duplicated RGB math) and
+- [x] The blend reuses Phase 2's `lerp_color` (no duplicated RGB math) and
       degrades gracefully on non-RGB terminals.
-- [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and
+- [x] `cargo test --workspace`, `cargo fmt --all -- --check`, and
       `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ## Notes

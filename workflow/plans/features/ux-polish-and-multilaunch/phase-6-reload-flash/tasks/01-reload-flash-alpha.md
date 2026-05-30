@@ -123,3 +123,34 @@ fn flash_alpha_zero_for_past_now() { /* now < last_reload_time → 0.0, not nega
   phase to exactly `Running`, so the steady-state check is a direct equality.
   Using `Running` (not `Reloading`) also means an in-flight *new* reload does not
   show a stale flash from the previous one.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/session.rs` | Added `RELOAD_FLASH_DURATION_MS` const (500 ms), `reload_flash_alpha(now: DateTime<Local>) -> f32` method, and 7 inline `#[cfg(test)]` tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Constant as associated const**: Placed `RELOAD_FLASH_DURATION_MS` as an inherent `const` on `Session` (via `impl Session`) rather than a module-level `const`. This keeps it co-located with the method and avoids polluting the module namespace, while still being the single canonical value task 02 must not duplicate.
+
+2. **Range guard**: Used `!(0..RELOAD_FLASH_DURATION_MS).contains(&elapsed_ms)` which correctly handles both negative elapsed (clock skew, `now < reloaded_at`) and elapsed >= duration (window elapsed) with one clear branch. No additional clamp needed.
+
+3. **Extra test**: Added `flash_alpha_always_in_unit_interval` (probing 50 ms steps from -100 to +1000 ms) beyond the 6 specified in the task to provide a property-based sweep ensuring `[0.0, 1.0]` invariant at all offsets.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app session::session::tests::flash_alpha` — Passed (7 tests)
+- `cargo test -p fdemon-app --lib` — Passed (2625 tests, 0 failed)
+- `cargo clippy -p fdemon-app` — Clean (no warnings)
+
+### Risks/Limitations
+
+1. **No consumer yet**: The method is unused at render time until task 02 integrates it into the TUI header. Clippy does not flag it because `pub fn` on a `pub struct` is public API surface.

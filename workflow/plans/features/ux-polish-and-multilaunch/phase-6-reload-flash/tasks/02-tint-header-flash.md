@@ -142,3 +142,35 @@ carry the block background.
   alpha. Keep it that way.
 - **No managed-doc change.** No `AppPhase`/`Message`/module-structure change, so
   `docs/ARCHITECTURE.md` needs no update for this phase.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/header.rs` | Added `reload_flash: f32` field and `.reload_flash(alpha)` builder to `MainHeader`; added `RELOAD_FLASH_BLEND_CAP` constant; replaced bare `CARD_BG` bg with `lerp_color(CARD_BG, STATUS_GREEN, header.reload_flash * RELOAD_FLASH_BLEND_CAP)`; added two render tests `header_bg_unchanged_without_flash` and `header_bg_tints_toward_green_with_flash` |
+| `crates/fdemon-tui/src/render/mod.rs` | Reads `reload_flash_alpha(chrono::Local::now())` from the selected session and passes it via `.reload_flash(reload_flash)` into the `MainHeader` builder |
+
+### Notable Decisions/Tradeoffs
+
+1. **`RELOAD_FLASH_BLEND_CAP = 0.35`**: Keeps the tint subtle — the header visibly pulses green but stays readable. Named constant with a comment as required by the task.
+2. **`chrono::Local::now()` called once in `render/mod.rs`**: Keeps `MainHeader` pure (no I/O inside the widget). Consistent with the pattern used elsewhere in the codebase (`render/tests.rs`, memory tests, etc.).
+3. **Test approach**: Rendered directly into a `Buffer` via `render_main_header` rather than through `TestTerminal` to inspect the raw cell `bg` color. This is simpler and avoids TestTerminal's `Widget::render` path that doesn't expose cell styles via the wrapper API.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui --lib widgets::header` — Passed (21 tests)
+- `cargo test -p fdemon-tui --lib` — Passed (1348 tests, 1 ignored)
+- `cargo test --workspace --lib` — Passed (6147 tests total, 8 ignored, 0 failures)
+- `cargo clippy -p fdemon-tui` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No manual run verification**: The 500 ms fade driven by 50 ms ticks was not manually verified in a live terminal (per task criterion 4). The math is correct and the unit tests confirm the blending behavior; the visual fade is determined by task 01's `reload_flash_alpha` decay which has its own test coverage.
