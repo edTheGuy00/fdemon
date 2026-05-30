@@ -5,10 +5,10 @@
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, Widget},
+    widgets::{List, ListItem, Paragraph, Widget},
 };
 
 use super::device_groups::{
@@ -209,15 +209,15 @@ pub fn connected_device_list_render_with_regions(
     let groups = group_connected_devices(list.devices);
     let items = flatten_groups(&groups);
 
-    if items.is_empty() {
-        use ratatui::layout::Alignment;
-        use ratatui::widgets::Paragraph;
+    // Count devices in the full list that are filtered out (not supported)
+    let hidden = list.devices.iter().filter(|d| !d.is_supported).count();
 
+    if items.is_empty() {
         let msg = if list.devices.is_empty() {
             "No connected devices"
         } else {
             // Devices were discovered but all are unsupported for this project.
-            "Devices found but none runnable for this project \u{2014} check enabled platforms"
+            "Devices found but none runnable for this project — check enabled platforms"
         };
         Paragraph::new(msg)
             .alignment(Alignment::Center)
@@ -227,8 +227,17 @@ pub fn connected_device_list_render_with_regions(
         return;
     }
 
-    // Calculate visible range
-    let visible_height = area.height as usize;
+    // Split area to reserve a 1-row footer when there are hidden unsupported devices.
+    // Layout: list area (Min(0)) + optional footer (Length(1))
+    let (list_area, footer_area) = if hidden > 0 {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Calculate visible range using the (possibly reduced) list area
+    let visible_height = list_area.height as usize;
     let start = list.scroll_offset.min(items.len().saturating_sub(1));
     let end = (start + visible_height).min(items.len());
 
@@ -238,17 +247,27 @@ pub fn connected_device_list_render_with_regions(
         .enumerate()
         .map(|(visible_idx, item)| {
             let actual_idx = start + visible_idx;
-            list.render_item(item, actual_idx, area.width)
+            list.render_item(item, actual_idx, list_area.width)
         })
         .collect();
 
     let rendered_list = List::new(list_items);
-    rendered_list.render(area, buf);
+    rendered_list.render(list_area, buf);
 
-    // Render scroll indicators
-    list.render_scroll_indicators(area, buf, start, end, items.len());
+    // Render scroll indicators into the list sub-area
+    list.render_scroll_indicators(list_area, buf, start, end, items.len());
 
-    // Record click regions for device rows (skip headers)
+    // Render the hidden-devices footer when applicable
+    if let Some(footer) = footer_area {
+        let footer_text = format!("({hidden} hidden: not runnable for this project)");
+        Paragraph::new(footer_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(palette::TEXT_MUTED))
+            .render(footer, buf);
+    }
+
+    // Record click regions for device rows (skip headers).
+    // Iterate only within the list_area rows — do NOT register a region over the footer.
     if let Some(c) = ctx {
         for screen_row in 0..visible_height {
             let abs_index = start + screen_row;
@@ -257,7 +276,12 @@ pub fn connected_device_list_render_with_regions(
             }
             // Only record regions for device rows, not headers
             if matches!(items[abs_index], DeviceListItem::Device(_)) {
-                let rect = MouseRect::new(area.x, area.y + screen_row as u16, area.width, 1);
+                let rect = MouseRect::new(
+                    list_area.x,
+                    list_area.y + screen_row as u16,
+                    list_area.width,
+                    1,
+                );
                 if !rect.is_empty() {
                     c.click_at_z(
                         rect,
@@ -360,9 +384,6 @@ impl<'a> BootableDeviceList<'a> {
     }
 
     fn render_unavailable_message(&self, area: Rect, buf: &mut Buffer) {
-        use ratatui::layout::Alignment;
-        use ratatui::widgets::Paragraph;
-
         let mut messages = Vec::new();
 
         if let Some(msg) = self.tool_availability.ios_unavailable_message() {
@@ -457,9 +478,6 @@ pub fn bootable_device_list_render_with_regions(
     let items = flatten_groups(&groups);
 
     if items.is_empty() {
-        use ratatui::layout::Alignment;
-        use ratatui::widgets::Paragraph;
-
         let msg = Paragraph::new("No bootable devices found")
             .alignment(Alignment::Center)
             .style(Style::default().fg(palette::TEXT_MUTED));
@@ -1026,6 +1044,141 @@ mod tests {
             indices.iter().all(|&i| i >= 2),
             "all abs_indices must be >= scroll_offset 2, got {:?}",
             indices
+        );
+    }
+
+    // ─── Hidden-footer tests (task 03) ──────────────────────────────────────
+
+    #[test]
+    fn connected_mixed_shows_hidden_footer() {
+        // One supported device + one unsupported device → rows render AND footer appears.
+        let supported = test_device_full("1", "Pixel 9", "android", false);
+        let unsupported = Device {
+            id: "u1".to_string(),
+            name: "Legacy Phone".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: false,
+            capabilities: None,
+        };
+        let devices = vec![supported, unsupported];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("Pixel 9"),
+            "supported device name should appear; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content.contains("1 hidden"),
+            "footer should contain '1 hidden'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content.contains("not runnable"),
+            "footer should contain 'not runnable'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn connected_all_supported_has_no_hidden_footer() {
+        // Two supported devices → no footer row should appear.
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 8", "android", false),
+        ];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            !content.contains("hidden"),
+            "all-supported list must NOT show 'hidden' footer; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn connected_click_maps_correctly_with_footer_present() {
+        // Mixed case: one supported + one unsupported.
+        // The supported device is at flat-list index 1 (after the header at index 0).
+        // The footer row must NOT receive a click region.
+        // Area height = 3: list_area = rows 0..2, footer = row 2.
+        let supported = test_device_full("1", "Pixel 9", "android", false);
+        let unsupported = Device {
+            id: "u1".to_string(),
+            name: "Legacy Phone".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: false,
+            capabilities: None,
+        };
+        let devices = vec![supported, unsupported];
+
+        // Height 3: Layout gives list_area height=2 and footer height=1
+        let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+        let area = Rect::new(0, 0, 50, 3);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            connected_device_list_render_with_regions(area, &mut buf, &list, Some(&mut ctx));
+        }
+
+        // Flat list: [Header("ANDROID DEVICES"), Device("Pixel 9")] — 1 device region
+        assert_eq!(
+            regions.len(),
+            1,
+            "only the supported device row should register a click region; got {}",
+            regions.len()
+        );
+
+        let device_region = regions.iter().next().expect("expected at least one region");
+
+        // The device region must be within list_area (y < area.bottom() - 1 = 2)
+        let footer_y = area.y + area.height - 1;
+        assert!(
+            device_region.rect.y < footer_y,
+            "device click region must not overlap the footer row (y={footer_y}); got y={}",
+            device_region.rect.y
+        );
+
+        // The registered index must be the flat-list device index (1, after the header at 0)
+        let registered_index = device_region
+            .on_left
+            .as_ref()
+            .and_then(|a| a.as_emit())
+            .and_then(|m| {
+                if let Message::NewSessionDialogSelectDeviceAt { index } = m {
+                    Some(*index)
+                } else {
+                    None
+                }
+            })
+            .expect("region should carry NewSessionDialogSelectDeviceAt");
+        assert_eq!(
+            registered_index, 1,
+            "click should map to flat-list index 1 (first device after header); got {registered_index}"
         );
     }
 }
