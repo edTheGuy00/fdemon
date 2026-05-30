@@ -249,6 +249,66 @@ The theme is true-color RGB (`theme/palette.rs`), which makes per-character colo
 
 ---
 
+### Phase 6.5: Shimmer timing polish + launch spinner icon
+
+**Goal**: Two follow-up refinements after Phases 2/2.5/3 shipped. (1) The status-label
+shimmer (Phase 2) "feels off" — it reads as a constant, mechanical sweep with no rest.
+(2) The launch-lifecycle phases (`Initializing`/`Preparing`/`Launching`) still show a
+**static** `○` icon next to their shimmering label; swap that icon for the existing
+braille spinner (Phase 3) so the in-progress state animates on both glyph and text.
+
+**Duration**: ~1.5–2.5h (two independent, small TUI-only tasks)
+
+**Research finding (shimmer)** — the current sweep and a smoother reference variant use
+the same ~1.5 s period, so cycle length is **not** the problem. The difference is the
+sweep **range**:
+
+| | fdemon (`widgets/shimmer.rs:58,64`) | smoother variant |
+|---|---|---|
+| Head position | `head = phase * n` → range `[0, n)` | `head = phase * (n + 6) − 3` → range `[−3, n+3)` |
+| Behavior | Bright head **pops in** at char 0 and **snaps back** each cycle; no rest | Head **fades in from off-screen left**, exits **off-screen right** → brief all-dim **rest gap** between sweeps |
+| Head falloff | `dist / 4.0` | `dist / 3.5` (slightly tighter) |
+
+The "off" feeling is the hard pop-in/snap-back and the absence of a rest gap. Adopting
+the off-screen lead-in/lead-out (and matching the 3.5 falloff) makes the sweep breathe.
+This is a **pure-math change in one function** (`shimmer_spans`) — every existing call
+site (status label, future reuse) benefits with no call-site change.
+
+**Decisions (confirmed with user):**
+- **Spinner phases:** launch-lifecycle only — `Initializing`, `Preparing`, `Launching`.
+  `Reloading` keeps its `↻` glyph, `Quitting` keeps `✗`, `Running`/`Stopped` unchanged.
+- **Surface:** the **bottom status bar only** (`widgets/log_view/mod.rs`
+  `render_bottom_metadata`). The header title row and session tabs keep their static
+  phase icons.
+
+#### Steps
+
+1. **Refine the shimmer sweep** (`widgets/shimmer.rs`)
+   - Change the head computation in `shimmer_spans` so the sweep travels off-screen at
+     both ends: `head = phase * (n + LEAD*2) − LEAD` with `LEAD ≈ 3.0`, and narrow the
+     falloff from `SHIMMER_HEAD_WIDTH = 4.0` to `3.5` for a slightly tighter head.
+   - Keep the frame-counter phase source (`shimmer_phase(frame)`, period 30) so all
+     shimmers stay in unison — only the spatial mapping changes.
+   - Update/extend the existing `shimmer_spans` unit tests (the `shimmer_spans_head_is_brightest`
+     test asserts "char at dist >4 == base" and "head at index 0 brightest at phase 0",
+     both of which change under the new range — re-derive the expectations).
+
+2. **Spinner icon for launch phases** (`widgets/log_view/mod.rs`)
+   - In `render_bottom_metadata`, when `status.phase` ∈ {`Initializing`, `Preparing`,
+     `Launching`}, render `spinner::spinner_char(status.animation_frame / SPINNER_TICKS_PER_FRAME)`
+     (styled with the existing `phase_style`) in place of the static `icon`.
+   - All other phases (incl. `Reloading`/`Quitting`/`Running`/`Stopped`, and the
+     `is_busy` path) keep their static `phase_indicator` icon — unchanged.
+   - Label shimmer (`is_transient`) is untouched; only the leading glyph changes.
+
+**Milestone**: The reload/launch shimmer breathes (sweeps in, rests, repeats) instead of
+popping; and `Launching`/`Preparing`/`Starting` show a spinning braille glyph in the
+status bar in lockstep with the dialog's discovery spinner.
+
+**Tasks**: see `phase-6.5-shimmer-spinner-polish/TASKS.md`.
+
+---
+
 ## Edge Cases & Risks
 
 ### Multi-launch
@@ -330,6 +390,13 @@ The theme is true-color RGB (`theme/palette.rs`), which makes per-character colo
 ### Phase 6 Complete When:
 - [ ] A successful hot reload briefly tints the header green and fades within ~500 ms.
 - [ ] The flash is driven by `last_reload_time` via the tick loop (no new timer) and suppressed in error phases.
+
+### Phase 6.5 Complete When:
+- [ ] The status-label shimmer sweeps in from off-screen, exits off-screen, and has a visible rest gap between cycles (no pop-in/snap-back); the change is confined to `shimmer_spans` and shared by all call sites.
+- [ ] `shimmer_spans` unit tests are updated for the new sweep range and falloff (`3.5`) and pass.
+- [ ] The bottom status bar shows the braille spinner in place of the static icon for `Initializing`, `Preparing`, and `Launching` only; `Reloading` (`↻`), `Quitting` (`✗`), `Running` (`●`), and `Stopped` (`○`) keep their static icons.
+- [ ] The status-bar spinner advances in unison with the new-session dialog spinner (same `SPINNER_TICKS_PER_FRAME` cadence off the global `animation_frame`).
+- [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ---
 
