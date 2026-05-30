@@ -25,6 +25,7 @@ use crate::theme::icons::IconSet;
 use crate::theme::palette;
 use crate::theme::styles as theme_styles;
 use crate::widgets::shimmer;
+use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME};
 use crate::widgets::MouseCtx;
 
 /// Stack trace styling constants
@@ -911,12 +912,23 @@ impl<'a> LogView<'a> {
                     | AppPhase::Quitting
             );
 
-        // Left side: icon (always static) + shimmered or static label
-        let mut spans = vec![
-            Span::raw(" "),
-            Span::styled(icon, phase_style),
-            Span::raw(" "),
-        ];
+        // Launch-lifecycle phases animate their glyph; every other phase (incl. the
+        // is_busy / Reloading path) keeps its static phase_indicator icon.
+        let is_launch_phase = !status.is_busy
+            && matches!(
+                status.phase,
+                AppPhase::Initializing | AppPhase::Preparing | AppPhase::Launching
+            );
+
+        let icon_span = if is_launch_phase {
+            let glyph = spinner_char(status.animation_frame / SPINNER_TICKS_PER_FRAME);
+            Span::styled(glyph.to_string(), phase_style)
+        } else {
+            Span::styled(icon, phase_style)
+        };
+
+        // Left side: icon (spinner during launch phases, static otherwise) + shimmered or static label
+        let mut spans = vec![Span::raw(" "), icon_span, Span::raw(" ")];
         spans.extend(Self::status_label_spans_inner(
             label,
             phase_style,

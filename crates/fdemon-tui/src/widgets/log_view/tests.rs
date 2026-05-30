@@ -3148,3 +3148,156 @@ fn jump_hint_rendered_at_pill_width_plus_one() {
         last_content_row
     );
 }
+
+// ─────────────────────────────────────────────────────────
+// Launch-lifecycle spinner glyph tests (phase-6.5 task 02)
+// ─────────────────────────────────────────────────────────
+
+/// Helper to build a minimal StatusInfo for spinner tests.
+fn spinner_status(phase: AppPhase, is_busy: bool, animation_frame: u64) -> StatusInfo<'static> {
+    // We need a 'static reference to AppPhase for the struct. Use Box::leak for test convenience.
+    let leaked: &'static AppPhase = Box::leak(Box::new(phase));
+    StatusInfo {
+        phase: leaked,
+        is_busy,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+        animation_frame,
+        progress: None,
+    }
+}
+
+#[test]
+fn launch_phases_show_spinner_glyph() {
+    use crate::test_utils::TestTerminal;
+    use crate::widgets::spinner::{spinner_char, SPINNER_FRAMES, SPINNER_TICKS_PER_FRAME};
+
+    for phase in [
+        AppPhase::Initializing,
+        AppPhase::Preparing,
+        AppPhase::Launching,
+    ] {
+        for frame in [0u64, 1, 4, 10, 19] {
+            let mut term = TestTerminal::with_size(80, 10);
+            let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+            let status = spinner_status(phase.clone(), false, frame);
+            let view = LogView::new(&logs, test_icons()).with_status(status);
+            let mut state = LogViewState::new();
+            term.render_stateful_widget(view, term.area(), &mut state);
+
+            let expected_glyph = spinner_char(frame / SPINNER_TICKS_PER_FRAME);
+            assert!(
+                SPINNER_FRAMES.contains(&expected_glyph),
+                "glyph {expected_glyph:?} must be a SPINNER_FRAMES char"
+            );
+
+            // The spinner glyph must appear somewhere in the rendered output.
+            assert!(
+                term.buffer_contains(&expected_glyph.to_string()),
+                "phase {:?} frame {frame}: expected spinner glyph {expected_glyph:?} in buffer",
+                phase
+            );
+
+            // The static circle '○' must NOT appear — it has been replaced.
+            assert!(
+                !term.buffer_contains("○"),
+                "phase {:?} frame {frame}: static '○' must not appear when spinner is active",
+                phase
+            );
+        }
+    }
+}
+
+#[test]
+fn non_launch_phases_keep_static_icon() {
+    use crate::test_utils::TestTerminal;
+
+    // Reloading keeps ↻, Running keeps ●, Stopped keeps ○
+    let cases: &[(AppPhase, &str)] = &[(AppPhase::Running, "●"), (AppPhase::Stopped, "○")];
+
+    for (phase, expected_icon) in cases {
+        let mut term = TestTerminal::with_size(80, 10);
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        let status = spinner_status(phase.clone(), false, 0);
+        let view = LogView::new(&logs, test_icons()).with_status(status);
+        let mut state = LogViewState::new();
+        term.render_stateful_widget(view, term.area(), &mut state);
+
+        assert!(
+            term.buffer_contains(expected_icon),
+            "phase {:?}: expected static icon {:?} in buffer",
+            phase,
+            expected_icon
+        );
+    }
+
+    // is_busy = true → phase_indicator_busy (Reloading / ↻); spinner must not replace it.
+    {
+        let mut term = TestTerminal::with_size(80, 10);
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        // Even if phase is Launching, is_busy = true should stay with the busy icon ↻
+        let status = spinner_status(AppPhase::Launching, true, 4);
+        let view = LogView::new(&logs, test_icons()).with_status(status);
+        let mut state = LogViewState::new();
+        term.render_stateful_widget(view, term.area(), &mut state);
+
+        assert!(
+            term.buffer_contains("↻"),
+            "is_busy=true: expected static busy icon '↻' in buffer, not a spinner glyph"
+        );
+    }
+}
+
+#[test]
+fn launch_spinner_advances_with_frame() {
+    use crate::test_utils::TestTerminal;
+    use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME};
+
+    // Two renders separated by SPINNER_TICKS_PER_FRAME frames must yield different glyphs.
+    let frame_a = 0u64;
+    let frame_b = frame_a + SPINNER_TICKS_PER_FRAME;
+
+    let glyph_a = spinner_char(frame_a / SPINNER_TICKS_PER_FRAME);
+    let glyph_b = spinner_char(frame_b / SPINNER_TICKS_PER_FRAME);
+    assert_ne!(
+        glyph_a, glyph_b,
+        "frames {frame_a} and {frame_b} must produce different spinner glyphs"
+    );
+
+    for phase in [
+        AppPhase::Initializing,
+        AppPhase::Preparing,
+        AppPhase::Launching,
+    ] {
+        let mut term_a = TestTerminal::with_size(80, 10);
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        let status_a = spinner_status(phase.clone(), false, frame_a);
+        let view_a = LogView::new(&logs, test_icons()).with_status(status_a);
+        let mut state_a = LogViewState::new();
+        term_a.render_stateful_widget(view_a, term_a.area(), &mut state_a);
+
+        let mut term_b = TestTerminal::with_size(80, 10);
+        let logs2 = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        let status_b = spinner_status(phase.clone(), false, frame_b);
+        let view_b = LogView::new(&logs2, test_icons()).with_status(status_b);
+        let mut state_b = LogViewState::new();
+        term_b.render_stateful_widget(view_b, term_b.area(), &mut state_b);
+
+        assert!(
+            term_a.buffer_contains(&glyph_a.to_string()),
+            "phase {:?} frame_a={frame_a}: expected glyph {glyph_a:?}",
+            phase
+        );
+        assert!(
+            term_b.buffer_contains(&glyph_b.to_string()),
+            "phase {:?} frame_b={frame_b}: expected glyph {glyph_b:?}",
+            phase
+        );
+    }
+}
