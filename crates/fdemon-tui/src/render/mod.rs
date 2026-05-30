@@ -165,8 +165,19 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // (Task 06), but only when no modal overlay is active.  When a modal is
     // up (`in_modal = true`) we pass `None` so that clicking header shortcuts
     // while a modal is displayed cannot fire base-UI actions.
+    //
+    // Read the reload-flash alpha from the selected session (if any) and pass it
+    // into the MainHeader builder. The immutable `selected()` borrow is released
+    // before the `selected_mut()` borrow below (NLL), so there is no borrow
+    // conflict. `Local::now()` is called once here to keep the widget pure.
+    let reload_flash = state
+        .session_manager
+        .selected()
+        .map(|h| h.session.reload_flash_alpha(chrono::Local::now()))
+        .unwrap_or(0.0);
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
-        .with_sessions(&state.session_manager);
+        .with_sessions(&state.session_manager)
+        .reload_flash(reload_flash);
     let header_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
     widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, header_ctx);
 

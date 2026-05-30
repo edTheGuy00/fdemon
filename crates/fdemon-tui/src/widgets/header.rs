@@ -24,12 +24,23 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Padding around header sections for layout calculations
 const HEADER_SECTION_PADDING: u16 = 4;
 
+/// Peak blend fraction toward `STATUS_GREEN` at full flash intensity.
+///
+/// Kept well below 1.0 so the header tints (not floods) green — readability
+/// of the title and tab labels is preserved. Tuned for a subtle but visible
+/// pulse at the 50 ms tick cadence.
+const RELOAD_FLASH_BLEND_CAP: f32 = 0.35;
+
 /// Main header showing app title, project name, and keybindings
 /// with optional session tabs rendered inside the bordered area
 pub struct MainHeader<'a> {
     project_name: Option<&'a str>,
     session_manager: Option<&'a SessionManager>,
     icons: IconSet,
+    /// Reload-success flash intensity in `[0.0, 1.0]`.
+    /// `0.0` = no tint (steady state); `1.0` = peak blend at completion.
+    /// Set via `.reload_flash(..)` builder.
+    reload_flash: f32,
 }
 
 impl<'a> MainHeader<'a> {
@@ -38,12 +49,24 @@ impl<'a> MainHeader<'a> {
             project_name,
             session_manager: None,
             icons,
+            reload_flash: 0.0,
         }
     }
 
     /// Add session manager to render tabs inside the header
     pub fn with_sessions(mut self, session_manager: &'a SessionManager) -> Self {
         self.session_manager = Some(session_manager);
+        self
+    }
+
+    /// Tint the header background toward the success green by this `0.0..=1.0`
+    /// reload-flash intensity (see `Session::reload_flash_alpha`).
+    ///
+    /// When `alpha` is `0.0` the header renders with the standard `CARD_BG`
+    /// background. At `1.0` the background is blended by `RELOAD_FLASH_BLEND_CAP`
+    /// toward `STATUS_GREEN`. Values outside `[0.0, 1.0]` are clamped.
+    pub fn reload_flash(mut self, alpha: f32) -> Self {
+        self.reload_flash = alpha;
         self
     }
 }
@@ -73,8 +96,15 @@ pub fn render_main_header(
     header: &MainHeader<'_>,
     ctx: Option<&mut MouseCtx<'_>>,
 ) {
+    // Blend header background from CARD_BG toward STATUS_GREEN based on the
+    // reload-flash alpha. At alpha == 0.0, lerp_color returns CARD_BG unchanged.
+    let bg = crate::widgets::shimmer::lerp_color(
+        palette::CARD_BG,
+        palette::STATUS_GREEN,
+        header.reload_flash * RELOAD_FLASH_BLEND_CAP,
+    );
     // Render glass container with rounded borders
-    let block = styles::glass_block(false).style(Style::default().bg(palette::CARD_BG));
+    let block = styles::glass_block(false).style(Style::default().bg(bg));
 
     // Get inner content area (inside borders) before rendering
     let inner = block.inner(area);
@@ -725,5 +755,64 @@ mod tests {
             .expect("HotReload region must be registered");
         assert_eq!(entry.rect.width, 2);
         assert_eq!(entry.rect.height, 1);
+    }
+
+    // ── Reload-flash background tint tests (Phase 6, Task 02) ────────────────
+
+    /// Helper: render a `MainHeader` with the given `reload_flash` alpha into an
+    /// 80×5 buffer and return the background color of the first inner cell (row 1,
+    /// col 1 — inside the rounded-border block).
+    fn render_header_bg(alpha: f32) -> ratatui::style::Color {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 80, 5);
+        let mut buf = Buffer::empty(area);
+        let icons = IconSet::new(fdemon_app::config::IconMode::Unicode);
+        let header = MainHeader::new(Some("test"), icons).reload_flash(alpha);
+        render_main_header(area, &mut buf, &header, None);
+        // Row 0, col 0 is the top-left border cell. Row 1, col 1 is the first
+        // inner cell — inside the rounded glass_block border — which carries the
+        // block background style.
+        buf[(1, 1)].style().bg.unwrap_or(ratatui::style::Color::Reset)
+    }
+
+    #[test]
+    fn header_bg_unchanged_without_flash() {
+        // With alpha == 0.0, the header background must be exactly CARD_BG.
+        let bg = render_header_bg(0.0);
+        assert_eq!(
+            bg,
+            palette::CARD_BG,
+            "expected CARD_BG with reload_flash=0.0, got {bg:?}"
+        );
+    }
+
+    #[test]
+    fn header_bg_tints_toward_green_with_flash() {
+        // With alpha == 1.0, the background must be blended — neither CARD_BG nor
+        // STATUS_GREEN (the blend cap is 0.35, so it sits between them).
+        let bg = render_header_bg(1.0);
+        assert_ne!(
+            bg,
+            palette::CARD_BG,
+            "expected tinted bg with reload_flash=1.0, got CARD_BG unchanged"
+        );
+        assert_ne!(
+            bg,
+            palette::STATUS_GREEN,
+            "expected partial blend (not full STATUS_GREEN) with reload_flash=1.0"
+        );
+        // Verify the tint is an RGB interpolation within the expected range.
+        // CARD_BG = Rgb(18, 21, 28), STATUS_GREEN = Rgb(16, 185, 129)
+        // At t = 1.0 * 0.35, green channel: 21 + (185 - 21) * 0.35 ≈ 78
+        if let ratatui::style::Color::Rgb(_r, g, _b) = bg {
+            assert!(
+                g > 21 && g < 185,
+                "green channel {g} should be between CARD_BG.g (21) and STATUS_GREEN.g (185)"
+            );
+        } else {
+            panic!("expected Rgb color, got {bg:?}");
+        }
     }
 }
