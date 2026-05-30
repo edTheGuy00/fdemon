@@ -182,6 +182,35 @@ module without a similar explicit exception. Future HTTPS-using features (e.g., 
 reporting, plugin registry) should land in `fdemon-daemon` or a new dedicated crate
 (`fdemon-net`), not be added next to `version_check.rs` as precedent.
 
+### Approved Exception: `is_supported` Filtering is Dialog-Scoped by Design (Phase 5)
+
+The `Device::is_supported` filter introduced in Phase 5 (runnable-device filtering) is applied
+**only** at `group_connected_devices` in
+`fdemon-app/src/new_session_dialog/device_groups.rs`. That function is the single shared
+chokepoint for the new-session dialog's Connected tab — it governs the flat device list, cursor
+position, multi-select checked set, and click regions. Every consumer of the Connected tab
+goes through this function, so the invariant holds consistently within interactive device
+selection.
+
+`find_auto_launch_target` (`fdemon-app/src/spawn.rs`) and the headless launch path
+**intentionally do not** consult `is_supported`. These non-interactive paths resolve a device
+from the full discovered list (`devices.first()` / `find_device()` / cached `last_device`
+validated by `validate_last_selection()`). This matches the Phase 5 scope ("Connected tab
+only") and is consistent with `find_auto_launch_target`'s own doc comment, which states that
+callers should pre-filter empty device lists before invoking it — the function is not the
+right place to apply filtering policy.
+
+**Reviewer guidance:** Do **not** flag the auto-launch or headless paths' lack of an
+`is_supported` check as a bug or regression. The feature's invariant is intentionally
+dialog-scoped. If a future product decision makes "never launch an unrunnable target" a
+system-wide invariant, that is a **new feature task** — not a regression fix. The shape of
+that task would be: introduce a shared `Device::is_runnable()` helper (or equivalent), apply
+a *default-true fallback* filter in `find_auto_launch_target` (fall back to the unfiltered
+list if all devices are unsupported so the list is never emptied), and add tests for an
+unsupported `devices.first()` and an unsupported cached `last_device`. See
+`workflow/reviews/features/phase-5-runnable-filtering/ACTION_ITEMS.md` item M2 for the
+decision record.
+
 ## Performance Concerns
 
 ### Hot Paths
