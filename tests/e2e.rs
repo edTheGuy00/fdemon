@@ -32,6 +32,8 @@ pub fn test_device(id: &str, name: &str, platform: &str) -> Device {
         platform_type: Some(platform.to_string()),
         ephemeral: false,
         emulator_id: None,
+        is_supported: true,
+        capabilities: None,
     }
 }
 

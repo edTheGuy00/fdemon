@@ -404,6 +404,8 @@ mod tests {
                 platform_type: None,
                 ephemeral: false,
                 emulator_id: None,
+                is_supported: true,
+                capabilities: None,
             }
         }
 
@@ -550,6 +552,8 @@ mod press_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         };
         state.session_manager.create_session(&device).unwrap();
         state
@@ -587,6 +591,8 @@ mod press_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         };
         state.session_manager.create_session(&device).unwrap();
         state
@@ -659,6 +665,8 @@ mod press_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         };
         state.session_manager.create_session(&device).unwrap();
         state

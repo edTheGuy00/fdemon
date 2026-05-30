@@ -1144,6 +1144,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2257,6 +2259,8 @@ mod tests {
                 platform_type: None,
                 ephemeral: false,
                 emulator_id: None,
+                is_supported: true,
+                capabilities: None,
             };
             let _ = state.session_manager.create_session(&d);
         }
@@ -2464,6 +2468,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 

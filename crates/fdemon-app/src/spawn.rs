@@ -480,6 +480,8 @@ mod tests {
             platform: platform.to_string(),
             emulator: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
             ephemeral: false,
             category: None,
             platform_type: None,

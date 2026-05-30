@@ -417,6 +417,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         };
         let session_id = state.session_manager.create_session(&device).unwrap();
         (state, session_id)

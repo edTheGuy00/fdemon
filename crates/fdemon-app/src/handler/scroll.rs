@@ -173,6 +173,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 

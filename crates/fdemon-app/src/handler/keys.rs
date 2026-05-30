@@ -1503,6 +1503,8 @@ mod device_selector_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2141,6 +2143,8 @@ mod performance_sort_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2495,6 +2499,8 @@ mod network_filter_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2625,6 +2631,8 @@ mod dap_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2905,6 +2913,8 @@ mod inspector_phase1_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -3068,6 +3078,8 @@ mod memory_panel_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -3110,6 +3122,8 @@ mod timeline_pan_zoom_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 

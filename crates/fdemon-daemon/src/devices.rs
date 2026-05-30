@@ -12,6 +12,26 @@ use tokio::time::timeout;
 /// Default timeout for flutter devices command
 const DEVICES_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn default_is_supported() -> bool {
+    true
+}
+
+/// Per-device capability flags reported by `flutter devices --machine`.
+///
+/// This struct is parse-and-store only for now; downstream filtering only uses
+/// `Device::is_supported`. Future UI phases may surface these flags.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceCapabilities {
+    /// Whether hot reload is supported on this device.
+    #[serde(default)]
+    pub hot_reload: bool,
+
+    /// Whether hot restart is supported on this device.
+    #[serde(default)]
+    pub hot_restart: bool,
+}
+
 /// A connected Flutter device
 ///
 /// Based on Flutter daemon protocol v3.38.5 (protocol version 0.6.1)
@@ -51,6 +71,19 @@ pub struct Device {
     /// Added in protocol v0.5.3
     #[serde(default)]
     pub emulator_id: Option<String>,
+
+    /// Whether the Flutter toolchain can run this device for the current project.
+    ///
+    /// `flutter devices --machine` emits `isSupported`; older/abbreviated payloads
+    /// and daemon `device.added` events omit it — default `true` keeps them visible
+    /// so filtering only ever *removes* explicitly-unsupported devices.
+    #[serde(default = "default_is_supported")]
+    pub is_supported: bool,
+
+    /// Per-device capability flags (hot reload / hot restart). Optional; absent on
+    /// abbreviated payloads. Parse-and-store only for now (future UI use).
+    #[serde(default)]
+    pub capabilities: Option<DeviceCapabilities>,
 }
 
 impl Device {
@@ -322,6 +355,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -449,16 +484,33 @@ Some trailing message"#;
         assert_eq!(devices[0].name, "Tacos al pastor");
         assert_eq!(devices[0].platform, "ios");
         assert_eq!(devices[0].platform_short(), "iOS");
+        assert!(devices[0].is_supported, "iOS device should be supported");
+        let caps = devices[0]
+            .capabilities
+            .as_ref()
+            .expect("iOS device should have capabilities");
+        assert!(caps.hot_reload, "iOS device should support hot reload");
+        assert!(caps.hot_restart, "iOS device should support hot restart");
 
         // macOS uses "darwin" in targetPlatform
         assert_eq!(devices[1].name, "macOS");
         assert_eq!(devices[1].platform, "darwin");
         assert_eq!(devices[1].platform_short(), "macOS");
+        assert!(devices[1].is_supported, "macOS device should be supported");
+        assert!(
+            devices[1].capabilities.is_none(),
+            "macOS device has no capabilities object"
+        );
 
         // Chrome uses "web-javascript"
         assert_eq!(devices[2].name, "Chrome");
         assert_eq!(devices[2].platform, "web-javascript");
         assert_eq!(devices[2].platform_short(), "Web");
+        assert!(devices[2].is_supported, "Chrome device should be supported");
+        assert!(
+            devices[2].capabilities.is_none(),
+            "Chrome device has no capabilities object"
+        );
     }
 
     #[test]
@@ -667,6 +719,34 @@ Some trailing message"#;
             msg.contains("/nonexistent/flutter") || matches!(err, Error::FlutterNotFound),
             "expected error to reference the binary path, got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_is_supported_defaults_true_when_absent() {
+        let output = r#"[{"id":"x","name":"X","platform":"ios","emulator":false}]"#;
+        let devices = parse_devices_output(output).unwrap();
+        assert!(
+            devices[0].is_supported,
+            "absent isSupported must default to true"
+        );
+        assert!(devices[0].capabilities.is_none());
+    }
+
+    #[test]
+    fn test_is_supported_false_is_parsed() {
+        let output = r#"[{"id":"x","name":"X","targetPlatform":"web-javascript",
+            "emulator":false,"isSupported":false}]"#;
+        let devices = parse_devices_output(output).unwrap();
+        assert!(!devices[0].is_supported);
+    }
+
+    #[test]
+    fn test_capabilities_parsed_when_present() {
+        let output = r#"[{"id":"x","name":"X","targetPlatform":"ios","emulator":false,
+            "isSupported":true,"capabilities":{"hotReload":true,"hotRestart":true}}]"#;
+        let devices = parse_devices_output(output).unwrap();
+        let caps = devices[0].capabilities.as_ref().unwrap();
+        assert!(caps.hot_reload && caps.hot_restart);
     }
 
     #[tokio::test]

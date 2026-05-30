@@ -27,6 +27,8 @@ fn test_device(id: &str, name: &str) -> fdemon_daemon::Device {
         platform_type: None,
         ephemeral: false,
         emulator_id: None,
+        is_supported: true,
+        capabilities: None,
     }
 }
 
@@ -6932,6 +6934,8 @@ fn android_device(id: &str) -> fdemon_daemon::Device {
         platform_type: None,
         ephemeral: false,
         emulator_id: None,
+        is_supported: true,
+        capabilities: None,
     }
 }
 
@@ -6946,6 +6950,8 @@ fn linux_device(id: &str) -> fdemon_daemon::Device {
         platform_type: None,
         ephemeral: false,
         emulator_id: None,
+        is_supported: true,
+        capabilities: None,
     }
 }
 

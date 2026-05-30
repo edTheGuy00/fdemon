@@ -1379,6 +1379,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         };
         dialog.target_selector.connected_devices.push(device);
         // selected_index = 1 because index 0 is the group header
