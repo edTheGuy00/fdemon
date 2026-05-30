@@ -413,20 +413,20 @@ impl TargetSelectorState {
         if self.active_tab != TargetTab::Connected {
             return;
         }
-        let all_ids: Vec<String> = self
+        let supported_ids: BTreeSet<String> = self
             .connected_devices
             .iter()
             .filter(|d| d.is_supported)
             .map(|d| d.id.clone())
             .collect();
-        let all_checked = !all_ids.is_empty()
-            && all_ids
+        let all_checked = !supported_ids.is_empty()
+            && supported_ids
                 .iter()
                 .all(|id| self.checked_device_ids.contains(id));
         if all_checked {
             self.checked_device_ids.clear();
         } else {
-            self.checked_device_ids = all_ids.into_iter().collect();
+            self.checked_device_ids = supported_ids;
         }
     }
 
@@ -465,9 +465,7 @@ impl TargetSelectorState {
     fn is_connected_device_supported(&self, id: &str) -> bool {
         self.connected_devices
             .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.is_supported)
-            .unwrap_or(false)
+            .any(|d| d.id == id && d.is_supported)
     }
 }
 
@@ -871,14 +869,18 @@ mod tests {
 
     #[test]
     fn toggle_checked_cursor_skips_unsupported() {
-        // Build a state where the cursor id resolves to an unsupported device.
-        let state = state_with(vec![device("a", false)]);
-        // Manually poke a checked_device_ids entry so we can confirm it is not modified.
-        // The cursor device "a" is unsupported; toggle_checked_cursor must be a no-op.
-        // We can't easily place the cursor ON the unsupported device via normal nav
-        // (it's filtered from the flat list), so we bypass the guard by calling
-        // is_connected_device_supported directly through the helper test:
-        // Instead, verify the helper itself:
+        // Only an unsupported device: it is filtered from the flat list, so the cursor
+        // cannot resolve to it and toggle_checked_cursor() must be a no-op.
+        let mut state = state_with(vec![device("a", false)]);
+        // Pre-seed to confirm the checked-set is left untouched by the no-op.
+        state.checked_device_ids.insert("a".to_string());
+        state.toggle_checked_cursor();
+        assert!(
+            state.checked_device_ids.contains("a"),
+            "no-op must not remove a pre-seeded id"
+        );
+        assert_eq!(state.checked_device_ids.len(), 1, "no-op must not add ids");
+        // Keep the direct-helper assertions too (they document the unknown-id case).
         assert!(!state.is_connected_device_supported("a"));
         assert!(!state.is_connected_device_supported("nonexistent"));
     }

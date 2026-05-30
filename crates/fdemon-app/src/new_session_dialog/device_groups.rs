@@ -263,7 +263,7 @@ fn nearest_selectable<T>(items: &[DeviceListItem<T>], index: usize) -> usize {
     }
 
     // Then backward (return last selectable)
-    selectable[selectable.len() - 1]
+    selectable.last().copied().unwrap_or(0)
 }
 
 /// Navigate to next selectable item
@@ -283,7 +283,7 @@ pub fn next_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize 
     // Find current position in selectable list
     let current_pos = selectable.iter().position(|&i| i == start).unwrap_or(0);
     let next_pos = (current_pos + 1) % selectable.len();
-    selectable[next_pos]
+    selectable.get(next_pos).copied().unwrap_or(0)
 }
 
 /// Navigate to previous selectable item
@@ -306,5 +306,5 @@ pub fn prev_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize 
     } else {
         current_pos - 1
     };
-    selectable[prev_pos]
+    selectable.get(prev_pos).copied().unwrap_or(0)
 }
