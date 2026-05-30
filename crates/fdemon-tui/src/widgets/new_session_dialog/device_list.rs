@@ -209,6 +209,24 @@ pub fn connected_device_list_render_with_regions(
     let groups = group_connected_devices(list.devices);
     let items = flatten_groups(&groups);
 
+    if items.is_empty() {
+        use ratatui::layout::Alignment;
+        use ratatui::widgets::Paragraph;
+
+        let msg = if list.devices.is_empty() {
+            "No connected devices"
+        } else {
+            // Devices were discovered but all are unsupported for this project.
+            "Devices found but none runnable for this project \u{2014} check enabled platforms"
+        };
+        Paragraph::new(msg)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(palette::TEXT_MUTED))
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .render(area, buf);
+        return;
+    }
+
     // Calculate visible range
     let visible_height = area.height as usize;
     let start = list.scroll_offset.min(items.len().saturating_sub(1));
@@ -875,6 +893,94 @@ mod tests {
             !header_content.contains("[x]") && !header_content.contains("[ ]"),
             "header row must not display a checkbox; got: {}",
             header_content
+        );
+    }
+
+    // ─── Empty-state messaging tests (task 03) ──────────────────────────────
+
+    #[test]
+    fn connected_empty_shows_no_devices() {
+        // devices: &[] → expect "No connected devices"
+        let devices: Vec<Device> = vec![];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("No connected devices"),
+            "empty device list should show 'No connected devices'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("none runnable"),
+            "'none runnable' must not appear when list is genuinely empty"
+        );
+    }
+
+    #[test]
+    fn connected_all_unsupported_shows_none_runnable() {
+        // devices: one device with is_supported = false → expect "none runnable"
+        // task 02's filter in group_connected_devices excludes unsupported devices,
+        // so items is empty while list.devices is non-empty.
+        let devices = vec![Device {
+            id: "unsupported-1".to_string(),
+            name: "Unsupported Phone".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: false,
+            capabilities: None,
+        }];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("none runnable"),
+            "all-unsupported list should show 'none runnable' message; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("No connected devices"),
+            "'No connected devices' must not appear when devices exist but are unsupported"
+        );
+    }
+
+    #[test]
+    fn connected_with_supported_device_renders_rows_not_empty_state() {
+        // devices: one supported device → buffer contains the device name, not the empty message
+        let devices = vec![test_device_full("1", "Pixel 9", "android", false)];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("Pixel 9"),
+            "supported device name should appear; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("No connected devices"),
+            "empty-state message must not appear when a supported device is present"
+        );
+        assert!(
+            !content.contains("none runnable"),
+            "none-runnable message must not appear when a supported device is present"
         );
     }
 
