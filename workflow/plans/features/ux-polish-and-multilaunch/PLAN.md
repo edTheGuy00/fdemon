@@ -67,6 +67,10 @@ The theme is true-color RGB (`theme/palette.rs`), which makes per-character colo
 - `crates/fdemon-app/src/session/session.rs` — optional `reload_flash_alpha()` helper decaying from `last_reload_time`.
 - `crates/fdemon-tui/src/render/mod.rs` / `widgets/header.rs` — tint header background toward success green using the Phase 2 `lerp` while the flash is active.
 
+**Phase 7 — Multi-session header spacing + separator**
+- `crates/fdemon-tui/src/widgets/header.rs` — multi-session branch (`render_main_header`, lines 128-153): re-layout inner area into title / dim separator rule / tabs; add a private `render_separator_row` helper. Reads `palette::BORDER_DIM`.
+- `crates/fdemon-tui/src/layout.rs` — comment-only update (header_height stays 5).
+
 ---
 
 ## Development Phases
@@ -309,6 +313,84 @@ status bar in lockstep with the dialog's discovery spinner.
 
 ---
 
+### Phase 7: Multi-session header spacing + separator
+
+**Goal**: Fix the miscalibrated multi-session header block. Today the title row and
+the device tabs are crammed adjacent with no separation, and a full empty row of
+dead `CARD_BG` space sits at the **bottom** of the bordered block. Re-distribute the
+already-allocated space so the inner area reads **title → dim separator rule → tabs**,
+with no wasted row.
+
+**Duration**: ~1–1.5h (single TUI-only task, no state/layout-height change)
+
+**Problem (confirmed by research)**: In multi-session mode `layout::create_with_sessions`
+allocates `Constraint::Length(5)` for the header (`layout.rs:27`) → **3** inner rows
+(after the rounded `glass_block` border). But `render_main_header`
+(`widgets/header.rs:128-149`) only paints **2** of them: the title at `inner.y` and the
+tabs at `inner.y + 1` (`render_session_tabs`, a single-row ratatui `Tabs`). The 3rd
+inner row (`inner.y + 2`) is never written and renders as blank `CARD_BG` **inside the
+border** — the "too much empty space at the bottom." The `glass_block` carries no
+`Padding` (`theme/styles.rs:102`), so all vertical rhythm comes from explicit row
+placement. The fix is purely a re-layout of the existing 3 inner rows plus one new dim
+rule; **`header_height` stays 5**, so `layout.rs` and its tests are unaffected (only the
+inline comment changes).
+
+**Decision (confirmed with user)**: a **dim horizontal rule** (`─` in `BORDER_DIM`)
+between title and tabs — not a blank gap, not a height reduction. The rule is inset 1
+cell on each side to align with the tabs' existing left/right padding
+(`tabs.rs:118-122`, `x+1 / width-2`).
+
+```
+╭───────────────────────────────────────────╮
+│ ● Flutter Demon v0.5.5 / sample             │   ← title  (inner.y)
+│ ─────────────────────────────────────────── │   ← rule   (inner.y + 1, BORDER_DIM, inset)
+│ ● iPhone 17 │ ● macOS                        │   ← tabs   (inner.y + 2)
+╰───────────────────────────────────────────╯
+```
+
+#### Steps
+
+1. **Re-layout the multi-session inner area** (`widgets/header.rs`, multi-session branch
+   at lines 128-153)
+   - When `inner.height >= 3` (the normal multi-session case, `inner.height == 3`):
+     - Title row at `inner.y`, `height: 1` (unchanged call to `render_title_row(.., false, None)`).
+     - **Separator row** at `inner.y + 1`, `height: 1`: paint a `─` rule across
+       `inner.x + 1 .. inner.x + inner.width - 1` styled `BORDER_DIM` fg on the current
+       `bg` (respect the reload-flash `bg` already computed at `header.rs:104`, so the
+       rule tints with the flash). Add a small private helper (e.g. `render_separator_row`)
+       rather than inlining, to keep `render_main_header` readable.
+     - Tabs row at `inner.y + 2`, `height: inner.height.saturating_sub(2)`
+       (`render_session_tabs`).
+   - **Graceful degradation**: keep the existing `inner.height >= 2` branch as the
+     fallback for a vertically-squeezed terminal — title at `inner.y`, tabs at
+     `inner.y + 1`, **no** separator (current behaviour, still better than clipping).
+     The `< 2` branch (title only) is unchanged.
+   - No change to `render_session_tabs` itself; it already pads `x+1 / width-2`, which
+     the separator's inset matches.
+
+2. **Update the layout comment** (`layout.rs:24-31`)
+   - Reword the `5 // Top border + title row + tabs row + breathing row + bottom border`
+     comment to `title row + separator row + tabs row` (the "breathing row" is no longer
+     dead space at the bottom — it is now the separator between title and tabs). **No
+     code/height change**; the existing `test_create_layout_multiple_sessions` (height
+     == 5) stays green.
+
+3. **Tests** (`widgets/header.rs` test module)
+   - Add a render test asserting that, in multi-session mode on a tall-enough header
+     (`inner.height >= 3`), row `inner.y + 1` contains the `─` rule glyph and the tabs
+     content now lands on row `inner.y + 2` (not `inner.y + 1`).
+   - Assert the bottom inner row is no longer the only painted-but-empty row (the dead
+     space is gone — the separator occupies the middle row).
+   - Keep/verify the squeezed-terminal fallback (`inner.height == 2`) still renders
+     title + tabs with no separator.
+
+**Milestone**: With ≥2 sessions running, the header shows the title, a subtle dim rule,
+then the device tabs — evenly spaced with no empty band at the bottom of the block.
+
+**Tasks**: see `phase-7-header-spacing/TASKS.md`.
+
+---
+
 ## Edge Cases & Risks
 
 ### Multi-launch
@@ -397,6 +479,13 @@ status bar in lockstep with the dialog's discovery spinner.
 - [ ] The bottom status bar shows the braille spinner in place of the static icon for `Initializing`, `Preparing`, and `Launching` only; `Reloading` (`↻`), `Quitting` (`✗`), `Running` (`●`), and `Stopped` (`○`) keep their static icons.
 - [ ] The status-bar spinner advances in unison with the new-session dialog spinner (same `SPINNER_TICKS_PER_FRAME` cadence off the global `animation_frame`).
 - [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+
+### Phase 7 Complete When:
+- [ ] In multi-session mode the header renders title → dim `BORDER_DIM` separator rule → device tabs, with **no** empty `CARD_BG` band at the bottom of the bordered block.
+- [ ] The separator rule is inset 1 cell on each side (aligned with the tabs' existing padding) and tints with the reload-flash `bg` like the rest of the header.
+- [ ] `header_height` is unchanged (still 5); `layout.rs` tests stay green and only the inline comment is reworded.
+- [ ] The vertically-squeezed fallback (`inner.height == 2`) still renders title + tabs (no separator) without clipping; single-session/no-session headers are visually unchanged.
+- [ ] A `header.rs` render test asserts the rule glyph on `inner.y + 1` and tabs on `inner.y + 2`; `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ---
 
