@@ -21,11 +21,11 @@ pub struct ScreenAreas {
 /// * `area` - Total screen area
 /// * `session_count` - Number of active sessions (determines header height for tabs)
 pub fn create_with_sessions(area: Rect, session_count: usize) -> ScreenAreas {
-    // Multi-session mode needs extra height for tabs:
+    // Multi-session mode needs extra height for the separator and tabs rows:
     // - Single session: Length(3) = 1 inner row (title only)
-    // - Multiple sessions: Length(5) = 3 inner rows (title + tabs + breathing room)
+    // - Multiple sessions: Length(5) = 3 inner rows (title + separator + tabs)
     let header_height = if session_count > 1 {
-        5 // Top border + title row + tabs row + breathing row + bottom border
+        5 // Top border + title row + separator row + tabs row + bottom border
     } else {
         3 // Top border + title row + bottom border
     };

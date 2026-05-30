@@ -126,23 +126,44 @@ pub fn render_main_header(
         .unwrap_or(false);
 
     if has_multiple_sessions {
-        // Multi-session mode: split into title row and tabs row
-        if inner.height >= 2 {
-            // Title row — no shortcuts in multi-session mode (show_device = false)
-            let title_area = Rect {
+        // Multi-session mode: title → dim separator rule → tabs
+        let title_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        };
+
+        if inner.height >= 3 {
+            // Normal case (inner.height == 3 given header_height == 5):
+            // title row, then dim separator rule, then tabs row.
+            header.render_title_row(title_area, buf, false, None);
+
+            let sep_area = Rect {
                 x: inner.x,
-                y: inner.y,
+                y: inner.y + 1,
                 width: inner.width,
                 height: 1,
             };
-            header.render_title_row(title_area, buf, false, None);
+            render_separator_row(sep_area, buf, bg);
 
-            // Tabs row
+            let tabs_area = Rect {
+                x: inner.x,
+                y: inner.y + 2,
+                width: inner.width,
+                height: inner.height.saturating_sub(2),
+            };
+            if let Some(session_manager) = header.session_manager {
+                render_session_tabs(tabs_area, buf, session_manager, header.icons, ctx);
+            }
+        } else if inner.height == 2 {
+            // Squeezed terminal: title + tabs adjacent, no separator (prior behaviour)
+            header.render_title_row(title_area, buf, false, None);
             let tabs_area = Rect {
                 x: inner.x,
                 y: inner.y + 1,
                 width: inner.width,
-                height: inner.height.saturating_sub(1),
+                height: 1,
             };
             if let Some(session_manager) = header.session_manager {
                 render_session_tabs(tabs_area, buf, session_manager, header.icons, ctx);
@@ -372,6 +393,27 @@ impl MainHeader<'_> {
             buf.set_line(area.x, area.y, &left_line, area.width);
         }
     }
+}
+
+/// Render a dim horizontal rule separating the title row from the device tabs
+/// in the multi-session header. Inset by one cell on each side to align with the
+/// tabs' left/right padding; painted on `bg` so it tints with the reload flash.
+fn render_separator_row(area: Rect, buf: &mut Buffer, bg: ratatui::style::Color) {
+    if area.width <= 2 || area.height == 0 {
+        return;
+    }
+    let rule_width = area.width.saturating_sub(2) as usize;
+    let line = Line::from(Span::styled(
+        "─".repeat(rule_width),
+        Style::default().fg(palette::BORDER_DIM).bg(bg),
+    ));
+    let rule_area = Rect {
+        x: area.x + 1,
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    line.render(rule_area, buf);
 }
 
 /// Map platform string to device icon
@@ -827,5 +869,112 @@ mod tests {
         } else {
             panic!("expected Rgb color, got {bg:?}");
         }
+    }
+
+    // ── Multi-session separator tests (Phase 7, Task 01) ─────────────────────
+
+    /// Build a SessionManager with two sessions and render into the given area,
+    /// returning the buffer for direct cell inspection.
+    fn render_multi_session_header(area: ratatui::layout::Rect) -> ratatui::buffer::Buffer {
+        use ratatui::buffer::Buffer;
+
+        let mut session_manager = SessionManager::new();
+        session_manager
+            .create_session(&test_device_with_platform("d1", "iPhone 15", "ios"))
+            .unwrap();
+        session_manager
+            .create_session(&test_device_with_platform("d2", "Pixel 7", "android"))
+            .unwrap();
+
+        let icons = IconSet::new(fdemon_app::config::IconMode::Unicode);
+        let header = MainHeader::new(Some("test_app"), icons).with_sessions(&session_manager);
+        let mut buf = Buffer::empty(area);
+        render_main_header(area, &mut buf, &header, None);
+        buf
+    }
+
+    #[test]
+    fn multi_session_header_renders_separator_between_title_and_tabs() {
+        // height=5 → border(1) + title(1) + sep(1) + tabs(1) + border(1)
+        // inner.y = 1 (after top border), so separator is at y=2, tabs at y=3.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 5);
+        let buf = render_multi_session_header(area);
+
+        // The separator rule is at inner.y + 1 = 2; inset 1 cell → x starts at 2
+        // (x=1 is first inner cell, inset adds 1 more).
+        // Check that at least one cell on row y=2, x >= 2 holds the '─' glyph.
+        let sep_row = 2u16;
+        let found_rule = (2u16..area.width - 1).any(|x| buf[(x, sep_row)].symbol() == "─");
+        assert!(
+            found_rule,
+            "expected '─' rule on row {sep_row} (separator between title and tabs)"
+        );
+
+        // Tabs content (device names) must land on row y=3, not y=2.
+        let tabs_row = 3u16;
+        let title_row = 1u16;
+        // The title row must not contain the '─' glyph.
+        let rule_on_title = (0u16..area.width).any(|x| buf[(x, title_row)].symbol() == "─");
+        assert!(
+            !rule_on_title,
+            "title row {title_row} must not contain '─' rule"
+        );
+        // The tabs row must contain text content (device name or status icon).
+        let tabs_row_content: String = (0u16..area.width)
+            .map(|x| buf[(x, tabs_row)].symbol().to_string())
+            .collect();
+        assert!(
+            !tabs_row_content.trim().is_empty(),
+            "tabs row {tabs_row} should contain tab content, got only whitespace"
+        );
+    }
+
+    #[test]
+    fn multi_session_header_has_no_trailing_empty_inner_row() {
+        // With inner.height == 3 (header height=5), the three inner rows are:
+        //   row 1 (inner.y+0): title
+        //   row 2 (inner.y+1): separator
+        //   row 3 (inner.y+2): tabs
+        // Previously row 3 was blank; now it must carry tab content.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 5);
+        let buf = render_multi_session_header(area);
+
+        // inner.y = 1, so inner rows are y=1,2,3 and bottom border is y=4.
+        // Row y=3 (tabs row, inner.y+2) must not be all-blank inside the border.
+        let tabs_row = 3u16;
+        // Inspect cells from x=1 to x=width-2 (inside the border).
+        let inner_content: String = (1u16..area.width - 1)
+            .map(|x| buf[(x, tabs_row)].symbol().to_string())
+            .collect();
+        assert!(
+            !inner_content.trim().is_empty(),
+            "inner bottom row (y={tabs_row}) must not be blank — tabs should occupy it"
+        );
+    }
+
+    #[test]
+    fn multi_session_header_squeezed_omits_separator() {
+        // height=4 → border(1) + inner(2) + border(1); inner.height == 2.
+        // Expected: title at y=1, tabs at y=2, no '─' anywhere in the inner area.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 4);
+        let buf = render_multi_session_header(area);
+
+        // No '─' glyph should appear in rows y=1 or y=2 (the two inner rows).
+        for row in 1u16..3u16 {
+            let found_rule = (0u16..area.width).any(|x| buf[(x, row)].symbol() == "─");
+            assert!(
+                !found_rule,
+                "squeezed header (height=4) must not render '─' separator on row {row}"
+            );
+        }
+
+        // Title row (y=1) should contain the app name content.
+        let title_row_content: String = (0u16..area.width)
+            .map(|x| buf[(x, 1u16)].symbol().to_string())
+            .collect();
+        assert!(
+            title_row_content.contains("Flutter"),
+            "title row should contain 'Flutter' in squeezed mode"
+        );
     }
 }
