@@ -653,6 +653,35 @@ impl Session {
             .map(|t| t.format("%H:%M:%S").to_string())
     }
 
+    /// Duration of the post-reload success flash. The header tint fades from full
+    /// to none over this window.
+    const RELOAD_FLASH_DURATION_MS: i64 = 500;
+
+    /// Intensity of the reload-success flash at wall-clock `now`, in `[0.0, 1.0]`.
+    ///
+    /// Returns `1.0` at the instant of `complete_reload()` and decays linearly to
+    /// `0.0` over [`Self::RELOAD_FLASH_DURATION_MS`], staying `0.0` afterwards.
+    /// Returns `0.0` when the session never reloaded or is not in a steady
+    /// `Running` phase (so the flash never bleeds into `Stopped`/`Quitting`/error
+    /// states — a failed reload leaves the phase at `Running` and does not stamp
+    /// `last_reload_time`, so only successful reloads can trigger it).
+    ///
+    /// `now` is injected (rather than read internally) to keep the helper pure and
+    /// unit-testable; the render path passes `Local::now()`.
+    pub fn reload_flash_alpha(&self, now: DateTime<Local>) -> f32 {
+        if self.phase != AppPhase::Running {
+            return 0.0;
+        }
+        let Some(reloaded_at) = self.last_reload_time else {
+            return 0.0;
+        };
+        let elapsed_ms = (now - reloaded_at).num_milliseconds();
+        if !(0..Self::RELOAD_FLASH_DURATION_MS).contains(&elapsed_ms) {
+            return 0.0; // future timestamp (clock skew) or window elapsed
+        }
+        1.0 - (elapsed_ms as f32 / Self::RELOAD_FLASH_DURATION_MS as f32)
+    }
+
     /// Check if session is running
     pub fn is_running(&self) -> bool {
         matches!(self.phase, AppPhase::Running | AppPhase::Reloading)
@@ -1004,5 +1033,107 @@ mod tests {
             "another error — passes filter",
         ));
         assert_eq!(s.unseen_log_count, 2);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — reload_flash_alpha (Phase 6, Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    fn make_running_session_with_reload() -> (Session, DateTime<Local>) {
+        let mut s = make_session();
+        // Stamp a reload at a fixed wall-clock instant
+        let reloaded_at = Local::now();
+        s.phase = AppPhase::Running;
+        s.last_reload_time = Some(reloaded_at);
+        (s, reloaded_at)
+    }
+
+    #[test]
+    fn flash_alpha_full_at_reload_instant() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // now == last_reload_time → elapsed = 0 ms → alpha = 1.0
+        let alpha = s.reload_flash_alpha(reloaded_at);
+        assert!(
+            (alpha - 1.0).abs() < 1e-6,
+            "expected 1.0 at reload instant, got {alpha}"
+        );
+    }
+
+    #[test]
+    fn flash_alpha_half_at_midpoint() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // +250 ms → elapsed = 250 / 500 = 0.5 → alpha ≈ 0.5
+        let now = reloaded_at + chrono::Duration::milliseconds(250);
+        let alpha = s.reload_flash_alpha(now);
+        assert!(
+            (alpha - 0.5).abs() < 1e-4,
+            "expected ~0.5 at midpoint, got {alpha}"
+        );
+    }
+
+    #[test]
+    fn flash_alpha_zero_after_window() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // +500 ms (equal to RELOAD_FLASH_DURATION_MS) is outside the half-open
+        // range [0, 500), so alpha must be 0.0
+        let at_boundary = reloaded_at + chrono::Duration::milliseconds(500);
+        assert_eq!(s.reload_flash_alpha(at_boundary), 0.0);
+
+        // +1 s is well past the window
+        let past = reloaded_at + chrono::Duration::milliseconds(1_000);
+        assert_eq!(s.reload_flash_alpha(past), 0.0);
+    }
+
+    #[test]
+    fn flash_alpha_zero_when_never_reloaded() {
+        let mut s = make_session();
+        s.phase = AppPhase::Running;
+        // last_reload_time is None (default)
+        assert_eq!(s.reload_flash_alpha(Local::now()), 0.0);
+    }
+
+    #[test]
+    fn flash_alpha_suppressed_when_not_running() {
+        let (mut s, reloaded_at) = make_running_session_with_reload();
+        // Override phase to something other than Running
+        for phase in [
+            AppPhase::Stopped,
+            AppPhase::Reloading,
+            AppPhase::Quitting,
+            AppPhase::Initializing,
+            AppPhase::Launching,
+            AppPhase::Preparing,
+        ] {
+            s.phase = phase;
+            // Use the reload instant itself — would be 1.0 if Running
+            assert_eq!(
+                s.reload_flash_alpha(reloaded_at),
+                0.0,
+                "expected 0.0 for phase {phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flash_alpha_zero_for_past_now() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // now is 1 ms BEFORE the reload stamp → elapsed_ms = -1, outside [0,500)
+        let before = reloaded_at - chrono::Duration::milliseconds(1);
+        let alpha = s.reload_flash_alpha(before);
+        assert_eq!(alpha, 0.0, "expected 0.0 for clock-skew case, got {alpha}");
+    }
+
+    #[test]
+    fn flash_alpha_always_in_unit_interval() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // Probe every 50 ms from -100 to +1000 ms
+        for offset_ms in (-100i64..=1000).step_by(50) {
+            let now = reloaded_at + chrono::Duration::milliseconds(offset_ms);
+            let alpha = s.reload_flash_alpha(now);
+            assert!(
+                (0.0..=1.0).contains(&alpha),
+                "alpha {alpha} out of [0,1] at offset {offset_ms} ms"
+            );
+        }
     }
 }
