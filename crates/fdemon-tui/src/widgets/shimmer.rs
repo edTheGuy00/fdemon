@@ -17,7 +17,12 @@ use ratatui::text::Span;
 const SHIMMER_PERIOD_FRAMES: u64 = 30;
 
 /// Width of the bright "head" of the sweep, in characters.
-const SHIMMER_HEAD_WIDTH: f32 = 4.0;
+const SHIMMER_HEAD_WIDTH: f32 = 3.5;
+
+/// How far (in characters) the sweep head travels off-screen past each edge,
+/// so it fades in from the left, exits off the right, and leaves a brief
+/// all-dim rest gap between cycles instead of popping in / snapping back.
+const SHIMMER_LEAD: f32 = 3.0;
 
 /// Linearly interpolate between two colors. `t` is clamped to `[0.0, 1.0]`.
 ///
@@ -55,7 +60,12 @@ pub fn shimmer_spans(
     if chars.is_empty() {
         return Vec::new();
     }
-    let head = phase * chars.len() as f32;
+    // Map the head position into [-SHIMMER_LEAD, n + SHIMMER_LEAD) so it
+    // travels off-screen on both sides.  This produces a soft fade-in from the
+    // left edge, a soft fade-out off the right edge, and a brief all-dim rest
+    // gap between cycles — instead of snapping back to character 0.
+    let n = chars.len() as f32;
+    let head = phase * (n + SHIMMER_LEAD * 2.0) - SHIMMER_LEAD;
     chars
         .iter()
         .enumerate()
@@ -177,36 +187,105 @@ mod tests {
     fn shimmer_spans_head_is_brightest() {
         let base = Color::Rgb(50, 50, 50);
         let highlight = Color::Rgb(250, 250, 250);
+        let text = "ABCDEFGHIJ"; // 10 chars, n=10
+
+        // Choose a phase that places the head over interior index 4.
+        // head = phase * (n + SHIMMER_LEAD*2) - SHIMMER_LEAD
+        //      = phase * 16 - 3 = 4  →  phase = 7/16 = 0.4375
+        let phase = 7.0_f32 / 16.0;
+        let spans = shimmer_spans(text, base, highlight, phase, Modifier::empty());
+
+        // Character 4 is nearest the head and should be brightest.
+        let fg_at_head = match spans[4].style.fg {
+            Some(Color::Rgb(r, _, _)) => r,
+            _ => panic!("expected Rgb color at index 4"),
+        };
+
+        // Character 0: dist = |0 - 4| = 4 > SHIMMER_HEAD_WIDTH(3.5) → base
+        let fg_far_left = spans[0].style.fg;
+        assert_eq!(
+            fg_far_left,
+            Some(base),
+            "char at dist >3.5 from head (index 0) should equal base"
+        );
+
+        // Character 9: dist = |9 - 4| = 5 > SHIMMER_HEAD_WIDTH(3.5) → base
+        let fg_far_right = spans[9].style.fg;
+        assert_eq!(
+            fg_far_right,
+            Some(base),
+            "char at dist >3.5 from head (index 9) should equal base"
+        );
+
+        // Index 4 must be brighter than both far ends.
+        let base_r = match base {
+            Color::Rgb(r, _, _) => r,
+            _ => panic!("expected Rgb"),
+        };
+        assert!(
+            fg_at_head > base_r,
+            "head char r={fg_at_head} should be brighter than base r={base_r}"
+        );
+    }
+
+    /// At `phase = 0.0` the head is at `-SHIMMER_LEAD = -3.0`.  Index 0 is
+    /// `3.0` characters away → `t ≈ 0.143` (dim, not full highlight).  This
+    /// proves there is no pop-in at cycle start.
+    #[test]
+    fn shimmer_spans_no_pop_in_at_phase_zero() {
+        let base = Color::Rgb(50, 50, 50);
+        let highlight = Color::Rgb(250, 250, 250);
         let text = "ABCDEFGHIJ"; // 10 chars
 
-        // phase=0.0 → head at position 0.0 (leftmost character)
         let spans = shimmer_spans(text, base, highlight, 0.0, Modifier::empty());
 
-        // Character 0 is nearest the head and should be brightest (closest to highlight)
-        let fg_at_head = match spans[0].style.fg {
+        // At phase=0.0, head = -3.0.  Index 0 is only 3/3.5 of the way from
+        // the head to off-screen → dim, not full highlight.
+        let fg_0 = match spans[0].style.fg {
             Some(Color::Rgb(r, _, _)) => r,
-            _ => panic!("expected Rgb color"),
+            _ => panic!("expected Rgb at index 0"),
         };
-        // Character far from head (e.g. index 9) should be dimmer (at base or close to it)
-        let fg_far = match spans[9].style.fg {
-            Some(Color::Rgb(r, _, _)) => r,
-            _ => panic!("expected Rgb color"),
+        let base_r = match base {
+            Color::Rgb(r, _, _) => r,
+            _ => panic!("expected Rgb base"),
         };
+        let highlight_r = match highlight {
+            Color::Rgb(r, _, _) => r,
+            _ => panic!("expected Rgb highlight"),
+        };
+        let midpoint_r = (base_r as u16 + highlight_r as u16) / 2;
 
-        // Head character should be brighter (higher r value) than far character
+        // Index 0 should be closer to base than to highlight (no pop-in).
         assert!(
-            fg_at_head > fg_far,
-            "head char r={fg_at_head} should be brighter than far char r={fg_far}"
+            fg_0 < midpoint_r as u8,
+            "at phase=0.0, index 0 r={fg_0} should be closer to base ({base_r}) than highlight ({highlight_r})"
         );
+    }
 
-        // Characters beyond SHIMMER_HEAD_WIDTH from the head should equal base
-        // SHIMMER_HEAD_WIDTH=4.0; at phase=0.0 head=0.0, so index 5+ are >4 away → base
-        let fg_beyond = spans[5].style.fg;
-        assert_eq!(
-            fg_beyond,
-            Some(base),
-            "char at dist >4 from head should equal base"
-        );
+    /// There exists a phase range where the head is fully off-screen to the
+    /// right and every character is at `base` (the rest gap).
+    ///
+    /// For n=10, SHIMMER_LEAD=3.0, SHIMMER_HEAD_WIDTH=3.5:
+    ///   head > (n-1) + SHIMMER_HEAD_WIDTH  →  head > 12.5
+    ///   phase * 16 - 3 > 12.5  →  phase > 15.5/16 ≈ 0.96875
+    ///
+    /// At phase=0.97 the head is at 12.52, 3.52 past the last char → t=0 for all.
+    #[test]
+    fn shimmer_spans_rest_gap_all_at_base() {
+        let base = Color::Rgb(50, 50, 50);
+        let highlight = Color::Rgb(250, 250, 250);
+        let text = "ABCDEFGHIJ"; // 10 chars
+
+        let spans = shimmer_spans(text, base, highlight, 0.97, Modifier::empty());
+
+        // Every character must equal base (head is fully off-screen right).
+        for (i, span) in spans.iter().enumerate() {
+            assert_eq!(
+                span.style.fg,
+                Some(base),
+                "at phase=0.97, index {i} should be at base (rest gap)"
+            );
+        }
     }
 
     #[test]
