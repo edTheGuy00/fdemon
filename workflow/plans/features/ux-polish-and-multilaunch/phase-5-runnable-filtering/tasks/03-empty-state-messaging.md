@@ -87,3 +87,38 @@ fn connected_with_supported_device_renders_rows_not_empty_state() {
 - **Sequencing caveat (parallel with task 02):** the "none runnable" branch only *activates* once task 02's `group_connected_devices` filter is merged — until then `items` is non-empty when unsupported devices exist, so the branch is unreachable but harmless. The render logic here is correct and independent; the `connected_all_unsupported_shows_none_runnable` test will only pass once both tasks are integrated. If developed strictly in isolation before task 02 merges, mark that one test `#[ignore]` with a note, or stub a local filtered fixture.
 - Do **not** add a second `is_supported` filter here — task 02 owns the single filter in `group_connected_devices`. This task only reads `list.devices.is_empty()` to choose the message.
 - No new keybindings, messages, or state fields.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/device_list.rs` | Added empty-state block in `connected_device_list_render_with_regions` immediately after `let items = flatten_groups(&groups)` (before visible-range calculation), plus three new render tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Em-dash as Unicode escape**: Used `\u{2014}` for the em-dash in the "none runnable" message to avoid any potential encoding issues in source files, keeping the string a plain `&str` literal.
+2. **No `target_selector.rs` changes needed**: All logic fit cleanly in `device_list.rs` — `list.devices` (full slice) and `items` (filtered result) were already in scope at the right point, exactly as the task specified.
+3. **Device construction in test**: The `connected_all_unsupported_shows_none_runnable` test constructs a `Device` struct directly (setting `is_supported: false`) rather than using `test_device_full`, which always returns `is_supported: true`. This is the minimal approach to get an unsupported device fixture without adding a new test helper.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all 0 failures across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+All three new tests pass:
+- `connected_empty_shows_no_devices`
+- `connected_all_unsupported_shows_none_runnable`
+- `connected_with_supported_device_renders_rows_not_empty_state`
+
+### Risks/Limitations
+
+1. **None**: Implementation is minimal and self-contained. The early `return` in the empty-state branch correctly skips scroll indicator rendering and click-region registration, consistent with the existing Bootable empty-state pattern.

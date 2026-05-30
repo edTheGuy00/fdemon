@@ -100,3 +100,37 @@ Also strengthen `test_parse_devices_with_target_platform` (`devices.rs:410`) to 
 - **Why default true:** the daemon `device.added` live-event path and any abbreviated payload omit `isSupported`; defaulting true guarantees filtering only ever *removes* explicitly-unsupported devices, never accidentally hides one. See plan "Runnable-device filtering" risks.
 - The live `device.added` path uses a separate `DeviceInfo` struct (`fdemon-core/src/events.rs:93`) that never reaches the dialog, so no change is needed there.
 - Keep `capabilities` parse-and-store only; do not wire it into any UI this phase (Future Enhancement).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/devices.rs` | Added `DeviceCapabilities` struct, `default_is_supported()` helper, `is_supported` and `capabilities` fields to `Device`; updated `sample_device` fixture; added 3 new tests; strengthened `test_parse_devices_with_target_platform` |
+| `crates/fdemon-daemon/src/test_utils.rs` | Updated `test_device_full` fixture with `is_supported: true, capabilities: None` |
+| `crates/fdemon-app/src/` (25 files) | Added `is_supported: true, capabilities: None` to all `Device { ... }` struct literals in test code |
+| `src/headless/runner.rs` | Added `is_supported: true, capabilities: None` to 5 `Device { ... }` struct literals in test code |
+| `tests/e2e.rs` | Added `is_supported: true, capabilities: None` to `Device { ... }` struct literal |
+
+### Notable Decisions/Tradeoffs
+
+1. **Scope of changes**: The `Device` struct has no `Default` impl (it has a non-optional `platform: String`), so all 41 struct literals across the workspace needed explicit `is_supported` and `capabilities` fields. Used `perl` with a capture-group replacement to batch-update all `emulator_id: None,` terminations, then fixed one `emulator_id: Some(...)` case manually.
+2. **Default value**: `default_is_supported()` returns `true` per spec — absent `isSupported` means "assume runnable", ensuring filtering never accidentally hides devices on older/abbreviated payloads.
+3. **`DeviceCapabilities` is public**: Exported `pub` on both struct and fields so downstream crates (`fdemon-app`, `fdemon-tui`) can access it if needed in future phases.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (6,243 tests across all crates, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Worklist completeness**: The batch update covered all struct literals containing `emulator_id: None,`. One additional case (`emulator_id: Some(...)`) in `engine_event.rs` was caught by the compiler and fixed manually. No other edge cases were found.

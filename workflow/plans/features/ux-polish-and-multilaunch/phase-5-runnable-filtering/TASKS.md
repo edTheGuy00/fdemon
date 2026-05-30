@@ -27,9 +27,9 @@ Stop offering devices the Flutter toolchain won't actually run for this project,
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-device-supportability-flag](tasks/01-device-supportability-flag.md) | Not Started | - | 1–2h | `fdemon-daemon/src/devices.rs` |
-| 2 | [02-filter-and-skip-unsupported](tasks/02-filter-and-skip-unsupported.md) | Not Started | 1 | 2–3h | `fdemon-app/src/new_session_dialog/device_groups.rs`, `target_selector_state.rs` |
-| 3 | [03-empty-state-messaging](tasks/03-empty-state-messaging.md) | Not Started | 1 | 1–2h | `fdemon-tui/src/widgets/new_session_dialog/device_list.rs`, `target_selector.rs` |
+| 1 | [01-device-supportability-flag](tasks/01-device-supportability-flag.md) | ✅ Done | - | 1–2h | `fdemon-daemon/src/devices.rs` |
+| 2 | [02-filter-and-skip-unsupported](tasks/02-filter-and-skip-unsupported.md) | ✅ Done | 1 | 2–3h | `fdemon-app/src/new_session_dialog/device_groups.rs`, `target_selector_state.rs` |
+| 3 | [03-empty-state-messaging](tasks/03-empty-state-messaging.md) | ✅ Done | 1 | 1–2h | `fdemon-tui/src/widgets/new_session_dialog/device_list.rs`, `target_selector.rs` |
 
 ## File Overlap Analysis
 
@@ -57,12 +57,12 @@ Stop offering devices the Flutter toolchain won't actually run for this project,
 
 Phase 5 is complete when:
 
-- [ ] `Device` captures `is_supported: bool` (serde `default = true`); absent/abbreviated payloads (and daemon `device.added` events using the leaner `DeviceInfo`) are unaffected and remain visible.
-- [ ] Explicitly-unsupported connected devices (`isSupported: false`) are excluded from the Connected tab; cursor navigation, scroll, and mouse click-regions remain correct (no off-by-one).
-- [ ] Multi-select (Phase 1) cannot check an unsupported device via `Space` and `a`/select-all skips them; `checked_devices()` never returns an unsupported device.
-- [ ] When all discovered connected devices are filtered out, the dialog shows an actionable empty state ("Devices found but none runnable for this project — check enabled platforms") distinct from the truly-empty "No connected devices" state.
-- [ ] Parsing is unit-tested for present-true, present-false, and absent `isSupported`; filtering and multi-select-skip logic are unit-tested.
-- [ ] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+- [x] `Device` captures `is_supported: bool` (serde `default = true`); absent/abbreviated payloads (and daemon `device.added` events using the leaner `DeviceInfo`) are unaffected and remain visible.
+- [x] Explicitly-unsupported connected devices (`isSupported: false`) are excluded from the Connected tab; cursor navigation, scroll, and mouse click-regions remain correct (no off-by-one).
+- [x] Multi-select (Phase 1) cannot check an unsupported device via `Space` and `a`/select-all skips them; `checked_devices()` never returns an unsupported device.
+- [x] When all discovered connected devices are filtered out, the dialog shows an actionable empty state ("Devices found but none runnable for this project — check enabled platforms") distinct from the truly-empty "No connected devices" state.
+- [x] Parsing is unit-tested for present-true, present-false, and absent `isSupported`; filtering and multi-select-skip logic are unit-tested.
+- [x] `cargo test --workspace`, `cargo fmt --all -- --check`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ## Keyboard Shortcuts
 

@@ -142,3 +142,35 @@ fn checked_devices_drops_unsupported_safety_net() {
 - **Single chokepoint is the whole point** — see the TASKS.md "Critical design note." The TUI widget calls `group_connected_devices` directly, so the filter there fixes rendering and click-regions for free.
 - `set_connected_devices` already prunes stale checked ids on refresh (`:242-249`); the `checked_devices` safety net additionally covers a device whose `is_supported` flips false on a later poll without its id changing.
 - No keybinding or message changes — the guards are internal to existing handlers.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/device_groups.rs` | Added `is_supported` filter inside `group_connected_devices` (the shared chokepoint); updated doc comment. |
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | Resolved both `TODO(phase-5)` guards in `toggle_checked_cursor` and `toggle_select_all`; added `.is_supported` to `checked_devices()` safety net; added private `is_connected_device_supported()` helper; added 6 new unit tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single chokepoint**: The filter is placed only in `group_connected_devices` as specified. `compute_flat_list`, `selected_connected_device`, and the TUI widget all route through this function and pick up the filter for free with no double-filtering risk.
+2. **`connected_devices` stores the full list**: Unsupported devices remain in `TargetSelectorState::connected_devices` so task 03 can distinguish "found N but all unsupported" from "found 0". Only the grouped/rendered view excludes them.
+3. **`is_connected_device_supported` private helper**: The id-based lookup is robust even if a cursor somehow resolved to an unsupported device (edge case). Tests exercise this directly.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (0 warnings)
+- `cargo test -p fdemon-app` — Passed (2618 tests, 6 new Phase-5 tests)
+- `cargo test --workspace` — Passed (all crates, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **None**: All acceptance criteria met. Both `TODO(phase-5)` comments removed, single chokepoint filter in place, safety net added.
