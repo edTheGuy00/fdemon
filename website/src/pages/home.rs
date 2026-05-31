@@ -11,7 +11,7 @@ pub fn Home() -> impl IntoView {
     let feats = features();
 
     view! {
-        <Title text="Flutter Demon — A Rust TUI for Flutter" />
+        <Title text="Flutter Demon — A Rust TUI for Flutter" formatter=|t: String| t />
         <Meta name="description" content="Flutter Demon (fdemon) is a blazingly fast terminal UI for Flutter development written in Rust. Hot reload, multi-device sessions, real-time logs, and DevTools — all from your terminal." />
         <Link rel="canonical" href="https://fdemon.dev/" />
         <div class="space-y-24 pb-24">
