@@ -7,11 +7,27 @@
 # To deploy on your server:
 #   docker pull ghcr.io/edtheguy00/flutter-demon-site:latest
 #   docker run -d -p 80:80 ghcr.io/edtheguy00/flutter-demon-site:latest
+#
+# Build stages (Dockerfile):
+#   1. builder  — Rust + Trunk: wasm32 WASM SPA → dist/
+#   2. prerender — Node + Puppeteer: headless Chrome snapshots all 11 routes
+#                  into dist/<route>/index.html
+#                  If this step fails the CSR dist/ is used as-is (fallback).
+#   3. serve    — nginx: serves dist/ (with or without prerendered snapshots)
+#
+# To skip prerendering (emergency deploy):
+#   GitHub → Actions → Publish Website → Run workflow → skip_prerender: true
 
 name: Publish Website
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_prerender:
+        description: 'Skip headless-Chrome prerender step (use CSR fallback)'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -59,5 +75,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SKIP_PRERENDER=${{ inputs.skip_prerender == 'true' && '1' || '0' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
