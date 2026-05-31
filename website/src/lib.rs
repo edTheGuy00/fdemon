@@ -5,6 +5,7 @@ pub mod pages;
 use components::footer::Footer;
 use components::navbar::Navbar;
 use leptos::prelude::*;
+use leptos_meta::{provide_meta_context, Title};
 use leptos_router::components::{ParentRoute, Route, Router, Routes};
 use leptos_router::hooks::use_location;
 use leptos_router::path;
@@ -23,7 +24,10 @@ use pages::home::Home;
 
 #[component]
 pub fn App() -> impl IntoView {
+    provide_meta_context();
+
     view! {
+        <Title formatter=|text| format!("{text} — Flutter Demon") />
         <Router>
             <ScrollToTop />
             <div class="min-h-screen bg-slate-950 text-slate-200 selection:bg-blue-500/30 font-sans">
