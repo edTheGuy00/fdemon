@@ -5,9 +5,59 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Flutter Demon — Terminal UI for Flutter</title>
+
+    <!-- Primary meta -->
+    <meta name="description" content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust." />
+
+    <!-- Canonical (root; per-route canonicals injected by leptos_meta after WASM boots) -->
+    <link rel="canonical" href="https://fdemon.dev/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Flutter Demon" />
+    <meta property="og:title" content="Flutter Demon — Terminal UI for Flutter" />
+    <meta property="og:description" content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust." />
+    <meta property="og:url" content="https://fdemon.dev/" />
+    <meta property="og:image" content="https://fdemon.dev/og-image.png" />
+
+    <!-- Twitter / X Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Flutter Demon — Terminal UI for Flutter" />
+    <meta name="twitter:description" content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust." />
+    <meta name="twitter:image" content="https://fdemon.dev/og-image.png" />
+
+    <!-- JSON-LD: SoftwareApplication -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Flutter Demon",
+      "alternateName": "fdemon",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": ["macOS", "Linux", "Windows"],
+      "description": "fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust.",
+      "url": "https://fdemon.dev/",
+      "installUrl": "https://fdemon.dev/docs/installation",
+      "codeRepository": "https://github.com/edTheGuy00/fdemon",
+      "programmingLanguage": "Rust",
+      "license": "https://github.com/edTheGuy00/fdemon/blob/main/LICENSE",
+      "featureList": [
+        "Real-time Flutter log viewer",
+        "Hot reload on file changes",
+        "Multi-device session launch",
+        "DevTools integration (performance, inspector, network)",
+        "Native log capture (Android logcat, macOS log stream, iOS simulator)",
+        "Keyboard-driven TUI"
+      ]
+    }
+    </script>
+
+    <!-- Trunk directives -->
     <link data-trunk rel="tailwind-css" href="tailwind.css" />
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <link data-trunk rel="copy-dir" href="public" />
+
+    <!-- Favicons -->
     <link rel="icon" type="image/x-icon" href="/public/favicon.ico" />
     <link rel="icon" type="image/png" sizes="32x32" href="/public/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/public/favicon-16x16.png" />
