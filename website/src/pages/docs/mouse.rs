@@ -142,9 +142,9 @@ pub fn Mouse() -> impl IntoView {
                     "\u{2013}"
                     <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"9"</kbd>
                     " to jump to a session, "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"["</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Tab"</kbd>
                     " / "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"]"</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Shift+Tab"</kbd>
                     " to cycle) to switch sessions, or left-click a tab."
                 </p>
             </Section>
@@ -263,9 +263,9 @@ pub fn Mouse() -> impl IntoView {
                     "\u{2013}"
                     <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"9"</kbd>
                     " to jump to a session, "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"["</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Tab"</kbd>
                     " / "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"]"</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Shift+Tab"</kbd>
                     " to cycle) to switch sessions, or left-click a tab to select it."
                 </p>
             </Section>
@@ -570,7 +570,7 @@ pub fn Mouse() -> impl IntoView {
 
                 <h3 class="text-base font-semibold text-white mb-2">
                     "Link Highlight Badges (visible after "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Shift+L"</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"L"</kbd>
                     ")"
                 </h3>
                 <ul class="list-disc list-inside text-slate-400 space-y-2 ml-2 mb-4">

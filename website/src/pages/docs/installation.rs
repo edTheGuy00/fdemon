@@ -132,7 +132,7 @@ pub fn Installation() -> impl IntoView {
                         </thead>
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
                             <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400">"Rust 1.70+"</td>
+                                <td class="p-4 font-mono text-blue-400">"Rust 1.77.2+"</td>
                                 <td class="p-4 text-slate-300">"Install via "<a href="https://rustup.rs" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">"rustup.rs"</a></td>
                             </tr>
                             <tr class="hover:bg-slate-900/50">
