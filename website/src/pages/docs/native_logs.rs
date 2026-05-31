@@ -229,13 +229,11 @@ pub fn NativeLogs() -> impl IntoView {
                 </p>
                 <CodeBlock language="toml" code="[native_logs]
 enabled = true            # Enable / disable native log capture
-min_level = \"debug\"       # Minimum log level: debug, info, warn, error
-buffer_size = 1000        # Ring buffer size per session
+min_level = \"info\"        # Minimum log level: verbose, debug, info, warning, error
 exclude_tags = [\"flutter\"] # Tags to always exclude" />
                 <SettingsTable entries=vec![
                     ("enabled", "boolean", "true", "Enable or disable native log capture globally"),
-                    ("min_level", "string", "\"debug\"", "Minimum log level to capture. Options: debug, info, warn, error"),
-                    ("buffer_size", "integer", "1000", "Number of native log entries to retain per session ring buffer"),
+                    ("min_level", "string", "\"info\"", "Minimum log level to capture. Options: verbose, debug, info, warning, error"),
                     ("exclude_tags", "array<string>", r#"["flutter"]"#, "Tags that are always excluded from capture regardless of UI filter state"),
                 ] />
 
@@ -244,10 +242,14 @@ exclude_tags = [\"flutter\"] # Tags to always exclude" />
                     "You can set a different minimum log level for individual tags. This is useful when \
                      a specific tag is too noisy at the default level:"
                 </p>
-                <CodeBlock language="toml" code="[native_logs.tag_levels]
-AudioManager = \"warn\"     # Only warn/error from AudioManager
-CameraX = \"error\"         # Only errors from CameraX
-MyPlugin = \"debug\"        # All levels from MyPlugin" />
+                <CodeBlock language="toml" code="[native_logs.tags.AudioManager]
+min_level = \"warning\"     # Only warning/error from AudioManager
+
+[native_logs.tags.CameraX]
+min_level = \"error\"       # Only errors from CameraX
+
+[native_logs.tags.MyPlugin]
+min_level = \"debug\"       # All levels from MyPlugin" />
 
                 <h3 class="text-lg font-bold text-white mt-6">"Custom Log Sources"</h3>
                 <p class="text-slate-400 mb-2">
@@ -255,13 +257,13 @@ MyPlugin = \"debug\"        # All levels from MyPlugin" />
                      sources are started alongside platform capture and their tags appear in the tag \
                      filter overlay:"
                 </p>
-                <CodeBlock language="toml" code="[[native_logs.sources]]
+                <CodeBlock language="toml" code="[[native_logs.custom_sources]]
 name = \"AppLogs\"
 command = \"tail\"
 args = [\"-f\", \"/var/log/myapp.log\"]
 format = \"raw\"
 
-[[native_logs.sources]]
+[[native_logs.custom_sources]]
 name = \"JsonService\"
 command = \"journalctl\"
 args = [\"-f\", \"-o\", \"json\", \"-u\", \"myservice\"]
@@ -312,21 +314,21 @@ format = \"json\"" />
 
                 <h3 class="text-lg font-bold text-white mt-6">"Examples"</h3>
                 <p class="text-slate-400 mb-2">"Tail a plain log file:"</p>
-                <CodeBlock language="toml" code="[[native_logs.sources]]
+                <CodeBlock language="toml" code="[[native_logs.custom_sources]]
 name = \"AppLogs\"
 command = \"tail\"
 args = [\"-f\", \"/var/log/myapp/app.log\"]
 format = \"raw\"" />
 
                 <p class="text-slate-400 mb-2">"Stream structured JSON logs:"</p>
-                <CodeBlock language="toml" code="[[native_logs.sources]]
+                <CodeBlock language="toml" code="[[native_logs.custom_sources]]
 name = \"JsonService\"
 command = \"./scripts/log-stream.sh\"
 args = []
 format = \"json\"" />
 
                 <p class="text-slate-400 mb-2">"Filtered logcat for specific tags:"</p>
-                <CodeBlock language="toml" code="[[native_logs.sources]]
+                <CodeBlock language="toml" code="[[native_logs.custom_sources]]
 name = \"AudioOnly\"
 command = \"adb\"
 args = [\"logcat\", \"-s\", \"AudioManager:V\", \"MediaPlayer:V\"]
@@ -337,6 +339,203 @@ format = \"logcat-threadtime\"" />
                     <p class="text-sm text-slate-400">
                         "Tags from custom sources appear in the tag filter overlay alongside platform \
                          tags. You can toggle them independently just like any other tag."
+                    </p>
+                </div>
+            </Section>
+
+            // ── Boot Your Whole Stack ─────────────────────────────────
+            <Section title="Boot Your Whole Stack">
+                <p class="text-slate-400">
+                    "Custom sources can run "<strong class="text-white">"any command"</strong>" \u{2014} not just log \
+                     tailers. You can boot a backend your app depends on, wait until it\u{2019}s \
+                     actually ready, and then launch Flutter, with all output interleaved in one \
+                     unified log view. A mini "<code class="text-blue-400">"docker-compose"</code>"/"
+                    <code class="text-blue-400">"Procfile"</code>" baked into the Flutter loop: \
+                     one command boots the whole stack."
+                </p>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Custom Source Fields"</h3>
+                <div class="overflow-hidden rounded-lg border border-slate-800 mt-2">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Field"</th>
+                                <th class="p-4 font-medium">"Default"</th>
+                                <th class="p-4 font-medium hidden md:table-cell">"Description"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"name"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"(required)"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Display name; becomes the tag in the log view and tag-filter overlay."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"command"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"(required)"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Executable to run. Launched directly via "<code>"Command::new"</code>
+                                    " \u{2014} never through a shell (no shell expansion or injection risk)."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"args"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"[]"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">"Arguments to pass to the command."</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"working_dir"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"(project root)"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Run the command from a different directory (e.g. a separate backend repo). \
+                                     Defaults to the Flutter project root when omitted."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"env"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"{}"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Extra environment variables. Example: "
+                                    <code class="text-green-400">"env = \u{7b} LOG_LEVEL = \"debug\" \u{7d}"</code>"."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"format"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"\"raw\""</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Output parser: "<code>"raw"</code>", "<code>"json"</code>", "
+                                    <code>"logcat-threadtime"</code>", or "<code>"syslog"</code>
+                                    " (macOS-only)."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"start_before_app"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"false"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Spawn during the pre-app phase, before Flutter is launched. Required \
+                                     for "<code>"ready_check"</code>" to be valid."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"ready_check"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"(none)"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Gate Flutter launch until the dependency is up. Requires "
+                                    <code>"start_before_app = true"</code>". On timeout, fdemon \
+                                     proceeds with the launch anyway (non-fatal)."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"shared"</td>
+                                <td class="p-4 font-mono text-slate-300 whitespace-nowrap">"false"</td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Spawn once and broadcast logs to all sessions (persists until fdemon \
+                                     quits). When false, each session gets its own process instance."
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Ready Check Types"</h3>
+                <p class="text-slate-400 mb-3">
+                    "Use a "<code class="text-blue-400">"ready_check"</code>" to gate Flutter launch until \
+                     a dependency is confirmed healthy. Five check types are available:"
+                </p>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Type"</th>
+                                <th class="p-4 font-medium">"Fields"</th>
+                                <th class="p-4 font-medium hidden md:table-cell">"When to use"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"http"</td>
+                                <td class="p-4 font-mono text-slate-300 text-xs">
+                                    <code>"url"</code>", "
+                                    <code>"interval_ms"</code>" (500), "
+                                    <code>"timeout_s"</code>" (30)"
+                                </td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">"Poll a URL until a 2xx response."</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"tcp"</td>
+                                <td class="p-4 font-mono text-slate-300 text-xs">
+                                    <code>"host"</code>", "
+                                    <code>"port"</code>", "
+                                    <code>"interval_ms"</code>" (500), "
+                                    <code>"timeout_s"</code>" (30)"
+                                </td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">"Connect to a host:port until it accepts."</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"command"</td>
+                                <td class="p-4 font-mono text-slate-300 text-xs">
+                                    <code>"command"</code>", "
+                                    <code>"args"</code>", "
+                                    <code>"interval_ms"</code>" (500), "
+                                    <code>"timeout_s"</code>" (30)"
+                                </td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">"Run e.g. pg_isready until exit code 0."</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"stdout"</td>
+                                <td class="p-4 font-mono text-slate-300 text-xs">
+                                    <code>"pattern"</code>", "
+                                    <code>"timeout_s"</code>" (30)"
+                                </td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Watch process output for a regex match. No "<code>"interval_ms"</code>
+                                    " \u{2014} watches the stream."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"delay"</td>
+                                <td class="p-4 font-mono text-slate-300 text-xs">
+                                    <code>"seconds"</code>" (5)"
+                                </td>
+                                <td class="p-4 text-slate-500 hidden md:table-cell">
+                                    "Wait a fixed number of seconds. No "<code>"interval_ms"</code>
+                                    " or "<code>"timeout_s"</code>"."
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm mt-4">
+                    <strong>"Non-fatal timeouts:"</strong>
+                    " If a ready check times out, fdemon logs a warning and proceeds with the Flutter \
+                     launch anyway. The app is not blocked indefinitely by a slow dependency."
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Worked Example"</h3>
+                <p class="text-slate-400 mb-2">
+                    "Boot a Python backend, wait for its health endpoint, then launch Flutter \u{2014} \
+                     all from one "<code class="text-blue-400">"fdemon"</code>" command:"
+                </p>
+                <CodeBlock language="toml" code="[[native_logs.custom_sources]]
+name = \"backend\"
+shared = true
+command = \"python3\"
+args = [\"server/server.py\"]
+working_dir = \"/path/to/your/backend-repo\"
+format = \"raw\"
+start_before_app = true
+ready_check = { type = \"http\", url = \"http://127.0.0.1:8085/health\", interval_ms = 500, timeout_s = 15 }" />
+
+                <div class="p-4 bg-slate-900 rounded-lg border border-slate-800 mt-2">
+                    <h4 class="font-bold text-white mb-1">"One screen, the whole stack"</h4>
+                    <p class="text-sm text-slate-400">
+                        "fdemon isn\u{2019}t just watching your app \u{2014} it can bring up the entire environment \
+                         your app needs and prove it\u{2019}s healthy before the first frame renders, with \
+                         backend, app, and native logs interleaved in one screen. Removes a second \
+                         terminal and the manual \u{201c}is the server up yet?\u{201d} dance for full-stack Flutter devs."
                     </p>
                 </div>
             </Section>
@@ -353,7 +552,7 @@ format = \"logcat-threadtime\"" />
                     <Tip
                         title="Too many tags in the overlay?"
                         text="Add noisy tags to exclude_tags in [native_logs] to permanently hide them. \
-                               Use per-tag level overrides in [native_logs.tag_levels] to raise the \
+                               Use per-tag level overrides in [native_logs.tags.<TAG>] to raise the \
                                minimum level for chatty tags without hiding them entirely."
                     />
                     <Tip
