@@ -17,3 +17,19 @@ wasm-bindgen-futures = "0.4"
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Size-optimized release profile for WASM bundle reduction (improves LCP/INP Core
+# Web Vitals). These settings follow the Leptos binary-size guide:
+#   https://book.leptos.dev/deployment/binary_size.html
+#
+# opt-level = "z"  — optimize for size (smaller than "s" at the cost of speed)
+# lto = true       — link-time optimisation removes dead code across crates
+# codegen-units = 1 — single codegen unit for maximum cross-crate inlining
+# panic = "abort"  — removes unwinding machinery; compatible with
+#                    console_error_panic_hook because the panic hook is invoked
+#                    by the Rust runtime before the abort signal fires.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
