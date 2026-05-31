@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
@@ -6,6 +7,9 @@ use crate::components::code_block::CodeBlock;
 #[component]
 pub fn Debugging() -> impl IntoView {
     view! {
+        <Title text="Debugging" />
+        <Meta name="description" content="DAP debugging in Flutter Demon. Set breakpoints, inspect stack traces, step through Dart code, and connect your editor via the Debug Adapter Protocol." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/debugging" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"DAP Debugging"</h1>
             <p class="text-lg text-slate-400">

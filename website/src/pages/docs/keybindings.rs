@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::data::{all_keybinding_sections, KeybindingSection as KbSection};
 
@@ -7,6 +8,9 @@ pub fn Keybindings() -> impl IntoView {
     let sections = all_keybinding_sections();
 
     view! {
+        <Title text="Keybindings" />
+        <Meta name="description" content="Complete keyboard shortcut reference for Flutter Demon. Covers log navigation, hot reload, multi-launch, DevTools, search, settings, and more." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/keybindings" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Keyboard Bindings"</h1>
             <p class="text-slate-400">

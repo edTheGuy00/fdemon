@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
@@ -6,6 +7,9 @@ use crate::components::code_block::CodeBlock;
 #[component]
 pub fn Mouse() -> impl IntoView {
     view! {
+        <Title text="Mouse Support" />
+        <Meta name="description" content="Opt-in mouse interactions in Flutter Demon. Learn how to enable mouse mode and use click, scroll, and selection in the TUI." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/mouse" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Mouse Interactions"</h1>
             <p class="text-slate-400">

@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
@@ -9,6 +10,9 @@ use crate::components::icons::{
 #[component]
 pub fn Introduction() -> impl IntoView {
     view! {
+        <Title text="Documentation" />
+        <Meta name="description" content="Flutter Demon documentation overview. Learn how to install, configure, and get the most out of fdemon — the Rust TUI for Flutter development." />
+        <Link rel="canonical" href="https://fdemon.dev/docs" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-4xl font-bold text-white">"Flutter Demon"</h1>
             <p class="text-lg text-slate-400">

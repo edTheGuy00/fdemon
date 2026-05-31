@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::data::{changelog_entries, ChangelogEntry, ChangelogGroup};
 
@@ -7,6 +8,9 @@ pub fn Changelog() -> impl IntoView {
     let entries = changelog_entries();
 
     view! {
+        <Title text="Changelog" />
+        <Meta name="description" content="Flutter Demon release history. See what's new, what's changed, and what's been fixed in each version of fdemon." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/changelog" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Changelog"</h1>
             <p class="text-lg text-slate-400">

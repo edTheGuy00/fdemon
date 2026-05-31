@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
@@ -6,6 +7,9 @@ use crate::components::code_block::CodeBlock;
 #[component]
 pub fn Devtools() -> impl IntoView {
     view! {
+        <Title text="DevTools" />
+        <Meta name="description" content="Flutter Demon's built-in DevTools panel. Inspect widget trees, monitor frame performance and memory, profile network requests — all inside the terminal." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/devtools" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"DevTools Integration"</h1>
             <p class="text-lg text-slate-400">

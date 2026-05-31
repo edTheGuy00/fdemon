@@ -1,10 +1,14 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::components::code_block::CodeBlock;
 
 #[component]
 pub fn Configuration() -> impl IntoView {
     view! {
+        <Title text="Configuration" />
+        <Meta name="description" content="Full reference for Flutter Demon's .fdemon/config.toml and launch.toml. Configure watcher paths, UI options, DevTools settings, Flutter SDK, and launch profiles." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/configuration" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Configuration"</h1>
             <p class="text-slate-400">

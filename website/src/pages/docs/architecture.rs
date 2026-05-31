@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::components::code_block::CodeBlock;
 use crate::components::diagrams::*;
@@ -7,6 +8,9 @@ use crate::components::icons::*;
 #[component]
 pub fn Architecture() -> impl IntoView {
     view! {
+        <Title text="Architecture" />
+        <Meta name="description" content="Flutter Demon's internal architecture: a 5-crate Cargo workspace following The Elm Architecture (TEA). Covers the Engine, session manager, DevTools subsystem, and DAP server." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/architecture" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-4xl font-bold text-white">"Architecture"</h1>
             <p class="text-lg text-slate-400">

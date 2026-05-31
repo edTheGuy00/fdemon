@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::icons::{ChevronRight, Download};
@@ -10,6 +11,9 @@ pub fn Home() -> impl IntoView {
     let feats = features();
 
     view! {
+        <Title text="Flutter Demon — A Rust TUI for Flutter" />
+        <Meta name="description" content="Flutter Demon (fdemon) is a blazingly fast terminal UI for Flutter development written in Rust. Hot reload, multi-device sessions, real-time logs, and DevTools — all from your terminal." />
+        <Link rel="canonical" href="https://fdemon.dev/" />
         <div class="space-y-24 pb-24">
             // Hero Section
             <section class="pt-20 px-6 text-center relative overflow-hidden">
