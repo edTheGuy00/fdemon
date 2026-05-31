@@ -26,6 +26,8 @@ This document provides a complete reference for all configuration options availa
   - [DevTools Settings](#devtools-settings)
   - [Native Logs Settings](#native-logs-settings)
     - [Pre-App Custom Sources](#pre-app-custom-sources)
+  - [DAP Settings](#dap-settings)
+  - [Flutter SDK Settings](#flutter-sdk-settings)
   - [Editor Settings](#editor-settings)
 - [Launch Configuration Reference](#launch-configuration-reference)
   - [Configuration Properties](#configuration-properties)
@@ -389,28 +391,58 @@ Configure Flutter DevTools integration.
 [devtools]
 auto_open = false          # Automatically open DevTools when app starts
 browser = ""               # Browser command (empty = system default)
+default_panel = "inspector"  # Panel shown on first entry: "inspector", "performance", "network", or "memory"
 
-# Inspector readiness poll (Phase 1+)
+# Inspector
+inspector_fetch_timeout_secs = 60        # Outer timeout for widget tree fetch (seconds)
+tree_max_depth = 0                       # Widget tree fetch depth (0 = unlimited)
+hide_implementation_widgets = true       # Collapse non-local wrapper widget chains (toggle: Shift+H)
+
+# Inspector readiness poll
 inspector_readiness_poll_attempts = 2
 inspector_readiness_poll_interval_ms = 250
 inspector_readiness_poll_call_timeout_ms = 1000
 
-# Performance panel — Phase 3 rebuild stats + timeline
-auto_enable_rebuild_tracking = false   # Enable ext.flutter.profileWidgetBuilds on VM connect
-rebuild_stats_frame_window = 30        # Max frames retained in Rebuild Stats ring buffer
-timeline_event_buffer_size = 10000     # Max timeline events retained in Timeline Events buffer (raised from 1000 in Phase 5)
+# Performance panel
+performance_refresh_ms = 2000            # Refresh interval (ms); minimum 500
+auto_repaint_rainbow = false             # Enable repaint rainbow on VM connect
+auto_performance_overlay = false         # Enable performance overlay on VM connect
+auto_enable_rebuild_tracking = false     # Enable ext.flutter.profileWidgetBuilds on VM connect
+rebuild_stats_frame_window = 30          # Max frames retained in Rebuild Stats ring buffer
+timeline_event_buffer_size = 10000       # Max timeline events retained in Timeline Events buffer
+
+# Memory panel
+memory_history_size = 60                 # Number of memory snapshots to retain
+allocation_profile_interval_ms = 5000   # Per-class heap stats poll interval (ms); minimum 1000
+
+# Network panel
+max_network_entries = 500                # Max network entries to keep per session (FIFO eviction)
+network_auto_record = true               # Auto-start recording when entering the Network tab
+network_poll_interval_ms = 1000          # getHttpProfile poll interval (ms); minimum 500
 ```
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `auto_open` | `boolean` | `false` | If `true`, automatically opens DevTools in a browser when the app starts. |
 | `browser` | `string` | `""` | Browser command to use (e.g., `"chrome"`, `"firefox"`). Empty string uses system default. |
+| `default_panel` | `string` | `"inspector"` | Panel shown when first entering DevTools mode. Valid values: `"inspector"`, `"performance"`, `"network"`, `"memory"`. |
+| `inspector_fetch_timeout_secs` | `integer` | `60` | Outer timeout in seconds for the widget tree fetch (readiness polling + retries). Minimum effective value is 5 seconds. |
+| `tree_max_depth` | `integer` | `0` | Widget tree fetch depth. `0` means unlimited. |
+| `hide_implementation_widgets` | `boolean` | `true` | When `true`, collapses long single-child chains of non-local-project wrapper widgets in the Inspector tree. Toggle at runtime with `Shift+H`. |
 | `inspector_readiness_poll_attempts` | `integer` | `2` | Number of `isWidgetTreeReady` poll attempts before giving up and fetching the tree anyway. |
 | `inspector_readiness_poll_interval_ms` | `integer` | `250` | Milliseconds between readiness poll attempts. |
 | `inspector_readiness_poll_call_timeout_ms` | `integer` | `1000` | Per-call timeout (ms) for each readiness poll RPC. |
+| `performance_refresh_ms` | `integer` | `2000` | Performance data refresh interval in milliseconds. Minimum 500ms. |
+| `auto_repaint_rainbow` | `boolean` | `false` | When `true`, the repaint rainbow overlay is enabled automatically on VM Service connect. |
+| `auto_performance_overlay` | `boolean` | `false` | When `true`, the performance overlay is enabled automatically on VM Service connect. |
 | `auto_enable_rebuild_tracking` | `boolean` | `false` | When `true`, `ext.flutter.profileWidgetBuilds` is enabled automatically on VM Service connect. Enabling this has a small runtime overhead on the Flutter app. |
 | `rebuild_stats_frame_window` | `integer` | `30` | Maximum number of frames retained in the Rebuild Stats ring buffer. Older frames are discarded as new ones arrive. |
-| `timeline_event_buffer_size` | `integer` | `10000` | Maximum number of VM timeline events retained in the Timeline Events buffer. Older events are discarded as new ones arrive. Raised from 1000 to 10_000 in Phase 5 to support the full interactive Gantt history. |
+| `timeline_event_buffer_size` | `integer` | `10000` | Maximum number of VM timeline events retained in the Timeline Events buffer. Older events are discarded as new ones arrive. |
+| `memory_history_size` | `integer` | `60` | Number of memory snapshots to retain in the history graph. |
+| `allocation_profile_interval_ms` | `integer` | `5000` | How often `getAllocationProfile` is called for per-class heap statistics. Clamped to a minimum of 1000ms. |
+| `max_network_entries` | `integer` | `500` | Maximum number of network entries retained per session. Oldest entries are evicted (FIFO). |
+| `network_auto_record` | `boolean` | `true` | When `true`, network recording starts automatically when entering the Network tab. |
+| `network_poll_interval_ms` | `integer` | `1000` | How often `getHttpProfile` is called when recording is active. Clamped to minimum 500ms. |
 
 ### Native Logs Settings
 
@@ -626,6 +658,42 @@ start_before_app = true
 ```
 
 > **Note:** The source's stdout is visible in the fdemon log view while the readiness check is in progress, so you can watch startup output in real time.
+
+### DAP Settings
+
+Configuration for the embedded Debug Adapter Protocol (DAP) server. Enables IDE debugger integration (breakpoints, variable inspection) from VS Code, Neovim, Helix, Zed, and Emacs.
+
+```toml
+[dap]
+enabled = false              # Always start the DAP server (overrides auto-detection)
+auto_start_in_ide = true     # Auto-start when running inside a detected IDE terminal
+port = 0                     # TCP port (0 = auto-assign an available port)
+bind_address = "127.0.0.1"   # Bind address for the DAP server
+suppress_reload_on_pause = true   # Suppress hot reload while debugger is paused
+auto_configure_ide = true    # Auto-generate IDE DAP config (launch.json / languages.toml / etc.)
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | When `true`, always starts the DAP server regardless of environment. Can also be set via `--dap` CLI flag. |
+| `auto_start_in_ide` | `boolean` | `true` | Auto-start the DAP server when fdemon detects it is running inside a supported IDE terminal (VS Code, Neovim, Helix, Zed, Emacs). Has no effect when `enabled = true`. |
+| `port` | `integer` | `0` | TCP port for DAP connections. `0` auto-assigns an available port. Use a fixed port for stable IDE configs across restarts. |
+| `bind_address` | `string` | `"127.0.0.1"` | Bind address for the DAP server. The default `127.0.0.1` restricts connections to localhost only. |
+| `suppress_reload_on_pause` | `boolean` | `true` | When `true`, hot reload is suppressed while the debugger is paused at a breakpoint. |
+| `auto_configure_ide` | `boolean` | `true` | When `true`, fdemon automatically generates the IDE-specific DAP configuration file (e.g., `.vscode/launch.json`, `.helix/languages.toml`) when the server binds. |
+
+### Flutter SDK Settings
+
+Override the Flutter SDK path used by fdemon.
+
+```toml
+[flutter]
+sdk_path = ""   # Explicit SDK path override (empty = auto-detect via version managers / PATH)
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `sdk_path` | `string` | `""` (auto-detect) | Explicit Flutter SDK path (e.g., `/Users/me/flutter`). When set, bypasses all version manager detection (fvm, asdf, mise). Leave empty to use the standard detection chain. |
 
 ### Editor Settings
 
@@ -945,11 +1013,19 @@ stack_trace_max_frames = 3
 [devtools]
 auto_open = false
 browser = ""
+default_panel = "inspector"
 
 [native_logs]
 enabled = true
 exclude_tags = ["flutter"]
 min_level = "info"
+
+[dap]
+auto_start_in_ide = true
+suppress_reload_on_pause = true
+
+[flutter]
+# sdk_path = "/Users/me/flutter"  # Uncomment to override SDK auto-detection
 
 [editor]
 command = ""  # Auto-detect
