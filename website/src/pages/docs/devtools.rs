@@ -20,14 +20,18 @@ pub fn Devtools() -> impl IntoView {
                      panels into your terminal. While the full browser-based DevTools suite remains available \
                      for advanced workflows, the TUI panels cover the most common inspection tasks:"
                 </p>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"Widget Inspector"</h4>
                         <p class="text-sm text-slate-400">"Browse the live widget tree with expandable nodes, detailed properties, and flex layout data."</p>
                     </div>
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"Performance Monitor"</h4>
-                        <p class="text-sm text-slate-400">"Real-time FPS sparkline, memory gauge, jank percentage, and GC history."</p>
+                        <p class="text-sm text-slate-400">"Real-time FPS sparkline, jank percentage, frame timing, and GC event history."</p>
+                    </div>
+                    <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
+                        <h4 class="font-bold text-white mb-1">"Memory Panel"</h4>
+                        <p class="text-sm text-slate-400">"Rolling heap-usage timeline, live allocation class breakdown, and GC history."</p>
                     </div>
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"Network Monitor"</h4>
@@ -66,7 +70,9 @@ pub fn Devtools() -> impl IntoView {
                             <KeyRow key="Esc" action="Return to log view" />
                             <KeyRow key="i" action="Switch to Widget Inspector panel" />
                             <KeyRow key="p" action="Switch to Performance Monitor panel" />
+                            <KeyRow key="m" action="Switch to Memory panel" />
                             <KeyRow key="n" action="Switch to Network Monitor panel" />
+                            <KeyRow key="b" action="Open Flutter DevTools in browser" />
                         </tbody>
                     </table>
                 </div>
@@ -116,8 +122,9 @@ pub fn Devtools() -> impl IntoView {
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
                             <KeyRow key="\u{2191} / k" action="Move selection up" />
                             <KeyRow key="\u{2193} / j" action="Move selection down" />
-                            <KeyRow key="\u{2192} / Enter" action="Expand selected node" />
+                            <KeyRow key="\u{2192}" action="Expand selected node" />
                             <KeyRow key="\u{2190} / h" action="Collapse selected node" />
+                            <KeyRow key="Enter" action="Open the Details view for the selected widget" />
                             <KeyRow key="r" action="Re-fetch the widget tree from the VM" />
                         </tbody>
                     </table>
@@ -125,64 +132,24 @@ pub fn Devtools() -> impl IntoView {
 
                 <h3 class="text-lg font-bold text-white mt-6">"Details Panel"</h3>
                 <p class="text-slate-400">
-                    "When a widget is selected the details panel shows:"
+                    "Press "<code class="text-blue-400">"Enter"</code>" on a selected widget to open the \
+                     Details view. The Details panel shows:"
                 </p>
                 <ul class="list-disc list-inside text-slate-400 space-y-1 ml-2 mt-2">
                     <li>"Widget type (e.g. "<code class="text-blue-400">"Scaffold"</code>")"</li>
                     <li>"A short description from the widget itself"</li>
                     <li>"Creation location: file path and line number"</li>
-                    <li>"Render object constraints and actual size"</li>
+                    <li>"Render object constraints, actual size, flex properties, and child allocations"</li>
                 </ul>
                 <p class="text-slate-400 mt-3">
                     "Widgets from your own code are highlighted differently from framework widgets, making \
                      it easy to identify the boundaries between your code and the Flutter SDK."
                 </p>
-            </Section>
-
-            // ── Layout Explorer ───────────────────────────────────────
-            <Section title="Layout Explorer (l)">
-                <p class="text-slate-400">
-                    "Press "<code class="text-blue-400">"l"</code>" to open the Layout Explorer. It displays \
-                     flex layout data for the widget currently selected in the Inspector. If no widget is \
-                     selected, it prompts you to select one first."
-                </p>
                 <p class="text-slate-400 mt-3">
-                    "The Layout Explorer auto-fetches layout data whenever you switch to it (provided a widget \
-                     is already selected), so you always see up-to-date information."
-                </p>
-
-                <h3 class="text-lg font-bold text-white mt-4">"What Is Shown"</h3>
-                <div class="overflow-hidden rounded-lg border border-slate-800">
-                    <table class="w-full text-left text-sm">
-                        <thead class="bg-slate-900 text-slate-200">
-                            <tr>
-                                <th class="p-4 font-medium">"Section"</th>
-                                <th class="p-4 font-medium">"Details"</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-800 bg-slate-950">
-                            <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"Constraints"</td>
-                                <td class="p-4 text-slate-300">"Min/max width and height. Tight constraints are highlighted."</td>
-                            </tr>
-                            <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"Size"</td>
-                                <td class="p-4 text-slate-300">"Actual rendered width and height, proportionally visualized."</td>
-                            </tr>
-                            <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"Flex Properties"</td>
-                                <td class="p-4 text-slate-300">"mainAxisAlignment, crossAxisAlignment, flex factor, and FlexFit."</td>
-                            </tr>
-                            <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"Children"</td>
-                                <td class="p-4 text-slate-300">"Individual child sizes and flex allocations within the parent."</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <p class="text-slate-400 mt-3">
-                    "This panel is most useful for debugging "<strong class="text-white">"overflow errors"</strong>
-                    " and understanding why a widget renders at a particular size."
+                    "Press "<code class="text-blue-400">"Esc"</code>" to close the Details view and return \
+                     to tree navigation. Use "<code class="text-blue-400">"Tab"</code>" / "
+                    <code class="text-blue-400">"Shift+Tab"</code>" or the "<code class="text-blue-400">"→"</code>
+                    " / "<code class="text-blue-400">"←"</code>" arrow keys to cycle through the Details tabs."
                 </p>
             </Section>
 
@@ -190,7 +157,7 @@ pub fn Devtools() -> impl IntoView {
             <Section title="Performance Monitor (p)">
                 <p class="text-slate-400">
                     "Press "<code class="text-blue-400">"p"</code>" to open the Performance Monitor. Unlike the \
-                     Inspector and Layout Explorer, performance data streams continuously in real time \
+                     Inspector, performance data streams continuously in real time \
                      \u{2014} no manual refresh is required."
                 </p>
 
@@ -249,6 +216,40 @@ pub fn Devtools() -> impl IntoView {
                     " in the "<code class="text-blue-400">"[devtools]"</code>" config section. Frame timing and GC events \
                      are always streamed in real time regardless of this setting."
                 </p>
+            </Section>
+
+            // ── Memory Panel ─────────────────────────────────────────
+            <Section title="Memory Panel (m)">
+                <p class="text-slate-400">
+                    "Press "<code class="text-blue-400">"m"</code>" while in DevTools mode to open the Memory \
+                     panel. It shows a rolling heap-usage timeline, live allocation class breakdown, and GC \
+                     event history, all sampled at the "<code class="text-blue-400">"performance_refresh_ms"</code>
+                    " interval."
+                </p>
+
+                <h3 class="text-lg font-bold text-white mt-4">"Navigation"</h3>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Action"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="Tab" action="Cycle focus to the next section" />
+                            <KeyRow key="Shift+Tab" action="Cycle focus to the previous section" />
+                            <KeyRow key="j / \u{2193}" action="Scroll down" />
+                            <KeyRow key="k / \u{2191}" action="Scroll up" />
+                            <KeyRow key="PgDn" action="Page down" />
+                            <KeyRow key="PgUp" action="Page up" />
+                            <KeyRow key="Home" action="Jump to oldest entry" />
+                            <KeyRow key="End" action="Jump to latest entry" />
+                            <KeyRow key="s" action="Toggle allocation table sort (by size \u{21c4} by instances)" />
+                            <KeyRow key="Esc" action="Deselect selected row / exit Memory panel" />
+                        </tbody>
+                    </table>
+                </div>
             </Section>
 
             // ── Network Monitor ───────────────────────────────────────
@@ -510,7 +511,7 @@ dedupe_threshold_ms = 100" />
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
                             <SettingsRow prop="auto_open" default="false" desc="Automatically open DevTools in a browser when the app starts." />
                             <SettingsRow prop="browser" default="\"\"" desc="Browser command (e.g. \"chrome\", \"firefox\"). Empty string uses the system default." />
-                            <SettingsRow prop="default_panel" default="\"inspector\"" desc="Panel shown when entering DevTools mode. Options: \"inspector\", \"layout\", \"performance\"." />
+                            <SettingsRow prop="default_panel" default="\"inspector\"" desc="Panel shown when entering DevTools mode. Options: \"inspector\", \"performance\", \"memory\", \"network\"." />
                             <SettingsRow prop="performance_refresh_ms" default="2000" desc="Memory data polling interval in milliseconds. Frame timing and GC events are always real-time." />
                             <SettingsRow prop="memory_history_size" default="60" desc="Number of memory snapshots retained in the ring buffer for the memory graph." />
                             <SettingsRow prop="tree_max_depth" default="0" desc="Max depth when fetching the widget tree. 0 fetches the entire tree." />
@@ -572,7 +573,9 @@ dedupe_threshold_ms = 100" />
                             <KeyRow key="Esc" action="Exit DevTools mode, return to log view" />
                             <KeyRow key="i" action="Open Widget Inspector panel" />
                             <KeyRow key="p" action="Open Performance Monitor panel" />
+                            <KeyRow key="m" action="Open Memory panel" />
                             <KeyRow key="n" action="Open Network Monitor panel" />
+                            <KeyRow key="b" action="Open Flutter DevTools in browser" />
                         </tbody>
                     </table>
                 </div>
@@ -589,8 +592,9 @@ dedupe_threshold_ms = 100" />
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
                             <KeyRow key="\u{2191} / k" action="Move selection up in the widget tree" />
                             <KeyRow key="\u{2193} / j" action="Move selection down in the widget tree" />
-                            <KeyRow key="\u{2192} / Enter" action="Expand selected node" />
+                            <KeyRow key="\u{2192}" action="Expand selected node" />
                             <KeyRow key="\u{2190} / h" action="Collapse selected node" />
+                            <KeyRow key="Enter" action="Open the Details view for the selected widget" />
                             <KeyRow key="r" action="Refresh widget tree from VM" />
                         </tbody>
                     </table>
@@ -606,9 +610,32 @@ dedupe_threshold_ms = 100" />
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
-                            <KeyRow key="j / \u{2193}" action="Scroll frame list down" />
-                            <KeyRow key="k / \u{2191}" action="Scroll frame list up" />
-                            <KeyRow key="s" action="Sort frames by duration" />
+                            <KeyRow key="Tab / Shift+Tab" action="Cycle between sections" />
+                            <KeyRow key="j / \u{2193}" action="Scroll down" />
+                            <KeyRow key="k / \u{2191}" action="Scroll up" />
+                            <KeyRow key="PgDn / PgUp" action="Page down / up" />
+                            <KeyRow key="Home / End" action="Jump to oldest / latest" />
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Memory Panel"</h3>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Action"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="Tab / Shift+Tab" action="Cycle between sections" />
+                            <KeyRow key="j / \u{2193}" action="Scroll down" />
+                            <KeyRow key="k / \u{2191}" action="Scroll up" />
+                            <KeyRow key="PgDn / PgUp" action="Page down / up" />
+                            <KeyRow key="Home / End" action="Jump to oldest / latest" />
+                            <KeyRow key="s" action="Toggle allocation sort (by size \u{21c4} by instances)" />
+                            <KeyRow key="Esc" action="Deselect row / exit panel" />
                         </tbody>
                     </table>
                 </div>
@@ -654,21 +681,6 @@ dedupe_threshold_ms = 100" />
                             <KeyRow key="Ctrl+r" action="Toggle repaint rainbow on device/emulator" />
                             <KeyRow key="Ctrl+p" action="Toggle performance overlay on device/emulator" />
                             <KeyRow key="Ctrl+d" action="Toggle debug paint on device/emulator" />
-                        </tbody>
-                    </table>
-                </div>
-
-                <h3 class="text-lg font-bold text-white mt-6">"Browser"</h3>
-                <div class="overflow-hidden rounded-lg border border-slate-800">
-                    <table class="w-full text-left text-sm">
-                        <thead class="bg-slate-900 text-slate-200">
-                            <tr>
-                                <th class="p-4 font-medium">"Key"</th>
-                                <th class="p-4 font-medium">"Action"</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-800 bg-slate-950">
-                            <KeyRow key="b" action="Open Flutter DevTools in browser" />
                         </tbody>
                     </table>
                 </div>
