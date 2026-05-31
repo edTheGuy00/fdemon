@@ -227,3 +227,33 @@ header tests do.
 - **No managed-doc change.** No `AppPhase` / `Message` / module-structure / layer change,
   so `docs/ARCHITECTURE.md`, `docs/CODE_STANDARDS.md`, and `docs/DEVELOPMENT.md` need no
   update.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/header.rs` | Re-layout multi-session branch to insert `render_separator_row` between title and tabs; added private `render_separator_row` helper; added three render tests |
+| `crates/fdemon-tui/src/layout.rs` | Rewrote `header_height` comment (no code change) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact rustfmt line-length**: Two test expressions that rustfmt wanted on a single line (the `any()` iterator calls) were adjusted to match; the formatter is authoritative on wrapping.
+2. **`line.render(rule_area, buf)` idiom**: Used `Line: Widget` render path consistent with the task spec and existing patterns in `header.rs`; no new imports needed.
+3. **Test geometry**: Tests use a `Rect { height: 5 }` (3 inner rows) and `Rect { height: 4 }` (2 inner rows) to cover the normal and squeezed branches respectively.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (1356 tests, 0 failed, 1 ignored)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: Pure layout redistribution within already-allocated rows; `header_height` stays 5 and all existing layout tests pass unchanged.

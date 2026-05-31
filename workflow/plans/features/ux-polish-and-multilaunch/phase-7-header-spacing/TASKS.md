@@ -34,7 +34,19 @@ the only code change is in `widgets/header.rs` plus a comment reword in `layout.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-header-separator-spacing](tasks/01-header-separator-spacing.md) | ⬜ Todo | - | 1–1.5h | `crates/fdemon-tui/src/widgets/header.rs`, `crates/fdemon-tui/src/layout.rs` |
+| 1 | [01-header-separator-spacing](tasks/01-header-separator-spacing.md) | ✅ Done | - | 1–1.5h | `crates/fdemon-tui/src/widgets/header.rs`, `crates/fdemon-tui/src/layout.rs` |
+
+## ✅ Orchestration Result (2026-05-31)
+
+Task 01 implemented and committed on `feat/ux-polish-and-multilaunch` as `79019a41`
+("feat(phase-7): add separator rule between title and tabs in multi-session header").
+
+- Single-file edit of `widgets/header.rs` (+165) plus the comment-only reword in `layout.rs`
+  (6 lines) — exactly the planned scope; `header_height` stays 5.
+- Adds the private `render_separator_row` helper and three render tests
+  (separator-present, no-trailing-blank, squeezed-omits-separator).
+- Verification: `cargo check -p fdemon-tui --all-targets` clean; `cargo test -p fdemon-tui --lib`
+  → 1356 passed, 0 failed; task_validator verdict **PASS**.
 
 ## File Overlap Analysis
 
