@@ -77,6 +77,7 @@ WORKDIR /prerender
 # Copy pinned package.json and install dependencies
 COPY prerender/package.json ./
 COPY prerender/.npmrc ./
+COPY prerender/package-lock.json ./
 
 # Cache Puppeteer's Chrome download in a Docker layer
 ENV PUPPETEER_CACHE_DIR=/root/.cache/puppeteer
