@@ -132,7 +132,8 @@ Filter logs by level or source to focus on relevant information.
 | `f` | Cycle Level Filter | Cycle through: All → Errors → Warnings → Info → Debug |
 | `F` | Cycle Source Filter | Cycle through: All → App → Daemon → Flutter → Watcher |
 | `Ctrl+F` | Reset Filters | Clear all active filters |
-| `T` | Open/close native tag filter overlay | Toggle visibility of individual native platform log tags (Android/iOS/macOS) |
+| `T` or `t` | Open/close native tag filter overlay | Toggle visibility of individual native platform log tags (Android/iOS/macOS) |
+| `w` | Toggle Wrap Mode | Toggle line wrap on/off for the log view |
 
 ### Log Search
 
@@ -229,9 +230,9 @@ When the Target Selector pane is focused:
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `↑` / `k` | Navigate Up | Move up in device list |
-| `↓` / `j` | Navigate Down | Move down in device list |
-| `Enter` | Select/Boot | Select device (Connected tab) or Boot device (Bootable tab) |
+| `↑` | Navigate Up | Move up in device list |
+| `↓` | Navigate Down | Move down in device list |
+| `Enter` | Select/Boot | Acknowledge selection (Connected tab) or Boot device (Bootable tab); use Launch Context to launch |
 | `Space` | Toggle Selection | Toggle multi-launch checked state for cursor device (Connected tab only) |
 | `a` | Select All / Clear | Check all connected devices for multi-launch; clears if all are already checked |
 | `r` | Refresh | Refresh device list |
@@ -611,6 +612,8 @@ The panel has a two-pane layout:
 | `j` / `↓` | Navigate Down | Move selection down in the version list |
 | `Enter` | Switch Version | Switch to the selected Flutter SDK version (writes `.fvmrc` in project root) |
 | `d` | Remove Version | Delete the selected SDK version from the FVM cache |
+| `i` | Install Version | Install the selected Flutter SDK version |
+| `u` | Update Version | Update the selected Flutter SDK version |
 
 > **Note:** Switching to the active version or removing the active version are both blocked — the status bar will show an error message.
 
