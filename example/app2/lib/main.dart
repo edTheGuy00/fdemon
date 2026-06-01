@@ -73,8 +73,10 @@ class _Sample2TestPageState extends State<Sample2TestPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text('Count: $_counter',
-                    style: Theme.of(context).textTheme.headlineMedium),
+                Text(
+                  'Count: $_counter',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
                 const SizedBox(width: 16),
                 ElevatedButton(
                   onPressed: () {
@@ -142,24 +144,29 @@ class _Sample2TestPageState extends State<Sample2TestPage> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.purple.shade100,
               ),
-              onPressed: () => setState(() => _showBuildError = !_showBuildError),
-              child: Text(_showBuildError ? 'Hide Build Error' : 'Trigger Build Error'),
+              onPressed: () =>
+                  setState(() => _showBuildError = !_showBuildError),
+              child: Text(
+                _showBuildError ? 'Hide Build Error' : 'Trigger Build Error',
+              ),
             ),
           ]),
           if (_showOverflow) const OverflowWidget(),
           if (_showBuildError)
-            Builder(builder: (context) {
-              try {
-                return const BuildErrorWidget();
-              } catch (e, st) {
-                logger.e('Build error caught', error: e, stackTrace: st);
-                return Container(
-                  padding: const EdgeInsets.all(16),
-                  color: Colors.red.shade100,
-                  child: Text('Build error: $e'),
-                );
-              }
-            }),
+            Builder(
+              builder: (context) {
+                try {
+                  return const BuildErrorWidget();
+                } catch (e, st) {
+                  logger.e('Build error caught', error: e, stackTrace: st);
+                  return Container(
+                    padding: const EdgeInsets.all(16),
+                    color: Colors.red.shade100,
+                    child: Text('Build error: $e'),
+                  );
+                }
+              },
+            ),
           _buildSection('Timer Logs', [
             _buildButton('Log Every 1s (5x)', () {
               for (int i = 0; i < 5; i++) {

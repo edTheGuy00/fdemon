@@ -1486,6 +1486,11 @@ pub struct AppState {
     /// indicator in the bottom metadata bar (Task 08) reads this field.
     pub mouse_capture_active: bool,
 
+    /// Monotonic animation tick, advanced once per `Message::Tick` (≈50 ms)
+    /// regardless of `UiMode`. Shared time source for shimmer/spinner/flash
+    /// animations. Wraps via `wrapping_add`; consumers use modulo arithmetic.
+    pub animation_frame: u64,
+
     /// Terminal/clipboard actions queued for the runner to execute.
     ///
     /// `SetMouseCapture` and `WriteClipboard` require synchronous side effects
@@ -1581,6 +1586,7 @@ impl AppState {
             last_log_click: None,
             last_settings_click: None,
             mouse_capture_active,
+            animation_frame: 0,
             pending_runner_actions: Vec::new(),
         }
     }
@@ -2423,6 +2429,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 

@@ -5,10 +5,10 @@
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, Widget},
+    widgets::{List, ListItem, Paragraph, Widget},
 };
 
 use super::device_groups::{
@@ -16,46 +16,14 @@ use super::device_groups::{
     GroupedBootableDevice,
 };
 use fdemon_app::message::Message;
-use fdemon_app::{config::IconMode, AndroidAvd, Device, IosSimulator, ToolAvailability};
+use fdemon_app::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 use fdemon_app::{MouseAction, MouseRect};
 
-use crate::theme::{icons::IconSet, palette};
+use crate::theme::palette;
 
 /// Minimum width (in columns) to show verbose scroll indicators ("↑ more").
 /// Below this threshold, compact indicators ("↑") are shown.
 const VERBOSE_INDICATOR_WIDTH_THRESHOLD: u16 = 50;
-
-/// Determine icon for a device based on platform_type
-fn device_icon(platform_type: &str, _is_emulator: bool, icons: &IconSet) -> &'static str {
-    let platform_lower = platform_type.to_lowercase();
-
-    if platform_lower.contains("ios") || platform_lower.contains("android") {
-        icons.smartphone()
-    } else if platform_lower.contains("web") || platform_lower.contains("chrome") {
-        icons.globe()
-    } else if platform_lower.contains("macos")
-        || platform_lower.contains("linux")
-        || platform_lower.contains("windows")
-        || platform_lower.contains("darwin")
-    {
-        icons.monitor()
-    } else {
-        icons.cpu()
-    }
-}
-
-/// Determine icon for a bootable device based on platform
-fn bootable_device_icon(platform: &str, icons: &IconSet) -> &'static str {
-    let platform_lower = platform.to_lowercase();
-
-    if platform_lower.contains("ios") || platform_lower.contains("android") {
-        icons.smartphone()
-    } else if platform_lower.contains("web") {
-        icons.globe()
-    } else {
-        icons.cpu()
-    }
-}
 
 /// Widget for rendering connected devices with grouping
 pub struct ConnectedDeviceList<'a> {
@@ -63,7 +31,8 @@ pub struct ConnectedDeviceList<'a> {
     selected_index: usize,
     is_focused: bool,
     scroll_offset: usize,
-    icons: IconSet,
+    /// Device ids that are checked for multi-launch. Independent of the cursor.
+    checked: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl<'a> ConnectedDeviceList<'a> {
@@ -78,13 +47,16 @@ impl<'a> ConnectedDeviceList<'a> {
             selected_index,
             is_focused,
             scroll_offset,
-            icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
+            checked: None,
         }
     }
 
-    /// Set the icon mode (chainable builder)
-    pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
-        self.icons = IconSet::new(icon_mode);
+    /// Attach the checked-device set (chainable builder).
+    ///
+    /// When set, each connected-device row displays a `[x]` or `[ ]` checkbox
+    /// prefix that reflects membership in `checked`. Orthogonal to the cursor highlight.
+    pub fn with_checked(mut self, checked: &'a std::collections::BTreeSet<String>) -> Self {
+        self.checked = Some(checked);
         self
     }
 
@@ -108,6 +80,10 @@ impl<'a> ConnectedDeviceList<'a> {
             }
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
+                let is_checked = self
+                    .checked
+                    .map(|set| set.contains(&device.id))
+                    .unwrap_or(false);
 
                 // Updated selection highlighting
                 let style = if is_selected && self.is_focused {
@@ -123,9 +99,19 @@ impl<'a> ConnectedDeviceList<'a> {
                     Style::default().fg(palette::TEXT_SECONDARY)
                 };
 
-                // Platform icon - use platform_type if available, fallback to platform
-                let platform = device.platform_type.as_deref().unwrap_or(&device.platform);
-                let icon = device_icon(platform, device.emulator, &self.icons);
+                // Checkbox prefix — only rendered when a checked set is attached
+                let checkbox_span: Option<Span> = self.checked.map(|_| {
+                    let glyph = if is_checked { "[x] " } else { "[ ] " };
+                    let color = if is_checked {
+                        palette::ACCENT
+                    } else {
+                        palette::TEXT_MUTED
+                    };
+                    Span::styled(glyph, Style::default().fg(color))
+                });
+                // Checkbox width (4 cols: "[x] " or "[ ] ") — 0 when not shown
+                let checkbox_width: usize = if checkbox_span.is_some() { 4 } else { 0 };
+
                 let device_type = if device.emulator {
                     device
                         .emulator_id
@@ -137,10 +123,9 @@ impl<'a> ConnectedDeviceList<'a> {
                 };
 
                 // Calculate available width for device name
-                // Format: " <icon> <name> (<type>)"
-                let prefix = format!(" {} ", icon);
+                // Format: "[x] <name> (<type>)" or "<name> (<type>)"
                 let type_suffix = format!(" ({})", device_type);
-                let reserved = prefix.len() + type_suffix.len();
+                let reserved = checkbox_width + type_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -150,11 +135,16 @@ impl<'a> ConnectedDeviceList<'a> {
                     device.name.clone()
                 };
 
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(name, style),
-                    Span::styled(type_suffix, Style::default().fg(palette::TEXT_MUTED)),
-                ]))
+                let mut spans: Vec<Span> = Vec::new();
+                if let Some(cb) = checkbox_span {
+                    spans.push(cb);
+                }
+                spans.push(Span::styled(name, style));
+                spans.push(Span::styled(
+                    type_suffix,
+                    Style::default().fg(palette::TEXT_MUTED),
+                ));
+                ListItem::new(Line::from(spans))
             }
         }
     }
@@ -219,8 +209,35 @@ pub fn connected_device_list_render_with_regions(
     let groups = group_connected_devices(list.devices);
     let items = flatten_groups(&groups);
 
-    // Calculate visible range
-    let visible_height = area.height as usize;
+    // Count devices in the full list that are filtered out (not supported)
+    let hidden = list.devices.iter().filter(|d| !d.is_supported).count();
+
+    if items.is_empty() {
+        let msg = if list.devices.is_empty() {
+            "No connected devices"
+        } else {
+            // Devices were discovered but all are unsupported for this project.
+            "Devices found but none runnable for this project — check enabled platforms"
+        };
+        Paragraph::new(msg)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(palette::TEXT_MUTED))
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .render(area, buf);
+        return;
+    }
+
+    // Split area to reserve a 1-row footer when there are hidden unsupported devices.
+    // Layout: list area (Min(0)) + optional footer (Length(1))
+    let (list_area, footer_area) = if hidden > 0 {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Calculate visible range using the (possibly reduced) list area
+    let visible_height = list_area.height as usize;
     let start = list.scroll_offset.min(items.len().saturating_sub(1));
     let end = (start + visible_height).min(items.len());
 
@@ -230,17 +247,27 @@ pub fn connected_device_list_render_with_regions(
         .enumerate()
         .map(|(visible_idx, item)| {
             let actual_idx = start + visible_idx;
-            list.render_item(item, actual_idx, area.width)
+            list.render_item(item, actual_idx, list_area.width)
         })
         .collect();
 
     let rendered_list = List::new(list_items);
-    rendered_list.render(area, buf);
+    rendered_list.render(list_area, buf);
 
-    // Render scroll indicators
-    list.render_scroll_indicators(area, buf, start, end, items.len());
+    // Render scroll indicators into the list sub-area
+    list.render_scroll_indicators(list_area, buf, start, end, items.len());
 
-    // Record click regions for device rows (skip headers)
+    // Render the hidden-devices footer when applicable
+    if let Some(footer) = footer_area {
+        let footer_text = format!("({hidden} hidden: not runnable for this project)");
+        Paragraph::new(footer_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(palette::TEXT_MUTED))
+            .render(footer, buf);
+    }
+
+    // Record click regions for device rows (skip headers).
+    // Iterate only within the list_area rows — do NOT register a region over the footer.
     if let Some(c) = ctx {
         for screen_row in 0..visible_height {
             let abs_index = start + screen_row;
@@ -249,7 +276,12 @@ pub fn connected_device_list_render_with_regions(
             }
             // Only record regions for device rows, not headers
             if matches!(items[abs_index], DeviceListItem::Device(_)) {
-                let rect = MouseRect::new(area.x, area.y + screen_row as u16, area.width, 1);
+                let rect = MouseRect::new(
+                    list_area.x,
+                    list_area.y + screen_row as u16,
+                    list_area.width,
+                    1,
+                );
                 if !rect.is_empty() {
                     c.click_at_z(
                         rect,
@@ -272,7 +304,6 @@ pub struct BootableDeviceList<'a> {
     is_focused: bool,
     scroll_offset: usize,
     tool_availability: &'a ToolAvailability,
-    icons: IconSet,
 }
 
 impl<'a> BootableDeviceList<'a> {
@@ -291,14 +322,7 @@ impl<'a> BootableDeviceList<'a> {
             is_focused,
             scroll_offset,
             tool_availability,
-            icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
         }
-    }
-
-    /// Set the icon mode (chainable builder)
-    pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
-        self.icons = IconSet::new(icon_mode);
-        self
     }
 
     fn render_item(
@@ -336,15 +360,12 @@ impl<'a> BootableDeviceList<'a> {
                     Style::default().fg(palette::TEXT_SECONDARY)
                 };
 
-                // Platform icon
-                let icon = bootable_device_icon(device.platform(), &self.icons);
                 let runtime = device.runtime_info();
 
                 // Calculate available width for device name
-                // Format: " <icon> <name> (<runtime>)"
-                let prefix = format!(" {} ", icon);
+                // Format: "<name> (<runtime>)"
                 let runtime_suffix = format!(" ({})", runtime);
-                let reserved = prefix.len() + runtime_suffix.len();
+                let reserved = runtime_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -355,7 +376,6 @@ impl<'a> BootableDeviceList<'a> {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
                     Span::styled(name, style),
                     Span::styled(runtime_suffix, Style::default().fg(palette::TEXT_MUTED)),
                 ]))
@@ -364,9 +384,6 @@ impl<'a> BootableDeviceList<'a> {
     }
 
     fn render_unavailable_message(&self, area: Rect, buf: &mut Buffer) {
-        use ratatui::layout::Alignment;
-        use ratatui::widgets::Paragraph;
-
         let mut messages = Vec::new();
 
         if let Some(msg) = self.tool_availability.ios_unavailable_message() {
@@ -461,9 +478,6 @@ pub fn bootable_device_list_render_with_regions(
     let items = flatten_groups(&groups);
 
     if items.is_empty() {
-        use ratatui::layout::Alignment;
-        use ratatui::widgets::Paragraph;
-
         let msg = Paragraph::new("No bootable devices found")
             .alignment(Alignment::Center)
             .style(Style::default().fg(palette::TEXT_MUTED));
@@ -800,6 +814,194 @@ mod tests {
         );
     }
 
+    // ─── Checkbox rendering tests ────────────────────────────────────────────
+
+    #[test]
+    fn renders_checkbox_for_each_device() {
+        // When with_checked() is provided with an empty set, every device row
+        // shows the unchecked glyph "[ ]".
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 8", "android", false),
+        ];
+        let checked = std::collections::BTreeSet::new();
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0).with_checked(&checked);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("[ ]"),
+            "unchecked rows should display '[ ]'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("[x]"),
+            "no device is checked — '[x]' must not appear"
+        );
+    }
+
+    #[test]
+    fn renders_checked_glyph_for_checked_device() {
+        // When a device id is in the checked set its row shows "[x]".
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 8", "android", false),
+        ];
+        let mut checked = std::collections::BTreeSet::new();
+        checked.insert("1".to_string()); // iPhone 15 is checked
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0).with_checked(&checked);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("[x]"),
+            "checked device should display '[x]'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content.contains("[ ]"),
+            "unchecked device should still display '[ ]'"
+        );
+    }
+
+    #[test]
+    fn renders_no_checkbox_when_checked_set_not_provided() {
+        // Without with_checked(), no checkbox glyphs appear (backward compatibility).
+        let devices = vec![test_device_full("1", "iPhone 15", "ios", false)];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            !content.contains("[ ]") && !content.contains("[x]"),
+            "without with_checked(), no checkbox glyphs should appear; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn header_rows_render_without_checkbox() {
+        // Headers must never carry a checkbox prefix even when with_checked is set.
+        let devices = vec![test_device_full("1", "iPhone 15", "ios", false)];
+        let mut checked = std::collections::BTreeSet::new();
+        checked.insert("1".to_string());
+
+        // Render into a small buffer to isolate the first row (the header).
+        let area = Rect::new(0, 0, 50, 1);
+        let mut buf = Buffer::empty(area);
+        let list = ConnectedDeviceList::new(&devices, 0, true, 0).with_checked(&checked);
+        connected_device_list_render_with_regions(area, &mut buf, &list, None);
+
+        // The flat list is: [Header("IOS DEVICES"), Device("iPhone 15")]
+        // At height=1, only the first row (header) is rendered.
+        let header_content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            !header_content.contains("[x]") && !header_content.contains("[ ]"),
+            "header row must not display a checkbox; got: {}",
+            header_content
+        );
+    }
+
+    // ─── Empty-state messaging tests (task 03) ──────────────────────────────
+
+    #[test]
+    fn connected_empty_shows_no_devices() {
+        // devices: &[] → expect "No connected devices"
+        let devices: Vec<Device> = vec![];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("No connected devices"),
+            "empty device list should show 'No connected devices'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("none runnable"),
+            "'none runnable' must not appear when list is genuinely empty"
+        );
+    }
+
+    #[test]
+    fn connected_all_unsupported_shows_none_runnable() {
+        // devices: one device with is_supported = false → expect "none runnable"
+        // task 02's filter in group_connected_devices excludes unsupported devices,
+        // so items is empty while list.devices is non-empty.
+        let devices = vec![Device {
+            id: "unsupported-1".to_string(),
+            name: "Unsupported Phone".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: false,
+            capabilities: None,
+        }];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("none runnable"),
+            "all-unsupported list should show 'none runnable' message; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("No connected devices"),
+            "'No connected devices' must not appear when devices exist but are unsupported"
+        );
+    }
+
+    #[test]
+    fn connected_with_supported_device_renders_rows_not_empty_state() {
+        // devices: one supported device → buffer contains the device name, not the empty message
+        let devices = vec![test_device_full("1", "Pixel 9", "android", false)];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("Pixel 9"),
+            "supported device name should appear; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            !content.contains("No connected devices"),
+            "empty-state message must not appear when a supported device is present"
+        );
+        assert!(
+            !content.contains("none runnable"),
+            "none-runnable message must not appear when a supported device is present"
+        );
+    }
+
     #[test]
     fn connected_device_list_regions_scroll_offset_preserved() {
         // 5 devices, scroll offset = 2 → visible rows start at flat-list index 2
@@ -842,6 +1044,141 @@ mod tests {
             indices.iter().all(|&i| i >= 2),
             "all abs_indices must be >= scroll_offset 2, got {:?}",
             indices
+        );
+    }
+
+    // ─── Hidden-footer tests (task 03) ──────────────────────────────────────
+
+    #[test]
+    fn connected_mixed_shows_hidden_footer() {
+        // One supported device + one unsupported device → rows render AND footer appears.
+        let supported = test_device_full("1", "Pixel 9", "android", false);
+        let unsupported = Device {
+            id: "u1".to_string(),
+            name: "Legacy Phone".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: false,
+            capabilities: None,
+        };
+        let devices = vec![supported, unsupported];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            content.contains("Pixel 9"),
+            "supported device name should appear; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content.contains("1 hidden"),
+            "footer should contain '1 hidden'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content.contains("not runnable"),
+            "footer should contain 'not runnable'; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn connected_all_supported_has_no_hidden_footer() {
+        // Two supported devices → no footer row should appear.
+        let devices = vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 8", "android", false),
+        ];
+
+        let mut terminal = TestTerminal::new();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+        assert!(
+            !content.contains("hidden"),
+            "all-supported list must NOT show 'hidden' footer; got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn connected_click_maps_correctly_with_footer_present() {
+        // Mixed case: one supported + one unsupported.
+        // The supported device is at flat-list index 1 (after the header at index 0).
+        // The footer row must NOT receive a click region.
+        // Area height = 3: list_area = rows 0..2, footer = row 2.
+        let supported = test_device_full("1", "Pixel 9", "android", false);
+        let unsupported = Device {
+            id: "u1".to_string(),
+            name: "Legacy Phone".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: false,
+            capabilities: None,
+        };
+        let devices = vec![supported, unsupported];
+
+        // Height 3: Layout gives list_area height=2 and footer height=1
+        let list = ConnectedDeviceList::new(&devices, 0, true, 0);
+        let area = Rect::new(0, 0, 50, 3);
+        let mut buf = Buffer::empty(area);
+        let mut regions = MouseRegions::default();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            connected_device_list_render_with_regions(area, &mut buf, &list, Some(&mut ctx));
+        }
+
+        // Flat list: [Header("ANDROID DEVICES"), Device("Pixel 9")] — 1 device region
+        assert_eq!(
+            regions.len(),
+            1,
+            "only the supported device row should register a click region; got {}",
+            regions.len()
+        );
+
+        let device_region = regions.iter().next().expect("expected at least one region");
+
+        // The device region must be within list_area (y < area.bottom() - 1 = 2)
+        let footer_y = area.y + area.height - 1;
+        assert!(
+            device_region.rect.y < footer_y,
+            "device click region must not overlap the footer row (y={footer_y}); got y={}",
+            device_region.rect.y
+        );
+
+        // The registered index must be the flat-list device index (1, after the header at 0)
+        let registered_index = device_region
+            .on_left
+            .as_ref()
+            .and_then(|a| a.as_emit())
+            .and_then(|m| {
+                if let Message::NewSessionDialogSelectDeviceAt { index } = m {
+                    Some(*index)
+                } else {
+                    None
+                }
+            })
+            .expect("region should carry NewSessionDialogSelectDeviceAt");
+        assert_eq!(
+            registered_index, 1,
+            "click should map to flat-list index 1 (first device after header); got {registered_index}"
         );
     }
 }

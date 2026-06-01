@@ -45,6 +45,8 @@ pub fn test_device_full(id: &str, name: &str, platform: &str, emulator: bool) ->
         platform_type: None,
         ephemeral: false,
         emulator_id: None,
+        is_supported: true,
+        capabilities: None,
     }
 }
 

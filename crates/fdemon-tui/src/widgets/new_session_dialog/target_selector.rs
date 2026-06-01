@@ -32,6 +32,9 @@ pub struct TargetSelector<'a> {
     /// When `true` and `compact` is also `true`, render a one-line hint
     /// informing the user that mouse regions are not registered at this size.
     enable_mouse: bool,
+    /// Global animation frame (`AppState::animation_frame`) for in-progress
+    /// spinners. Defaults to `0` so existing test constructions compile without change.
+    animation_frame: u64,
 }
 
 impl<'a> TargetSelector<'a> {
@@ -47,6 +50,7 @@ impl<'a> TargetSelector<'a> {
             is_focused,
             compact: false,
             enable_mouse: false,
+            animation_frame: 0,
         }
     }
 
@@ -69,6 +73,12 @@ impl<'a> TargetSelector<'a> {
     /// a hint when mouse regions are not registered at this layout size.
     pub fn enable_mouse(mut self, enable: bool) -> Self {
         self.enable_mouse = enable;
+        self
+    }
+
+    /// Set the global animation frame used to drive in-progress spinners.
+    pub fn animation_frame(mut self, frame: u64) -> Self {
+        self.animation_frame = frame;
         self
     }
 }
@@ -117,8 +127,8 @@ impl TargetSelector<'_> {
             self.is_focused,
             self.state.refreshing,
             self.state.bootable_refreshing,
-            &self.icons,
-        );
+        )
+        .animation_frame(self.animation_frame);
         tab_bar.render(chunks[0], buf);
 
         // Render content based on active tab
@@ -134,7 +144,8 @@ impl TargetSelector<'_> {
                         self.state.selected_index,
                         self.is_focused,
                         corrected_scroll,
-                    );
+                    )
+                    .with_checked(&self.state.checked_device_ids);
                     list.render(chunks[1], buf);
                 }
                 TargetTab::Bootable => {
@@ -220,7 +231,8 @@ impl TargetSelector<'_> {
                         self.state.selected_index,
                         self.is_focused,
                         corrected_scroll,
-                    );
+                    )
+                    .with_checked(&self.state.checked_device_ids);
                     list.render(chunks[1], buf);
                 }
                 TargetTab::Bootable => {
@@ -315,7 +327,10 @@ impl TargetSelector<'_> {
 
 impl TargetSelector<'_> {
     fn render_loading(&self, area: Rect, buf: &mut Buffer) {
-        let text = Paragraph::new("Discovering devices...")
+        let glyph = crate::widgets::spinner::spinner_char(
+            self.animation_frame / crate::widgets::spinner::SPINNER_TICKS_PER_FRAME,
+        );
+        let text = Paragraph::new(format!("{glyph} Discovering devices..."))
             .style(Style::default().fg(palette::STATUS_YELLOW))
             .alignment(Alignment::Center);
         text.render(area, buf);
@@ -330,11 +345,21 @@ impl TargetSelector<'_> {
 
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         let hints = match self.state.active_tab {
-            TargetTab::Connected => "[Enter] Select  [r] Refresh",
-            TargetTab::Bootable => "[Enter] Boot  [r] Refresh",
+            TargetTab::Connected => {
+                let checked = self.state.checked_count();
+                if checked > 0 {
+                    format!(
+                        "Space select · a all · Enter launch · r refresh  ({} selected)",
+                        checked
+                    )
+                } else {
+                    "Space select · a all · Enter launch · r refresh".to_string()
+                }
+            }
+            TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
         };
 
-        let text = Paragraph::new(hints)
+        let text = Paragraph::new(hints.as_str())
             .style(Style::default().fg(palette::BORDER_DIM))
             .alignment(Alignment::Center);
         text.render(area, buf);
@@ -1132,8 +1157,9 @@ mod tests {
 
     #[test]
     fn test_target_selector_renders_refreshing_glyph_when_state_set() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
         // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
-        // Use height 12 to ensure the tab bar renders fully and the refresh glyph is visible.
+        // Use height 12 to ensure the tab bar renders fully and the spinner glyph is visible.
         let mut state = TargetSelectorState {
             loading: false,
             ..Default::default()
@@ -1142,13 +1168,12 @@ mod tests {
         state.refreshing = true;
 
         let tool_availability = ToolAvailability::default();
-        let icons = crate::theme::icons::IconSet::default();
-        let glyph = icons.refresh();
 
         let backend = TestBackend::new(60, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
+                // animation_frame=0 → spinner_char(0 / 2) = SPINNER_FRAMES[0] = '⠋'
                 let selector = TargetSelector::new(&state, &tool_availability, true);
                 selector.render(f.area(), f.buffer_mut());
             })
@@ -1161,16 +1186,18 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<Vec<_>>()
             .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
         assert!(
-            rendered.contains(glyph),
-            "expected refresh glyph in target selector, got: {rendered}"
+            any_spinner,
+            "expected a spinner glyph in target selector tab bar when refreshing, got: {rendered}"
         );
     }
 
     #[test]
     fn test_target_selector_renders_bootable_refreshing_glyph_when_state_set() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
         // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
-        // Use height 12 to ensure the tab bar renders fully and the refresh glyph is visible.
+        // Use height 12 to ensure the tab bar renders fully and the spinner glyph is visible.
         let mut state = TargetSelectorState {
             loading: false,
             active_tab: TargetTab::Bootable,
@@ -1180,8 +1207,6 @@ mod tests {
         state.bootable_refreshing = true;
 
         let tool_availability = ToolAvailability::default();
-        let icons = crate::theme::icons::IconSet::default();
-        let glyph = icons.refresh();
 
         let backend = TestBackend::new(60, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1199,14 +1224,16 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<Vec<_>>()
             .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
         assert!(
-            rendered.contains(glyph),
-            "expected bootable refresh glyph in target selector, got: {rendered}"
+            any_spinner,
+            "expected a spinner glyph in target selector tab bar when bootable refreshing, got: {rendered}"
         );
     }
 
     #[test]
     fn test_target_selector_no_glyph_when_not_refreshing() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
         // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
         // Use height 12 to ensure the tab bar renders fully.
         let mut state = TargetSelectorState {
@@ -1217,13 +1244,13 @@ mod tests {
         // refreshing defaults to false
 
         let tool_availability = ToolAvailability::default();
-        let icons = crate::theme::icons::IconSet::default();
-        let glyph = icons.refresh();
 
         let backend = TestBackend::new(60, 12);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
+                // When not refreshing, no spinner glyphs should appear in the tab bar.
+                // (The loading spinner is also not shown since loading=false.)
                 let selector = TargetSelector::new(&state, &tool_availability, true);
                 selector.render(f.area(), f.buffer_mut());
             })
@@ -1236,9 +1263,10 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<Vec<_>>()
             .join("");
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| rendered.contains(g));
         assert!(
-            !rendered.contains(glyph),
-            "expected no refresh glyph when not refreshing, got: {rendered}"
+            !any_spinner,
+            "expected no spinner glyph when not refreshing, got: {rendered}"
         );
     }
 
@@ -1526,5 +1554,100 @@ mod tests {
                 "expected refresh glyph on inactive Connected tab in compact mode, got: {rendered}"
             );
         }
+    }
+
+    // ── Animated loading spinner tests (Phase 3, Task 03) ───────────────────
+
+    #[test]
+    fn test_target_selector_renders_loading_with_spinner_glyph() {
+        use crate::widgets::spinner::SPINNER_FRAMES;
+
+        // loading=true is the default; use a non-zero frame to get a spinner glyph.
+        let state = TargetSelectorState::default(); // loading = true
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(50, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector =
+                    TargetSelector::new(&state, &tool_availability, true).animation_frame(4);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        // Substring "Discovering devices" must still be present (acceptance criterion 5).
+        assert!(
+            content.contains("Discovering devices"),
+            "loading content must contain 'Discovering devices', got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+
+        // A spinner glyph from SPINNER_FRAMES must also be present.
+        let any_spinner = SPINNER_FRAMES.iter().any(|&g| content.contains(g));
+        assert!(
+            any_spinner,
+            "loading content must contain a spinner glyph from SPINNER_FRAMES, got: {}",
+            &content.chars().take(300).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn test_target_selector_loading_spinner_advances_with_frame() {
+        use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME};
+
+        // The glyph rendered for frame=0 and frame=SPINNER_TICKS_PER_FRAME*1 should differ.
+        let state = TargetSelectorState::default();
+        let tool_availability = ToolAvailability::default();
+
+        let render_at_frame = |frame: u64| -> String {
+            let backend = TestBackend::new(50, 20);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let selector = TargetSelector::new(&state, &tool_availability, true)
+                        .animation_frame(frame);
+                    f.render_widget(selector, f.area());
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+
+        // Frame 0 → cadence index 0; frame SPINNER_TICKS_PER_FRAME → cadence index 1.
+        let glyph_at_0 = spinner_char(0);
+        let glyph_at_1 = spinner_char(1);
+        // These should differ (all SPINNER_FRAMES entries are distinct).
+        assert_ne!(
+            glyph_at_0, glyph_at_1,
+            "consecutive spinner glyphs must be distinct"
+        );
+
+        let content_frame0 = render_at_frame(0);
+        let content_frame1 = render_at_frame(SPINNER_TICKS_PER_FRAME);
+
+        assert!(
+            content_frame0.contains(glyph_at_0),
+            "at animation_frame=0 expected glyph '{glyph_at_0}', content: {}",
+            &content_frame0.chars().take(300).collect::<String>()
+        );
+        assert!(
+            content_frame1.contains(glyph_at_1),
+            "at animation_frame={SPINNER_TICKS_PER_FRAME} expected glyph '{glyph_at_1}', content: {}",
+            &content_frame1.chars().take(300).collect::<String>()
+        );
     }
 }

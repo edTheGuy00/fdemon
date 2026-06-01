@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::components::code_block::CodeBlock;
 use crate::components::diagrams::*;
@@ -7,60 +8,69 @@ use crate::components::icons::*;
 #[component]
 pub fn Architecture() -> impl IntoView {
     view! {
+        <Title text="Architecture" />
+        <Meta name="description" content="Flutter Demon's internal architecture: a 5-crate Cargo workspace following The Elm Architecture (TEA). Covers the Engine, session manager, DevTools subsystem, and DAP server." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/architecture" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-4xl font-bold text-white">"Architecture"</h1>
             <p class="text-lg text-slate-400">
-                "Flutter Demon is a terminal-based Flutter development environment built with a "
-                "layered architecture separating concerns between domain logic, infrastructure, and presentation. "
-                "The application uses The Elm Architecture (TEA) for predictable state management."
+                "Flutter Demon is organized as a Cargo workspace with five library crates and one binary. "
+                "The application follows The Elm Architecture (TEA) for predictable state management, "
+                "with compile-time enforced layer boundaries between crates."
             </p>
 
             // ── System Architecture ─────────────────────────
             <Section title="System Architecture">
-                <DiagramContainer title="Architecture Layers">
+                <DiagramContainer title="Crate Dependency Graph">
                     <ArchNode
-                        title="Binary (main.rs)"
-                        subtitle="CLI parsing, project discovery"
+                        title="flutter-demon (binary)"
+                        subtitle="CLI parsing, headless NDJSON mode"
                         color=NodeColor::Slate
                         icon=|| view! { <Terminal class="w-4 h-4" /> }.into_any()
                     />
                     <FlowArrow />
-                    <ArchNode
-                        title="Application Layer (app/, services/)"
-                        subtitle="TEA state management, message handling, service abstractions"
-                        color=NodeColor::Blue
-                        icon=|| view! { <Layers class="w-4 h-4" /> }.into_any()
-                    />
-                    <BranchDown3 />
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mx-[12%] md:mx-[16%]">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mx-[12%] md:mx-[16%]">
                         <ArchNode
-                            title="Presentation"
-                            subtitle="Terminal UI, Ratatui widgets (tui/)"
+                            title="fdemon-tui"
+                            subtitle="Ratatui terminal UI, widgets, runner"
                             color=NodeColor::Purple
                             icon=|| view! { <Layout class="w-4 h-4" /> }.into_any()
                         />
-                        <div>
-                            <ArchNode
-                                title="Infrastructure"
-                                subtitle="Process mgmt, JSON-RPC (daemon/)"
-                                color=NodeColor::Cyan
-                                icon=|| view! { <Cpu class="w-4 h-4" /> }.into_any()
-                            />
-                            <FlowArrow />
-                            <ArchNode
-                                title="Flutter Process"
-                                subtitle="flutter run --machine"
-                                color=NodeColor::Rose
-                                icon=|| view! { <Smartphone class="w-4 h-4" /> }.into_any()
-                            />
-                        </div>
                         <ArchNode
-                            title="Domain"
-                            subtitle="Business types, discovery (core/)"
-                            color=NodeColor::Green
-                            icon=|| view! { <Keyboard class="w-4 h-4" /> }.into_any()
+                            title="fdemon-app"
+                            subtitle="TEA engine, AppState, handler::update(), services, config"
+                            color=NodeColor::Blue
+                            icon=|| view! { <Layers class="w-4 h-4" /> }.into_any()
                         />
                     </div>
+                    <FlowArrow />
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mx-[12%] md:mx-[16%]">
+                        <ArchNode
+                            title="fdemon-daemon"
+                            subtitle="Flutter process I/O, JSON-RPC, device discovery, native logs"
+                            color=NodeColor::Cyan
+                            icon=|| view! { <Cpu class="w-4 h-4" /> }.into_any()
+                        />
+                        <ArchNode
+                            title="fdemon-dap"
+                            subtitle="Debug Adapter Protocol server, adapter, TCP/stdio transport"
+                            color=NodeColor::Orange
+                            icon=|| view! { <Zap class="w-4 h-4" /> }.into_any()
+                        />
+                        <ArchNode
+                            title="fdemon-core"
+                            subtitle="Domain types, events, discovery, error handling (zero deps)"
+                            color=NodeColor::Green
+                            icon=|| view! { <Database class="w-4 h-4" /> }.into_any()
+                        />
+                    </div>
+                    <FlowArrow />
+                    <ArchNode
+                        title="Flutter Process"
+                        subtitle="flutter run --machine"
+                        color=NodeColor::Rose
+                        icon=|| view! { <Smartphone class="w-4 h-4" /> }.into_any()
+                    />
                 </DiagramContainer>
             </Section>
 
@@ -76,7 +86,7 @@ pub fn Architecture() -> impl IntoView {
                         <ul class="space-y-2 text-sm text-slate-400">
                             <li><strong class="text-white">"Model"</strong>" \u{2014} "<code class="text-blue-400">"AppState"</code>" holds the complete application state"</li>
                             <li><strong class="text-white">"Messages"</strong>" \u{2014} "<code class="text-blue-400">"Message"</code>" enum defines all possible events"</li>
-                            <li><strong class="text-white">"Update"</strong>" \u{2014} "<code class="text-blue-400">"handler::update()"</code>" pure function: (State, Msg) \u{2192} (State, Action)"</li>
+                            <li><strong class="text-white">"Update"</strong>" \u{2014} "<code class="text-blue-400">"handler::update()"</code>" pure function: (State, Msg) \u{2192} (State, Option\u{3C}Action\u{3E})"</li>
                             <li><strong class="text-white">"View"</strong>" \u{2014} "<code class="text-blue-400">"tui::render()"</code>" renders state to the terminal"</li>
                         </ul>
                     </div>
@@ -125,8 +135,8 @@ pub fn Architecture() -> impl IntoView {
                     <FlowArrow />
 
                     <ArchNode
-                        title="update(state, message)"
-                        subtitle="Pure function \u{2192} (new_state, Option<Action>)"
+                        title="handler::update(state, message)"
+                        subtitle="Pure function \u{2192} (AppState, Option\u{3C}UpdateAction\u{3E})"
                         color=NodeColor::Orange
                         icon=|| view! { <RefreshCw class="w-3 h-3" /> }.into_any()
                     />
@@ -160,30 +170,30 @@ pub fn Architecture() -> impl IntoView {
             // ── Layer Dependencies ──────────────────────────
             <Section title="Layer Dependencies">
                 <p class="text-slate-400 mb-4">
-                    "Each layer has clear responsibilities. Dependencies flow downward \u{2014} lower layers never depend on higher ones."
+                    "Each crate has clear responsibilities. Dependencies flow downward — lower crates never depend on higher ones. "
+                    "Cargo enforces these boundaries at compile time."
                 </p>
                 <div class="overflow-hidden rounded-lg border border-slate-800">
                     <table class="w-full text-left text-sm">
                         <thead class="bg-slate-900 text-slate-200">
                             <tr>
-                                <th class="p-4 font-medium">"Layer"</th>
+                                <th class="p-4 font-medium">"Crate"</th>
                                 <th class="p-4 font-medium">"Responsibility"</th>
-                                <th class="p-4 font-medium hidden md:table-cell">"Dependencies"</th>
+                                <th class="p-4 font-medium hidden md:table-cell">"Depends on"</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
-                            <LayerRow layer="Binary" resp="CLI, entry point" deps="All" />
-                            <LayerRow layer="App" resp="State, orchestration" deps="Core, Daemon, TUI" />
-                            <LayerRow layer="Services" resp="Reusable controllers" deps="Core, Daemon" />
-                            <LayerRow layer="TUI" resp="Presentation" deps="Core, App (TEA View)" />
-                            <LayerRow layer="Daemon" resp="Flutter process I/O" deps="Core" />
-                            <LayerRow layer="Core" resp="Domain types" deps="None" />
-                            <LayerRow layer="Common" resp="Utilities" deps="None" />
+                            <LayerRow layer="flutter-demon" resp="CLI, entry point, headless mode" deps="All crates" />
+                            <LayerRow layer="fdemon-tui" resp="Terminal UI presentation" deps="fdemon-core, fdemon-app" />
+                            <LayerRow layer="fdemon-app" resp="TEA engine, state, orchestration, services, config" deps="fdemon-core, fdemon-daemon, fdemon-dap" />
+                            <LayerRow layer="fdemon-dap" resp="DAP protocol, adapter, TCP/stdio transport" deps="fdemon-core" />
+                            <LayerRow layer="fdemon-daemon" resp="Flutter process I/O, device/emulator discovery" deps="fdemon-core" />
+                            <LayerRow layer="fdemon-core" resp="Domain types, events, discovery, error handling" deps="None" />
                         </tbody>
                     </table>
                 </div>
                 <p class="text-sm text-slate-500 mt-2">
-                    "The TUI layer depends on App because of the TEA pattern: "
+                    "The TUI crate depends on App because of the TEA pattern: "
                     <code class="text-blue-400">"render()"</code>" must receive "<code class="text-blue-400">"AppState"</code>
                     " to render it. This is the fundamental TEA contract: View: State \u{2192} UI."
                 </p>
@@ -197,7 +207,7 @@ pub fn Architecture() -> impl IntoView {
                         <h4 class="font-bold text-white">"Error Classification"</h4>
                     </div>
                     <ul class="space-y-2 text-sm text-slate-400">
-                        <li>"Custom "<code class="text-blue-400">"Error"</code>" enum with domain-specific variants"</li>
+                        <li>"Custom "<code class="text-blue-400">"Error"</code>" enum with domain-specific variants (defined in "<code class="text-blue-400">"crates/fdemon-core/src/error.rs"</code>")"</li>
                         <li><code class="text-blue-400">"Result<T>"</code>" type alias used throughout the codebase"</li>
                         <li>"Errors are categorized as "<strong class="text-red-400">"fatal"</strong>" vs "<strong class="text-yellow-400">"recoverable"</strong></li>
                         <li>"Rich error context via "<code class="text-blue-400">"ResultExt"</code>" trait"</li>
@@ -208,13 +218,15 @@ pub fn Architecture() -> impl IntoView {
             // ── Multi-Session Architecture ───────────────────
             <Section title="Multi-Session Architecture">
                 <p class="text-slate-400 mb-4">
-                    "Flutter Demon supports up to 9 concurrent device sessions, each with its own Flutter process, logs, and state."
+                    "Flutter Demon supports up to 9 concurrent device sessions, each with its own Flutter process, logs, and state. "
+                    <code class="text-blue-400">"SessionManager"</code>" is held on "<code class="text-blue-400">"AppState"</code>" inside "<code class="text-blue-400">"fdemon-app"</code>"."
                 </p>
                 <DiagramContainer title="Session Hierarchy">
                     <div class="border border-blue-500/30 rounded-lg p-4 bg-blue-950/10">
                         <div class="flex items-center gap-2 mb-1">
                             <Database class="w-4 h-4 text-blue-400" />
                             <span class="font-bold text-blue-400">"SessionManager"</span>
+                            <span class="text-xs text-slate-500 font-mono ml-2">"crates/fdemon-app/src/session_manager.rs"</span>
                         </div>
                         <div class="text-xs text-slate-500 mb-4 font-mono">
                             "sessions: HashMap<SessionId, SessionHandle>"<br/>
@@ -235,7 +247,7 @@ pub fn Architecture() -> impl IntoView {
             <Section title="Mouse Subsystem">
                 <p class="text-slate-400">
                     "Mouse input flows through the same TEA pipeline as keyboard events. "
-                    "The "<code class="text-blue-400">"MouseInput"</code>" type (in "<code class="text-blue-400">"fdemon-app/input_mouse.rs"</code>") carries button press, scroll direction, and modifier keys. "
+                    "The "<code class="text-blue-400">"MouseInput"</code>" type (in "<code class="text-blue-400">"crates/fdemon-app/src/input_mouse.rs"</code>") carries button press, scroll direction, and modifier keys. "
                     "During each render frame, widgets register hit-testable regions via a "<strong class="text-white">"Mouse Region Registry"</strong>" — a per-frame, z-index-aware table of "<code class="text-blue-400">"MouseRegionEntry"</code>" values held on "<code class="text-blue-400">"AppState"</code>" as a "<code class="text-blue-400">"MouseRegionsCell"</code>"."
                 </p>
                 <p class="text-slate-400">
@@ -270,7 +282,7 @@ pub fn Architecture() -> impl IntoView {
                 <DiagramContainer title="Log Processing Pipeline">
                     <div class="space-y-0">
                         <FlowStep n=1 title="Process Output" desc="FlutterProcess stdout/stderr reader task receives a line" color=NodeColor::Cyan />
-                        <FlowStep n=2 title="Protocol Parse" desc="protocol::DaemonMessage::parse() converts JSON-RPC to typed event" color=NodeColor::Cyan />
+                        <FlowStep n=2 title="Protocol Parse" desc="protocol::parse_daemon_message() converts JSON-RPC to typed event" color=NodeColor::Cyan />
                         <FlowStep n=3 title="Event Dispatch" desc="DaemonEvent::Message(parsed) wrapped as Message::Daemon(event)" color=NodeColor::Blue />
                         <FlowStep n=4 title="State Update" desc="handler::update() processes message, creates LogEntry with level and source" color=NodeColor::Orange />
                         <FlowStep n=5 title="Log Storage" desc="state.add_log(entry) appends to the active session's log buffer" color=NodeColor::Green />
@@ -282,74 +294,90 @@ pub fn Architecture() -> impl IntoView {
             // ── Key Types ────────────────────────────────────
             <Section title="Key Types">
                 <h3 class="text-lg font-bold text-white">"AppState (Model)"</h3>
-                <p class="text-slate-400 text-sm mb-2">"The complete application state \u{2014} everything needed to render the UI."</p>
-                <CodeBlock code="pub struct AppState {\n    pub ui_mode: UiMode,              // Normal, DeviceSelector, Settings, ...\n    pub session_manager: SessionManager,\n    pub device_selector: DeviceSelectorState,\n    pub settings: Settings,\n    pub project_path: PathBuf,\n    pub project_name: Option<String>,\n    // ...\n}" language="rust" />
+                <p class="text-slate-400 text-sm mb-2">
+                    "The complete application state \u{2014} everything needed to render the UI. "
+                    "Defined in "<code class="text-blue-400">"crates/fdemon-app/src/state.rs"</code>"."
+                </p>
+                <CodeBlock code="pub struct AppState {\n    pub ui_mode: UiMode,              // Normal, DevTools, Settings, ...\n    pub session_manager: SessionManager,\n    pub new_session_dialog_state: NewSessionDialogState,\n    pub settings: Settings,\n    pub project_path: PathBuf,\n    pub project_name: Option<String>,\n    // ...\n}" language="rust" />
 
                 <h3 class="text-lg font-bold text-white mt-6">"Message (Events)"</h3>
-                <p class="text-slate-400 text-sm mb-2">"All possible events that can occur in the application."</p>
-                <CodeBlock code="pub enum Message {\n    // Input\n    Key(KeyEvent),\n    Daemon(DaemonEvent),\n    Tick,\n    // Control\n    HotReload, HotRestart, StopApp,\n    // File watcher\n    FilesChanged { count: usize },\n    AutoReloadTriggered,\n    // Session management\n    SelectSessionByIndex(usize),\n    NextSession, PreviousSession,\n    CloseCurrentSession,\n    // Lifecycle\n    Quit,\n    // ...\n}" language="rust" />
+                <p class="text-slate-400 text-sm mb-2">
+                    "All possible events that can occur in the application. "
+                    "Defined in "<code class="text-blue-400">"crates/fdemon-app/src/message.rs"</code>"."
+                </p>
+                <CodeBlock code="pub enum Message {\n    // Input\n    Key(KeyEvent),\n    Mouse(MouseInput),\n    Daemon(DaemonEvent),\n    Tick,\n    // Control\n    HotReload, HotRestart, StopApp,\n    // File watcher\n    FilesChanged { count: usize },\n    AutoReloadTriggered,\n    // Session management\n    SelectSessionByIndex(usize),\n    NextSession, PreviousSession,\n    CloseCurrentSession,\n    // Lifecycle\n    Quit,\n    // ...\n}" language="rust" />
 
-                <h3 class="text-lg font-bold text-white mt-6">"UpdateResult"</h3>
-                <p class="text-slate-400 text-sm mb-2">"Returned by the update function \u{2014} an optional follow-up message and an optional side-effect action."</p>
-                <CodeBlock code="pub struct UpdateResult {\n    pub message: Option<Message>,\n    pub action: Option<UpdateAction>,\n}\n\npub enum UpdateAction {\n    SpawnTask(Task),\n    SpawnSession { device: Device, config: Option<Box<LaunchConfig>> },\n    DiscoverDevices,\n    DiscoverEmulators,\n    LaunchEmulator { emulator_id: String },\n}" language="rust" />
+                <h3 class="text-lg font-bold text-white mt-6">"handler::update() — The TEA Update Function"</h3>
+                <p class="text-slate-400 text-sm mb-2">
+                    "The update function is a pure function that takes the current state and a message, and returns a new state plus an optional side-effect action. "
+                    "Defined in "<code class="text-blue-400">"crates/fdemon-app/src/handler/"</code>"."
+                </p>
+                <CodeBlock code="pub fn update(state: AppState, message: Message) -> (AppState, Option<UpdateAction>) {\n    // Pure: no side effects. Returns new state + optional action.\n    // ...\n}\n\npub enum UpdateAction {\n    SpawnTask(Task),\n    SpawnSession { device: Device, config: Option<Box<LaunchConfig>> },\n    DiscoverDevices,\n    DiscoverEmulators,\n    LaunchEmulator { emulator_id: String },\n}" language="rust" />
             </Section>
 
             // ── Project Structure ────────────────────────────
             <Section title="Project Structure">
-                <CodeBlock code="src/\n\u{251C}\u{2500}\u{2500} main.rs              # Binary entry point, CLI handling\n\u{251C}\u{2500}\u{2500} lib.rs               # Library public API\n\u{251C}\u{2500}\u{2500} common/              # Shared utilities (no dependencies)\n\u{2502}   \u{251C}\u{2500}\u{2500} error.rs         # Error types and Result alias\n\u{2502}   \u{251C}\u{2500}\u{2500} logging.rs       # File-based logging setup\n\u{2502}   \u{2514}\u{2500}\u{2500} prelude.rs       # Common imports\n\u{251C}\u{2500}\u{2500} core/                # Domain types (pure business logic)\n\u{2502}   \u{251C}\u{2500}\u{2500} types.rs         # LogEntry, LogLevel, AppPhase\n\u{2502}   \u{251C}\u{2500}\u{2500} events.rs        # DaemonEvent enum\n\u{2502}   \u{2514}\u{2500}\u{2500} discovery.rs     # Flutter project detection\n\u{251C}\u{2500}\u{2500} config/              # Configuration parsing\n\u{2502}   \u{251C}\u{2500}\u{2500} settings.rs      # .fdemon/config.toml loader\n\u{2502}   \u{251C}\u{2500}\u{2500} launch.rs        # .fdemon/launch.toml loader\n\u{2502}   \u{2514}\u{2500}\u{2500} vscode.rs        # .vscode/launch.json compatibility\n\u{251C}\u{2500}\u{2500} daemon/              # Flutter process management\n\u{2502}   \u{251C}\u{2500}\u{2500} process.rs       # FlutterProcess lifecycle\n\u{2502}   \u{251C}\u{2500}\u{2500} protocol.rs      # JSON-RPC message parsing\n\u{2502}   \u{251C}\u{2500}\u{2500} commands.rs      # Request tracking\n\u{2502}   \u{2514}\u{2500}\u{2500} devices.rs       # Device discovery\n\u{251C}\u{2500}\u{2500} watcher/             # File system watching\n\u{2502}   \u{2514}\u{2500}\u{2500} mod.rs           # Auto-reload on file changes\n\u{251C}\u{2500}\u{2500} services/            # Service abstractions\n\u{2502}   \u{251C}\u{2500}\u{2500} flutter_controller.rs\n\u{2502}   \u{2514}\u{2500}\u{2500} log_service.rs\n\u{251C}\u{2500}\u{2500} app/                 # Application layer (TEA)\n\u{2502}   \u{251C}\u{2500}\u{2500} state.rs         # AppState (the Model)\n\u{2502}   \u{251C}\u{2500}\u{2500} message.rs       # Message enum\n\u{2502}   \u{251C}\u{2500}\u{2500} handler.rs       # update() function\n\u{2502}   \u{2514}\u{2500}\u{2500} session_manager.rs\n\u{2514}\u{2500}\u{2500} tui/                 # Terminal UI (ratatui)\n    \u{251C}\u{2500}\u{2500} render.rs        # State \u{2192} UI rendering\n    \u{251C}\u{2500}\u{2500} event.rs         # Terminal event handling\n    \u{2514}\u{2500}\u{2500} widgets/         # UI components\n        \u{251C}\u{2500}\u{2500} header.rs    # App header bar\n        \u{251C}\u{2500}\u{2500} tabs.rs      # Session tab bar\n        \u{251C}\u{2500}\u{2500} log_view/    # Scrollable log display\n        \u{251C}\u{2500}\u{2500} status_bar.rs\n        \u{2514}\u{2500}\u{2500} device_selector.rs" language="text" />
+                <p class="text-slate-400 mb-3">
+                    "The repository is a Cargo workspace. All library crates live under "<code class="text-blue-400">"crates/"</code>"; "
+                    "the binary entry point is "<code class="text-blue-400">"src/main.rs"</code>"."
+                </p>
+                <CodeBlock code="flutter-demon/\n\u{251C}\u{2500}\u{2500} Cargo.toml              # Workspace root\n\u{251C}\u{2500}\u{2500} src/\n\u{2502}   \u{251C}\u{2500}\u{2500} main.rs             # Binary entry point, CLI handling\n\u{2502}   \u{2514}\u{2500}\u{2500} headless/           # Headless NDJSON mode\n\u{251C}\u{2500}\u{2500} crates/\n\u{2502}   \u{251C}\u{2500}\u{2500} fdemon-core/        # Domain types (zero deps)\n\u{2502}   \u{2502}   \u{2514}\u{2500}\u{2500} src/\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} types.rs        # LogEntry, LogLevel, AppPhase\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} events.rs       # DaemonEvent + event structs\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} error.rs        # Error enum, Result alias, ResultExt\n\u{2502}   \u{2502}       \u{2514}\u{2500}\u{2500} discovery.rs    # Flutter project detection\n\u{2502}   \u{251C}\u{2500}\u{2500} fdemon-daemon/      # Flutter process I/O (depends: fdemon-core)\n\u{2502}   \u{2502}   \u{2514}\u{2500}\u{2500} src/\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} process.rs      # FlutterProcess lifecycle\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} protocol.rs     # JSON-RPC message parsing\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} commands.rs     # CommandSender, RequestTracker\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} devices.rs      # Device discovery\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} native_logs/    # Android/macOS/iOS log capture\n\u{2502}   \u{2502}       \u{2514}\u{2500}\u{2500} vm_service/     # VM Service WebSocket client\n\u{2502}   \u{251C}\u{2500}\u{2500} fdemon-dap/         # DAP server (depends: fdemon-core)\n\u{2502}   \u{2502}   \u{2514}\u{2500}\u{2500} src/\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} protocol/       # DAP wire types, codec\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} adapter/        # DAP <-> VM Service translation\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} server/         # TCP accept loop, session lifecycle\n\u{2502}   \u{2502}       \u{2514}\u{2500}\u{2500} transport/      # Stdio transport\n\u{2502}   \u{251C}\u{2500}\u{2500} fdemon-app/         # TEA engine (depends: fdemon-core, fdemon-daemon)\n\u{2502}   \u{2502}   \u{2514}\u{2500}\u{2500} src/\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} engine.rs       # Engine - shared orchestration core\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} state.rs        # AppState (the Model)\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} message.rs      # Message enum\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} handler/        # update() function + devtools handlers\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} session/        # Session, SessionHandle, per-session state\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} session_manager.rs\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} config/         # Settings, launch, VSCode config\n\u{2502}   \u{2502}       \u{251C}\u{2500}\u{2500} services/       # FlutterController, LogService, SharedState\n\u{2502}   \u{2502}       \u{2514}\u{2500}\u{2500} new_session_dialog/ # New session dialog state\n\u{2502}   \u{2514}\u{2500}\u{2500} fdemon-tui/         # Terminal UI (depends: fdemon-core, fdemon-app)\n\u{2502}       \u{2514}\u{2500}\u{2500} src/\n\u{2502}           \u{251C}\u{2500}\u{2500} runner.rs       # TUI runner (creates Engine)\n\u{2502}           \u{251C}\u{2500}\u{2500} render/         # State -> UI rendering pipeline\n\u{2502}           \u{251C}\u{2500}\u{2500} widgets/        # Header, tabs, log_view, status_bar\n\u{2502}           \u{2514}\u{2500}\u{2500} widgets/devtools/ # Inspector, Performance, Network, Memory\n\u{2514}\u{2500}\u{2500} tests/                  # Integration tests" language="text" />
             </Section>
 
             // ── Module Reference ─────────────────────────────
             <Section title="Module Reference">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <ModuleCard title="common/" desc="Shared utilities \u{2014} no domain dependencies" accent="text-slate-400">
-                        <FileEntry name="error.rs" desc="Custom Error enum, Result<T> alias, ResultExt trait" />
-                        <FileEntry name="logging.rs" desc="File-based logging via tracing (stdout owned by TUI)" />
-                        <FileEntry name="signals.rs" desc="Async SIGINT/SIGTERM handler, sends Message::Quit" />
-                        <FileEntry name="prelude.rs" desc="Re-exports common types and tracing macros" />
+                    <ModuleCard title="fdemon-core" desc="Pure domain types \u{2014} zero internal dependencies" accent="text-green-400">
+                        <FileEntry name="crates/fdemon-core/src/types.rs" desc="AppPhase, LogEntry, LogLevel, LogSource" />
+                        <FileEntry name="crates/fdemon-core/src/events.rs" desc="DaemonEvent \u{2014} events from the Flutter process" />
+                        <FileEntry name="crates/fdemon-core/src/error.rs" desc="Custom Error enum, Result<T> alias, ResultExt trait" />
+                        <FileEntry name="crates/fdemon-core/src/discovery.rs" desc="Project detection, ProjectType enum" />
+                        <FileEntry name="crates/fdemon-core/src/logging.rs" desc="File-based logging via tracing (stdout owned by TUI)" />
+                        <FileEntry name="crates/fdemon-core/src/prelude.rs" desc="Re-exports common types and tracing macros" />
                     </ModuleCard>
 
-                    <ModuleCard title="core/" desc="Pure domain types \u{2014} zero external dependencies" accent="text-green-400">
-                        <FileEntry name="types.rs" desc="AppPhase, LogEntry, LogLevel, LogSource" />
-                        <FileEntry name="events.rs" desc="DaemonEvent \u{2014} events from the Flutter process" />
-                        <FileEntry name="discovery.rs" desc="Project detection, ProjectType enum" />
+                    <ModuleCard title="fdemon-daemon" desc="Flutter process management and JSON-RPC" accent="text-cyan-400">
+                        <FileEntry name="crates/fdemon-daemon/src/process.rs" desc="FlutterProcess \u{2014} spawns flutter run --machine" />
+                        <FileEntry name="crates/fdemon-daemon/src/protocol.rs" desc="parse_daemon_message() from JSON-RPC" />
+                        <FileEntry name="crates/fdemon-daemon/src/commands.rs" desc="CommandSender, RequestTracker for request IDs" />
+                        <FileEntry name="crates/fdemon-daemon/src/devices.rs" desc="Device discovery and Emulator management" />
+                        <FileEntry name="crates/fdemon-daemon/src/native_logs/" desc="Android logcat, macOS log stream, iOS sim/physical" />
+                        <FileEntry name="crates/fdemon-daemon/src/vm_service/" desc="VM Service WebSocket client (inspector, perf, network)" />
                     </ModuleCard>
 
-                    <ModuleCard title="config/" desc="Configuration parsing from multiple sources" accent="text-orange-400">
-                        <FileEntry name="types.rs" desc="LaunchConfig, Settings, FlutterMode types" />
-                        <FileEntry name="settings.rs" desc=".fdemon/config.toml loader" />
-                        <FileEntry name="launch.rs" desc=".fdemon/launch.toml loader" />
-                        <FileEntry name="vscode.rs" desc=".vscode/launch.json compatibility parser" />
+                    <ModuleCard title="fdemon-dap" desc="Debug Adapter Protocol server" accent="text-orange-400">
+                        <FileEntry name="crates/fdemon-dap/src/protocol/types.rs" desc="All DAP request, response, and event types" />
+                        <FileEntry name="crates/fdemon-dap/src/protocol/codec.rs" desc="Content-Length framing encoder/decoder" />
+                        <FileEntry name="crates/fdemon-dap/src/adapter/" desc="DapAdapter, DebugBackend trait, handlers, breakpoints, variables" />
+                        <FileEntry name="crates/fdemon-dap/src/server/" desc="DapServer TCP accept loop, client session lifecycle" />
+                        <FileEntry name="crates/fdemon-dap/src/transport/stdio.rs" desc="Stdio transport for IDE integration testing" />
                     </ModuleCard>
 
-                    <ModuleCard title="daemon/" desc="Flutter process management and JSON-RPC" accent="text-cyan-400">
-                        <FileEntry name="process.rs" desc="FlutterProcess \u{2014} spawns flutter run --machine" />
-                        <FileEntry name="protocol.rs" desc="DaemonMessage parsing from JSON-RPC" />
-                        <FileEntry name="commands.rs" desc="CommandSender, RequestTracker for request IDs" />
-                        <FileEntry name="devices.rs" desc="Device discovery and Emulator management" />
+                    <ModuleCard title="fdemon-app — core" desc="TEA pattern \u{2014} state management and orchestration" accent="text-blue-400">
+                        <FileEntry name="crates/fdemon-app/src/engine.rs" desc="Engine \u{2014} shared orchestration core (TUI + headless)" />
+                        <FileEntry name="crates/fdemon-app/src/state.rs" desc="AppState \u{2014} the complete application Model" />
+                        <FileEntry name="crates/fdemon-app/src/message.rs" desc="Message enum \u{2014} all possible events/actions" />
+                        <FileEntry name="crates/fdemon-app/src/signals.rs" desc="Async SIGINT/SIGTERM handler, sends Message::Quit" />
+                        <FileEntry name="crates/fdemon-app/src/handler/" desc="update() \u{2014} processes messages, returns (state, action)" />
+                        <FileEntry name="crates/fdemon-app/src/session_manager.rs" desc="Manages up to 9 concurrent SessionHandle instances" />
+                        <FileEntry name="crates/fdemon-app/src/session/" desc="Session, SessionHandle, PerformanceState, NetworkState, NativeTagState" />
                     </ModuleCard>
 
-                    <ModuleCard title="app/" desc="TEA pattern \u{2014} state management and orchestration" accent="text-blue-400">
-                        <FileEntry name="state.rs" desc="AppState \u{2014} the complete application Model" />
-                        <FileEntry name="message.rs" desc="Message enum \u{2014} all possible events/actions" />
-                        <FileEntry name="handler.rs" desc="update() \u{2014} processes messages, returns state + actions" />
-                        <FileEntry name="session_manager.rs" desc="Manages up to 9 concurrent SessionHandle instances" />
+                    <ModuleCard title="fdemon-app — config &amp; services" desc="Configuration and service abstractions" accent="text-orange-400">
+                        <FileEntry name="crates/fdemon-app/src/config/settings.rs" desc=".fdemon/config.toml loader" />
+                        <FileEntry name="crates/fdemon-app/src/config/launch.rs" desc=".fdemon/launch.toml loader" />
+                        <FileEntry name="crates/fdemon-app/src/config/vscode.rs" desc=".vscode/launch.json compatibility parser" />
+                        <FileEntry name="crates/fdemon-app/src/services/" desc="FlutterController, LogService, SharedState (Arc<RwLock<>>)" />
+                        <FileEntry name="crates/fdemon-app/src/watcher.rs" desc="FileWatcher \u{2014} watches lib/ for .dart changes, debounces" />
                     </ModuleCard>
 
-                    <ModuleCard title="tui/" desc="Presentation layer using ratatui" accent="text-purple-400">
-                        <FileEntry name="render.rs" desc="State \u{2192} UI rendering pipeline" />
-                        <FileEntry name="event.rs" desc="Terminal event polling (keyboard, resize)" />
-                        <FileEntry name="widgets/" desc="Header, SessionTabs, LogView, StatusBar, DeviceSelector" />
-                    </ModuleCard>
-
-                    <ModuleCard title="watcher/" desc="File system monitoring for auto-reload" accent="text-yellow-400">
-                        <FileEntry name="mod.rs" desc="Watches lib/ for .dart changes, debounces (500ms default)" />
-                    </ModuleCard>
-
-                    <ModuleCard title="services/" desc="Abstractions for future MCP server integration" accent="text-rose-400">
-                        <FileEntry name="flutter_controller.rs" desc="Trait: reload(), restart(), stop(), is_running()" />
-                        <FileEntry name="log_service.rs" desc="Trait: log buffer access and filtering" />
-                        <FileEntry name="state_service.rs" desc="SharedState with Arc<RwLock<>>" />
+                    <ModuleCard title="fdemon-tui" desc="Presentation layer using ratatui" accent="text-purple-400">
+                        <FileEntry name="crates/fdemon-tui/src/runner.rs" desc="TUI runner \u{2014} creates Engine, drives event loop" />
+                        <FileEntry name="crates/fdemon-tui/src/render/mod.rs" desc="State \u{2192} UI rendering pipeline" />
+                        <FileEntry name="crates/fdemon-tui/src/widgets/header.rs" desc="App header bar with project name and status" />
+                        <FileEntry name="crates/fdemon-tui/src/widgets/log_view/" desc="Scrollable log display with syntax highlighting" />
+                        <FileEntry name="crates/fdemon-tui/src/widgets/new_session_dialog/" desc="New session creation dialog" />
+                        <FileEntry name="crates/fdemon-tui/src/widgets/devtools/" desc="Inspector, Performance, Network, Memory panels" />
                     </ModuleCard>
                 </div>
             </Section>
@@ -358,7 +386,8 @@ pub fn Architecture() -> impl IntoView {
             <Section title="JSON-RPC Protocol">
                 <p class="text-slate-400 mb-4">
                     "Flutter\u{2019}s "<code class="text-blue-400">"--machine"</code>" flag outputs JSON-RPC over stdout. "
-                    "Messages are wrapped in "<code class="text-blue-400">"[...]"</code>" brackets."
+                    "Messages are wrapped in "<code class="text-blue-400">"[...]"</code>" brackets. "
+                    "Parsing is handled by "<code class="text-blue-400">"crates/fdemon-daemon/src/protocol.rs"</code>"."
                 </p>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
@@ -384,7 +413,7 @@ pub fn Architecture() -> impl IntoView {
             </Section>
 
             // ── Dependencies ─────────────────────────────────
-            <Section title="Dependencies">
+            <Section title="Key Dependencies">
                 <div class="overflow-hidden rounded-lg border border-slate-800">
                     <table class="w-full text-left text-sm">
                         <thead class="bg-slate-900 text-slate-200">
@@ -402,7 +431,7 @@ pub fn Architecture() -> impl IntoView {
                             <DepRow name="notify" purpose="File system watching" />
                             <DepRow name="tracing" purpose="Structured logging" />
                             <DepRow name="thiserror" purpose="Error derive macros" />
-                            <DepRow name="color-eyre" purpose="Enhanced error reporting" />
+                            <DepRow name="tokio-tungstenite" purpose="VM Service WebSocket client" />
                             <DepRow name="chrono" purpose="Date/time handling" />
                         </tbody>
                     </table>
@@ -419,42 +448,41 @@ pub fn Architecture() -> impl IntoView {
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-blue-400 mb-2">"Unit Tests"</h4>
                         <p class="text-xs text-slate-400">
-                            "Live in "<code class="text-blue-400">"src/"</code>" alongside the code they test. "
+                            "Live alongside source code in each crate. "
                             "Use "<code class="text-blue-400">"#[cfg(test)] mod tests"</code>" inline or separate "
-                            <code class="text-blue-400">"tests.rs"</code>" files for large suites (100+ lines)."
+                            <code class="text-blue-400">"tests.rs"</code>" files for large suites."
                         </p>
                     </div>
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-green-400 mb-2">"Integration Tests"</h4>
                         <p class="text-xs text-slate-400">
-                            "Live in the "<code class="text-blue-400">"tests/"</code>" directory at the project root. "
+                            "Live in the "<code class="text-blue-400">"tests/"</code>" directory at the workspace root. "
                             "Each file is compiled as a separate crate with access to the public API only."
                         </p>
                     </div>
                 </div>
 
-                <h4 class="font-bold text-white text-sm mb-2">"Test Coverage by Module"</h4>
+                <h4 class="font-bold text-white text-sm mb-2">"Test Coverage by Crate"</h4>
                 <div class="overflow-hidden rounded-lg border border-slate-800">
                     <table class="w-full text-left text-sm">
                         <thead class="bg-slate-900 text-slate-200">
                             <tr>
-                                <th class="p-3 font-medium">"Module"</th>
-                                <th class="p-3 font-medium">"Test File"</th>
-                                <th class="p-3 font-medium hidden md:table-cell">"Coverage"</th>
+                                <th class="p-3 font-medium">"Crate"</th>
+                                <th class="p-3 font-medium hidden md:table-cell">"Approx. tests"</th>
+                                <th class="p-3 font-medium">"Coverage notes"</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-800 bg-slate-950 text-xs">
-                            <TestRow module="app/handler" file="tests.rs" coverage="Message handling, state transitions" />
-                            <TestRow module="app/session" file="tests.rs" coverage="Session lifecycle, log management" />
-                            <TestRow module="core/discovery" file="inline" coverage="Project detection logic" />
-                            <TestRow module="daemon/protocol" file="inline" coverage="JSON-RPC parsing" />
-                            <TestRow module="tui/render" file="render/tests.rs" coverage="Full-screen snapshots, UI transitions" />
-                            <TestRow module="tui/widgets/log_view" file="tests.rs" coverage="Widget rendering, scrolling" />
+                            <TestRow module="fdemon-core" file="357" coverage="Domain types, discovery, stack trace parsing" />
+                            <TestRow module="fdemon-daemon" file="527" coverage="JSON-RPC parsing, native log capture, device discovery" />
+                            <TestRow module="fdemon-app" file="1511" coverage="State transitions, DevTools handlers, session lifecycle" />
+                            <TestRow module="fdemon-tui" file="814" coverage="Widget rendering, DevTools panels, tag filter overlay" />
+                            <TestRow module="tests/ (integration)" file="80+" coverage="End-to-end binary tests" />
                         </tbody>
                     </table>
                 </div>
 
-                <CodeBlock code="cargo test              # Run all tests\ncargo test --lib        # Unit tests only\ncargo test --test '*'   # Integration tests only\ncargo test log_view     # Tests matching pattern\ncargo test -- --nocapture  # With visible output" language="bash" />
+                <CodeBlock code="cargo test --workspace      # Run all tests\ncargo test --lib           # Unit tests only\ncargo test -p fdemon-app   # Tests for one crate\ncargo test log_view        # Tests matching pattern\ncargo test -- --nocapture  # With visible output" language="bash" />
             </Section>
 
             // ── Future Considerations ────────────────────────
@@ -462,19 +490,19 @@ pub fn Architecture() -> impl IntoView {
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-blue-400 text-sm">"MCP Server"</h4>
-                        <p class="text-xs text-slate-500 mt-1">"Services layer designed for Model Context Protocol integration"</p>
+                        <p class="text-xs text-slate-500 mt-1">"Services layer designed for Model Context Protocol integration via EngineEvent subscription"</p>
                     </div>
                     <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-green-400 text-sm">"Plugin System"</h4>
-                        <p class="text-xs text-slate-500 mt-1">"Core/service separation enables plugin extensions"</p>
+                        <p class="text-xs text-slate-500 mt-1">"Workspace crate separation enables independent extensions and publication"</p>
                     </div>
                     <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-purple-400 text-sm">"Remote Devices"</h4>
-                        <p class="text-xs text-slate-500 mt-1">"Device abstraction supports remote device connections"</p>
+                        <p class="text-xs text-slate-500 mt-1">"Device abstraction in fdemon-daemon supports remote device connections"</p>
                     </div>
                     <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
-                        <h4 class="font-bold text-orange-400 text-sm">"Themes"</h4>
-                        <p class="text-xs text-slate-500 mt-1">"UI settings include theme configuration placeholder"</p>
+                        <h4 class="font-bold text-orange-400 text-sm">"DAP Integration"</h4>
+                        <p class="text-xs text-slate-500 mt-1">"fdemon-dap provides a full Debug Adapter Protocol server for IDE breakpoint debugging"</p>
                     </div>
                 </div>
             </Section>
@@ -574,8 +602,8 @@ fn TestRow(module: &'static str, file: &'static str, coverage: &'static str) -> 
     view! {
         <tr class="hover:bg-slate-900/50 transition-colors">
             <td class="p-3 font-mono text-blue-400 whitespace-nowrap">{module}</td>
-            <td class="p-3 text-slate-300 font-mono">{file}</td>
-            <td class="p-3 text-slate-500 hidden md:table-cell">{coverage}</td>
+            <td class="p-3 text-slate-300 font-mono hidden md:table-cell">{file}</td>
+            <td class="p-3 text-slate-500">{coverage}</td>
         </tr>
     }
 }

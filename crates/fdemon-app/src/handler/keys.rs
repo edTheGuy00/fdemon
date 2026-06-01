@@ -1365,6 +1365,8 @@ fn handle_target_selector_key(key: InputKey) -> Option<Message> {
         InputKey::Up => Some(Message::NewSessionDialogDeviceUp),
         InputKey::Down => Some(Message::NewSessionDialogDeviceDown),
         InputKey::Enter => Some(Message::NewSessionDialogDeviceSelect),
+        InputKey::Char(' ') => Some(Message::NewSessionDialogToggleDeviceSelection),
+        InputKey::Char('a') => Some(Message::NewSessionDialogSelectAllDevices),
         InputKey::Char('r') => Some(Message::NewSessionDialogRefreshDevices),
         _ => None,
     }
@@ -1501,6 +1503,8 @@ mod device_selector_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2139,6 +2143,8 @@ mod performance_sort_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2493,6 +2499,8 @@ mod network_filter_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2623,6 +2631,8 @@ mod dap_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -2903,6 +2913,8 @@ mod inspector_phase1_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -3066,6 +3078,8 @@ mod memory_panel_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -3108,6 +3122,8 @@ mod timeline_pan_zoom_key_tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -3457,5 +3473,71 @@ mod timeline_pan_zoom_key_tests {
             matches!(msg, Some(Message::TimelineSearchInputCancel { .. })),
             "Esc while search input active should emit TimelineSearchInputCancel, got: {msg:?}"
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-select key routing — TargetSelector pane (Phase 1, Task 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod target_selector_multiselect_key_tests {
+    use super::*;
+    use crate::config::LoadedConfigs;
+    use crate::new_session_dialog::DialogPane;
+    use crate::state::{AppState, UiMode};
+    use std::path::PathBuf;
+
+    fn make_new_session_dialog_target_selector() -> AppState {
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.show_new_session_dialog(LoadedConfigs::default());
+        // Ensure TargetSelector pane is focused
+        state.new_session_dialog_state.focused_pane = DialogPane::TargetSelector;
+        state
+    }
+
+    #[test]
+    fn space_key_maps_to_toggle_selection() {
+        let state = make_new_session_dialog_target_selector();
+        let msg = handle_key(&state, InputKey::Char(' '));
+        assert!(
+            matches!(msg, Some(Message::NewSessionDialogToggleDeviceSelection)),
+            "Space in TargetSelector should emit NewSessionDialogToggleDeviceSelection, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn a_key_maps_to_select_all() {
+        let state = make_new_session_dialog_target_selector();
+        let msg = handle_key(&state, InputKey::Char('a'));
+        assert!(
+            matches!(msg, Some(Message::NewSessionDialogSelectAllDevices)),
+            "'a' in TargetSelector should emit NewSessionDialogSelectAllDevices, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn up_down_enter_r_unchanged() {
+        let state = make_new_session_dialog_target_selector();
+        assert!(matches!(
+            handle_key(&state, InputKey::Up),
+            Some(Message::NewSessionDialogDeviceUp)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Down),
+            Some(Message::NewSessionDialogDeviceDown)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Enter),
+            Some(Message::NewSessionDialogDeviceSelect)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('r')),
+            Some(Message::NewSessionDialogRefreshDevices)
+        ));
     }
 }

@@ -1,4 +1,5 @@
-# Launch configurations for watcher path edge cases test (Issue #17)
+# Flutter Demon Launch Configurations
+# Auto-generated - manual edits will be preserved
 
 [[configurations]]
 name = "App4 | Default"

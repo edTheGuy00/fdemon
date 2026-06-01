@@ -43,12 +43,12 @@ pub fn features() -> Vec<Feature> {
         Feature {
             icon: || view! { <Smartphone class="w-6 h-6 text-green-400" /> }.into_any(),
             title: "Multi-Device",
-            desc: "Run up to 9 simultaneous sessions. Debug iOS, Android, and Web at the same time from one terminal.",
+            desc: "Run up to 9 simultaneous sessions. Select multiple connected devices at once and launch them all with a single confirm.",
         },
         Feature {
             icon: || view! { <Zap class="w-6 h-6 text-yellow-400" /> }.into_any(),
             title: "Auto Hot Reload",
-            desc: "Smart file watcher monitors your lib/ directory and triggers reload on save with intelligent debouncing.",
+            desc: "Smart file watcher monitors your source files and triggers reload on save with intelligent debouncing. Watch paths are configurable (default: lib/).",
         },
         Feature {
             icon: || view! { <Layout class="w-6 h-6 text-purple-400" /> }.into_any(),
@@ -84,6 +84,7 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "Esc", action: "Quit", description: "Same as q" },
                 Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit, bypasses confirmation dialog" },
                 Keybinding { key: "c", action: "Clear Logs", description: "Clear all logs in the current session" },
+                Keybinding { key: "Alt+m", action: "Toggle Mouse Capture", description: "Suspend or resume mouse capture. Status bar shows [mouse] / [mouse-off]. Works in all modes except text-input fields." },
             ],
         },
         KeybindingSection {
@@ -107,6 +108,9 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "r", action: "Hot Reload", description: "Trigger a hot reload (disabled when busy)" },
                 Keybinding { key: "R", action: "Hot Restart", description: "Trigger a hot restart (disabled when busy)" },
                 Keybinding { key: "s", action: "Stop App", description: "Stop the running app (disabled when busy)" },
+                Keybinding { key: "D", action: "Toggle DAP Server", description: "Start or stop the DAP debug adapter server. [DAP :PORT] appears in status bar when active." },
+                Keybinding { key: "V", action: "Flutter Version Panel", description: "Open the Flutter SDK version manager panel" },
+                Keybinding { key: "w", action: "Toggle Wrap Mode", description: "Toggle line-wrap on/off for the log view" },
             ],
         },
         KeybindingSection {
@@ -133,7 +137,7 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             bindings: vec![
                 Keybinding { key: "f", action: "Cycle Level Filter", description: "Cycle through: All \u{2192} Errors \u{2192} Warnings \u{2192} Info \u{2192} Debug" },
                 Keybinding { key: "F", action: "Cycle Source Filter", description: "Cycle through: All \u{2192} App \u{2192} Daemon \u{2192} Flutter \u{2192} Watcher" },
-                Keybinding { key: "T", action: "Tag Filter Overlay", description: "Open/close native platform log tag filter overlay" },
+                Keybinding { key: "T / t", action: "Tag Filter Overlay", description: "Open/close native platform log tag filter overlay (both uppercase T and lowercase t work)" },
                 Keybinding { key: "Ctrl+F", action: "Reset Filters", description: "Clear all active filters" },
             ],
         },
@@ -152,9 +156,21 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             ],
         },
 
+        // ── Loading Mode ─────────────────────────────────────────────
+        KeybindingSection {
+            title: "Loading Mode",
+            color: "bg-gray-500",
+            key_color: "text-gray-400",
+            bindings: vec![
+                Keybinding { key: "q", action: "Quit", description: "Quit Flutter Demon" },
+                Keybinding { key: "Esc", action: "Quit", description: "Same as q" },
+                Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit" },
+            ],
+        },
+
         // ── DevTools Mode ─────────────────────────────────────────────
         KeybindingSection {
-            title: "DevTools — Panel Navigation",
+            title: "DevTools \u{2014} Panel Navigation",
             color: "bg-cyan-500",
             key_color: "text-cyan-400",
             bindings: vec![
@@ -162,13 +178,14 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "Esc", action: "Exit DevTools", description: "Return to Normal mode (log view)" },
                 Keybinding { key: "i", action: "Inspector Panel", description: "Switch to Widget Inspector panel" },
                 Keybinding { key: "p", action: "Performance Panel", description: "Switch to Performance monitoring panel" },
+                Keybinding { key: "m", action: "Memory Panel", description: "Switch to Memory monitoring panel" },
                 Keybinding { key: "n", action: "Network Panel", description: "Switch to Network monitoring panel" },
                 Keybinding { key: "b", action: "Browser DevTools", description: "Open Flutter DevTools in system browser" },
                 Keybinding { key: "q", action: "Quit", description: "Quit the application" },
             ],
         },
         KeybindingSection {
-            title: "DevTools — Debug Overlays",
+            title: "DevTools \u{2014} Debug Overlays",
             color: "bg-cyan-500",
             key_color: "text-cyan-400",
             bindings: vec![
@@ -178,7 +195,7 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             ],
         },
         KeybindingSection {
-            title: "DevTools — Widget Inspector",
+            title: "DevTools \u{2014} Widget Inspector",
             color: "bg-cyan-500",
             key_color: "text-cyan-400",
             bindings: vec![
@@ -190,18 +207,43 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             ],
         },
         KeybindingSection {
-            title: "DevTools — Performance Monitor",
+            title: "DevTools \u{2014} Performance Monitor",
             color: "bg-cyan-500",
             key_color: "text-cyan-400",
             bindings: vec![
-                Keybinding { key: "s", action: "Toggle Allocation Sort", description: "Toggle allocation table sort between BySize and ByInstances" },
-                Keybinding { key: "\u{2190}", action: "Previous Frame", description: "Select the previous frame in the bar chart" },
-                Keybinding { key: "\u{2192}", action: "Next Frame", description: "Select the next frame in the bar chart" },
+                Keybinding { key: "Tab / Shift+Tab", action: "Cycle Section Focus", description: "Cycle focus between Frame Chart and Details pane" },
+                Keybinding { key: "j / \u{2193}", action: "Scroll Down", description: "Scroll focused section down" },
+                Keybinding { key: "k / \u{2191}", action: "Scroll Up", description: "Scroll focused section up" },
+                Keybinding { key: "PgUp / PgDn", action: "Page Scroll", description: "Page-scroll the focused section" },
+                Keybinding { key: "Home / End", action: "Jump to Start / End", description: "Jump to oldest frame or live edge" },
+                Keybinding { key: "\u{2190} / \u{2192}", action: "Frame Select / Gantt Pan / Sibling Nav", description: "Context-dependent: select prev/next frame, pan the Gantt chart, or navigate sibling events when an event is selected" },
+                Keybinding { key: "] / [", action: "Cycle Detail Tab", description: "Cycle the Details pane tabs forward/backward (Frame Analysis \u{2192} Rebuild Stats \u{2192} Timeline Events). Only active when Details pane has focus." },
+                Keybinding { key: "f", action: "Cycle Timeline Filter", description: "Cycle Timeline Events filter: All \u{2192} UI \u{2192} Raster. Only fires when Details pane focused and Timeline Events tab active." },
+                Keybinding { key: "R", action: "Toggle Rebuild Tracking", description: "Toggle ext.flutter.profileWidgetBuilds. Only fires when Details pane focused and Rebuild Stats tab active. Otherwise triggers hot restart." },
+                Keybinding { key: "+ / =", action: "Zoom In", description: "Zoom in on Timeline Events Gantt chart" },
+                Keybinding { key: "- / _", action: "Zoom Out", description: "Zoom out on Timeline Events Gantt chart" },
+                Keybinding { key: "g", action: "Follow Latest", description: "Pin Timeline Events view to the live edge (follow latest event)" },
+                Keybinding { key: "/", action: "Timeline Search", description: "Open timeline event search input (on Timeline Events tab)" },
+                Keybinding { key: "n / N", action: "Next / Previous Match", description: "Jump to next or previous timeline search match" },
                 Keybinding { key: "Esc", action: "Deselect / Exit", description: "Deselect current frame, or exit DevTools if no frame selected" },
             ],
         },
         KeybindingSection {
-            title: "DevTools — Network Monitor",
+            title: "DevTools \u{2014} Memory Monitor",
+            color: "bg-cyan-500",
+            key_color: "text-cyan-400",
+            bindings: vec![
+                Keybinding { key: "Tab / Shift+Tab", action: "Cycle Section Focus", description: "Cycle focus between Memory Chart and Allocation List" },
+                Keybinding { key: "j / \u{2193}", action: "Scroll Down", description: "Scroll focused section down" },
+                Keybinding { key: "k / \u{2191}", action: "Scroll Up", description: "Scroll focused section up" },
+                Keybinding { key: "PgUp / PgDn", action: "Page Scroll", description: "Page-scroll the focused section" },
+                Keybinding { key: "Home / End", action: "Jump to Start / End", description: "Jump to oldest chart sample or first/last alloc row" },
+                Keybinding { key: "s", action: "Toggle Allocation Sort", description: "Toggle allocation table sort between By Size and By Instances" },
+                Keybinding { key: "Esc", action: "Deselect / Exit", description: "Deselect current allocation row, or exit DevTools if nothing selected" },
+            ],
+        },
+        KeybindingSection {
+            title: "DevTools \u{2014} Network Monitor",
             color: "bg-cyan-500",
             key_color: "text-cyan-400",
             bindings: vec![
@@ -247,6 +289,19 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "\u{2190} / \u{2192}", action: "Change Mode", description: "Cycle mode (when Mode field focused)" },
                 Keybinding { key: "r", action: "Refresh", description: "Refresh device list" },
                 Keybinding { key: "Esc", action: "Close", description: "Close modal or dialog" },
+            ],
+        },
+
+        // ── Multi-Device Launch ──────────────────────────────────────
+        KeybindingSection {
+            title: "Multi-Device Launch (Connected Tab)",
+            color: "bg-green-500",
+            key_color: "text-green-400",
+            bindings: vec![
+                Keybinding { key: "Space", action: "Toggle Device Selection", description: "Toggle the cursor device's checked state for multi-launch. Unsupported devices cannot be selected." },
+                Keybinding { key: "a", action: "Select All / Clear All", description: "Check all supported connected devices; clears all if every supported device is already checked" },
+                Keybinding { key: "Enter", action: "Launch", description: "Launch all checked devices as separate sessions; if none checked, launches only the cursor device" },
+                Keybinding { key: "r", action: "Refresh Devices", description: "Refresh the connected device list" },
             ],
         },
 
@@ -324,6 +379,24 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             ],
         },
 
+        // ── Flutter Version Mode ─────────────────────────────────────
+        KeybindingSection {
+            title: "Flutter Version Mode",
+            color: "bg-indigo-500",
+            key_color: "text-indigo-400",
+            bindings: vec![
+                Keybinding { key: "Esc", action: "Close Panel", description: "Close the Flutter Version panel and return to Normal mode" },
+                Keybinding { key: "Tab", action: "Switch Pane", description: "Toggle focus between SDK Info and Installed Versions panes" },
+                Keybinding { key: "k / \u{2191}", action: "Navigate Up", description: "Move selection up in the version list" },
+                Keybinding { key: "j / \u{2193}", action: "Navigate Down", description: "Move selection down in the version list" },
+                Keybinding { key: "Enter", action: "Switch Version", description: "Switch to the selected Flutter SDK version (writes .fvmrc)" },
+                Keybinding { key: "d", action: "Remove Version", description: "Delete the selected SDK version from the FVM cache" },
+                Keybinding { key: "i", action: "Install Version", description: "Install a Flutter version into the FVM cache" },
+                Keybinding { key: "u", action: "Update Version", description: "Update the selected Flutter version" },
+                Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit" },
+            ],
+        },
+
         // ── Confirm Dialog ───────────────────────────────────────────
         KeybindingSection {
             title: "Confirm Dialog",
@@ -343,7 +416,7 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             color: "bg-pink-500",
             key_color: "text-pink-400",
             bindings: vec![
-                Keybinding { key: "Wheel", action: "Scroll focused surface", description: "Routes by current UiMode; coordinate-free — scrolls wherever focus is" },
+                Keybinding { key: "Wheel", action: "Scroll focused surface", description: "Routes by current UiMode; coordinate-free \u{2014} scrolls wherever focus is" },
                 Keybinding { key: "Shift+Wheel", action: "Page scroll", description: "Normal / LinkHighlight / DevTools-Network only; Windows 11 drops Shift modifier" },
                 Keybinding { key: "Click [r]/[R]/[x]/[d]/[D]/[q]", action: "Hot reload / restart / stop / DevTools / DAP / quit", description: "Bracketed header shortcuts; same is_busy gate as keyboard" },
                 Keybinding { key: "Click session tab", action: "Switch session", description: "Left-click a tab in the tab bar" },
@@ -351,8 +424,8 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "Click device pill", action: "Open New Session dialog", description: "Single-session compact header only" },
                 Keybinding { key: "Click log row", action: "Register for double-click", description: "No visible action on single click" },
                 Keybinding { key: "Double-click log row", action: "Toggle stack trace", description: "Within 400 ms; entry_id-matched; resets on session switch" },
-                Keybinding { key: "Click DevTools sub-tab", action: "Switch panel", description: "Click [i] Inspector / [p] Performance / [n] Network" },
-                Keybinding { key: "Click Inspector row", action: "Select node", description: "Click expansion glyph ▶/▼ to expand or collapse" },
+                Keybinding { key: "Click DevTools sub-tab", action: "Switch panel", description: "Click [i] Inspector / [p] Performance / [m] Memory / [n] Network" },
+                Keybinding { key: "Click Inspector row", action: "Select node", description: "Click expansion glyph \u{25b6}/\u{25bc} to expand or collapse" },
                 Keybinding { key: "Click frame bar", action: "Select frame", description: "Performance chart; clicking outside a bar is a no-op" },
                 Keybinding { key: "Click Network row", action: "Select request", description: "Details appear in side panel; click detail tab to switch view" },
                 Keybinding { key: "Click NewSessionDialog tab/device/field/Launch", action: "Activate", description: "Device tabs, device list rows, launch-context fields, and Launch button are all clickable" },

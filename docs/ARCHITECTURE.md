@@ -457,7 +457,7 @@ flutter-demon/
 
 | File | Purpose |
 |------|---------|
-| `types.rs` | `AppPhase`, `LogEntry`, `LogLevel`, `LogSource` — core domain types |
+| `types.rs` | `AppPhase`, `LogEntry`, `LogLevel`, `LogSource` — core domain types. `AppPhase` variants: `Initializing` (default), `Preparing` (pre-app native-log sources polling, Flutter not yet spawned), `Launching` (process attached, building/first-run), `Running`, `Reloading`, `Stopped`, `Quitting`. |
 | `events.rs` | `DaemonMessage`, `DaemonEvent`, and all 9 event structs (`AppStart`, `AppLog`, `DeviceInfo`, etc.) — events from the Flutter process |
 | `discovery.rs` | Flutter project detection: `is_runnable_flutter_project()`, `discover_flutter_projects()`, `ProjectType` enum |
 | `stack_trace.rs` | Stack trace parsing and rendering |
@@ -785,6 +785,7 @@ SessionHandle
 
 Session
 ├── id, name, phase
+├── current_progress: Option<String>   (latest launch progress line from app.progress)
 ├── device_id, device_name, platform
 ├── logs: Vec<LogEntry>
 ├── log_view_state: LogViewState
@@ -2027,6 +2028,33 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
 9. tui::render() shows updated status
 ```
 
+### Session Launch Lifecycle
+
+Each new session progresses through a fixed phase sequence driven by daemon events:
+
+```
+Initializing  (session created, no spawn work yet)
+    │
+    ▼
+Preparing     pre-app native-log sources with start_before_app=true are polling
+              their ready_check; Flutter process not yet spawned.
+              Exits when Message::PreAppSourcesReady is received (or immediately
+              if no pre-app sources are configured).
+    │
+    ▼
+Launching     Flutter process has attached (SessionStarted daemon event) and
+              app.start has been received (app_id captured). The app is
+              building or running for the first time.
+              Session::current_progress holds the latest app.progress build
+              message (finished:false) for display in the status bar.
+    │
+    ▼
+Running       Set ONLY on the app.started daemon event
+              (DaemonMessage::AppStarted). current_progress is cleared.
+```
+
+The key invariant: process attachment and `app.start` advance the phase to `Launching`; only `app.started` advances it to `Running`. This prevents a false-running display during long first-compile cycles.
+
 ### Log Processing Flow
 
 ```
@@ -2115,7 +2143,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 
 **Public API** (exported from `lib.rs`):
 - `LogEntry`, `LogLevel`, `LogSource` — Log entries and metadata
-- `AppPhase` — Application lifecycle phases
+- `AppPhase` — Application lifecycle phases: `Initializing`, `Preparing` (pre-app sources polling), `Launching` (process attached, building), `Running` (set on `app.started`), `Reloading`, `Stopped`, `Quitting`
 - `DaemonMessage`, `DaemonEvent` — Events from Flutter daemon
 - `Error`, `Result<T>` — Error handling types
 - `is_runnable_flutter_project()`, `discover_flutter_projects()` — Project discovery

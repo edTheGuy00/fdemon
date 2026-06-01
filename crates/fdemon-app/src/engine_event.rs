@@ -190,6 +190,8 @@ mod tests {
                     platform_type: None,
                     ephemeral: false,
                     emulator_id: None,
+                    is_supported: true,
+                    capabilities: None,
                 },
             },
             EngineEvent::SessionStarted {
@@ -302,6 +304,8 @@ mod tests {
             platform_type: Some("android".to_string()),
             ephemeral: false,
             emulator_id: Some("emulator-5554".to_string()),
+            is_supported: true,
+            capabilities: None,
         };
 
         let event = EngineEvent::SessionCreated {
@@ -329,6 +333,8 @@ mod tests {
                 platform_type: None,
                 ephemeral: false,
                 emulator_id: None,
+                is_supported: true,
+                capabilities: None,
             },
             Device {
                 id: "d2".to_string(),
@@ -339,6 +345,8 @@ mod tests {
                 platform_type: None,
                 ephemeral: false,
                 emulator_id: None,
+                is_supported: true,
+                capabilities: None,
             },
         ];
 

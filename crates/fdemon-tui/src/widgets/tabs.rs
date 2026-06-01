@@ -285,12 +285,12 @@ mod tests {
             .collect();
         assert!(title_str.contains('○')); // Initializing icon
 
-        // Mark as running
-        manager
-            .get_mut(id)
-            .unwrap()
-            .session
-            .mark_started("app-1".to_string());
+        // Mark as running (mark_started sets Launching, mark_running transitions to Running)
+        {
+            let session = &mut manager.get_mut(id).unwrap().session;
+            session.mark_started("app-1".to_string());
+            session.mark_running();
+        }
         let titles = build_tab_titles(&manager, icons);
         let title_str: String = titles[0]
             .spans
@@ -368,12 +368,12 @@ mod tests {
             .create_session(&test_device("d1", "iPhone 15"))
             .unwrap();
 
-        // Mark session as running
-        manager
-            .get_mut(id)
-            .unwrap()
-            .session
-            .mark_started("app-1".to_string());
+        // Mark session as running (mark_started sets Launching, mark_running transitions to Running)
+        {
+            let session = &mut manager.get_mut(id).unwrap().session;
+            session.mark_started("app-1".to_string());
+            session.mark_running();
+        }
 
         let icons = IconSet::new(IconMode::Unicode);
         let backend = TestBackend::new(80, 1);

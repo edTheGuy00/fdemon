@@ -79,6 +79,11 @@ pub struct Session {
     /// Current phase of this session
     pub phase: AppPhase,
 
+    /// Latest human-readable launch progress line (Flutter `app.progress`
+    /// build messages, or pre-app source readiness updates). `None` once
+    /// the app is running or when there is nothing in flight.
+    pub current_progress: Option<String>,
+
     /// Log buffer for this session
     /// Log entries stored in a ring buffer for bounded memory usage
     pub logs: VecDeque<LogEntry>,
@@ -197,7 +202,29 @@ pub struct Session {
     // ─────────────────────────────────────────────────────────
     /// Per-session debug state (pause status, breakpoints, exception mode).
     pub debug: DebugState,
+
+    // ─────────────────────────────────────────────────────────
+    // Jump-to-latest indicator (Phase 4, Task 01)
+    // ─────────────────────────────────────────────────────────
+    /// Count of log entries appended while the view was scrolled away from the
+    /// tail (i.e., `log_view_state.auto_scroll == false`). Advisory only — used
+    /// by the log view to render a "↓ N new · G to jump" indicator. Reset to
+    /// zero whenever auto-scroll re-engages via `mark_tail_followed()`.
+    ///
+    /// Ring-buffer eviction does not decrement this counter: evicted entries
+    /// are old (front), unseen entries are new (back). The two are independent.
+    ///
+    /// Filter-gated: only entries that pass `filter_state.matches(&entry)` at
+    /// the time of insertion are counted. This ensures the pill number matches
+    /// what the user actually sees when they jump to the tail. Note: changing
+    /// the filter while scrolled away does **not** retroactively recompute this
+    /// counter — the value reflects the filter state at insertion time only.
+    pub unseen_log_count: usize,
 }
+
+/// Duration of the post-reload success flash in milliseconds. The header tint
+/// fades from full intensity to none over this window.
+const RELOAD_FLASH_DURATION_MS: i64 = 500;
 
 impl Session {
     /// Create a new session for a device
@@ -211,6 +238,7 @@ impl Session {
             id: next_session_id(),
             name: device_name.clone(),
             phase: AppPhase::Initializing,
+            current_progress: None,
             logs: VecDeque::with_capacity(10_000),
             log_view_state: LogViewState::new(),
             max_logs: 10_000,
@@ -241,6 +269,7 @@ impl Session {
             memory: MemoryState::default(),
             network: NetworkState::default(),
             debug: DebugState::default(),
+            unseen_log_count: 0,
         }
     }
 
@@ -285,6 +314,10 @@ impl Session {
             self.block_state.block_max_level =
                 self.block_state.block_max_level.max_severity(entry.level);
         }
+
+        // Evaluate filter match BEFORE pushing (entry not yet moved).
+        // Used later to gate the unseen_log_count increment.
+        let passes_filter = self.filter_state.matches(&entry);
 
         // Track error count before adding
         if entry.is_error() {
@@ -353,6 +386,14 @@ impl Session {
             // Adjust scroll offset
             self.log_view_state.offset = self.log_view_state.offset.saturating_sub(1);
         }
+
+        // Track unseen logs for the jump-to-latest indicator (issue #31).
+        // Only count entries that are (a) arriving while scrolled away from the tail
+        // AND (b) visible under the active filter — so the pill matches what `G` reveals.
+        // Ring-buffer eviction is intentionally independent of this counter.
+        if !self.log_view_state.auto_scroll && passes_filter {
+            self.unseen_log_count = self.unseen_log_count.saturating_add(1);
+        }
     }
 
     /// Add an info log
@@ -365,11 +406,21 @@ impl Session {
         self.add_log(LogEntry::error(source, message));
     }
 
+    /// Reset the unseen log counter, called when the view re-engages tail-follow
+    /// (either via `Message::ScrollToBottom` or by scrolling down to the natural
+    /// bottom). Idempotent — safe to call when `unseen_log_count` is already 0
+    /// or when `auto_scroll` is already true.
+    pub fn mark_tail_followed(&mut self) {
+        self.unseen_log_count = 0;
+    }
+
     /// Clear all logs and reset error count
     pub fn clear_logs(&mut self) {
         self.logs.clear();
         self.log_view_state.offset = 0;
         self.error_count = 0;
+        // M2: no unseen entries remain after a wipe
+        self.unseen_log_count = 0;
         // Clear search matches since logs are gone
         self.search_state.matches.clear();
         self.search_state.current_match = None;
@@ -523,16 +574,41 @@ impl Session {
         self.logs.len()
     }
 
-    /// Mark session as started
+    /// Mark the session as launching: the `app.start` daemon event captured the
+    /// app id, but the app is still building/starting. Phase flips to `Running`
+    /// only when [`mark_running`](Self::mark_running) is called from the
+    /// `app.started` event.
+    ///
+    /// Note: `started_at` is intentionally set here (at `app.start` / Launching)
+    /// rather than at `app.started` / Running, so `session_duration` counts from
+    /// the beginning of the launch, not from the first frame.
     pub fn mark_started(&mut self, app_id: String) {
         self.app_id = Some(app_id);
         self.started_at = Some(Local::now());
-        self.phase = AppPhase::Running;
+        self.phase = AppPhase::Launching;
     }
 
-    /// Mark session as stopped
+    /// Mark the session as actually running (the `app.started` daemon event).
+    /// Clears any in-flight build/readiness progress text.
+    pub fn mark_running(&mut self) {
+        self.phase = AppPhase::Running;
+        self.current_progress = None;
+    }
+
+    /// Mark session as stopped. Clears any in-flight progress text.
     pub fn mark_stopped(&mut self) {
         self.phase = AppPhase::Stopped;
+        self.current_progress = None;
+    }
+
+    /// Set the current launch progress line (shown next to a transient phase label).
+    pub fn set_progress(&mut self, message: impl Into<String>) {
+        self.current_progress = Some(message.into());
+    }
+
+    /// Clear the current launch progress line.
+    pub fn clear_progress(&mut self) {
+        self.current_progress = None;
     }
 
     /// Called when a reload starts
@@ -581,6 +657,31 @@ impl Session {
             .map(|t| t.format("%H:%M:%S").to_string())
     }
 
+    /// Intensity of the reload-success flash at wall-clock `now`, in `[0.0, 1.0]`.
+    ///
+    /// Returns `1.0` at the instant of `complete_reload()` and decays linearly to
+    /// `0.0` over [`RELOAD_FLASH_DURATION_MS`], staying `0.0` afterwards.
+    /// Returns `0.0` when the session never reloaded or is not in a steady
+    /// `Running` phase (so the flash never bleeds into `Stopped`/`Quitting`/error
+    /// states — a failed reload leaves the phase at `Running` and does not stamp
+    /// `last_reload_time`, so only successful reloads can trigger it).
+    ///
+    /// `now` is injected (rather than read internally) to keep the helper pure and
+    /// unit-testable; the render path passes `Local::now()`.
+    pub fn reload_flash_alpha(&self, now: DateTime<Local>) -> f32 {
+        if self.phase != AppPhase::Running {
+            return 0.0;
+        }
+        let Some(reloaded_at) = self.last_reload_time else {
+            return 0.0;
+        };
+        let elapsed_ms = (now - reloaded_at).num_milliseconds();
+        if !(0..RELOAD_FLASH_DURATION_MS).contains(&elapsed_ms) {
+            return 0.0; // future timestamp (clock skew) or window elapsed
+        }
+        1.0 - (elapsed_ms as f32 / RELOAD_FLASH_DURATION_MS as f32)
+    }
+
     /// Check if session is running
     pub fn is_running(&self) -> bool {
         matches!(self.phase, AppPhase::Running | AppPhase::Reloading)
@@ -594,8 +695,8 @@ impl Session {
     /// Check if session is actively in use (not stopped/quitting).
     ///
     /// Unlike `is_running()` which only matches `Running | Reloading`,
-    /// this also includes `Initializing` — a session that is starting up
-    /// but hasn't emitted `app.start` yet.
+    /// this also includes `Initializing`, `Preparing`, and `Launching` —
+    /// phases where the session is alive but the app is not yet interactive.
     pub fn is_active(&self) -> bool {
         !matches!(self.phase, AppPhase::Stopped | AppPhase::Quitting)
     }
@@ -604,6 +705,8 @@ impl Session {
     pub fn status_icon(&self) -> &'static str {
         match self.phase {
             AppPhase::Initializing => "○",
+            AppPhase::Preparing => "◌",
+            AppPhase::Launching => "◐",
             AppPhase::Running => "●",
             AppPhase::Reloading => "↻",
             AppPhase::Stopped => "○",
@@ -800,5 +903,237 @@ impl Session {
     /// Check if a specific entry's stack trace should be shown expanded
     pub fn is_stack_trace_expanded(&self, entry_id: u64, default_collapsed: bool) -> bool {
         self.collapse_state.is_expanded(entry_id, default_collapsed)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests — unseen_log_count and mark_tail_followed (Phase 4, Task 01)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fdemon_core::{LogEntry, LogSource};
+
+    fn make_session() -> Session {
+        Session::new("d".into(), "Device".into(), "android".into(), false)
+    }
+
+    fn make_log_entry(msg: &str) -> LogEntry {
+        LogEntry::info(LogSource::Flutter, msg)
+    }
+
+    #[test]
+    fn unseen_log_count_does_not_increment_while_following() {
+        let mut s = make_session();
+        assert!(s.log_view_state.auto_scroll);
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn unseen_log_count_increments_while_scrolled_up() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        s.add_log(make_log_entry("c"));
+        assert_eq!(s.unseen_log_count, 3);
+    }
+
+    #[test]
+    fn unseen_log_count_unaffected_by_ring_buffer_eviction() {
+        let mut s = make_session();
+        s.max_logs = 2; // tight buffer
+        s.log_view_state.auto_scroll = false;
+        for i in 0..5 {
+            s.add_log(make_log_entry(&format!("log {i}")));
+        }
+        assert_eq!(s.logs.len(), 2);
+        assert_eq!(s.unseen_log_count, 5); // all 5 appends counted
+    }
+
+    #[test]
+    fn mark_tail_followed_resets_counter() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        assert_eq!(s.unseen_log_count, 2);
+        s.mark_tail_followed();
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn unseen_log_count_saturates_at_max() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.unseen_log_count = usize::MAX;
+        s.add_log(make_log_entry("overflow"));
+        assert_eq!(s.unseen_log_count, usize::MAX);
+    }
+
+    #[test]
+    fn unseen_log_count_zero_by_default() {
+        let s = make_session();
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — M2: clear_logs resets unseen_log_count
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn clear_logs_resets_unseen_log_count() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        assert!(s.unseen_log_count > 0);
+        s.clear_logs();
+        assert_eq!(s.unseen_log_count, 0);
+        assert!(s.logs.is_empty());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — m1: filter-gated unseen_log_count increment
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn unseen_log_count_skips_filtered_out_entries() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        // Errors-only filter: info entries (from make_log_entry) are filtered out
+        s.filter_state.level_filter = fdemon_core::LogLevelFilter::Errors;
+        s.add_log(make_log_entry("info line that is filtered out"));
+        assert_eq!(s.unseen_log_count, 0);
+    }
+
+    #[test]
+    fn unseen_log_count_counts_filter_matching_entries() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        // Default match-all filter: info entries pass
+        s.add_log(make_log_entry("visible line"));
+        assert_eq!(s.unseen_log_count, 1);
+    }
+
+    #[test]
+    fn unseen_log_count_counts_only_matching_entries_mixed() {
+        let mut s = make_session();
+        s.log_view_state.auto_scroll = false;
+        // Errors-only filter
+        s.filter_state.level_filter = fdemon_core::LogLevelFilter::Errors;
+        s.add_log(make_log_entry("info — filtered out"));
+        s.add_log(LogEntry::error(LogSource::Flutter, "error — passes filter"));
+        s.add_log(make_log_entry("another info — filtered out"));
+        s.add_log(LogEntry::error(
+            LogSource::Flutter,
+            "another error — passes filter",
+        ));
+        assert_eq!(s.unseen_log_count, 2);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Tests — reload_flash_alpha (Phase 6, Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    fn make_running_session_with_reload() -> (Session, DateTime<Local>) {
+        let mut s = make_session();
+        // Stamp a reload at a fixed wall-clock instant
+        let reloaded_at = Local::now();
+        s.phase = AppPhase::Running;
+        s.last_reload_time = Some(reloaded_at);
+        (s, reloaded_at)
+    }
+
+    #[test]
+    fn flash_alpha_full_at_reload_instant() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // now == last_reload_time → elapsed = 0 ms → alpha = 1.0
+        let alpha = s.reload_flash_alpha(reloaded_at);
+        assert!(
+            (alpha - 1.0).abs() < 1e-6,
+            "expected 1.0 at reload instant, got {alpha}"
+        );
+    }
+
+    #[test]
+    fn flash_alpha_half_at_midpoint() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // +250 ms → elapsed = 250 / 500 = 0.5 → alpha ≈ 0.5
+        let now = reloaded_at + chrono::Duration::milliseconds(250);
+        let alpha = s.reload_flash_alpha(now);
+        assert!(
+            (alpha - 0.5).abs() < 1e-4,
+            "expected ~0.5 at midpoint, got {alpha}"
+        );
+    }
+
+    #[test]
+    fn flash_alpha_zero_after_window() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // +500 ms (equal to RELOAD_FLASH_DURATION_MS) is outside the half-open
+        // range [0, 500), so alpha must be 0.0
+        let at_boundary = reloaded_at + chrono::Duration::milliseconds(500);
+        assert_eq!(s.reload_flash_alpha(at_boundary), 0.0);
+
+        // +1 s is well past the window
+        let past = reloaded_at + chrono::Duration::milliseconds(1_000);
+        assert_eq!(s.reload_flash_alpha(past), 0.0);
+    }
+
+    #[test]
+    fn flash_alpha_zero_when_never_reloaded() {
+        let mut s = make_session();
+        s.phase = AppPhase::Running;
+        // last_reload_time is None (default)
+        assert_eq!(s.reload_flash_alpha(Local::now()), 0.0);
+    }
+
+    #[test]
+    fn flash_alpha_suppressed_when_not_running() {
+        let (mut s, reloaded_at) = make_running_session_with_reload();
+        // Override phase to something other than Running
+        for phase in [
+            AppPhase::Stopped,
+            AppPhase::Reloading,
+            AppPhase::Quitting,
+            AppPhase::Initializing,
+            AppPhase::Launching,
+            AppPhase::Preparing,
+        ] {
+            s.phase = phase;
+            // Use the reload instant itself — would be 1.0 if Running
+            assert_eq!(
+                s.reload_flash_alpha(reloaded_at),
+                0.0,
+                "expected 0.0 for phase {phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flash_alpha_zero_for_past_now() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // now is 1 ms BEFORE the reload stamp → elapsed_ms = -1, outside [0,500)
+        let before = reloaded_at - chrono::Duration::milliseconds(1);
+        let alpha = s.reload_flash_alpha(before);
+        assert_eq!(alpha, 0.0, "expected 0.0 for clock-skew case, got {alpha}");
+    }
+
+    #[test]
+    fn flash_alpha_always_in_unit_interval() {
+        let (s, reloaded_at) = make_running_session_with_reload();
+        // Probe every 50 ms from -100 to +1000 ms
+        for offset_ms in (-100i64..=1000).step_by(50) {
+            let now = reloaded_at + chrono::Duration::milliseconds(offset_ms);
+            let alpha = s.reload_flash_alpha(now);
+            assert!(
+                (0.0..=1.0).contains(&alpha),
+                "alpha {alpha} out of [0,1] at offset {offset_ms} ms"
+            );
+        }
     }
 }

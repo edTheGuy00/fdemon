@@ -128,10 +128,15 @@ impl PlatformGroup {
 }
 
 /// Group connected devices by platform
+///
+/// Unsupported devices (`is_supported == false`) are excluded from the result.
+/// This is the single shared chokepoint used by `compute_flat_list`,
+/// `selected_connected_device`, and the TUI widget — filtering here keeps
+/// the flat list, cursor, checked-set, and click-regions consistent.
 pub fn group_connected_devices(devices: &[Device]) -> Vec<DeviceGroup<&Device>> {
     let mut groups: BTreeMap<PlatformGroup, Vec<&Device>> = BTreeMap::new();
 
-    for device in devices {
+    for device in devices.iter().filter(|d| d.is_supported) {
         let group = PlatformGroup::from_device(device);
         groups.entry(group).or_default().push(device);
     }
@@ -258,7 +263,7 @@ fn nearest_selectable<T>(items: &[DeviceListItem<T>], index: usize) -> usize {
     }
 
     // Then backward (return last selectable)
-    selectable[selectable.len() - 1]
+    selectable.last().copied().unwrap_or(0)
 }
 
 /// Navigate to next selectable item
@@ -278,7 +283,7 @@ pub fn next_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize 
     // Find current position in selectable list
     let current_pos = selectable.iter().position(|&i| i == start).unwrap_or(0);
     let next_pos = (current_pos + 1) % selectable.len();
-    selectable[next_pos]
+    selectable.get(next_pos).copied().unwrap_or(0)
 }
 
 /// Navigate to previous selectable item
@@ -301,5 +306,5 @@ pub fn prev_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize 
     } else {
         current_pos - 1
     };
-    selectable[prev_pos]
+    selectable.get(prev_pos).copied().unwrap_or(0)
 }

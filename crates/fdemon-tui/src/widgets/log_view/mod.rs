@@ -24,6 +24,8 @@ use ratatui::{
 use crate::theme::icons::IconSet;
 use crate::theme::palette;
 use crate::theme::styles as theme_styles;
+use crate::widgets::shimmer;
+use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME};
 use crate::widgets::MouseCtx;
 
 /// Stack trace styling constants
@@ -51,6 +53,11 @@ pub struct StatusInfo<'a> {
     /// Whether terminal mouse capture is currently active.
     /// Renders `[mouse]` (dim) when active, `[mouse-off]` (warning) when inactive.
     pub mouse_capture_active: bool,
+    /// Global animation frame, drives the shimmer on transient status labels.
+    pub animation_frame: u64,
+    /// Live launch progress line (build / pre-app readiness); shown next to
+    /// a transient phase label. `None` when nothing is in flight.
+    pub progress: Option<&'a str>,
 }
 
 /// Log view widget with rich formatting
@@ -77,6 +84,10 @@ pub struct LogView<'a> {
     icons: IconSet,
     /// Whether line wrap mode is enabled. When true, horizontal scroll is skipped.
     wrap_mode: bool,
+    /// Pending count of log entries that arrived while the view was scrolled away
+    /// from the tail. Used to render the jump-to-latest pill (Phase 4, Task 02).
+    /// Default 0 — pill is suppressed when the count is zero.
+    unseen_log_count: usize,
 }
 
 impl<'a> LogView<'a> {
@@ -95,6 +106,7 @@ impl<'a> LogView<'a> {
             status_info: None,
             icons,
             wrap_mode: false,
+            unseen_log_count: 0,
         }
     }
 
@@ -160,6 +172,13 @@ impl<'a> LogView<'a> {
     /// Set wrap mode. When enabled, long lines wrap at terminal width instead of scrolling.
     pub fn wrap_mode(mut self, enabled: bool) -> Self {
         self.wrap_mode = enabled;
+        self
+    }
+
+    /// Set the count of log entries that arrived while the view was scrolled away
+    /// from the tail. Drives the jump-to-latest pill. Default 0 (no pill drawn).
+    pub fn unseen_log_count(mut self, count: usize) -> Self {
+        self.unseen_log_count = count;
         self
     }
 
@@ -840,6 +859,29 @@ impl<'a> LogView<'a> {
         buf.set_line(area.x, area.y, &line, area.width);
     }
 
+    /// Build the label spans for the phase indicator.
+    ///
+    /// For transient phases (`Initializing`, `Reloading`, `Quitting`, or `is_busy`),
+    /// returns per-character shimmered spans so the label sweeps with a bright
+    /// highlight. For steady states (`Running`, `Stopped`) returns a single static
+    /// styled span identical to the pre-shimmer behaviour.
+    fn status_label_spans_inner(
+        label: &str,
+        phase_style: Style,
+        is_transient: bool,
+        animation_frame: u64,
+    ) -> Vec<Span<'static>> {
+        if is_transient {
+            let phase = shimmer::shimmer_phase(animation_frame);
+            let base = phase_style.fg.unwrap_or(palette::TEXT_SECONDARY);
+            let highlight = palette::TEXT_BRIGHT;
+            let modifier = phase_style.add_modifier; // preserve BOLD etc.
+            shimmer::shimmer_spans(label, base, highlight, phase, modifier)
+        } else {
+            vec![Span::styled(label.to_owned(), phase_style)]
+        }
+    }
+
     /// Render the bottom metadata bar with status info
     fn render_bottom_metadata(
         area: Rect,
@@ -859,13 +901,51 @@ impl<'a> LogView<'a> {
             theme_styles::phase_indicator(status.phase, icons)
         };
 
-        // Left side: phase indicator
-        let mut spans = vec![
-            Span::raw(" "),
-            Span::styled(icon, phase_style),
-            Span::raw(" "),
-            Span::styled(label, phase_style),
-        ];
+        // Transient = work in progress; steady = Running/Stopped.
+        let is_transient = status.is_busy
+            || matches!(
+                status.phase,
+                AppPhase::Initializing
+                    | AppPhase::Preparing
+                    | AppPhase::Launching
+                    | AppPhase::Reloading
+                    | AppPhase::Quitting
+            );
+
+        // Launch-lifecycle phases animate their glyph; every other phase (incl. the
+        // is_busy / Reloading path) keeps its static phase_indicator icon.
+        let is_launch_phase = !status.is_busy
+            && matches!(
+                status.phase,
+                AppPhase::Initializing | AppPhase::Preparing | AppPhase::Launching
+            );
+
+        let icon_span = if is_launch_phase {
+            let glyph = spinner_char(status.animation_frame / SPINNER_TICKS_PER_FRAME);
+            Span::styled(glyph.to_string(), phase_style)
+        } else {
+            Span::styled(icon, phase_style)
+        };
+
+        // Left side: icon (spinner during launch phases, static otherwise) + shimmered or static label
+        let mut spans = vec![Span::raw(" "), icon_span, Span::raw(" ")];
+        spans.extend(Self::status_label_spans_inner(
+            label,
+            phase_style,
+            is_transient,
+            status.animation_frame,
+        ));
+
+        // Progress suffix: shown only in transient phases when progress text is available.
+        // The text is rendered muted (not shimmered) — only the phase label shimmers.
+        if is_transient {
+            if let Some(progress) = status.progress {
+                spans.push(Span::styled(
+                    format!("  {progress}"),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ));
+            }
+        }
 
         // For compact mode, only show phase indicator and errors (if > 0)
         if compact {
@@ -1169,7 +1249,7 @@ impl<'a> LogView<'a> {
         area: Rect,
         buf: &mut Buffer,
         state: &mut LogViewState,
-        mouse_ctx: Option<&mut MouseCtx<'_>>,
+        mut mouse_ctx: Option<&mut MouseCtx<'_>>,
     ) {
         // Handle empty state specially
         if self.logs.is_empty() {
@@ -1564,6 +1644,20 @@ impl<'a> LogView<'a> {
             Paragraph::new(final_lines).render(content_area, buf);
         }
 
+        // Jump-to-latest indicator (Phase 4, Task 02). Only visible when the
+        // user is scrolled away from the tail AND new logs have arrived since.
+        // Rendered after the Paragraph (so it overlays the last log row's tail)
+        // and before the scrollbar (so the scrollbar can still draw on the
+        // rightmost column).
+        if !state.auto_scroll && self.unseen_log_count > 0 {
+            render_jump_to_latest_pill(
+                content_area,
+                buf,
+                self.unseen_log_count,
+                mouse_ctx.as_deref_mut(),
+            );
+        }
+
         // Render scrollbar if content exceeds visible area
         if total_lines > visible_lines {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -1711,6 +1805,88 @@ impl<'a> LogView<'a> {
                 ctx.click(rect, MouseAction::emit(Message::SelectLink(b.shortcut)));
             }
         }
+    }
+}
+
+/// Maximum exact count rendered in the jump-to-latest pill. Counts above this
+/// display as `"999+"`. Keeps the pill width bounded for layout sanity even
+/// after a long unattended scroll-away.
+const JUMP_HINT_MAX_DISPLAY: usize = 999;
+
+/// Static suffix advertising the keybinding. Middle-dot separator is used over
+/// em-dash for narrower terminals (see planning notes in `TASKS.md`).
+const JUMP_HINT_SUFFIX: &str = " · G to jump";
+
+/// Down-arrow glyph + a single space prefix.
+const JUMP_HINT_PREFIX: &str = "↓ ";
+
+/// Render a floating right-aligned `↓ N new · G to jump` pill on the last row
+/// of `content_area`. The pill overwrites whatever the Paragraph rendered there
+/// (no `Clear` needed — cells are overwritten with the pill's own background).
+///
+/// Registers a click region that emits `Message::ScrollToBottom` when a
+/// `MouseCtx` is provided.
+///
+/// # Suppression conditions
+/// - `content_area.height == 0`: nothing to render.
+/// - `content_area.width < pill_width + 1`: pill does not fit cleanly with a
+///   1-column right margin; suppress rather than truncate (the truncated form
+///   would hide the keybinding, defeating discoverability).
+fn render_jump_to_latest_pill(
+    content_area: Rect,
+    buf: &mut Buffer,
+    unseen: usize,
+    mouse_ctx: Option<&mut MouseCtx<'_>>,
+) {
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRect};
+
+    if content_area.height == 0 {
+        return;
+    }
+
+    let display_count = if unseen > JUMP_HINT_MAX_DISPLAY {
+        format!("{JUMP_HINT_MAX_DISPLAY}+")
+    } else {
+        unseen.to_string()
+    };
+    let label = format!("{JUMP_HINT_PREFIX}{display_count} new{JUMP_HINT_SUFFIX}");
+
+    // Width is character-count of the label (all chars are single-column in
+    // standard monospace: the down-arrow `↓` and middle-dot `·` are both 1 col).
+    let pill_width = label.chars().count() as u16;
+
+    // Narrow-terminal fallback: skip the pill if it doesn't fit cleanly with
+    // a 1-column right margin. Better to suppress than to truncate — truncating
+    // would hide the keybinding, defeating the discoverability purpose.
+    let min_required = pill_width.saturating_add(1);
+    if content_area.width < min_required {
+        return;
+    }
+
+    let y = content_area
+        .y
+        .saturating_add(content_area.height)
+        .saturating_sub(1);
+    let x = content_area
+        .x
+        .saturating_add(content_area.width)
+        .saturating_sub(pill_width)
+        .saturating_sub(1); // 1-col right margin
+
+    let pill_style = ratatui::style::Style::default()
+        .fg(styles::JUMP_HINT_FG)
+        .bg(styles::JUMP_HINT_BG);
+
+    let line = Line::from(vec![Span::styled(label, pill_style)]);
+    buf.set_line(x, y, &line, pill_width);
+
+    // Mouse routing: clicking the pill emits Message::ScrollToBottom.
+    // Registered at z=1 so it wins over the z=0 per-row ClickLogRow region that
+    // also covers the pill's cell (hit_test is max-by (z_index, push_index)).
+    if let Some(ctx) = mouse_ctx {
+        let rect = MouseRect::new(x, y, pill_width, 1);
+        ctx.click_at_z(rect, MouseAction::emit(Message::ScrollToBottom), 1);
     }
 }
 

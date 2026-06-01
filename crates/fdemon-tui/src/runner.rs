@@ -329,7 +329,17 @@ fn run_loop(
         // Flush batched logs
         engine.flush_pending_logs();
 
-        // Render
+        // Render.
+        //
+        // This redraws on EVERY loop iteration (driven by the ~50 ms `Tick` from
+        // `event::poll`), not only when state changes. That unconditional cadence
+        // is load-bearing for time-based animations that are pure functions of
+        // wall-clock `now` — the reload-success header flash, the shimmer, and
+        // the spinner all decay/advance across frames with no state mutation
+        // between them. ratatui's double-buffer diff already suppresses redundant
+        // terminal writes, so the steady state stays cheap. Do NOT gate this
+        // `draw` on a dirty/needs-redraw flag without adding a compensating
+        // animation-redraw trigger, or those effects will freeze mid-animation.
         terminal.draw(|frame| render::view(frame, &mut engine.state))?;
 
         // Handle terminal events (TUI-specific)

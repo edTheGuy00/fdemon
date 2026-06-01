@@ -457,6 +457,8 @@ mod tests {
             platform_type: None,
             ephemeral: false,
             emulator_id: None,
+            is_supported: true,
+            capabilities: None,
         }
     }
 
@@ -640,11 +642,11 @@ mod tests {
 
         assert!(!manager.has_running_sessions());
 
-        manager
-            .get_mut(id1)
-            .unwrap()
-            .session
-            .mark_started("app-1".to_string());
+        {
+            let session = &mut manager.get_mut(id1).unwrap().session;
+            session.mark_started("app-1".to_string());
+            session.mark_running();
+        }
 
         assert!(manager.has_running_sessions());
         assert_eq!(manager.running_sessions(), vec![id1]);
@@ -731,6 +733,7 @@ mod tests {
         let session = &mut manager.get_mut(id).unwrap().session;
         session.log_info(LogSource::App, "Starting...");
         session.mark_started("app-123".to_string());
+        session.mark_running();
         session.log_info(LogSource::Flutter, "App running");
 
         assert_eq!(session.logs.len(), 2);
@@ -766,19 +769,19 @@ mod tests {
 
         assert_eq!(manager.running_count(), 0);
 
-        manager
-            .get_mut(id1)
-            .unwrap()
-            .session
-            .mark_started("app-1".to_string());
+        {
+            let session = &mut manager.get_mut(id1).unwrap().session;
+            session.mark_started("app-1".to_string());
+            session.mark_running();
+        }
 
         assert_eq!(manager.running_count(), 1);
 
-        manager
-            .get_mut(id3)
-            .unwrap()
-            .session
-            .mark_started("app-3".to_string());
+        {
+            let session = &mut manager.get_mut(id3).unwrap().session;
+            session.mark_started("app-3".to_string());
+            session.mark_running();
+        }
 
         assert_eq!(manager.running_count(), 2);
     }

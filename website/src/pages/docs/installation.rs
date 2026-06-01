@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::components::code_block::CodeBlock;
 use crate::data::FDEMON_VERSION;
@@ -6,6 +7,9 @@ use crate::data::FDEMON_VERSION;
 #[component]
 pub fn Installation() -> impl IntoView {
     view! {
+        <Title text="Installation" />
+        <Meta name="description" content="Install Flutter Demon via the one-line script, download a pre-built binary, or build from source with cargo. Supports macOS, Linux, and Windows." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/installation" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Installation"</h1>
             <p class="text-lg text-slate-400">
@@ -132,7 +136,7 @@ pub fn Installation() -> impl IntoView {
                         </thead>
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
                             <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400">"Rust 1.70+"</td>
+                                <td class="p-4 font-mono text-blue-400">"Rust 1.77.2+"</td>
                                 <td class="p-4 text-slate-300">"Install via "<a href="https://rustup.rs" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">"rustup.rs"</a></td>
                             </tr>
                             <tr class="hover:bg-slate-900/50">

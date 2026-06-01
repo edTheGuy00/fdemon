@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
@@ -9,6 +10,9 @@ use crate::components::icons::{
 #[component]
 pub fn Introduction() -> impl IntoView {
     view! {
+        <Title text="Documentation" />
+        <Meta name="description" content="Flutter Demon documentation overview. Learn how to install, configure, and get the most out of fdemon — the Rust TUI for Flutter development." />
+        <Link rel="canonical" href="https://fdemon.dev/docs" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-4xl font-bold text-white">"Flutter Demon"</h1>
             <p class="text-lg text-slate-400">
@@ -65,9 +69,23 @@ pub fn Introduction() -> impl IntoView {
             <Section title="Key Features">
                 <h3 class="text-lg font-bold text-white">"Auto Hot Reload"</h3>
                 <p class="text-slate-400">
-                    "A built-in file watcher monitors your "<code class="text-blue-400">"lib/"</code>" directory and triggers \
-                     hot reload on save with smart debouncing (default 500ms). Watch paths, extensions, and debounce \
-                     timing are all configurable."
+                    "A built-in file watcher monitors your "<code class="text-blue-400">"lib/"</code>" directory (configurable) and triggers \
+                     hot reload on save with smart debouncing (default 500 ms). Watch paths, extensions, and debounce \
+                     timing are all configurable in "<code class="text-blue-400">".fdemon/config.toml"</code>"."
+                </p>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Multi-Device Launch"</h3>
+                <p class="text-slate-400">
+                    "The New Session Dialog lets you select multiple devices at once with checkboxes. A single "
+                    <code class="text-blue-400">"Enter"</code>
+                    " launches all selected devices in parallel, each in its own numbered tab. Sessions progress through "
+                    "defined lifecycle phases: "
+                    <code class="text-blue-400">"Preparing"</code>
+                    " (native-log sources polled before Flutter is spawned) \u{2192} "
+                    <code class="text-blue-400">"Launching"</code>
+                    " (Flutter process attached, building or first run) \u{2192} "
+                    <code class="text-blue-400">"Running"</code>
+                    " (app is live). The status bar and tab header reflect the current phase so you can track each device independently."
                 </p>
 
                 <h3 class="text-lg font-bold text-white mt-6">"Log Filtering & Search"</h3>

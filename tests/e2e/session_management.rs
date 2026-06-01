@@ -126,9 +126,13 @@ fn test_session_phase_transitions() {
     // Initial state
     assert!(matches!(session.phase, AppPhase::Initializing));
 
-    // Mark as started
+    // Mark as started (app.start event — sets Launching, not Running)
     session.mark_started("app-123".to_string());
     assert_eq!(session.app_id, Some("app-123".to_string()));
+    assert!(matches!(session.phase, AppPhase::Launching));
+
+    // Mark as running (app.started event — transitions to Running)
+    session.mark_running();
     assert!(matches!(session.phase, AppPhase::Running));
 
     // Start reload

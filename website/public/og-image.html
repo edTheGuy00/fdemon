@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1200" />
+  <title>Flutter Demon OG Image</title>
+  <style>
+    /* Reset */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* 1200×630 card — matches bg-slate-950 from the site */
+    body {
+      width: 1200px;
+      height: 630px;
+      overflow: hidden;
+      background-color: #020617; /* slate-950 */
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      width: 1200px;
+      height: 630px;
+      position: relative;
+      background: #020617; /* slate-950 */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* Radial glow accent in bottom-right (echoes site hero glow) */
+    .glow-br {
+      position: absolute;
+      bottom: -120px;
+      right: -80px;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(99,102,241,0.25) 0%, rgba(139,92,246,0.12) 45%, transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Subtle top-left glow */
+    .glow-tl {
+      position: absolute;
+      top: -100px;
+      left: -60px;
+      width: 450px;
+      height: 450px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(99,102,241,0.07) 50%, transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Grid dot pattern overlay (optional: adds depth without clutter) */
+    .grid-overlay {
+      position: absolute;
+      inset: 0;
+      background-image:
+        radial-gradient(circle, rgba(148,163,184,0.07) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    /* Blue-to-purple gradient divider line at top */
+    .top-accent-line {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #3b82f6 0%, #6366f1 40%, #8b5cf6 70%, #a855f7 100%);
+    }
+
+    /* Bottom accent line */
+    .bottom-accent-line {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent 0%, #6366f1 30%, #8b5cf6 60%, transparent 100%);
+      opacity: 0.5;
+    }
+
+    /* Inner content layout */
+    .content {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 64px;
+      padding: 0 80px;
+    }
+
+    /* Logo */
+    .logo-wrap {
+      flex-shrink: 0;
+    }
+
+    .logo-wrap img {
+      width: 200px;
+      height: 200px;
+      object-fit: contain;
+      /* subtle drop shadow to lift logo off dark bg */
+      filter: drop-shadow(0 8px 32px rgba(99,102,241,0.35)) drop-shadow(0 2px 8px rgba(0,0,0,0.6));
+    }
+
+    /* Text block */
+    .text-block {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    /* "fdemon" monospace badge above wordmark */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(99,102,241,0.15);
+      border: 1px solid rgba(99,102,241,0.35);
+      border-radius: 6px;
+      padding: 6px 14px;
+      width: fit-content;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e; /* green-500 — echoes the "live" status dot on the site */
+      box-shadow: 0 0 6px rgba(34,197,94,0.7);
+    }
+
+    .badge-text {
+      font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Consolas", "Menlo", monospace;
+      font-size: 18px;
+      font-weight: 500;
+      color: #a5b4fc; /* indigo-300 */
+      letter-spacing: 0.04em;
+    }
+
+    /* Main wordmark */
+    .wordmark {
+      font-size: 72px;
+      font-weight: 800;
+      line-height: 1.0;
+      letter-spacing: -0.025em;
+      /* Blue → purple gradient text */
+      background: linear-gradient(135deg, #60a5fa 0%, #818cf8 35%, #a78bfa 65%, #c084fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Divider slash */
+    .slash {
+      color: rgba(148,163,184,0.4); /* slate-400 dimmed */
+      font-weight: 300;
+    }
+
+    /* Sub wordmark "fdemon" */
+    .sub-wordmark {
+      display: inline;
+      font-size: 52px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #94a3b8; /* slate-400 */
+      background: none;
+      -webkit-background-clip: unset;
+      -webkit-text-fill-color: #94a3b8;
+    }
+
+    /* Tagline */
+    .tagline {
+      font-size: 28px;
+      font-weight: 400;
+      color: #94a3b8; /* slate-400 */
+      line-height: 1.4;
+      max-width: 560px;
+    }
+
+    .tagline strong {
+      color: #cbd5e1; /* slate-300 */
+      font-weight: 600;
+    }
+
+    /* Feature pills row */
+    .pills {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .pill {
+      font-size: 15px;
+      font-weight: 500;
+      color: #7dd3fc; /* sky-300 */
+      background: rgba(14,165,233,0.1);
+      border: 1px solid rgba(14,165,233,0.2);
+      border-radius: 999px;
+      padding: 4px 14px;
+      letter-spacing: 0.02em;
+    }
+
+    /* Corner watermark */
+    .corner-url {
+      position: absolute;
+      bottom: 28px;
+      right: 36px;
+      font-size: 16px;
+      color: rgba(148,163,184,0.45);
+      font-family: "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+      letter-spacing: 0.04em;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <!-- Decorative layers -->
+    <div class="glow-tl"></div>
+    <div class="glow-br"></div>
+    <div class="grid-overlay"></div>
+    <div class="top-accent-line"></div>
+    <div class="bottom-accent-line"></div>
+
+    <!-- Main content -->
+    <div class="content">
+      <div class="logo-wrap">
+        <img src="logo.png" alt="Flutter Demon logo" />
+      </div>
+
+      <div class="text-block">
+        <div class="badge">
+          <span class="badge-dot"></span>
+          <span class="badge-text">fdemon</span>
+        </div>
+
+        <div class="wordmark">
+          Flutter Demon
+        </div>
+
+        <div class="tagline">
+          A <strong>blazingly fast TUI</strong> for Flutter development
+        </div>
+
+        <div class="pills">
+          <span class="pill">Rust</span>
+          <span class="pill">Hot Reload</span>
+          <span class="pill">Multi-Device</span>
+          <span class="pill">DevTools</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="corner-url">fdemon.dev</div>
+  </div>
+</body>
+</html>

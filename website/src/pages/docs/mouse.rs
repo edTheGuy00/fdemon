@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
@@ -6,6 +7,9 @@ use crate::components::code_block::CodeBlock;
 #[component]
 pub fn Mouse() -> impl IntoView {
     view! {
+        <Title text="Mouse Support" />
+        <Meta name="description" content="Opt-in mouse interactions in Flutter Demon. Learn how to enable mouse mode and use click, scroll, and selection in the TUI." />
+        <Link rel="canonical" href="https://fdemon.dev/docs/mouse" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Mouse Interactions"</h1>
             <p class="text-slate-400">
@@ -142,9 +146,9 @@ pub fn Mouse() -> impl IntoView {
                     "\u{2013}"
                     <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"9"</kbd>
                     " to jump to a session, "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"["</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Tab"</kbd>
                     " / "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"]"</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Shift+Tab"</kbd>
                     " to cycle) to switch sessions, or left-click a tab."
                 </p>
             </Section>
@@ -263,9 +267,9 @@ pub fn Mouse() -> impl IntoView {
                     "\u{2013}"
                     <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"9"</kbd>
                     " to jump to a session, "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"["</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Tab"</kbd>
                     " / "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"]"</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Shift+Tab"</kbd>
                     " to cycle) to switch sessions, or left-click a tab to select it."
                 </p>
             </Section>
@@ -570,7 +574,7 @@ pub fn Mouse() -> impl IntoView {
 
                 <h3 class="text-base font-semibold text-white mb-2">
                     "Link Highlight Badges (visible after "
-                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"Shift+L"</kbd>
+                    <kbd class="font-mono text-xs bg-slate-800 px-1 py-0.5 rounded">"L"</kbd>
                     ")"
                 </h3>
                 <ul class="list-disc list-inside text-slate-400 space-y-2 ml-2 mb-4">

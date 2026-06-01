@@ -991,6 +991,8 @@ fn test_footer_height_not_stolen_in_small_area() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1208,6 +1210,8 @@ fn test_status_bar_no_dap_badge_when_off() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1241,6 +1245,8 @@ fn test_status_bar_shows_dap_badge_with_port() {
         dap_port: Some(4711),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1273,6 +1279,8 @@ fn test_status_bar_dap_badge_different_port() {
         dap_port: Some(54321),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1306,6 +1314,8 @@ fn test_dap_badge_hidden_in_compact_mode() {
         dap_port: Some(4711),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1342,6 +1352,8 @@ fn test_status_bar_shows_dap_with_ide_name() {
         dap_port: Some(4711),
         dap_config_ide: Some("VS Code".to_string()),
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1378,6 +1390,8 @@ fn test_status_bar_shows_dap_without_ide_name() {
         dap_port: Some(4711),
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1415,6 +1429,8 @@ fn test_status_bar_no_dap_with_ide_name_when_port_absent() {
         dap_port: None,
         dap_config_ide: Some("VS Code".to_string()),
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2472,6 +2488,8 @@ fn test_status_info_renders_mouse_on_badge() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2509,6 +2527,8 @@ fn test_status_info_renders_mouse_off_badge() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: false,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2551,6 +2571,8 @@ fn test_status_info_drops_badge_when_width_too_narrow() {
         dap_port: None,
         dap_config_ide: None,
         mouse_capture_active: true,
+        animation_frame: 0,
+        progress: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -2571,4 +2593,711 @@ fn test_status_info_drops_badge_when_width_too_narrow() {
         !term.buffer_contains("[mouse-off]"),
         "Off-state mouse badge should also be absent in compact mode (terminal width 40 < 60)"
     );
+}
+
+// ── shimmer label tests ────────────────────────────────────────────────────
+
+#[test]
+fn reloading_label_shimmers_across_chars() {
+    // For a transient phase the label should produce one span per character
+    // (the shimmer sweep) whose fg colours are not all identical.
+    use ratatui::style::{Color, Modifier, Style};
+
+    let phase_style = Style::default()
+        .fg(Color::Rgb(200, 170, 0)) // STATUS_YELLOW-ish
+        .add_modifier(Modifier::BOLD);
+
+    // Frame 5 → head somewhere in the middle of "Reloading"
+    let spans = LogView::status_label_spans_inner("Reloading", phase_style, true, 5);
+
+    // One span per character
+    assert_eq!(
+        spans.len(),
+        "Reloading".chars().count(),
+        "transient label must produce one span per char (shimmer)"
+    );
+
+    // Collect all fg values; the sweep must produce at least two distinct colours
+    let fg_values: Vec<Color> = spans.iter().filter_map(|s| s.style.fg).collect();
+    assert_eq!(
+        fg_values.len(),
+        spans.len(),
+        "every shimmer span must carry an fg colour"
+    );
+    let all_same = fg_values.windows(2).all(|w| w[0] == w[1]);
+    assert!(
+        !all_same,
+        "shimmer must produce a gradient — not all fg colours are equal"
+    );
+}
+
+#[test]
+fn running_label_is_static_single_style() {
+    // For a steady state the label must be a single span with the phase style's fg.
+    use ratatui::style::{Color, Style};
+
+    let base_fg = Color::Rgb(63, 185, 80); // STATUS_GREEN
+    let phase_style = Style::default().fg(base_fg);
+
+    let spans = LogView::status_label_spans_inner("Running", phase_style, false, 42);
+
+    assert_eq!(spans.len(), 1, "steady state must produce exactly one span");
+    assert_eq!(
+        spans[0].style.fg,
+        Some(base_fg),
+        "steady state span fg must match the phase style"
+    );
+    assert_eq!(
+        spans[0].content.as_ref(),
+        "Running",
+        "steady state span must carry the full label text"
+    );
+}
+
+#[test]
+fn shimmer_advances_with_animation_frame() {
+    // Two renders with different animation_frame values must produce different
+    // fg distributions (the shimmer head has moved).
+    use ratatui::style::{Color, Modifier, Style};
+
+    let phase_style = Style::default()
+        .fg(Color::Rgb(200, 100, 0))
+        .add_modifier(Modifier::BOLD);
+    let label = "Reloading";
+
+    let spans_a = LogView::status_label_spans_inner(label, phase_style, true, 0);
+    let spans_b = LogView::status_label_spans_inner(label, phase_style, true, 10);
+
+    let fgs_a: Vec<Option<Color>> = spans_a.iter().map(|s| s.style.fg).collect();
+    let fgs_b: Vec<Option<Color>> = spans_b.iter().map(|s| s.style.fg).collect();
+
+    assert_ne!(
+        fgs_a, fgs_b,
+        "different animation_frame values must yield different shimmer fg distributions"
+    );
+}
+
+// ── Phase 2.5 Task 04: Launching/Preparing shimmer + progress tests ───────────
+
+#[test]
+fn launching_label_shimmers_across_chars() {
+    // Launching is a transient phase — the label must produce one span per
+    // character with varying fg colours (shimmer sweep).
+    use ratatui::style::{Color, Modifier, Style};
+
+    let phase_style = Style::default()
+        .fg(palette::STATUS_BLUE)
+        .add_modifier(Modifier::BOLD);
+
+    // Frame 3 → head somewhere in the middle of "Launching"
+    let spans = LogView::status_label_spans_inner("Launching", phase_style, true, 3);
+
+    assert_eq!(
+        spans.len(),
+        "Launching".chars().count(),
+        "Launching label must produce one span per char (shimmer)"
+    );
+
+    let fg_values: Vec<Color> = spans.iter().filter_map(|s| s.style.fg).collect();
+    assert_eq!(
+        fg_values.len(),
+        spans.len(),
+        "every shimmer span must carry an fg colour"
+    );
+    let all_same = fg_values.windows(2).all(|w| w[0] == w[1]);
+    assert!(
+        !all_same,
+        "shimmer must produce a gradient — not all fg colours are equal"
+    );
+}
+
+#[test]
+fn preparing_label_shimmers_across_chars() {
+    // Preparing is a transient phase — the label must produce one span per
+    // character with varying fg colours (shimmer sweep).
+    use ratatui::style::{Color, Style};
+
+    let phase_style = Style::default().fg(palette::STATUS_BLUE);
+
+    // Frame 7 → head somewhere in the middle of "Preparing"
+    let spans = LogView::status_label_spans_inner("Preparing", phase_style, true, 7);
+
+    assert_eq!(
+        spans.len(),
+        "Preparing".chars().count(),
+        "Preparing label must produce one span per char (shimmer)"
+    );
+
+    let fg_values: Vec<Color> = spans.iter().filter_map(|s| s.style.fg).collect();
+    assert_eq!(
+        fg_values.len(),
+        spans.len(),
+        "every shimmer span must carry an fg colour"
+    );
+    let all_same = fg_values.windows(2).all(|w| w[0] == w[1]);
+    assert!(
+        !all_same,
+        "shimmer must produce a gradient — not all fg colours are equal"
+    );
+}
+
+#[test]
+fn progress_suffix_rendered_when_present() {
+    // When phase is Launching and progress is Some, the progress text must
+    // appear in the rendered bottom metadata bar with muted fg.
+    use crate::test_utils::TestTerminal;
+    use std::time::Duration;
+
+    let mut term = TestTerminal::with_size(120, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Launching,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: Some(Duration::from_secs(2)),
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+        animation_frame: 0,
+        progress: Some("Running Gradle task"),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("Running Gradle task"),
+        "Progress suffix 'Running Gradle task' should appear in the status bar when present"
+    );
+}
+
+#[test]
+fn running_has_no_progress_suffix() {
+    // When phase is Running (steady state), progress text must NOT appear
+    // even if progress is Some — steady states ignore the progress field.
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(120, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+        animation_frame: 0,
+        progress: Some("this should not appear"),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        !term.buffer_contains("this should not appear"),
+        "Running (steady state) must not render progress suffix even when progress is Some"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Jump-to-latest indicator pill tests (Phase 4, Task 02)
+// ─────────────────────────────────────────────────────────
+
+/// Read the content of a single row from a raw `Buffer` as a `String`.
+///
+/// Used by the jump-to-latest pill tests which operate directly on `Buffer`
+/// instances (rather than `TestTerminal`) so they can control exact coordinates.
+fn read_row(buf: &ratatui::buffer::Buffer, row: u16) -> String {
+    let mut s = String::new();
+    if row < buf.area.height {
+        for x in 0..buf.area.width {
+            s.push_str(buf[(x, row)].symbol());
+        }
+    }
+    s
+}
+
+/// Helper: create a `Buffer` of the given dimensions (origin 0, 0).
+fn make_buffer(width: u16, height: u16) -> ratatui::buffer::Buffer {
+    ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, height))
+}
+
+/// Helper: create `count` plain log entries with no stack traces.
+fn make_logs(count: usize) -> std::collections::VecDeque<LogEntry> {
+    make_logs_no_traces(count)
+}
+
+/// Helper: return the default `IconSet` for rendering tests.
+fn default_icons() -> crate::theme::icons::IconSet {
+    test_icons()
+}
+
+#[test]
+fn jump_hint_visible_when_scrolled_up_with_unseen_logs() {
+    use ratatui::layout::Rect;
+
+    // Layout for 40x10, no status footer:
+    //   border(1) + meta(1) + gap(1) + content(6) + border(1) = 10 rows
+    //   content rows: y=3..=8; last content row = y=8.
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(7);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // The pill is on the last row of content_area (y=8); row y=9 is the border.
+    let bottom_content_row = read_row(&buf, 8);
+    assert!(
+        bottom_content_row.contains("G to jump"),
+        "pill should be visible; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+    assert!(
+        bottom_content_row.contains("7 new"),
+        "pill should show count 7; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+}
+
+#[test]
+fn jump_hint_hidden_when_following_tail() {
+    use ratatui::layout::Rect;
+
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = true; // default, but explicit
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(50);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // Check both the last content row (y=8) and the border row (y=9).
+    let bottom_content_row = read_row(&buf, 8);
+    let border_row = read_row(&buf, 9);
+    assert!(
+        !bottom_content_row.contains("G to jump"),
+        "pill must not appear when auto_scroll is true; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+    assert!(
+        !border_row.contains("G to jump"),
+        "pill must not appear on border row; border row (y=9): {:?}",
+        border_row
+    );
+}
+
+#[test]
+fn jump_hint_hidden_when_count_zero() {
+    use ratatui::layout::Rect;
+
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(0);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // Check the last content row (y=8).
+    let bottom_content_row = read_row(&buf, 8);
+    assert!(
+        !bottom_content_row.contains("G to jump"),
+        "pill must not appear when unseen_log_count is 0; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+}
+
+#[test]
+fn jump_hint_caps_display_at_999_plus() {
+    use ratatui::layout::Rect;
+
+    let mut buf = make_buffer(40, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(12_345);
+    super::render_with_regions(Rect::new(0, 0, 40, 10), &mut buf, &mut state, view, None);
+
+    // Last content row is y=8 (border is y=9).
+    let bottom_content_row = read_row(&buf, 8);
+    assert!(
+        bottom_content_row.contains("999+"),
+        "pill should display '999+' for counts > 999; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+    assert!(
+        !bottom_content_row.contains("12345"),
+        "pill must not show the raw count when > 999; last content row (y=8): {:?}",
+        bottom_content_row
+    );
+}
+
+#[test]
+fn jump_hint_suppressed_when_terminal_too_narrow() {
+    use ratatui::layout::Rect;
+
+    // Pill text "↓ 5 new · G to jump" = 20 chars; need ≥ 21 width to render.
+    // A 10-column terminal is far too narrow.
+    let mut buf = make_buffer(10, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(5);
+    super::render_with_regions(Rect::new(0, 0, 10, 10), &mut buf, &mut state, view, None);
+
+    // Check both the last content row (y=8) and entire buffer.
+    let bottom_content_row = read_row(&buf, 8);
+    let border_row = read_row(&buf, 9);
+    assert!(
+        !bottom_content_row.contains("G to jump"),
+        "pill must be suppressed when terminal is too narrow; last content row: {:?}",
+        bottom_content_row
+    );
+    assert!(
+        !border_row.contains("G to jump"),
+        "pill must not appear on border row either; border row: {:?}",
+        border_row
+    );
+    // Check the entire buffer doesn't contain the down-arrow or the suffix.
+    for row in 0..10u16 {
+        let r = read_row(&buf, row);
+        assert!(
+            !r.contains("G to jump"),
+            "pill must not appear anywhere; row {row}: {:?}",
+            r
+        );
+    }
+}
+
+#[test]
+fn jump_hint_click_emits_scroll_to_bottom() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseButton, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // Wide enough to render the pill (≥ 21 columns needed for "↓ 3 new · G to jump" + 1 margin).
+    // For a 60x10 area (no status footer):
+    //   area = Rect(0, 0, 60, 10)
+    //   inner (after border) = Rect(1, 1, 58, 8)
+    //   top_meta(1) + gap(1) = y offset 2; content_area = Rect(1, 3, 58, 6)
+    //   last content row y = 3 + 6 - 1 = 8
+    //   pill label "↓ 3 new · G to jump" = 19 chars → pill_width = 19
+    //   pill x = 1 + 58 - 19 - 1 = 39
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // 10 log entries so that a ClickLogRow region also covers row y=8,
+    // letting us verify the pill's z=1 wins over the row's z=0.
+    let logs = make_logs(10);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(3);
+
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    // For count=3 the pill label "↓ 3 new · G to jump" is 19 chars wide.
+    // content_area.x=1, content_area.width=58 → pill x = 1 + 58 - 19 - 1 = 39, y = 8.
+    // We pick a cell in the middle of the pill to be safe.
+    let pill_y: u16 = 8;
+    let pill_x: u16 = 45; // well inside pill (x=39..57)
+
+    // hit_test must resolve to ScrollToBottom at pill coordinates, even though
+    // a ClickLogRow region (z=0) also covers that cell.  The pill is at z=1.
+    let hit = regions.hit_test(pill_x, pill_y, MouseButton::Left);
+    assert!(
+        matches!(
+            hit.and_then(|e| e.on_left.as_ref()),
+            Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ScrollToBottom)
+        ),
+        "hit_test at the pill cell must resolve to ScrollToBottom (z=1 wins over ClickLogRow z=0); \
+         hit = {:?}",
+        hit.map(|e| &e.on_left)
+    );
+}
+
+/// n1 — pill and scrollbar render simultaneously without collision.
+///
+/// Conditions: scrolled up, total_lines > visible_lines, auto_scroll == false,
+/// unseen_log_count > 0.  Asserts that the keybind text "G to jump" is fully
+/// intact on the last content row and that the scrollbar end-cap "▼" appears
+/// in the buffer.
+#[test]
+fn jump_hint_pill_and_scrollbar_render_together() {
+    use ratatui::layout::Rect;
+
+    // 60-wide, 10-tall, no status footer.
+    // content_area = Rect(1, 3, 58, 6), visible_lines = 6.
+    // With 20 log entries total_lines = 20 > 6 → scrollbar drawn.
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = make_buffer(60, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // Scroll up so offset > 0 (ensures scrollbar position is non-trivial).
+    state.offset = 10;
+    let logs = make_logs(20);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(5);
+    super::render_with_regions(area, &mut buf, &mut state, view, None);
+
+    // The pill must be fully intact on the last content row (y=8).
+    let last_content_row = read_row(&buf, 8);
+    assert!(
+        last_content_row.contains("G to jump"),
+        "pill keybind text must be intact when pill and scrollbar render together; row y=8: {:?}",
+        last_content_row
+    );
+
+    // The scrollbar end-cap "▼" must appear somewhere in the buffer (rightmost column).
+    let scrollbar_col = 59u16; // area.x + area.width - 1
+    let has_end_cap = (0..10u16)
+        .map(|row| buf[(scrollbar_col, row)].symbol().to_string())
+        .any(|sym| sym == "▼");
+    assert!(
+        has_end_cap,
+        "scrollbar end-cap '▼' must appear in column 59 when content overflows"
+    );
+}
+
+/// n3 — narrow-terminal exact boundary: pill suppressed at width == pill_width,
+/// rendered at width == pill_width + 1.
+///
+/// Uses count=1 so pill_width is derived from the public constants rather than
+/// a hardcoded literal.  The suppression condition is
+/// `content_area.width < pill_width + 1`, i.e. the pill is:
+///   - suppressed: content_area.width == pill_width   (minimum-content test)
+///   - rendered:   content_area.width == pill_width + 1
+///
+/// content_area.width = area.width - 2 (border columns).
+#[test]
+fn jump_hint_suppressed_at_exact_pill_width() {
+    use ratatui::layout::Rect;
+
+    // Derive pill_width for count=1: "↓ 1 new · G to jump".
+    let label = format!("{}1 new{}", JUMP_HINT_PREFIX, JUMP_HINT_SUFFIX);
+    let pill_width = label.chars().count() as u16;
+
+    // content_area.width == pill_width  →  suppressed.
+    // area.width = pill_width + 2 (left border + right border).
+    let area_width = pill_width + 2;
+    let area = Rect::new(0, 0, area_width, 10);
+    let mut buf = make_buffer(area_width, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(1);
+    super::render_with_regions(area, &mut buf, &mut state, view, None);
+
+    // Verify no row contains the keybind text.
+    for row in 0..10u16 {
+        let r = read_row(&buf, row);
+        assert!(
+            !r.contains("G to jump"),
+            "pill must be suppressed when content_area.width == pill_width ({}); row {}: {:?}",
+            pill_width,
+            row,
+            r
+        );
+    }
+}
+
+#[test]
+fn jump_hint_rendered_at_pill_width_plus_one() {
+    use ratatui::layout::Rect;
+
+    // Derive pill_width for count=1: "↓ 1 new · G to jump".
+    let label = format!("{}1 new{}", JUMP_HINT_PREFIX, JUMP_HINT_SUFFIX);
+    let pill_width = label.chars().count() as u16;
+
+    // content_area.width == pill_width + 1  →  rendered.
+    // area.width = pill_width + 3 (left border + 1 col margin + right border).
+    let area_width = pill_width + 3;
+    let area = Rect::new(0, 0, area_width, 10);
+    let mut buf = make_buffer(area_width, 10);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    let logs = make_logs(2);
+    let view = LogView::new(&logs, default_icons()).unseen_log_count(1);
+    super::render_with_regions(area, &mut buf, &mut state, view, None);
+
+    // The pill must appear on the last content row.
+    // Layout for area_width x 10, no footer:
+    //   inner.height=8, content_area.height = 8 - 2 = 6, last content row y=8.
+    let last_content_row = read_row(&buf, 8);
+    assert!(
+        last_content_row.contains("G to jump"),
+        "pill must render when content_area.width == pill_width + 1 ({}); row y=8: {:?}",
+        pill_width + 1,
+        last_content_row
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Launch-lifecycle spinner glyph tests (phase-6.5 task 02)
+// ─────────────────────────────────────────────────────────
+
+/// Helper to build a minimal StatusInfo for spinner tests.
+fn spinner_status(phase: AppPhase, is_busy: bool, animation_frame: u64) -> StatusInfo<'static> {
+    // We need a 'static reference to AppPhase for the struct. Use Box::leak for test convenience.
+    let leaked: &'static AppPhase = Box::leak(Box::new(phase));
+    StatusInfo {
+        phase: leaked,
+        is_busy,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: None,
+        mouse_capture_active: true,
+        animation_frame,
+        progress: None,
+    }
+}
+
+#[test]
+fn launch_phases_show_spinner_glyph() {
+    use crate::test_utils::TestTerminal;
+    use crate::widgets::spinner::{spinner_char, SPINNER_FRAMES, SPINNER_TICKS_PER_FRAME};
+
+    for phase in [
+        AppPhase::Initializing,
+        AppPhase::Preparing,
+        AppPhase::Launching,
+    ] {
+        for frame in [0u64, 1, 4, 10, 19] {
+            let mut term = TestTerminal::with_size(80, 10);
+            let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+            let status = spinner_status(phase, false, frame);
+            let view = LogView::new(&logs, test_icons()).with_status(status);
+            let mut state = LogViewState::new();
+            term.render_stateful_widget(view, term.area(), &mut state);
+
+            let expected_glyph = spinner_char(frame / SPINNER_TICKS_PER_FRAME);
+            assert!(
+                SPINNER_FRAMES.contains(&expected_glyph),
+                "glyph {expected_glyph:?} must be a SPINNER_FRAMES char"
+            );
+
+            // The spinner glyph must appear somewhere in the rendered output.
+            assert!(
+                term.buffer_contains(&expected_glyph.to_string()),
+                "phase {:?} frame {frame}: expected spinner glyph {expected_glyph:?} in buffer",
+                phase
+            );
+
+            // The static circle '○' must NOT appear — it has been replaced.
+            assert!(
+                !term.buffer_contains("○"),
+                "phase {:?} frame {frame}: static '○' must not appear when spinner is active",
+                phase
+            );
+        }
+    }
+}
+
+#[test]
+fn non_launch_phases_keep_static_icon() {
+    use crate::test_utils::TestTerminal;
+
+    // Reloading keeps ↻, Running keeps ●, Stopped keeps ○
+    let cases: &[(AppPhase, &str)] = &[(AppPhase::Running, "●"), (AppPhase::Stopped, "○")];
+
+    for (phase, expected_icon) in cases {
+        let mut term = TestTerminal::with_size(80, 10);
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        let status = spinner_status(*phase, false, 0);
+        let view = LogView::new(&logs, test_icons()).with_status(status);
+        let mut state = LogViewState::new();
+        term.render_stateful_widget(view, term.area(), &mut state);
+
+        assert!(
+            term.buffer_contains(expected_icon),
+            "phase {:?}: expected static icon {:?} in buffer",
+            phase,
+            expected_icon
+        );
+    }
+
+    // is_busy = true → phase_indicator_busy (Reloading / ↻); spinner must not replace it.
+    {
+        let mut term = TestTerminal::with_size(80, 10);
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        // Even if phase is Launching, is_busy = true should stay with the busy icon ↻
+        let status = spinner_status(AppPhase::Launching, true, 4);
+        let view = LogView::new(&logs, test_icons()).with_status(status);
+        let mut state = LogViewState::new();
+        term.render_stateful_widget(view, term.area(), &mut state);
+
+        assert!(
+            term.buffer_contains("↻"),
+            "is_busy=true: expected static busy icon '↻' in buffer, not a spinner glyph"
+        );
+    }
+}
+
+#[test]
+fn launch_spinner_advances_with_frame() {
+    use crate::test_utils::TestTerminal;
+    use crate::widgets::spinner::{spinner_char, SPINNER_TICKS_PER_FRAME};
+
+    // Two renders separated by SPINNER_TICKS_PER_FRAME frames must yield different glyphs.
+    let frame_a = 0u64;
+    let frame_b = frame_a + SPINNER_TICKS_PER_FRAME;
+
+    let glyph_a = spinner_char(frame_a / SPINNER_TICKS_PER_FRAME);
+    let glyph_b = spinner_char(frame_b / SPINNER_TICKS_PER_FRAME);
+    assert_ne!(
+        glyph_a, glyph_b,
+        "frames {frame_a} and {frame_b} must produce different spinner glyphs"
+    );
+
+    for phase in [
+        AppPhase::Initializing,
+        AppPhase::Preparing,
+        AppPhase::Launching,
+    ] {
+        let mut term_a = TestTerminal::with_size(80, 10);
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        let status_a = spinner_status(phase, false, frame_a);
+        let view_a = LogView::new(&logs, test_icons()).with_status(status_a);
+        let mut state_a = LogViewState::new();
+        term_a.render_stateful_widget(view_a, term_a.area(), &mut state_a);
+
+        let mut term_b = TestTerminal::with_size(80, 10);
+        let logs2 = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+        let status_b = spinner_status(phase, false, frame_b);
+        let view_b = LogView::new(&logs2, test_icons()).with_status(status_b);
+        let mut state_b = LogViewState::new();
+        term_b.render_stateful_widget(view_b, term_b.area(), &mut state_b);
+
+        assert!(
+            term_a.buffer_contains(&glyph_a.to_string()),
+            "phase {:?} frame_a={frame_a}: expected glyph {glyph_a:?}",
+            phase
+        );
+        assert!(
+            term_b.buffer_contains(&glyph_b.to_string()),
+            "phase {:?} frame_b={frame_b}: expected glyph {glyph_b:?}",
+            phase
+        );
+    }
 }

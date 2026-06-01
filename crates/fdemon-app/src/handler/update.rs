@@ -87,6 +87,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::ScrollToLineEnd => scroll::handle_scroll_to_line_end(state),
 
         Message::Tick => {
+            // Global animation clock — drives shimmer/spinner/flash everywhere,
+            // independent of the loading screen's own frame counter.
+            state.animation_frame = state.animation_frame.wrapping_add(1);
+
             // Tick loading screen animation with message cycling (Task 08d)
             if state.ui_mode == UiMode::Loading && state.loading_state.is_some() {
                 state.tick_loading_animation_with_cycling(true);
@@ -106,7 +110,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::HotReload => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy
+                // Gate: session must be fully running (not Preparing/Launching).
+                // is_running() returns true only for Running | Reloading.
+                if !handle.session.is_running() {
+                    return UpdateResult::none();
+                }
+                // Check if THIS session is busy (Reloading)
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
@@ -136,7 +145,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::HotRestart => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy
+                // Gate: session must be fully running (not Preparing/Launching).
+                // is_running() returns true only for Running | Reloading.
+                if !handle.session.is_running() {
+                    return UpdateResult::none();
+                }
+                // Check if THIS session is busy (Reloading)
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
@@ -166,7 +180,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::StopApp => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy
+                // Gate: session must be fully running (not Preparing/Launching).
+                // is_running() returns true only for Running | Reloading.
+                if !handle.session.is_running() {
+                    return UpdateResult::none();
+                }
+                // Check if THIS session is busy (Reloading)
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
@@ -1200,6 +1219,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::NewSessionDialogDeviceDown => new_session::handle_device_down(state),
 
         Message::NewSessionDialogDeviceSelect => new_session::handle_device_select(state),
+
+        Message::NewSessionDialogToggleDeviceSelection => {
+            new_session::handle_toggle_device_selection(state)
+        }
+
+        Message::NewSessionDialogSelectAllDevices => new_session::handle_select_all_devices(state),
 
         Message::NewSessionDialogRefreshDevices => new_session::handle_refresh_devices(state),
 
@@ -2862,9 +2887,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // The session already exists in SessionManager (created by handle_launch).
             if state.session_manager.get(session_id).is_some() {
                 let Some(flutter) = state.flutter_executable() else {
+                    // Defense-in-depth: handle_launch fails fast on a missing SDK
+                    // before creating the session, so this arm should be
+                    // unreachable. If it is reached anyway, remove the orphaned
+                    // Preparing session so it does not permanently consume a slot,
+                    // and surface the failure instead of silently stalling.
                     tracing::warn!(
                         "PreAppSourcesReady: no Flutter SDK — cannot spawn session {}",
                         session_id
+                    );
+                    state.session_manager.remove_session(session_id);
+                    state.push_toast(
+                        crate::state::ToastLevel::Warn,
+                        "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
+                            .to_string(),
                     );
                     return UpdateResult::none();
                 };
@@ -2902,12 +2938,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        // Progress update from a pre-app source startup — add to session log buffer.
+        // Progress update from a pre-app source startup — add to session log buffer
+        // and update the transient `current_progress` field so the Preparing phase
+        // label shows "Pre-app sources: N/M ready…" in the status bar / tabs.
         Message::PreAppSourceProgress {
             session_id,
             message,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.set_progress(message.clone());
                 handle.session.add_log(fdemon_core::LogEntry::new(
                     LogLevel::Info,
                     LogSource::Daemon,
@@ -3336,6 +3375,23 @@ fn scroll_to_log_entry(session: &mut crate::session::Session, entry_index: usize
 mod tests {
     use super::*;
     use crate::state::StartupNotice;
+
+    #[test]
+    fn tick_advances_global_animation_frame_in_normal_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        let before = state.animation_frame;
+        let _ = update(&mut state, Message::Tick);
+        assert_eq!(state.animation_frame, before + 1);
+    }
+
+    #[test]
+    fn animation_frame_wraps_without_panic() {
+        let mut state = AppState::new();
+        state.animation_frame = u64::MAX;
+        let _ = update(&mut state, Message::Tick);
+        assert_eq!(state.animation_frame, 0);
+    }
 
     #[test]
     fn new_version_available_sets_startup_notice_when_dialog_visible() {

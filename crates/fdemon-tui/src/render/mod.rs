@@ -165,8 +165,19 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // (Task 06), but only when no modal overlay is active.  When a modal is
     // up (`in_modal = true`) we pass `None` so that clicking header shortcuts
     // while a modal is displayed cannot fire base-UI actions.
+    //
+    // Read the reload-flash alpha from the selected session (if any) and pass it
+    // into the MainHeader builder. The immutable `selected()` borrow is released
+    // before the `selected_mut()` borrow below (NLL), so there is no borrow
+    // conflict. `Local::now()` is called once here to keep the widget pure.
+    let reload_flash = state
+        .session_manager
+        .selected()
+        .map(|h| h.session.reload_flash_alpha(chrono::Local::now()))
+        .unwrap_or(0.0);
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
-        .with_sessions(&state.session_manager);
+        .with_sessions(&state.session_manager)
+        .reload_flash(reload_flash);
     let header_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
     widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, header_ctx);
 
@@ -175,9 +186,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // so that clicks that miss the modal's z=1 rects cannot fall through to the
     // underlying log-view z=0 regions.
     if let Some(handle) = state.session_manager.selected_mut() {
+        let unseen = handle.session.unseen_log_count;
         let mut log_view = widgets::LogView::new(&handle.session.logs, icons)
             .filter_state(&handle.session.filter_state)
-            .wrap_mode(handle.session.log_view_state.wrap_mode);
+            .wrap_mode(handle.session.log_view_state.wrap_mode)
+            .unseen_log_count(unseen);
 
         // Add search state if there's an active search
         if !handle.session.search_state.query.is_empty() {
@@ -213,6 +226,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             dap_port: state.dap_status.port(),
             dap_config_ide: state.dap_config_status.as_ref().map(|s| s.ide_name.clone()),
             mouse_capture_active: state.mouse_capture_active,
+            animation_frame: state.animation_frame,
+            progress: handle.session.current_progress.as_deref(),
         };
         log_view = log_view.with_status(status_info);
 
@@ -252,7 +267,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &icons,
             )
             .startup_notice(state.startup_notice.as_ref())
-            .enable_mouse(state.settings.ui.enable_mouse);
+            .enable_mouse(state.settings.ui.enable_mouse)
+            .animation_frame(state.animation_frame);
             widgets::new_session_dialog::render_with_regions(
                 area,
                 frame.buffer_mut(),
@@ -517,12 +533,8 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[fdemon_app::state::Toa
 /// - Animated spinner
 /// - Current loading message
 fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingState, area: Rect) {
-    // Braille spinner characters for smooth animation
-    const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-    // Direct modulo - each tick is 100ms, each frame shows next spinner char
-    let spinner_idx = (loading.animation_frame as usize) % SPINNER.len();
-    let spinner_char = SPINNER[spinner_idx];
+    // Use shared spinner helper — zero visual change; SPINNER_FRAMES[0] == '⠋'
+    let glyph = crate::widgets::spinner::spinner_char(loading.animation_frame);
 
     // Create centered content box - smaller modal overlay
     let vertical_center = Layout::default()
@@ -570,7 +582,7 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
     // Spinner and message
     lines.push(Line::from(vec![
         Span::styled(
-            spinner_char,
+            glyph.to_string(),
             Style::default()
                 .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),

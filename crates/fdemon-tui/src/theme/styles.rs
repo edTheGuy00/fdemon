@@ -148,6 +148,18 @@ pub fn phase_indicator(phase: &AppPhase, icons: &IconSet) -> (&'static str, &'st
             "Starting",
             Style::default().fg(palette::TEXT_MUTED),
         ),
+        AppPhase::Preparing => (
+            icons.circle(),
+            "Preparing",
+            Style::default().fg(palette::STATUS_BLUE),
+        ),
+        AppPhase::Launching => (
+            icons.circle(),
+            "Launching",
+            Style::default()
+                .fg(palette::STATUS_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
         AppPhase::Stopped => (
             icons.circle(),
             "Stopped",
@@ -302,6 +314,26 @@ mod tests {
     }
 
     #[test]
+    fn test_phase_indicator_preparing() {
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Preparing, &icons);
+        assert_eq!(icon, "○");
+        assert_eq!(label, "Preparing");
+        assert_eq!(style.fg, Some(palette::STATUS_BLUE));
+        assert!(!style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_phase_indicator_launching() {
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Launching, &icons);
+        assert_eq!(icon, "○");
+        assert_eq!(label, "Launching");
+        assert_eq!(style.fg, Some(palette::STATUS_BLUE));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn test_phase_indicator_all_phases_covered() {
         let icons = IconSet::new(IconMode::Unicode);
         // Ensure every AppPhase variant returns valid data
@@ -309,6 +341,8 @@ mod tests {
             AppPhase::Running,
             AppPhase::Reloading,
             AppPhase::Initializing,
+            AppPhase::Preparing,
+            AppPhase::Launching,
             AppPhase::Stopped,
             AppPhase::Quitting,
         ] {

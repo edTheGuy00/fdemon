@@ -18,7 +18,9 @@ pub fn handle_session_started(
 ) -> UpdateResult {
     // Update session-specific state
     if let Some(handle) = state.session_manager.get_mut(session_id) {
-        handle.session.phase = AppPhase::Running;
+        // Process pipe is open and building/starting — not yet confirmed up.
+        // Phase moves to Running only when DaemonMessage::AppStarted is processed.
+        handle.session.phase = AppPhase::Launching;
         handle.session.started_at = Some(chrono::Local::now());
 
         // Log to session-specific logs

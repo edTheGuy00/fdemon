@@ -7,6 +7,15 @@ use std::path::Path;
 const LAUNCH_FILENAME: &str = "launch.toml";
 const FDEMON_DIR: &str = ".fdemon";
 
+/// Maximum accepted byte length of a single extra CLI argument.
+///
+/// Chosen to be generous enough that realistic Flutter flags are never rejected
+/// (e.g. a long `--split-debug-info=<path>` value with a deep build directory),
+/// while still blocking accidental injection of large free-text blobs (e.g. a
+/// file path accidentally placed in `extra_args` instead of `entry_point`).
+/// 256 bytes covers any plausible flag or path component with significant margin.
+const MAX_EXTRA_ARG_LEN: usize = 256;
+
 /// Load launch configurations from .fdemon/launch.toml
 pub fn load_launch_configs(project_path: &Path) -> Vec<ResolvedLaunchConfig> {
     let launch_path = project_path.join(FDEMON_DIR).join(LAUNCH_FILENAME);
@@ -330,8 +339,36 @@ impl LaunchConfig {
             args.push(format!("{}={}", key, value));
         }
 
-        // Add extra args
-        args.extend(self.extra_args.clone());
+        // Add extra args (validated positionally). Flags must start with '-', but
+        // a flag that takes its value as the *next* list entry (split syntax, e.g.
+        // VS Code `toolArgs` `["--web-port", "8080"]`) must keep that value even
+        // though it does not start with '-'. So: a token starting with '-' is a
+        // flag; the single token immediately following a flag (when the flag has
+        // no inline `=value`) is accepted as that flag's value. A leading bare
+        // token with no preceding flag is a stray positional and is dropped.
+        //
+        // Every retained token must contain no NUL bytes and stay within the
+        // bounded length cap. Entries that fail are silently dropped with a
+        // warning — we never reject the whole config for a single malformed arg,
+        // and there is no shell-evaluation risk because args reach
+        // `Command::args()` as separate, non-shell-evaluated elements.
+        let mut expect_value = false;
+        for arg in &self.extra_args {
+            let is_flag = arg.starts_with('-');
+            // Accept flags, and value tokens that follow a flag lacking inline `=`.
+            let positionally_ok = is_flag || expect_value;
+            let ok = positionally_ok && !arg.contains('\0') && arg.len() <= MAX_EXTRA_ARG_LEN;
+            if ok {
+                args.push(arg.clone());
+                // The next token is this flag's value only when this is a flag
+                // without an inline `=value`. A consumed value never expects a
+                // following value itself.
+                expect_value = is_flag && !arg.contains('=');
+            } else {
+                warn!("Ignoring malformed extra_arg: {:?}", arg);
+                expect_value = false;
+            }
+        }
 
         args
     }
@@ -1307,5 +1344,161 @@ EMPTY = ""
             .unwrap_err()
             .to_string()
             .contains("Config 'NonExistent' not found"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // extra_args validation tests (Task 02-validate-extra-args)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Well-formed flags must pass through build_flutter_args unchanged.
+    #[test]
+    fn test_extra_args_valid_flags_pass_through() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec![
+                "--obfuscate".to_string(),
+                "--split-debug-info=build/symbols".to_string(),
+                "-t".to_string(),
+                "lib/main.dart".to_string(), // value token following the -t flag (split syntax)
+            ],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        // Valid dash-prefixed flags must be present.
+        assert!(
+            args.contains(&"--obfuscate".to_string()),
+            "--obfuscate should pass through"
+        );
+        assert!(
+            args.contains(&"--split-debug-info=build/symbols".to_string()),
+            "--split-debug-info should pass through"
+        );
+        assert!(args.contains(&"-t".to_string()), "-t should pass through");
+
+        // The value token following a split-syntax flag must be preserved.
+        assert!(
+            args.contains(&"lib/main.dart".to_string()),
+            "value following -t must be preserved (split flag/value syntax)"
+        );
+    }
+
+    /// A split flag/value pair (e.g. VS Code `toolArgs` `["--web-port", "8080"]`)
+    /// must keep the value token even though it does not start with '-'.
+    #[test]
+    fn test_extra_args_split_flag_value_preserved() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec!["--web-port".to_string(), "8080".to_string()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        // Both tokens present, in order, immediately adjacent.
+        let pos = args
+            .windows(2)
+            .position(|w| w[0] == "--web-port" && w[1] == "8080");
+        assert!(
+            pos.is_some(),
+            "--web-port 8080 must be preserved as an adjacent flag/value pair, got {args:?}"
+        );
+    }
+
+    /// A flag with an inline `=value` does not consume the following token; a
+    /// subsequent bare positional with no preceding flag is still dropped.
+    #[test]
+    fn test_extra_args_inline_value_does_not_consume_next() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec![
+                "--split-debug-info=build/symbols".to_string(),
+                "stray".to_string(), // bare positional, no preceding split flag
+            ],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--split-debug-info=build/symbols".to_string()));
+        assert!(
+            !args.contains(&"stray".to_string()),
+            "bare positional after an inline-value flag must be dropped"
+        );
+    }
+
+    /// A value token is accepted after a flag even if the value itself would fail
+    /// the leading-dash rule, but it must still pass the NUL/length checks.
+    #[test]
+    fn test_extra_args_value_token_still_length_checked() {
+        let long_value = "x".repeat(MAX_EXTRA_ARG_LEN + 1);
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec!["--web-port".to_string(), long_value.clone()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--web-port".to_string()));
+        assert!(
+            !args.contains(&long_value),
+            "over-length value token must still be dropped"
+        );
+    }
+
+    /// An extra_arg containing a NUL byte must be dropped.
+    #[test]
+    fn test_extra_args_nul_byte_dropped() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec!["--flag\0injected".to_string()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(
+            !args.iter().any(|a| a.contains('\0')),
+            "NUL-containing arg must not reach the command"
+        );
+    }
+
+    /// An extra_arg that exceeds MAX_EXTRA_ARG_LEN must be dropped.
+    #[test]
+    fn test_extra_args_over_length_dropped() {
+        let long_arg = format!("--{}", "x".repeat(MAX_EXTRA_ARG_LEN));
+        assert!(
+            long_arg.len() > MAX_EXTRA_ARG_LEN,
+            "precondition: arg is over limit"
+        );
+
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec![long_arg.clone()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(!args.contains(&long_arg), "over-length arg must be dropped");
+    }
+
+    /// A free-text extra_arg not starting with '-' must be dropped.
+    #[test]
+    fn test_extra_args_non_dash_free_text_dropped() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec!["some_free_text_value".to_string()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(
+            !args.contains(&"some_free_text_value".to_string()),
+            "non-dash free-text arg must be dropped"
+        );
     }
 }

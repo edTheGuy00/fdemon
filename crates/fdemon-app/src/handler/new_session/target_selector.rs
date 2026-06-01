@@ -203,6 +203,31 @@ pub fn handle_boot_failed(state: &mut AppState, device_id: String, error: String
     UpdateResult::none()
 }
 
+/// Handle Space key: toggle checked state of the cursor device (Connected tab only).
+///
+/// On the Bootable tab this is a no-op (the `toggle_checked_cursor` method
+/// on `TargetSelectorState` guards on `active_tab == Connected`).
+pub fn handle_toggle_device_selection(state: &mut AppState) -> UpdateResult {
+    state
+        .new_session_dialog_state
+        .target_selector
+        .toggle_checked_cursor();
+    UpdateResult::none()
+}
+
+/// Handle `a` key: select all connected devices, or clear all if every device
+/// is already checked.
+///
+/// On the Bootable tab this is a no-op (the `toggle_select_all` method
+/// on `TargetSelectorState` guards on `active_tab == Connected`).
+pub fn handle_select_all_devices(state: &mut AppState) -> UpdateResult {
+    state
+        .new_session_dialog_state
+        .target_selector
+        .toggle_select_all();
+    UpdateResult::none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,6 +656,207 @@ mod tests {
         assert!(
             sel >= offset && sel < offset + 5,
             "selected_index ({sel}) should be visible in viewport [offset={offset}, offset+5)"
+        );
+    }
+
+    // ── Multi-select handler tests ────────────────────────────────────────────
+
+    fn test_app_state_with_connected_devices() -> AppState {
+        let mut state = test_app_state();
+        // Use all android devices so they appear in a single group.
+        // Flat list: [Header "Android Devices", dev-1, dev-2, dev-3]
+        //   index 0 = header (not selectable)
+        //   index 1 = dev-1
+        //   index 2 = dev-2
+        //   index 3 = dev-3
+        let devices: Vec<Device> = vec![
+            fdemon_daemon::test_utils::test_device_full("dev-1", "Pixel 7", "android", false),
+            fdemon_daemon::test_utils::test_device_full("dev-2", "Pixel 8", "android", false),
+            fdemon_daemon::test_utils::test_device_full("dev-3", "Pixel 6", "android", false),
+        ];
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(devices);
+        // Move cursor to first device (flat index 1, after the header at index 0).
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+        state
+    }
+
+    #[test]
+    fn handle_toggle_device_selection_checks_cursor_device() {
+        let mut state = test_app_state_with_connected_devices();
+        // Pre-condition: nothing checked
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0
+        );
+
+        let result = handle_toggle_device_selection(&mut state);
+
+        // Returns none
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
+
+        // Exactly one device is now checked
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            1
+        );
+        assert!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .is_checked("dev-1"),
+            "cursor device 'dev-1' should be checked"
+        );
+    }
+
+    #[test]
+    fn handle_toggle_device_selection_unchecks_already_checked() {
+        let mut state = test_app_state_with_connected_devices();
+        // Pre-check the cursor device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .checked_device_ids
+            .insert("dev-1".to_string());
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            1
+        );
+
+        handle_toggle_device_selection(&mut state);
+
+        // Device should be unchecked
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn handle_select_all_devices_checks_all() {
+        let mut state = test_app_state_with_connected_devices();
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0
+        );
+
+        let result = handle_select_all_devices(&mut state);
+
+        // Returns none
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
+
+        // All 3 devices checked
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            3
+        );
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .is_checked("dev-1"));
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .is_checked("dev-2"));
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .is_checked("dev-3"));
+    }
+
+    #[test]
+    fn handle_select_all_devices_clears_when_all_checked() {
+        let mut state = test_app_state_with_connected_devices();
+        // Pre-check all devices
+        for id in &["dev-1", "dev-2", "dev-3"] {
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_device_ids
+                .insert(id.to_string());
+        }
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            3
+        );
+
+        handle_select_all_devices(&mut state);
+
+        // All devices cleared
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn handle_toggle_device_selection_noop_on_bootable_tab() {
+        let mut state = test_app_state_with_connected_devices();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+
+        handle_toggle_device_selection(&mut state);
+
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0,
+            "toggle on Bootable tab should be a no-op"
+        );
+    }
+
+    #[test]
+    fn handle_select_all_devices_noop_on_bootable_tab() {
+        let mut state = test_app_state_with_connected_devices();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+
+        handle_select_all_devices(&mut state);
+
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .checked_count(),
+            0,
+            "select-all on Bootable tab should be a no-op"
         );
     }
 }

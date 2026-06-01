@@ -506,6 +506,12 @@ pub enum Message {
     /// Select current device or boot device (Target Selector specific)
     NewSessionDialogDeviceSelect,
 
+    /// Toggle multi-launch selection of the cursor device (Connected tab).
+    NewSessionDialogToggleDeviceSelection,
+
+    /// Select all / clear all connected devices for multi-launch.
+    NewSessionDialogSelectAllDevices,
+
     /// Refresh device list for current tab
     NewSessionDialogRefreshDevices,
 

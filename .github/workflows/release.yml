@@ -347,5 +347,10 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          # SKIP_PRERENDER=0: run headless-Chrome prerender (default).
+          # If prerender fails the Docker build still succeeds — the nginx stage
+          # will serve the plain CSR dist/ as fallback (see website/Dockerfile).
+          build-args: |
+            SKIP_PRERENDER=0
           cache-from: type=gha
           cache-to: type=gha,mode=max

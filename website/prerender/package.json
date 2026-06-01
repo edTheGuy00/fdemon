@@ -1,0 +1,16 @@
+{
+  "name": "fdemon-prerender",
+  "version": "1.0.0",
+  "description": "Build-time headless-Chrome prerender for fdemon.dev — generates static HTML per route so non-JS crawlers see fully-rendered content.",
+  "private": true,
+  "scripts": {
+    "prerender": "node prerender.js"
+  },
+  "dependencies": {
+    "puppeteer": "22.15.0",
+    "serve": "14.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
