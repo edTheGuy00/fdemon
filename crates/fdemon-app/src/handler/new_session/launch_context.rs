@@ -636,14 +636,23 @@ fn spawn_one(
         return Err("already has an active session".to_string());
     }
 
-    // Fail fast: resolve the Flutter SDK before creating any session so that
-    // a missing SDK never leaves an orphaned Initializing session in the
-    // manager. flutter_executable() is state-global — the result is the same
-    // for every device in the fan-out loop.
-    //
-    // Note: the SpawnPreAppSources branch (below) does not consume `flutter`,
-    // so resolving it here does not change that branch's behaviour.
-    let flutter_opt = state.flutter_executable();
+    // Fail fast: resolve the Flutter SDK before creating any session so that a
+    // missing SDK never leaves an orphaned session in the manager.
+    // flutter_executable() is state-global — the result is the same for every
+    // device in the fan-out loop. BOTH launch paths ultimately require the SDK:
+    // the direct path (SpawnSession) consumes `flutter` below, and the pre-app
+    // path (SpawnPreAppSources → PreAppSourcesReady → SpawnSession) re-resolves
+    // it later. Because the result is stable across the launch, a missing SDK
+    // now will still be missing at PreAppSourcesReady — so guarding here for
+    // both branches loses nothing and prevents an orphaned Preparing session
+    // from permanently consuming a session slot.
+    let Some(flutter) = state.flutter_executable() else {
+        tracing::warn!("handle_launch: no Flutter SDK — cannot spawn session");
+        return Err(
+            "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
+                .to_string(),
+        );
+    };
 
     // Build a LaunchConfig if any non-default parameters are present.
     let config = if params.config_name.is_some()
@@ -731,18 +740,8 @@ fn spawn_one(
             running_shared_names: state.running_shared_source_names(),
         }
     } else {
-        let Some(flutter) = flutter_opt else {
-            // Roll back the session creation: remove_session undoes the insert
-            // so the slot is reclaimed immediately rather than waiting for the
-            // next capacity eviction (which only reclaims Stopped sessions, not
-            // Initializing ones).
-            state.session_manager.remove_session(session_id);
-            tracing::warn!("handle_launch: no Flutter SDK — cannot spawn session");
-            return Err(
-                "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
-                    .to_string(),
-            );
-        };
+        // SDK already resolved (and guarded) above, so the session is only ever
+        // created when a spawn can actually proceed.
         UpdateAction::SpawnSession {
             session_id,
             device: device.clone(),
@@ -1826,10 +1825,8 @@ mod tests {
 
     #[test]
     fn test_handle_launch_returns_spawn_pre_app_when_pre_app_sources() {
-        let mut state = AppState {
-            ui_mode: UiMode::NewSessionDialog,
-            ..Default::default()
-        };
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
 
         // Enable native logs with a pre-app source
         state.settings.native_logs.enabled = true;
@@ -1856,6 +1853,60 @@ mod tests {
             matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
             "Expected SpawnPreAppSources when pre-app sources are configured, got {:?}",
             result.action
+        );
+    }
+
+    /// Regression: with pre-app sources configured but no Flutter SDK resolved,
+    /// handle_launch must fail fast — surfacing an error and leaving NO orphaned
+    /// session in the manager (previously the pre-app branch created a session
+    /// stuck in Preparing that consumed a slot forever).
+    #[test]
+    fn test_handle_launch_pre_app_no_sdk_creates_no_orphan_session() {
+        // AppState::default() has no resolved SDK.
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
+        assert!(state.flutter_executable().is_none(), "precondition: no SDK");
+
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("test-server"));
+
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // No spawn action, and no session left behind.
+        assert!(
+            result.action.is_none(),
+            "expected no spawn action without an SDK, got {:?}",
+            result.action
+        );
+        assert_eq!(
+            state.session_manager.len(),
+            0,
+            "no orphaned session must remain after a missing-SDK pre-app launch"
+        );
+        // Error surfaced to the dialog.
+        assert!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .error
+                .is_some(),
+            "an error must be surfaced when no SDK is available"
         );
     }
 
@@ -1994,10 +2045,8 @@ mod tests {
     fn test_launch_gates_when_non_shared_pre_app_present() {
         // Non-shared pre-app sources always require the gate regardless of
         // whether any shared sources are running.
-        let mut state = AppState {
-            ui_mode: UiMode::NewSessionDialog,
-            ..Default::default()
-        };
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
         state.settings.native_logs.enabled = true;
         // Add one shared (running) and one non-shared pre-app source
         state
@@ -2037,10 +2086,8 @@ mod tests {
     fn test_launch_gates_when_shared_pre_app_not_yet_running() {
         // First session scenario: the shared source has never been started yet.
         // The gate must fire.
-        let mut state = AppState {
-            ui_mode: UiMode::NewSessionDialog,
-            ..Default::default()
-        };
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
         state.settings.native_logs.enabled = true;
         state
             .settings
@@ -2078,10 +2125,8 @@ mod tests {
     /// phase must be `Preparing` after `handle_launch` returns.
     #[test]
     fn pre_app_spawn_sets_preparing() {
-        let mut state = AppState {
-            ui_mode: UiMode::NewSessionDialog,
-            ..Default::default()
-        };
+        let mut state = state_with_sdk();
+        state.ui_mode = UiMode::NewSessionDialog;
 
         // Enable native logs with a pre-app source
         state.settings.native_logs.enabled = true;

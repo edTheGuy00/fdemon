@@ -2887,9 +2887,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // The session already exists in SessionManager (created by handle_launch).
             if state.session_manager.get(session_id).is_some() {
                 let Some(flutter) = state.flutter_executable() else {
+                    // Defense-in-depth: handle_launch fails fast on a missing SDK
+                    // before creating the session, so this arm should be
+                    // unreachable. If it is reached anyway, remove the orphaned
+                    // Preparing session so it does not permanently consume a slot,
+                    // and surface the failure instead of silently stalling.
                     tracing::warn!(
                         "PreAppSourcesReady: no Flutter SDK — cannot spawn session {}",
                         session_id
+                    );
+                    state.session_manager.remove_session(session_id);
+                    state.push_toast(
+                        crate::state::ToastLevel::Warn,
+                        "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
+                            .to_string(),
                     );
                     return UpdateResult::none();
                 };

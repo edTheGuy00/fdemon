@@ -339,17 +339,34 @@ impl LaunchConfig {
             args.push(format!("{}={}", key, value));
         }
 
-        // Add extra args (validated): must start with '-', contain no NUL bytes,
-        // and stay within the bounded length cap. Entries that fail any check are
-        // silently dropped with a warning — we never reject the whole config for a
-        // single malformed arg, and there is no shell-evaluation risk because args
-        // reach `Command::args()` as separate, non-shell-evaluated elements.
+        // Add extra args (validated positionally). Flags must start with '-', but
+        // a flag that takes its value as the *next* list entry (split syntax, e.g.
+        // VS Code `toolArgs` `["--web-port", "8080"]`) must keep that value even
+        // though it does not start with '-'. So: a token starting with '-' is a
+        // flag; the single token immediately following a flag (when the flag has
+        // no inline `=value`) is accepted as that flag's value. A leading bare
+        // token with no preceding flag is a stray positional and is dropped.
+        //
+        // Every retained token must contain no NUL bytes and stay within the
+        // bounded length cap. Entries that fail are silently dropped with a
+        // warning — we never reject the whole config for a single malformed arg,
+        // and there is no shell-evaluation risk because args reach
+        // `Command::args()` as separate, non-shell-evaluated elements.
+        let mut expect_value = false;
         for arg in &self.extra_args {
-            let ok = arg.starts_with('-') && !arg.contains('\0') && arg.len() <= MAX_EXTRA_ARG_LEN;
+            let is_flag = arg.starts_with('-');
+            // Accept flags, and value tokens that follow a flag lacking inline `=`.
+            let positionally_ok = is_flag || expect_value;
+            let ok = positionally_ok && !arg.contains('\0') && arg.len() <= MAX_EXTRA_ARG_LEN;
             if ok {
                 args.push(arg.clone());
+                // The next token is this flag's value only when this is a flag
+                // without an inline `=value`. A consumed value never expects a
+                // following value itself.
+                expect_value = is_flag && !arg.contains('=');
             } else {
                 warn!("Ignoring malformed extra_arg: {:?}", arg);
+                expect_value = false;
             }
         }
 
@@ -1341,9 +1358,8 @@ EMPTY = ""
             extra_args: vec![
                 "--obfuscate".to_string(),
                 "--split-debug-info=build/symbols".to_string(),
-                "-d".to_string(),
                 "-t".to_string(),
-                "lib/main.dart".to_string(), // intentionally non-dash to confirm it gets dropped
+                "lib/main.dart".to_string(), // value token following the -t flag (split syntax)
             ],
             ..Default::default()
         };
@@ -1359,13 +1375,76 @@ EMPTY = ""
             args.contains(&"--split-debug-info=build/symbols".to_string()),
             "--split-debug-info should pass through"
         );
-        assert!(args.contains(&"-d".to_string()), "-d should pass through");
         assert!(args.contains(&"-t".to_string()), "-t should pass through");
 
-        // Non-dash arg (free text) must be dropped.
+        // The value token following a split-syntax flag must be preserved.
         assert!(
-            !args.contains(&"lib/main.dart".to_string()),
-            "bare path without leading dash must be dropped"
+            args.contains(&"lib/main.dart".to_string()),
+            "value following -t must be preserved (split flag/value syntax)"
+        );
+    }
+
+    /// A split flag/value pair (e.g. VS Code `toolArgs` `["--web-port", "8080"]`)
+    /// must keep the value token even though it does not start with '-'.
+    #[test]
+    fn test_extra_args_split_flag_value_preserved() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec!["--web-port".to_string(), "8080".to_string()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        // Both tokens present, in order, immediately adjacent.
+        let pos = args
+            .windows(2)
+            .position(|w| w[0] == "--web-port" && w[1] == "8080");
+        assert!(
+            pos.is_some(),
+            "--web-port 8080 must be preserved as an adjacent flag/value pair, got {args:?}"
+        );
+    }
+
+    /// A flag with an inline `=value` does not consume the following token; a
+    /// subsequent bare positional with no preceding flag is still dropped.
+    #[test]
+    fn test_extra_args_inline_value_does_not_consume_next() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec![
+                "--split-debug-info=build/symbols".to_string(),
+                "stray".to_string(), // bare positional, no preceding split flag
+            ],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--split-debug-info=build/symbols".to_string()));
+        assert!(
+            !args.contains(&"stray".to_string()),
+            "bare positional after an inline-value flag must be dropped"
+        );
+    }
+
+    /// A value token is accepted after a flag even if the value itself would fail
+    /// the leading-dash rule, but it must still pass the NUL/length checks.
+    #[test]
+    fn test_extra_args_value_token_still_length_checked() {
+        let long_value = "x".repeat(MAX_EXTRA_ARG_LEN + 1);
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec!["--web-port".to_string(), long_value.clone()],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--web-port".to_string()));
+        assert!(
+            !args.contains(&long_value),
+            "over-length value token must still be dropped"
         );
     }
 

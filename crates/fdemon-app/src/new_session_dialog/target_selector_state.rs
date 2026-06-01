@@ -239,14 +239,20 @@ impl TargetSelectorState {
         self.invalidate_cache();
         self.scroll_offset = 0; // Reset scroll when devices change
 
-        // Prune checked ids that are no longer present in the new device list.
-        let present: std::collections::HashSet<&str> = self
+        // Prune checked ids that are no longer present in the new device list,
+        // and ids whose device is still present but is no longer supported (e.g.
+        // a refresh flipped `is_supported` to false). Keeping an unsupported id
+        // would desync `checked_count()` (raw set length, shown as "N selected")
+        // from `checked_devices()` (which filters on `is_supported`), so the
+        // footer could claim more devices are selected than can actually launch.
+        let supported_present: std::collections::HashSet<&str> = self
             .connected_devices
             .iter()
+            .filter(|d| d.is_supported)
             .map(|d| d.id.as_str())
             .collect();
         self.checked_device_ids
-            .retain(|id| present.contains(id.as_str()));
+            .retain(|id| supported_present.contains(id.as_str()));
 
         // Reset selection if it's now invalid
         if self.active_tab == TargetTab::Connected {
@@ -895,6 +901,29 @@ mod tests {
         state.checked_device_ids.insert("a".to_string());
         // Safety net in checked_devices() must exclude it.
         assert!(state.checked_devices().is_empty());
+    }
+
+    #[test]
+    fn refresh_flipping_unsupported_prunes_checked_count() {
+        // Two supported devices, both checked.
+        let mut state = state_with(vec![device("a", true), device("b", true)]);
+        state.checked_device_ids.insert("a".to_string());
+        state.checked_device_ids.insert("b".to_string());
+        assert_eq!(state.checked_count(), 2);
+
+        // Refresh: "b" is still present but is now unsupported.
+        state.set_connected_devices(vec![device("a", true), device("b", false)]);
+
+        // checked_count() (shown as "N selected") must agree with the set of
+        // devices that can actually launch — "b" is pruned.
+        assert_eq!(state.checked_count(), 1);
+        assert_eq!(state.checked_devices().len(), state.checked_count());
+        let ids: Vec<&str> = state
+            .checked_devices()
+            .iter()
+            .map(|d| d.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["a"]);
     }
 
     #[test]
