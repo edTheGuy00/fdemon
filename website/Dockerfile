@@ -115,6 +115,12 @@ FROM nginx:alpine
 COPY --from=prerender /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Validate the nginx config at BUILD time. Without this, a config syntax error
+# (e.g. an unquoted regex containing {N,} braces) only surfaces when nginx tries
+# to start the container — producing a 502 in production while the image still
+# builds and publishes "successfully". `nginx -t` fails the build instead.
+RUN nginx -t
+
 EXPOSE 80
 
 CMD ["nginx", "-g", "daemon off;"]
