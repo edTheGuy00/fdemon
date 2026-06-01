@@ -106,13 +106,26 @@ RUN if [ "$SKIP_PRERENDER" = "1" ]; then \
 # ────────────────────────────────────────────────────────────────────────────
 # Stage 3: Serve with nginx
 #
-# Copies dist/ from the prerender stage (which may have rendered snapshots OR
-# may be the plain CSR dist/ if prerender failed — either is valid).
-# nginx routing for crawler snapshot serving is configured in task 08.
+# Serves the CLEAN CSR build from the `builder` stage. Prerendering (Stage 2) is
+# currently DISABLED and intentionally NOT referenced here:
+#
+#   The app mounts via Leptos `mount_to_body` (CSR), which APPENDS the rendered
+#   tree to <body>. Serving a prerendered snapshot therefore makes the WASM
+#   render a SECOND, duplicate copy — the static snapshot sits inert on top
+#   (nav does nothing) while the live app renders below (content "at the bottom"),
+#   and navigation jumps back to the stale snapshot. See PR discussion.
+#
+#   Re-enabling prerender requires a CSR-safe mount (clear <body> before mounting)
+#   or an SSR/hydration build — tracked as follow-up. Static <head> meta + OG +
+#   JSON-LD (index.html), robots.txt, sitemap.xml, and per-route leptos_meta still
+#   provide the bulk of the SEO value without the prerender snapshots.
+#
+# Because the final image no longer copies from the `prerender` stage, buildx
+# skips building it entirely (no headless Chrome at build time).
 # ────────────────────────────────────────────────────────────────────────────
 FROM nginx:alpine
 
-COPY --from=prerender /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Validate the nginx config at BUILD time. Without this, a config syntax error
