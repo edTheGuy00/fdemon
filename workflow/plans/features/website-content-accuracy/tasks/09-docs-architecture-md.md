@@ -41,4 +41,36 @@ Checklist:
 
 - Make targeted edits, do not rewrite the whole document.
 - Follow content boundaries strictly — see `~/.claude/skills/doc-standards/schemas.md`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | No changes required — already correct |
+
+### Verification Results
+
+| Checklist Item | Status | Notes |
+|---|---|---|
+| 1. Crate list/layering | PASS | All 6 entries present: `fdemon-core`, `fdemon-daemon`, `fdemon-app`, `fdemon-tui`, `fdemon-dap`, `flutter-demon` binary |
+| 2. `fdemon-dap` present with layer/deps | PASS | Described in Layered Architecture table (line 174), Project Structure (lines 417–441), Module Reference (lines 659–685), API Surface (lines 2198–2213) |
+| 3. No phantom "Common"/"Services" crates | PASS | "Services" in overview diagram labelled `(controllers)` is clearly a module within `fdemon-app`, not a crate |
+| 4. `update()` signature accuracy | PASS | Lines 2114–2133 describe `UpdateResult` accurately (`message`, `action`, `extra_actions`); matches actual `pub fn update(state: &mut AppState, message: Message) -> UpdateResult` |
+| 5. Per-session DevTools state + native-log capture | PASS | DevTools state covered at lines 899–935; native-log capture covered at lines 1794–1988 |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: N/A (no edits made)
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **No edits made**: All 5 checklist items were verified as already correct. The document was previously updated (visible in recent commits to `docs/ARCHITECTURE.md`). Making unnecessary changes would introduce noise.
 </content>

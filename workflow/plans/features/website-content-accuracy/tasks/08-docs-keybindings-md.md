@@ -42,4 +42,28 @@ Checklist:
 
 - Make targeted edits, do not rewrite the whole document.
 - Follow content boundaries strictly — see `~/.claude/skills/doc-standards/schemas.md`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Fixed 4 drift items: added `t` alias for tag filter overlay; added `w` (toggle wrap mode); fixed target selector navigation (removed incorrect `k`/`j` aliases — not bound in that handler); added `i` (install) and `u` (update) to Flutter Version panel bindings. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Target Selector `k`/`j` removal**: `handle_target_selector_key` in `keys.rs` only binds `InputKey::Up` and `InputKey::Down`, not `k`/`j`. The doc incorrectly listed these as aliases. Removed to match source.
+2. **`Enter` on Connected tab description**: Changed from "Select device" to accurately describe that it acknowledges the selection but launch is triggered from the Launch Context pane.
+3. **`w` wrap mode**: This key was present in `handle_key_normal` (line 330 of `keys.rs`) but absent from the doc. Added to Log Filtering section as it relates to log viewing.
 </content>

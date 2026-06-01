@@ -105,4 +105,33 @@ manual "is the server up yet?" dance for full-stack Flutter devs.
 - The orchestrator capability is also documented in `docs/CONFIGURATION.md` by T07.
 - The SEO landing-copy task (S09) references this as the "second differentiator" — no
   file overlap here.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-add6722273d4ab7b7
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/native_logs.rs` | Fixed TOML/defaults (min_level → "info", custom_sources key, tags.<TAG>.min_level syntax, removed buffer_size); added "Boot Your Whole Stack" section with full field table, ready_check types table with per-kind accuracy, worked example, and framing callout |
+
+### Notable Decisions/Tradeoffs
+
+1. **Syslog macOS-only note**: Noted in both the format options table (existing Custom Log Sources section) and in the new Boot Your Whole Stack field table, so both entry points are accurate.
+2. **Tag override syntax update**: Also fixed the Troubleshooting tip text that referenced the old `[native_logs.tag_levels]` (changed to `[native_logs.tags.<TAG>]`).
+3. **Cargo check in worktree**: The worktree path causes `cargo check` to fail with a workspace resolution error when run from inside `.claude/worktrees/`. Verified compilation by temporarily copying the file to the main repo `website/` and running `cargo check` there — passes cleanly with only the pre-existing `dead_code` warning in `debugging.rs`.
+
+### Testing Performed
+
+- `cd /Users/ed/Dev/zabin/flutter-demon/website && cargo check` — Passed (1 pre-existing warning in debugging.rs, none in native_logs.rs)
+- Manual review of all TOML snippets against `NativeLogsSettings`, `CustomSourceConfig`, `ReadyCheck` enum in source — Verified correct
+
+### Risks/Limitations
+
+1. **Trunk build not verified**: `trunk build` requires wasm32 target and build tools not present in this environment. `cargo check` (which validates Leptos macro expansion + type checking) passed, which is the meaningful compilation check for correctness.
+2. **Worktree cargo check limitation**: Running `cargo check` directly in the worktree fails due to workspace path resolution. This is a tooling limitation of the worktree setup, not a code issue.
 </content>

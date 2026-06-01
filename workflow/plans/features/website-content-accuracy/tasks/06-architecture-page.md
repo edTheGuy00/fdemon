@@ -49,4 +49,43 @@ layout with the actual Cargo workspace structure and refresh stale code snippets
 ### Notes
 
 - Keep terminology consistent with `docs/ARCHITECTURE.md`, which T09 verifies in parallel.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a372aaf850992cf04
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/architecture.rs` | Full rewrite: replaced fictional monolithic structure with real 5-crate workspace; fixed layer table, module reference cards, stale snippets, and project structure tree |
+
+### Notable Decisions/Tradeoffs
+
+1. **System Architecture diagram**: Replaced the old `app/`, `tui/`, `daemon/`, `core/` nodes with the real crates — `flutter-demon (binary)`, `fdemon-tui`, `fdemon-app`, `fdemon-daemon`, `fdemon-dap`, `fdemon-core` — using a top-to-bottom dependency flow.
+
+2. **Layer/dependency table**: Removed phantom "Common" and "Services" layer rows; added `fdemon-dap`; renamed all layers to actual crate names with correct dependency lists.
+
+3. **Module Reference cards**: Rebuilt from 8 fictional cards to 6 accurate cards, each using real `crates/<crate>/src/...` paths. Consolidated `config` and `services` into one `fdemon-app — config & services` card to reduce redundancy. Removed fictional `watcher/mod.rs` standalone card (watcher is a module inside `fdemon-app`).
+
+4. **Stale `UpdateResult` snippet**: Replaced with correct `pub fn update(state: AppState, message: Message) -> (AppState, Option<UpdateAction>)` signature showing the real return type.
+
+5. **`device_selector` → `new_session_dialog_state`**: Updated the `AppState` code snippet field name to match the real struct.
+
+6. **Project Structure**: Replaced fictional `src/core/`, `src/app/`, `src/tui/`, `src/common/` layout with the real workspace tree under `crates/`.
+
+7. **`signals.rs` location**: Confirmed at `crates/fdemon-app/src/signals.rs` via filesystem check. Placed in `fdemon-app — core` module card; `fdemon-core` card uses `prelude.rs` instead.
+
+8. **Testing table**: Updated from per-module file references to per-crate approximate test counts matching CLAUDE.md.
+
+### Testing Performed
+
+- `cd /Users/ed/Dev/zabin/flutter-demon/website && cargo check` — Passed (1 pre-existing warning, no new errors)
+
+### Risks/Limitations
+
+1. **No known risks**: All paths verified against actual filesystem. Website compiles cleanly.
 </content>

@@ -58,4 +58,35 @@ copy-pasted TOML actually works against the real config structs.
 - T03 (Native Logs page) carries its own copy of the native_logs TOML — both must be
   fixed independently.
 - The same config drift is checked in `docs/CONFIGURATION.md` by T07 (doc_maintainer).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/configuration.rs` | Fixed `[native_logs]` TOML keys, fixed `default_panel` options, added missing `[behavior]` keys, added `[ui] icons`, added all missing `[devtools]` keys, added `[dap]` section, added `[flutter]` section |
+
+### Notable Decisions/Tradeoffs
+
+1. **`auto_start` deprecation note retained**: Verified against `crates/fdemon-app/src/config/settings.rs` — `check_deprecated_auto_start()` emits a one-time `warn!` and serde silently drops the field. The existing "logs a one-time deprecation warning and ignores the value" wording is accurate.
+2. **`[native_logs]` section added as new section**: The original page had no `[native_logs]` section at all. Added it after the Editor Settings section with correct TOML keys (`custom_sources`, `tags.<TAG>.min_level`, correct `min_level` default of `"info"`, no `buffer_size`).
+3. **`[dap]` and `[flutter]` sections added**: Both were completely absent. Added as new sections (DAP Server Settings, Flutter SDK Settings) with all fields from `types.rs` and accurate defaults.
+4. **`default_panel` corrected**: Removed `"layout"`, added `"memory"` and `"network"` — matches `DevToolsSettings` validation in `types.rs` and the panel enum in the app.
+5. **All new devtools keys use values from `default_*` functions**: Checked each default function in `types.rs` to ensure all defaults are accurate.
+
+### Testing Performed
+
+- Copied changed file to `/Users/ed/Dev/zabin/flutter-demon/website/src/pages/docs/configuration.rs` and ran `cd /Users/ed/Dev/zabin/flutter-demon/website && cargo check` — **Passed** (1 pre-existing warning in `debugging.rs`, no errors)
+- Restored original file in main repo after verification
+- All acceptance criteria verified against `crates/fdemon-app/src/config/types.rs`
+
+### Risks/Limitations
+
+1. **Workspace detection issue in worktree**: The website crate cannot be compiled directly from the worktree path because cargo finds the parent project's `Cargo.toml` before the worktree's. Verified by copying to the original website directory instead. No impact on the actual change.
 </content>

@@ -54,4 +54,40 @@ Suggested titles/descriptions:
 
 - Must run after the content-accuracy plan's page edits to avoid merge conflicts.
 - S09 (landing copy) edits `home.rs` after this task.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/home.rs` | Added `Title`, `Meta description`, `Link canonical`; imported `leptos_meta::{Link, Meta, Title}` |
+| `website/src/pages/docs/introduction.rs` | Added per-route meta tags for `/docs` |
+| `website/src/pages/docs/installation.rs` | Added per-route meta tags for `/docs/installation` |
+| `website/src/pages/docs/keybindings.rs` | Added per-route meta tags for `/docs/keybindings` |
+| `website/src/pages/docs/mouse.rs` | Added per-route meta tags for `/docs/mouse` |
+| `website/src/pages/docs/devtools.rs` | Added per-route meta tags for `/docs/devtools` |
+| `website/src/pages/docs/native_logs.rs` | Added per-route meta tags for `/docs/native-logs` |
+| `website/src/pages/docs/debugging.rs` | Added per-route meta tags for `/docs/debugging` |
+| `website/src/pages/docs/configuration.rs` | Added per-route meta tags for `/docs/configuration` |
+| `website/src/pages/docs/architecture.rs` | Added per-route meta tags for `/docs/architecture` |
+| `website/src/pages/docs/changelog.rs` | Added per-route meta tags for `/docs/changelog` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Home title uses full string**: The home page uses `text="Flutter Demon — A Rust TUI for Flutter"` rather than a short bare title, because the global formatter would otherwise produce "Flutter Demon — A Rust TUI for Flutter — Flutter Demon". The task spec notes the home title is overridden (`except home if overridden`).
+2. **All other titles are bare page names**: Titles like `"Installation"`, `"Keybindings"`, etc. feed the global formatter `"{text} — Flutter Demon"` as specified.
+
+### Testing Performed
+
+- `cd website && cargo check` — Passed (1 pre-existing dead_code warning, unrelated to this task)
+
+### Risks/Limitations
+
+1. **Home OG overrides**: The task marked per-page OG overrides as optional for home. They were not added; the global OG tags from S01 apply.
 </content>

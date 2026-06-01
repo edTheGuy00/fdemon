@@ -50,4 +50,36 @@ task writes these files.
 
 - The SEO plan's S05 adds `leptos_meta` to `introduction.rs` and other pages — run S05
   after this task to avoid overlap.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aa0d1628cc016a872
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/mouse.rs` | Fixed two `[`/`]` session-cycle claims to `Tab`/`Shift+Tab`; changed "Shift+L" heading to "L" for link highlight badges |
+| `website/src/pages/docs/installation.rs` | Updated Rust minimum version from `1.70+` to `1.77.2+` |
+| `website/src/pages/docs/introduction.rs` | Refined watcher line to note configurable paths (default `lib`); added new "Multi-Device Launch" section describing multi-select launch picker and `Preparing` → `Launching` → `Running` lifecycle phases |
+
+### Notable Decisions/Tradeoffs
+
+1. **Multi-Device Launch placement**: Added as a new `<h3>` subsection inside "Key Features" between "Auto Hot Reload" and "Log Filtering & Search". This follows the existing pattern of feature subsections in that block.
+2. **Watcher description**: Kept brief while noting configurability; referenced `.fdemon/config.toml` explicitly to match task requirement D-12.
+
+### Testing Performed
+
+- `cargo check` (via main repo website) — Passed (1 pre-existing unrelated warning in `debugging.rs`)
+- Verified `[`/`]` no longer appear as session-cycling claims in `mouse.rs` (grep confirmed)
+- Verified Rust version `1.77.2` matches `Cargo.toml:12`
+- Verified link highlight key is `L` matching `keys.rs:336`
+- Verified session cycling uses `Tab`/`BackTab` matching `keys.rs:197-198`
+
+### Risks/Limitations
+
+1. **Worktree cargo check**: The website crate cannot run `cargo check` directly from the worktree path because the worktree is nested inside the main repo directory tree, causing Cargo to find the parent workspace Cargo.toml. Verification was performed by temporarily copying files to the main repo's website directory and running `cargo check` there, then restoring the originals.
 </content>

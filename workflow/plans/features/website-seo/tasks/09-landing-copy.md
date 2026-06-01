@@ -49,4 +49,34 @@ prose, not just a feature grid.
 ### Notes
 
 - Runs after S05 (home.rs) and content T01 (data.rs) to avoid merge conflicts.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a52966ef0c23c882a
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/home.rs` | Added 4 prose paragraphs with primary keywords; added h2 sections "Flutter Demon — A Rust TUI for Flutter Development", "Hot Reload Without an IDE", "Multi-Device Flutter Sessions", "Boot Your Whole Stack"; updated hero subheading to use keywords naturally; updated CTA button anchor text to be descriptive; updated logo alt text; added internal links to /docs/installation, /docs/configuration, /docs/native-logs, /docs/changelog at bottom of features grid |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single `<h1>` preserved**: The existing `<h1>` in the hero ("Flutter Demon") is kept as the sole `<h1>`. All new section titles are `<h2>` elements.
+2. **Meta tags untouched**: The `<Title>`, `<Meta name="description">`, and `<Link rel="canonical">` added by task 05 were preserved exactly.
+3. **data.rs unchanged**: The `features()` function already reflected accurate multi-device launch copy from content-accuracy task T01 — no changes were needed.
+4. **Keyword placement**: "flutter tui", "flutter terminal ui", "flutter hot reload cli", and "flutter development without IDE" all appear naturally in visible body copy, not stuffed into meta or hidden text.
+5. **"Boot Your Whole Stack" framing**: Taken directly from native_logs.rs section, accurately describing the custom sources feature.
+
+### Testing Performed
+
+- `cargo check --manifest-path website/Cargo.toml` (via main repo) — Passed, 1 pre-existing warning unrelated to this change
+- Main repo `website/src/pages/home.rs` restored via `git checkout -- website/src/pages/home.rs` after verification
+
+### Risks/Limitations
+
+1. **Prose keyword density**: "flutter tui" appears once in visible copy (as a lowercase phrase inline in the paragraph). Search engines may or may not treat this as a keyword signal given the surrounding markup — acceptable for natural readability.
 </content>

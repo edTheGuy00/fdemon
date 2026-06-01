@@ -45,4 +45,33 @@ Memory panel, matching the actual DevTools key handler.
 
 - Keep the DevTools keybinding tables consistent with the Keybindings page (T01 fixes the
   same bindings in `data.rs`).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a9d44ca232289acd7
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/devtools.rs` | Removed Layout Explorer (l) section; added Memory Panel (m) section with full keybinding table; fixed Inspector navigation (→ expands, Enter opens Details); removed false Performance `s` entry; updated all panel navigation tables to include `m` Memory and `b` browser; updated Overview grid to 4 panels; updated `default_panel` settings description to remove "layout" option |
+
+### Notable Decisions/Tradeoffs
+
+1. **Layout Explorer removal**: Replaced the standalone "Layout Explorer (l)" section with a note inside the Inspector Details Panel section explaining that layout info (constraints, size, flex properties) lives in the Details view. The `l` key does not exist in the actual DevTools handler.
+2. **`s` key placement**: Removed the false "Sort frames by duration" entry from Performance keybindings. `s` now appears only under Memory (allocation sort toggle) and Network (Response Body sub-tab), matching keys.rs lines 1012 and 930 respectively.
+3. **Browser key `b` consolidation**: Added `b` to the Panel Navigation entry table in both "Entering and Exiting DevTools" and "Keybindings Quick Reference > Panel Navigation". Removed the redundant standalone "Browser" sub-section from the quick reference to avoid duplication.
+4. **Memory Panel section**: Added a complete "Memory Panel (m)" section between Performance and Network with Tab/Shift+Tab section cycling, j/k/PgUp/PgDn/Home/End scroll, `s` sort toggle, and Esc deselect — all matching keys.rs lines 800-826 and 1012.
+
+### Testing Performed
+
+- `cargo check` on website crate (via copy to main repo) - Passed (only pre-existing dead_code warning)
+- Manual review of all changed keybinding tables against `crates/fdemon-app/src/handler/keys.rs` lines 450-1087
+
+### Risks/Limitations
+
+1. **Memory Panel content**: The panel description is accurate for the keys handled in keys.rs. Specific UI details (e.g. exact section names inside the Memory panel) were described generically since the task only required key documentation accuracy.
 </content>

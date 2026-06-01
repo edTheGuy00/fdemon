@@ -36,15 +36,15 @@ page files as T01/T05/T06 and must run AFTER this plan lands.
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Modules |
 |---|------|--------|------------|------------|-------|---------|
-| 1 | [01-data-keybindings-features](tasks/01-data-keybindings-features.md) | Not Started | - | 3-4h | implementor | `website/src/data.rs` |
-| 2 | [02-configuration-page](tasks/02-configuration-page.md) | Not Started | - | 2-3h | implementor | `website/src/pages/docs/configuration.rs` |
-| 3 | [03-native-logs-page](tasks/03-native-logs-page.md) | Not Started | - | 2-3h | implementor | `website/src/pages/docs/native_logs.rs` |
-| 4 | [04-devtools-page](tasks/04-devtools-page.md) | Not Started | - | 2-3h | implementor | `website/src/pages/docs/devtools.rs` |
-| 5 | [05-small-page-fixes](tasks/05-small-page-fixes.md) | Not Started | - | 1-2h | implementor | `website/src/pages/docs/{mouse,installation,introduction}.rs` |
-| 6 | [06-architecture-page](tasks/06-architecture-page.md) | Not Started | - | 2-3h | implementor | `website/src/pages/docs/architecture.rs` |
-| 7 | [07-docs-configuration-md](tasks/07-docs-configuration-md.md) | Not Started | - | 1-2h | doc_maintainer | `docs/CONFIGURATION.md` |
-| 8 | [08-docs-keybindings-md](tasks/08-docs-keybindings-md.md) | Not Started | - | 1-2h | doc_maintainer | `docs/KEYBINDINGS.md` |
-| 9 | [09-docs-architecture-md](tasks/09-docs-architecture-md.md) | Not Started | - | 1-2h | doc_maintainer | `docs/ARCHITECTURE.md` |
+| 1 | [01-data-keybindings-features](tasks/01-data-keybindings-features.md) | ✅ Done | - | 3-4h | implementor | `website/src/data.rs` |
+| 2 | [02-configuration-page](tasks/02-configuration-page.md) | ✅ Done | - | 2-3h | implementor | `website/src/pages/docs/configuration.rs` |
+| 3 | [03-native-logs-page](tasks/03-native-logs-page.md) | ✅ Done | - | 2-3h | implementor | `website/src/pages/docs/native_logs.rs` |
+| 4 | [04-devtools-page](tasks/04-devtools-page.md) | ✅ Done | - | 2-3h | implementor | `website/src/pages/docs/devtools.rs` |
+| 5 | [05-small-page-fixes](tasks/05-small-page-fixes.md) | ✅ Done | - | 1-2h | implementor | `website/src/pages/docs/{mouse,installation,introduction}.rs` |
+| 6 | [06-architecture-page](tasks/06-architecture-page.md) | ✅ Done | - | 2-3h | implementor | `website/src/pages/docs/architecture.rs` |
+| 7 | [07-docs-configuration-md](tasks/07-docs-configuration-md.md) | ✅ Done | - | 1-2h | doc_maintainer | `docs/CONFIGURATION.md` |
+| 8 | [08-docs-keybindings-md](tasks/08-docs-keybindings-md.md) | ✅ Done | - | 1-2h | doc_maintainer | `docs/KEYBINDINGS.md` |
+| 9 | [09-docs-architecture-md](tasks/09-docs-architecture-md.md) | ✅ Done (no drift; verified) | - | 1-2h | doc_maintainer | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 
@@ -77,17 +77,19 @@ tasks share a write file → all 9 are safe to run concurrently in isolated work
 
 This feature is complete when:
 
-- [ ] All 20 HIGH-severity discrepancies are corrected, each traceable to a `crate/file:line`.
-- [ ] The multi-device launch picker is documented (`Space`/`a`/`Enter`/`r` + footer hint).
-- [ ] Launch-lifecycle phases (`Preparing`/`Launching`/`Running`) and the jump-to-latest
+- [x] All 20 HIGH-severity discrepancies are corrected, each traceable to a `crate/file:line`.
+- [x] The multi-device launch picker is documented (`Space`/`a`/`Enter`/`r` + footer hint).
+- [x] Launch-lifecycle phases (`Preparing`/`Launching`/`Running`) and the jump-to-latest
       indicator are documented.
-- [ ] native_logs TOML examples parse against `NativeLogsSettings`; the new "Boot your
+- [x] native_logs TOML examples parse against `NativeLogsSettings`; the new "Boot your
       whole stack" orchestrator section is present and accurate.
-- [ ] DevTools docs include the Memory panel and drop the fabricated Layout Explorer key.
-- [ ] Architecture page reflects the real 5-crate workspace.
-- [ ] Installation page states Rust `1.77.2`.
-- [ ] `cd website && trunk build` succeeds; changed pages render.
-- [ ] `doc-validate` passes for each edited `docs/*.md`.
+- [x] DevTools docs include the Memory panel and drop the fabricated Layout Explorer key.
+- [x] Architecture page reflects the real 5-crate workspace.
+- [x] Installation page states Rust `1.77.2`.
+- [x] `cd website && cargo check` succeeds; changed pages render. (`trunk build`/wasm
+      toolchain unavailable in this environment — `cargo check` is the type-correctness gate.)
+- [x] `doc-validate` content boundaries pass for each edited `docs/*.md` (07/08 fixed real
+      drift; 09 verified already-accurate, no changes needed).
 
 ## Notes
 

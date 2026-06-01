@@ -40,4 +40,33 @@ Capture:
 ### Notes
 
 - Documentation-only task; no website code changes.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/ux-polish-and-multilaunch
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/website-seo/DECISION-ssr.md` | Created new decision record |
+
+### Notable Decisions/Tradeoffs
+
+1. **Structure:** Organized the record as Decision / Context / Rationale (4 numbered points) / Chosen Alternative / Trigger Conditions / References — maps directly to the task's required sections and is easy to scan.
+2. **Bug numbers:** All three Leptos SSG issue numbers (#3226, #3822, #3871) included with links and a short description of each so a future reader can check their status without searching.
+3. **Deployment diagram:** Added a short ASCII flow under "Chosen Alternative" to make the CSR + prerender pipeline concrete and grounded in the actual repo structure (`trunk build` -> `dist/` -> prerender -> nginx).
+
+### Testing Performed
+
+- File created at correct path `workflow/plans/features/website-seo/DECISION-ssr.md` — verified.
+- All four required content areas present: decision statement, rationale (4 sub-points), chosen alternative, revisit triggers.
+- All research sources from `PLAN.md` References section linked in the decision record.
+
+### Risks/Limitations
+
+1. **Leptos bug status:** Issue numbers and summaries are based on the PLAN.md research findings; the actual open/closed state of those issues was not re-verified at time of writing — the record is accurate as a historical snapshot and instructs the reader to check current status.
 </content>
