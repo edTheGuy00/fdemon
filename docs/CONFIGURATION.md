@@ -28,6 +28,7 @@ This document provides a complete reference for all configuration options availa
     - [Pre-App Custom Sources](#pre-app-custom-sources)
   - [DAP Settings](#dap-settings)
   - [Flutter SDK Settings](#flutter-sdk-settings)
+  - [Toolchain Settings](#toolchain-settings)
   - [Editor Settings](#editor-settings)
 - [Launch Configuration Reference](#launch-configuration-reference)
   - [Configuration Properties](#configuration-properties)
@@ -695,6 +696,36 @@ sdk_path = ""   # Explicit SDK path override (empty = auto-detect via version ma
 |----------|------|---------|-------------|
 | `sdk_path` | `string` | `""` (auto-detect) | Explicit Flutter SDK path (e.g., `/Users/me/flutter`). When set, bypasses all version manager detection (fvm, asdf, mise). Leave empty to use the standard detection chain. |
 
+> **Automatic write:** After a managed Flutter install via the Install Wizard, fdemon writes `sdk_path` in `config.toml` to point at the newly installed SDK. This ensures fdemon resolves the new SDK on the next run without requiring a manual restart or re-detection.
+
+### Toolchain Settings
+
+Control the Install Wizard's managed Flutter and Android toolchain installs. All fields are optional — a missing `[toolchain]` block uses the defaults shown below.
+
+```toml
+[toolchain]
+# Where managed Flutter SDKs are installed (default: ~/fvm/versions/<version>)
+# flutter_install_dir = "~/fvm/versions"
+channel = "stable"                  # Phase 2: Flutter channel to install
+flutter_install_method = "git"      # Phase 2: "git" (default) or "archive"
+# android_sdk_root = "~/.android/sdk"   # Phase 3 (reserved)
+android_api_level = 36                  # Phase 3 (reserved)
+# cmdline_tools_build = "..."           # Phase 3 (reserved)
+# jdk_path = "/usr/lib/jvm/java-17-openjdk"  # Phase 3 (reserved)
+```
+
+| Property | Type | Default | Phase | Description |
+|----------|------|---------|-------|-------------|
+| `flutter_install_dir` | `string` | `~/fvm/versions` | 2 | Directory where managed Flutter SDKs are installed. Each version is placed in a `<version>` subdirectory. Shared with the Flutter Version panel's FVM cache. Leave unset to use the default. |
+| `channel` | `string` | `"stable"` | 2 | Flutter channel to install (`"stable"`, `"beta"`, `"main"`, etc.). Used by the Install Wizard when running the Flutter SDK install step. |
+| `flutter_install_method` | `string` | `"git"` | 2 | Flutter install method: `"git"` clones the Flutter repository (default); `"archive"` downloads a prebuilt archive. |
+| `android_sdk_root` | `string` | `~/.android/sdk` or `$ANDROID_HOME` | 3 (reserved) | Android SDK root directory override. When unset, fdemon checks `$ANDROID_HOME` then falls back to `~/.android/sdk`. |
+| `android_api_level` | `integer` | `36` | 3 (reserved) | Android API level for `platforms/` and `build-tools/` installation. |
+| `cmdline_tools_build` | `string` | (latest) | 3 (reserved) | `cmdline-tools` build number override. Leave unset to install the latest available version. |
+| `jdk_path` | `string` | (auto-detect) | 3 (reserved) | Explicit JDK 17 directory. When unset, fdemon auto-detects via `$JAVA_HOME` and `which java`. |
+
+> **Phase 3 reserved fields:** `android_sdk_root`, `android_api_level`, `cmdline_tools_build`, and `jdk_path` are parsed and stored but have no effect until Phase 3 of the toolchain-bootstrap feature. They are declared now to avoid a second config migration.
+
 ### Editor Settings
 
 Configure editor integration for opening files from stack traces.
@@ -1026,6 +1057,10 @@ suppress_reload_on_pause = true
 
 [flutter]
 # sdk_path = "/Users/me/flutter"  # Uncomment to override SDK auto-detection
+
+[toolchain]
+channel = "stable"
+flutter_install_method = "git"
 
 [editor]
 command = ""  # Auto-detect
