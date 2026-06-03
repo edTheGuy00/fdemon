@@ -64,6 +64,7 @@ pub mod simulators;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_utils;
 pub mod tool_availability;
+pub mod toolchain;
 pub mod vm_service;
 
 // Public API re-exports
@@ -104,6 +105,10 @@ pub use simulators::{
 #[cfg(target_os = "macos")]
 pub use tool_availability::IosLogTool;
 pub use tool_availability::ToolAvailability;
+pub use toolchain::{
+    run_preflight, ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker,
+    HostPlatform, HostShell, ToolchainReport,
+};
 
 use fdemon_core::prelude::*;
 use fdemon_core::types::{DeviceState, Platform};
