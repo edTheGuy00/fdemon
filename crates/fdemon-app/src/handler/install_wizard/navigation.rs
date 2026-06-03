@@ -7,12 +7,6 @@ use crate::handler::{UpdateAction, UpdateResult};
 use crate::install_wizard::WizardPane;
 use crate::state::AppState;
 
-/// Default visible height when no render-hint is available yet.
-///
-/// Used as a fallback before the first render frame has written back
-/// the actual height via `Cell<usize>`. Follows CODE_STANDARDS.md Principle 3.
-const DEFAULT_VISIBLE_HEIGHT: usize = 10;
-
 /// Handle `ShowInstallWizard` — opens the Install Wizard panel.
 ///
 /// Resets the wizard to a fresh loading state, transitions to
@@ -84,9 +78,9 @@ pub fn handle_up(state: &mut AppState) -> UpdateResult {
 /// `steps.len() - 1`) and resets `detail_scroll` to 0 so the detail view
 /// shows the top of the newly selected step.
 ///
-/// When `Detail` pane is focused: scrolls `detail_scroll` down by one line
-/// using the `Cell<usize>` render-hint with `DEFAULT_VISIBLE_HEIGHT` fallback.
-/// Follows CODE_STANDARDS.md Principle 3 (Cell render-hint pattern).
+/// When `Detail` pane is focused: scrolls `detail_scroll` down by one line.
+/// The upper-bound clamp is applied at render time by `compute_corrected_scroll`
+/// in `step_detail.rs`, which has access to the actual content length.
 pub fn handle_down(state: &mut AppState) -> UpdateResult {
     let wiz = &mut state.install_wizard_state;
     match wiz.focused_pane {
@@ -98,15 +92,9 @@ pub fn handle_down(state: &mut AppState) -> UpdateResult {
             }
         }
         WizardPane::Detail => {
-            let height = wiz.last_known_visible_height.get();
-            // `effective` is the real viewport height for the renderer's per-frame clamp.
-            // The handler just advances the offset by 1; the renderer is responsible for
-            // clamping to the actual content length.
-            let _effective = if height > 0 {
-                height
-            } else {
-                DEFAULT_VISIBLE_HEIGHT
-            };
+            // Advance by 1 unconditionally; the upper-bound clamp is applied at render
+            // time via `compute_corrected_scroll` in `step_detail.rs`, which has access
+            // to the actual content length.
             wiz.detail_scroll = wiz.detail_scroll.saturating_add(1);
         }
     }

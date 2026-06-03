@@ -21,7 +21,16 @@ pub fn handle_preflight_completed(state: &mut AppState, report: ToolchainReport)
 ///
 /// Sets `loading = true` and dispatches `RunToolchainPreflight` so the
 /// wizard shows a spinner until the updated report arrives.
+///
+/// Early-returns when a preflight is already in flight to prevent stacking
+/// concurrent preflight tasks (each of which spawns `flutter doctor`).
 pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
+    // Already running — ignore the re-run request (prevents stacking concurrent
+    // preflight tasks, each of which spawns `flutter doctor`).
+    if state.install_wizard_state.loading {
+        return UpdateResult::none();
+    }
+
     state.install_wizard_state.loading = true;
     state.install_wizard_state.status_message = None;
 
@@ -96,9 +105,44 @@ mod tests {
     }
 
     #[test]
+    fn test_rerun_preflight_noops_when_already_loading() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        // loading is already true after show_install_wizard()
+        assert!(state.install_wizard_state.loading);
+
+        let result = handle_rerun_preflight(&mut state);
+
+        // Must stay loading, and must return no action
+        assert!(state.install_wizard_state.loading);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_rerun_preflight_spawns_when_idle() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        // Simulate preflight completed (loading = false)
+        state.install_wizard_state.apply_report(make_report());
+        assert!(!state.install_wizard_state.loading);
+
+        let result = handle_rerun_preflight(&mut state);
+
+        assert!(state.install_wizard_state.loading);
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::RunToolchainPreflight { .. })
+        ));
+    }
+
+    #[test]
     fn test_rerun_clears_status_message() {
         let mut state = AppState::new();
         state.show_install_wizard();
+        // Apply a report to bring loading back to false (idle state), then
+        // add a status_message to verify it is cleared on re-run.
+        state.install_wizard_state.apply_report(make_report());
+        assert!(!state.install_wizard_state.loading);
         state.install_wizard_state.status_message = Some("previous error".into());
 
         handle_rerun_preflight(&mut state);

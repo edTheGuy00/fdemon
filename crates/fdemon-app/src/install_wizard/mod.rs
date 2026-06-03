@@ -12,3 +12,7 @@ mod types;
 
 pub use state::*;
 pub use types::*;
+
+// Re-export the daemon toolchain *display* types so presentation-layer widgets can
+// consume them without a direct fdemon-tui -> fdemon-daemon dependency.
+pub use fdemon_daemon::toolchain::{ComponentCheck, ComponentStatus, DoctorLine, DoctorMarker};
