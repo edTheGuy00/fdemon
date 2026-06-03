@@ -814,6 +814,15 @@ pub fn handle_action(
             });
         }
 
+        // TODO(phase2-task-08): implement the wizard step executor.
+        // `RunWizardStep` dispatches to the appropriate sub-executor (Flutter SDK
+        // download/clone or PATH config writer) and streams WizardStepLog /
+        // WizardDownloadProgress / WizardStepCompleted|Failed messages back to
+        // the TEA loop.  The stub below keeps the crate compiling until task 08 lands.
+        UpdateAction::RunWizardStep { .. } => {
+            // TODO(phase2-task-08): executor not yet implemented.
+        }
+
         // ── Flutter Version Panel ─────────────────────────────────────────────
         UpdateAction::ScanInstalledSdks { active_sdk_root } => {
             let msg_tx = msg_tx.clone();

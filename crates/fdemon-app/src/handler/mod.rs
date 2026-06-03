@@ -43,6 +43,7 @@ pub(crate) mod update;
 mod tests;
 
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
+use crate::install_wizard::WizardStepKind;
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::{Device, FlutterExecutable};
@@ -670,6 +671,29 @@ pub enum UpdateAction {
         explicit_sdk_path: Option<std::path::PathBuf>,
     },
 
+    /// Execute a wizard step asynchronously (Flutter SDK install or PATH config).
+    ///
+    /// The executor task (task 08) reads `kind` to decide which sub-executor to
+    /// invoke, then emits `Message::WizardStepStarted`, zero or more
+    /// `WizardStepLog` / `WizardDownloadProgress` messages, and finally
+    /// `WizardStepCompleted` or `WizardStepFailed`.
+    ///
+    /// `install` is `Some` for the `FlutterSdk` step and `None` for the
+    /// `PathConfig` step.  `path_bin_dir` is `Some` for the `PathConfig` step
+    /// and `None` for all other steps.
+    RunWizardStep {
+        /// Which wizard step to execute.
+        kind: WizardStepKind,
+        /// Resolved Flutter install parameters.
+        ///
+        /// `None` for the `PathConfig` step (no download/clone needed).
+        install: Option<FlutterStepParams>,
+        /// Flutter `bin/` directory to add to PATH.
+        ///
+        /// `Some` for the `PathConfig` step, `None` for all others.
+        path_bin_dir: Option<std::path::PathBuf>,
+    },
+
     /// Fire-and-forget a daemon command on the session's Flutter process stdin.
     ///
     /// Used by the eager DevTools serve path to send `devtools.serve` to the
@@ -765,6 +789,24 @@ pub enum UpdateAction {
         /// VM Service request handle. `None` until hydrated by `process.rs`.
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
+}
+
+/// Parameters for a managed Flutter SDK installation step.
+///
+/// Carried by [`UpdateAction::RunWizardStep`] to the Phase 2 executor (task 08).
+/// The executor converts these into a `fdemon_daemon::toolchain::FlutterInstallTarget`
+/// (added in task 03) before starting the download or clone.
+#[derive(Debug, Clone)]
+pub struct FlutterStepParams {
+    /// How to acquire the SDK (download archive or git clone).
+    pub method: fdemon_daemon::toolchain::InstallMethod,
+    /// The Flutter channel or version string (e.g. `"stable"`, `"3.24.0"`).
+    pub channel: String,
+    /// Root directory where the SDK should be installed.
+    ///
+    /// `None` → the executor resolves a platform-appropriate default
+    /// (e.g. `~/.local/share/fdemon/flutter` on Linux).
+    pub install_root: Option<std::path::PathBuf>,
 }
 
 /// Background tasks to spawn

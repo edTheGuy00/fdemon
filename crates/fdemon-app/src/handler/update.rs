@@ -3247,6 +3247,39 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             install_wizard::handle_preflight_completed(state, report)
         }
 
+        // ── Install Wizard — Step Execution (Phase 2, Task 05) ────────────────
+        // Stub: full handling lands in task 09; until then we return none() so
+        // the crate stays compiling between tasks.
+        Message::InstallWizardRunSelectedStep => {
+            // TODO(phase2-task-09): build FlutterStepParams / path_bin_dir from
+            // install_wizard_state, then return:
+            //   UpdateResult::action(UpdateAction::RunWizardStep { kind, install, path_bin_dir })
+            UpdateResult::none()
+        }
+
+        // These lifecycle messages are produced by RunWizardStep executor (task 08)
+        // and are fully handled in task 09.
+        Message::WizardStepStarted { .. } => {
+            // TODO(phase2-task-09): transition step status to Running.
+            UpdateResult::none()
+        }
+        Message::WizardStepLog { .. } => {
+            // TODO(phase2-task-09): append line to step detail log buffer.
+            UpdateResult::none()
+        }
+        Message::WizardDownloadProgress { .. } => {
+            // TODO(phase2-task-09): update download progress state.
+            UpdateResult::none()
+        }
+        Message::WizardStepCompleted { .. } => {
+            // TODO(phase2-task-09): transition step status to Ok; store sdk_path.
+            UpdateResult::none()
+        }
+        Message::WizardStepFailed { .. } => {
+            // TODO(phase2-task-09): transition step status to Failed; store reason.
+            UpdateResult::none()
+        }
+
         // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────
         Message::CopyLogEntryToClipboard { entry_id } => {
             let entry_text = resolve_entry_text(state, entry_id);

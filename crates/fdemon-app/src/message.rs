@@ -3,6 +3,7 @@
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
+use crate::install_wizard::WizardStepKind;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::memory::MemorySection;
 use crate::session::performance::{PerfSection, SelectionDirection, TimelineEventCursor};
@@ -1730,6 +1731,57 @@ pub enum Message {
     /// Preflight task completed — populate the wizard with the report
     ToolchainPreflightCompleted {
         report: fdemon_daemon::toolchain::ToolchainReport,
+    },
+
+    // ── Install Wizard — Step Execution Protocol (Phase 2, Task 05) ──────────
+    /// Run (or retry) the currently selected wizard step.
+    ///
+    /// Emitted by `Enter` in `UiMode::InstallWizard`. The update handler reads
+    /// `install_wizard_state.selected_step` to determine which step to run and
+    /// returns `UpdateAction::RunWizardStep`. Handling lands in task 09.
+    InstallWizardRunSelectedStep,
+
+    /// A wizard step has started executing.
+    ///
+    /// Transitions the step's status to `StepStatus::Running` (added in task 07)
+    /// and clears any previous log lines for the step.
+    WizardStepStarted { kind: WizardStepKind },
+
+    /// Streamed log line from a running wizard step.
+    ///
+    /// Appended to the step's detail log buffer so the TUI can display
+    /// live progress while the executor is running.
+    WizardStepLog { kind: WizardStepKind, line: String },
+
+    /// Download progress for a running wizard step.
+    ///
+    /// `received` is the number of bytes downloaded so far.
+    /// `total` is `Some(n)` when the Content-Length is known, or `None`
+    /// for chunked/unknown-size transfers.
+    WizardDownloadProgress {
+        kind: WizardStepKind,
+        received: u64,
+        total: Option<u64>,
+    },
+
+    /// A wizard step finished successfully.
+    ///
+    /// `summary` is a human-readable description of what was done (e.g. the
+    /// resolved SDK path or the rc file written). `sdk_path` is set for the
+    /// `FlutterSdk` step and `None` for all other steps.
+    WizardStepCompleted {
+        kind: WizardStepKind,
+        summary: String,
+        sdk_path: Option<std::path::PathBuf>,
+    },
+
+    /// A wizard step failed.
+    ///
+    /// `reason` is a human-readable error description shown in the step's
+    /// detail pane so the user can diagnose and retry.
+    WizardStepFailed {
+        kind: WizardStepKind,
+        reason: String,
     },
 
     // ── Mouse Click Messages (Phase 5) ────────────────────────────────────────

@@ -414,9 +414,8 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `Tab` — switch between panes (`InstallWizardSwitchPane`)
 /// - `k`/`Up` — navigate up in the step list or scroll detail up
 /// - `j`/`Down` — navigate down in the step list or scroll detail down
+/// - `Enter` — run (or retry) the selected wizard step (`InstallWizardRunSelectedStep`)
 /// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
-///
-/// `Enter` is intentionally unbound in Phase 1 (step execution is Phase 2).
 fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message> {
     match key {
         // ── Global keys ───────────────────────────────────────────────────────
@@ -433,6 +432,8 @@ fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message
         InputKey::Char('j') | InputKey::Down => Some(Message::InstallWizardDown),
 
         // ── Actions ───────────────────────────────────────────────────────────
+        // Run (or retry) the currently selected wizard step (Phase 2, Task 05).
+        InputKey::Enter => Some(Message::InstallWizardRunSelectedStep),
         InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
 
         _ => None,
@@ -3580,5 +3581,73 @@ mod target_selector_multiselect_key_tests {
             handle_key(&state, InputKey::Char('r')),
             Some(Message::NewSessionDialogRefreshDevices)
         ));
+    }
+}
+
+#[cfg(test)]
+mod install_wizard_key_tests {
+    use super::*;
+    use crate::state::{AppState, UiMode};
+    use std::path::PathBuf;
+
+    fn make_install_wizard_state() -> AppState {
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.ui_mode = UiMode::InstallWizard;
+        state
+    }
+
+    /// Acceptance criterion (Task 05): `Enter` in `UiMode::InstallWizard`
+    /// produces `Message::InstallWizardRunSelectedStep`.
+    #[test]
+    fn test_enter_in_install_wizard_runs_selected_step() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardRunSelectedStep)),
+            "Enter in InstallWizard should emit InstallWizardRunSelectedStep, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_esc_in_install_wizard_emits_escape() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardEscape)),
+            "Esc in InstallWizard should emit InstallWizardEscape, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_tab_in_install_wizard_switches_pane() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Tab);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardSwitchPane)),
+            "Tab in InstallWizard should emit InstallWizardSwitchPane, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_r_in_install_wizard_reruns_preflight() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Char('r'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardRerunPreflight)),
+            "'r' in InstallWizard should emit InstallWizardRerunPreflight, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_ctrl_c_in_install_wizard_quits() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::CharCtrl('c'));
+        assert!(
+            matches!(msg, Some(Message::Quit)),
+            "Ctrl+C in InstallWizard should emit Quit, got: {msg:?}"
+        );
     }
 }
