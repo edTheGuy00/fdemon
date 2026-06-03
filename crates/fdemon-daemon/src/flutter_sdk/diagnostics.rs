@@ -42,16 +42,42 @@ pub(crate) fn is_path_resolution_error(stderr: &str) -> bool {
 /// process's stderr into a user-facing error message — the TUI does not
 /// interpret raw ANSI in error text, so leftover escapes appear as literal
 /// noise.
+///
+/// Handles both:
+/// - CSI sequences: `ESC [` … final letter (e.g. color codes)
+/// - OSC sequences: `ESC ]` … `BEL` (`\x07`) or `ST` (`ESC \`) (e.g. window title)
 pub(crate) fn strip_ansi(input: &str) -> String {
-    // Minimal CSI-only stripper: handle ESC [ ... letter sequences.
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next(); // consume '['
-            for inner in chars.by_ref() {
-                if inner.is_ascii_alphabetic() {
-                    break;
+        if c == '\x1b' {
+            match chars.peek() {
+                Some(&'[') => {
+                    // CSI sequence: ESC [ ... final ASCII letter
+                    chars.next(); // consume '['
+                    for inner in chars.by_ref() {
+                        if inner.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                Some(&']') => {
+                    // OSC sequence: ESC ] ... BEL or ST (ESC \)
+                    chars.next(); // consume ']'
+                    for inner in chars.by_ref() {
+                        if inner == '\x07' || inner == '\u{9C}' {
+                            // BEL or C1 ST
+                            break;
+                        }
+                        if inner == '\x1b' {
+                            // Two-char ST: ESC '\'
+                            chars.next(); // consume '\'
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown/bare ESC — skip the ESC character, leave rest intact
                 }
             }
             continue;
@@ -80,9 +106,28 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_ansi_removes_color_codes() {
+    fn test_strip_ansi_removes_csi_color_codes() {
         assert_eq!(strip_ansi("\x1b[31merror\x1b[0m: bad"), "error: bad");
         assert_eq!(strip_ansi("plain text"), "plain text");
         assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn test_strip_ansi_removes_osc_sequences() {
+        // OSC terminated by BEL
+        assert_eq!(strip_ansi("\x1b]0;window title\x07rest"), "rest");
+        // OSC terminated by ST (ESC \)
+        assert_eq!(strip_ansi("\x1b]2;title\x1b\\after"), "after");
+        // Plain text after OSC
+        assert_eq!(strip_ansi("before\x1b]0;title\x07after"), "beforeafter");
+    }
+
+    #[test]
+    fn test_strip_ansi_csi_unchanged_with_osc_present() {
+        // Mixing CSI and OSC — both stripped, plain text preserved
+        assert_eq!(
+            strip_ansi("\x1b[32mgreen\x1b[0m\x1b]0;title\x07text"),
+            "greentext"
+        );
     }
 }

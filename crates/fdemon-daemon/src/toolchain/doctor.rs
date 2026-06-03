@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
 
+use crate::flutter_sdk::diagnostics::strip_ansi;
 use crate::flutter_sdk::FlutterExecutable;
 
 use super::types::{DoctorLine, DoctorMarker};
@@ -19,6 +20,20 @@ use super::types::{DoctorLine, DoctorMarker};
 /// generous enough for a cold first-run but avoids blocking the preflight
 /// indefinitely.
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Upper bound on captured `flutter doctor -v` output per stream (stdout or stderr).
+///
+/// Real output is a few KiB; this cap prevents a misbehaving or replaced
+/// binary from streaming unbounded data into an in-memory buffer for the
+/// full timeout duration.
+const MAX_DOCTOR_OUTPUT_BYTES: u64 = 1024 * 1024; // 1 MiB per stream
+
+/// Maximum leading-space indent to record for a single `DoctorLine`.
+///
+/// `flutter doctor` never indents more than a handful of spaces; this cap
+/// defends against pathological input that would otherwise drive a large
+/// per-frame `" ".repeat(indent)` allocation in the TUI.
+const MAX_DOCTOR_INDENT: usize = 32;
 
 /// Run `flutter doctor -v` and return its combined stdout+stderr as a string.
 ///
@@ -36,7 +51,10 @@ pub async fn capture_flutter_doctor(exe: &FlutterExecutable) -> Option<String> {
         .stderr(Stdio::piped())
         // Prevent the spawned Flutter process from inheriting the terminal's
         // stdin, avoiding unexpected blocking reads.
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        // Ensure the child is killed when the handle is dropped (covers the
+        // timeout arm where `child` goes out of scope).
+        .kill_on_drop(true);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -46,21 +64,30 @@ pub async fn capture_flutter_doctor(exe: &FlutterExecutable) -> Option<String> {
         }
     };
 
+    // Take the I/O handles before moving `child` into the timeout future so
+    // we can kill the process if the timeout fires.
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
     // Collect stdout and stderr concurrently inside the timeout.
     let result = tokio::time::timeout(DOCTOR_TIMEOUT, async {
-        // Read stdout
-        let stdout_bytes = if let Some(mut stdout) = child.stdout.take() {
+        // Read stdout (capped)
+        let stdout_bytes = if let Some(stdout) = stdout_handle {
             let mut buf = Vec::new();
-            let _ = stdout.read_to_end(&mut buf).await;
+            let _ = AsyncReadExt::take(stdout, MAX_DOCTOR_OUTPUT_BYTES)
+                .read_to_end(&mut buf)
+                .await;
             buf
         } else {
             Vec::new()
         };
 
-        // Read stderr
-        let stderr_bytes = if let Some(mut stderr) = child.stderr.take() {
+        // Read stderr (capped)
+        let stderr_bytes = if let Some(stderr) = stderr_handle {
             let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf).await;
+            let _ = AsyncReadExt::take(stderr, MAX_DOCTOR_OUTPUT_BYTES)
+                .read_to_end(&mut buf)
+                .await;
             buf
         } else {
             Vec::new()
@@ -94,58 +121,15 @@ pub async fn capture_flutter_doctor(exe: &FlutterExecutable) -> Option<String> {
         }
         Err(_) => {
             tracing::warn!(
-                "flutter doctor timed out after {} s",
+                "flutter doctor timed out after {} s; child process will be killed via kill_on_drop",
                 DOCTOR_TIMEOUT.as_secs()
             );
-            // Kill the lingering process on timeout
+            // `child` is dropped here; `kill_on_drop(true)` ensures the OS
+            // sends SIGKILL (Unix) / TerminateProcess (Windows) before the
+            // handle is released, preventing an orphaned flutter process.
             None
         }
     }
-}
-
-/// Strip ANSI CSI escape sequences from `input`.
-///
-/// Local copy needed because `flutter_sdk::diagnostics::strip_ansi` is
-/// `pub(crate)` scoped to `fdemon-daemon` but not re-exported from `toolchain`.
-/// This implementation handles both CSI (`ESC [`) and OSC (`ESC ]`) sequences.
-fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            match chars.peek() {
-                Some(&'[') => {
-                    // CSI sequence: ESC [ ... letter
-                    chars.next(); // consume '['
-                    for inner in chars.by_ref() {
-                        if inner.is_ascii_alphabetic() {
-                            break;
-                        }
-                    }
-                }
-                Some(&']') => {
-                    // OSC sequence: ESC ] ... BEL or ST
-                    chars.next(); // consume ']'
-                    for inner in chars.by_ref() {
-                        if inner == '\x07' || inner == '\u{9C}' {
-                            break;
-                        }
-                        // ST = ESC '\'
-                        if inner == '\x1b' {
-                            chars.next(); // consume '\\'
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    // Unknown escape — skip the ESC character
-                }
-            }
-            continue;
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// Parse the raw text from `flutter doctor -v` into structured [`DoctorLine`]s.
@@ -159,7 +143,8 @@ fn strip_ansi(input: &str) -> String {
 ///    - `[✗]`            → [`DoctorMarker::Error`]
 ///    - `[☠]`            → [`DoctorMarker::Dead`]
 ///    - anything else    → [`DoctorMarker::None`] (continuation / section header)
-/// 3. `indent` is the number of leading space characters (before the marker or text).
+/// 3. `indent` is the number of leading space characters (before the marker or text),
+///    capped at [`MAX_DOCTOR_INDENT`].
 /// 4. Empty lines produce a `DoctorLine` with an empty `text` and `DoctorMarker::None`.
 ///
 /// This function is **pure and total** — it never panics, even on garbage input.
@@ -178,8 +163,10 @@ pub fn parse_doctor_output(text: &str) -> Vec<DoctorLine> {
 
 /// Parse a single ANSI-stripped line into a [`DoctorLine`].
 fn parse_single_line(line: &str) -> DoctorLine {
-    // Count leading spaces for indent
-    let indent = line.chars().take_while(|c| *c == ' ').count();
+    // Count leading spaces for indent, capped defensively so a pathological
+    // line cannot drive a large per-frame allocation in the TUI.
+    let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+    let indent = leading_spaces.min(MAX_DOCTOR_INDENT);
     let trimmed = line.trim_start();
 
     // Try to match a marker at the beginning of the trimmed line.
@@ -340,26 +327,45 @@ mod tests {
         assert_eq!(lines[0].text, "Flutter");
     }
 
-    // ── strip_ansi tests ──────────────────────────────────────────────────────
-
     #[test]
-    fn test_strip_ansi_removes_csi_sequences() {
-        assert_eq!(strip_ansi("\x1b[31merror\x1b[0m: bad"), "error: bad");
+    fn test_parse_caps_indent_at_max() {
+        // A line with 1000 leading spaces should be capped at MAX_DOCTOR_INDENT (32)
+        let input = format!("{}[✓] over-indented", " ".repeat(1000));
+        let lines = parse_doctor_output(&input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].indent, MAX_DOCTOR_INDENT);
+        assert_eq!(lines[0].marker, DoctorMarker::Ok);
     }
 
     #[test]
-    fn test_strip_ansi_plain_text_unchanged() {
-        assert_eq!(strip_ansi("plain text"), "plain text");
+    fn test_parse_caps_indent_plain_text() {
+        // Plain text line with large indent is also capped
+        let input = format!("{}some text", " ".repeat(500));
+        let lines = parse_doctor_output(&input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].indent, MAX_DOCTOR_INDENT);
+    }
+
+    // ── strip_ansi delegation tests ───────────────────────────────────────────
+    // These tests verify that doctor.rs delegates to the shared strip_ansi, which
+    // now handles both CSI and OSC sequences.
+
+    #[test]
+    fn test_strip_ansi_removes_osc_sequences() {
+        // OSC: ESC ] ... BEL — should be stripped from doctor output
+        let input = "\x1b]0;title\x07[✓] Flutter";
+        let lines = parse_doctor_output(input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].marker, DoctorMarker::Ok);
+        assert!(lines[0].text.contains("Flutter"));
     }
 
     #[test]
-    fn test_strip_ansi_empty_string() {
-        assert_eq!(strip_ansi(""), "");
-    }
-
-    #[test]
-    fn test_strip_ansi_osc_sequence() {
-        // OSC: ESC ] ... BEL
-        assert_eq!(strip_ansi("\x1b]0;title\x07rest"), "rest");
+    fn test_strip_ansi_csi_unchanged() {
+        // CSI stripping must still work correctly after the consolidation
+        let input = "\x1b[32m[✓]\x1b[0m Flutter";
+        let lines = parse_doctor_output(input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].marker, DoctorMarker::Ok);
     }
 }
