@@ -1,5 +1,17 @@
 # Plan: Flutter SDK Management
 
+> **Status (2026-06-03):**
+> - **Phase 1 (Multi-Strategy SDK Locator) — ✅ SHIPPED.** Implemented as the 12-strategy
+>   locator in `crates/fdemon-daemon/src/flutter_sdk/`.
+> - **Phase 2 (Flutter Version Panel) — ✅ SHIPPED.** Implemented as `UiMode::FlutterVersion`
+>   (`crates/fdemon-app/src/flutter_version/`, `crates/fdemon-tui/src/widgets/flutter_version_panel/`),
+>   including FVM-cache scanning, version switching, and the `flutter --version --machine` probe.
+> - **Phase 3 (Managed Installation) — ❌ SUPERSEDED.** The "install Flutter when nothing is found"
+>   goal is replaced and greatly expanded by the new
+>   [`toolchain-bootstrap`](../toolchain-bootstrap/PLAN.md) plan, which covers a full guided
+>   install wizard (OS prerequisites, Android command-line tools, PATH configuration, managed
+>   Flutter SDK, and an embedded `flutter doctor` view). Do not implement Phase 3 from this file.
+
 ## TL;DR
 
 Add a comprehensive Flutter SDK locator and version management system to fdemon — shipped as a single feature. A fresh `flutter_sdk/` module in `fdemon-daemon` replaces the hardcoded `Command::new("flutter")` with a multi-strategy SDK discovery chain that detects FVM, Puro, asdf, mise, proto, and manual installations. A new Flutter Version panel (opened with `V`, following the New Session Dialog design pattern) provides TUI-based SDK visibility and management. For version pinning, fdemon reads and writes `.fvmrc` for ecosystem compatibility, and uses the FVM cache (`~/fvm/versions/`) for managed SDK storage. Managed installation is a low-priority fallback — fdemon assumes Flutter is already installed via some tool.
