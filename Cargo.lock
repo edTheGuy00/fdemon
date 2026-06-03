@@ -837,6 +837,7 @@ dependencies = [
  "toml",
  "tracing",
  "which",
+ "wiremock",
  "zip",
 ]
 

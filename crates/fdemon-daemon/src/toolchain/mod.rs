@@ -22,8 +22,12 @@
 
 mod checks;
 mod doctor;
+pub mod download;
+pub mod process_stream;
 mod types;
 
+pub use download::{download_to_file, extract_archive, extract_tar_xz, extract_zip, verify_sha256};
+pub use process_stream::run_streaming;
 pub use types::{
     ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, DownloadProgress,
     FlutterInstallOutcome, FlutterInstallTarget, FlutterRelease, FlutterReleaseManifest, HostArch,

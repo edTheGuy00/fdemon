@@ -32,3 +32,4 @@ sha2.workspace = true
 tempfile.workspace = true
 tokio-test.workspace = true
 serial_test.workspace = true
+wiremock.workspace = true
