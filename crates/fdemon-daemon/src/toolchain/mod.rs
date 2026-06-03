@@ -24,6 +24,7 @@ mod checks;
 mod doctor;
 pub mod download;
 pub mod flutter_install;
+pub mod path_config;
 pub mod process_stream;
 mod types;
 
@@ -32,6 +33,7 @@ pub use flutter_install::{
     archive_download_url, fetch_release_manifest, install_flutter, resolve_install_dir,
     InstallEvent,
 };
+pub use path_config::{add_to_path, rc_file_for_shell, PathConfigOutcome};
 pub use process_stream::run_streaming;
 pub use types::{
     ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, DownloadProgress,
