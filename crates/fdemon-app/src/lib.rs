@@ -69,6 +69,7 @@ pub mod hyperlinks;
 pub mod ide_config;
 pub(crate) mod input_key;
 pub(crate) mod input_mouse;
+pub mod install_wizard;
 pub mod log_view_state;
 pub mod message;
 pub mod mouse_regions;
