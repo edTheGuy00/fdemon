@@ -11,7 +11,9 @@ mod state;
 mod types;
 
 pub use state::*;
-pub use types::*;
+pub use types::{
+    StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind, MAX_LOG_TAIL,
+};
 
 // Re-export the daemon toolchain *display* types so presentation-layer widgets can
 // consume them without a direct fdemon-tui -> fdemon-daemon dependency.

@@ -8,7 +8,9 @@ use std::cell::Cell;
 
 use fdemon_daemon::toolchain::{ComponentCheck, ComponentKind, ComponentStatus, ToolchainReport};
 
-use super::types::{StepStatus, WizardPane, WizardStepKind};
+use super::types::{
+    StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind, MAX_LOG_TAIL,
+};
 
 /// A single UI step in the install wizard, grouping one or more component checks.
 #[derive(Debug, Clone)]
@@ -51,6 +53,11 @@ pub struct InstallWizardState {
     /// Principle 3). Defaults to 0, which signals "not yet rendered — use
     /// fallback". Written by the renderer; not mutated by message handlers.
     pub last_known_visible_height: Cell<usize>,
+    /// Execution state for step runs (Phase 2+). Idle when nothing is running.
+    ///
+    /// Separate from the per-step `StepStatus` rollup (which reflects preflight
+    /// results). Updated by the lifecycle mutators on `InstallWizardState`.
+    pub execution: StepExecution,
 }
 
 impl InstallWizardState {
@@ -83,6 +90,67 @@ impl InstallWizardState {
     pub fn selected_step(&self) -> Option<&WizardStep> {
         self.steps.get(self.selected_index)
     }
+
+    /// Whether a step is currently executing.
+    ///
+    /// Returns `true` only when `execution.status == Running`. Used by handlers
+    /// to guard against concurrent step runs.
+    pub fn is_step_running(&self) -> bool {
+        self.execution.status == StepExecStatus::Running
+    }
+
+    /// Begin a run: set `Running`, clear prior progress/log/summary, and record
+    /// the step kind.
+    ///
+    /// Called by task 09's handlers when a step execution starts. Resets all
+    /// progress fields so the TUI always shows fresh state.
+    pub fn begin_step(&mut self, kind: WizardStepKind) {
+        self.execution = StepExecution {
+            kind: Some(kind),
+            status: StepExecStatus::Running,
+            phase_label: None,
+            received: 0,
+            total: None,
+            log_tail: Vec::new(),
+            result_summary: None,
+        };
+    }
+
+    /// Record a streamed log line, bounded to [`MAX_LOG_TAIL`] lines.
+    ///
+    /// When the tail is already at capacity, the oldest line is dropped
+    /// (index 0) before the new line is appended.
+    pub fn push_step_log(&mut self, line: String) {
+        if self.execution.log_tail.len() >= MAX_LOG_TAIL {
+            self.execution.log_tail.remove(0);
+        }
+        self.execution.log_tail.push(line);
+    }
+
+    /// Update the download progress counters without disturbing the log tail.
+    ///
+    /// `received` is the number of bytes (or abstract units) transferred so far.
+    /// `total` is `None` when the content length is unknown (e.g. chunked transfer).
+    pub fn set_step_progress(&mut self, received: u64, total: Option<u64>) {
+        self.execution.received = received;
+        self.execution.total = total;
+    }
+
+    /// Update the current phase label (e.g. `"Cloning"`, `"Downloading"`,
+    /// `"Precaching"`) without disturbing the log tail or progress counters.
+    pub fn set_step_phase(&mut self, label: String) {
+        self.execution.phase_label = Some(label);
+    }
+
+    /// Finish a run with a terminal status and a human-readable summary.
+    ///
+    /// `status` must be `Succeeded` or `Failed`; passing `Running` or `Idle`
+    /// is a logic error but will not panic (the summary is still stored).
+    /// After this call, [`is_step_running`][Self::is_step_running] returns `false`.
+    pub fn finish_step(&mut self, status: StepExecStatus, summary: String) {
+        self.execution.status = status;
+        self.execution.result_summary = Some(summary);
+    }
 }
 
 impl std::fmt::Debug for InstallWizardState {
@@ -102,6 +170,7 @@ impl std::fmt::Debug for InstallWizardState {
                 "last_known_visible_height",
                 &self.last_known_visible_height.get(),
             )
+            .field("execution", &self.execution)
             .finish()
     }
 }
@@ -486,5 +555,136 @@ mod tests {
             .find(|s| s.kind == WizardStepKind::AndroidTools)
             .expect("AndroidTools step must exist");
         assert_eq!(android_step.status, StepStatus::Partial);
+    }
+
+    // --- Execution state tests ---
+
+    #[test]
+    fn test_default_state_has_idle_execution() {
+        let s = InstallWizardState::default();
+        assert_eq!(s.execution.status, StepExecStatus::Idle);
+        assert!(s.execution.log_tail.is_empty());
+        assert!(s.execution.kind.is_none());
+    }
+
+    #[test]
+    fn test_is_step_running_false_when_idle() {
+        let s = InstallWizardState::default();
+        assert!(!s.is_step_running());
+    }
+
+    #[test]
+    fn test_begin_step_sets_running_and_clears() {
+        let mut s = InstallWizardState::default();
+        // Simulate leftover state from a previous run.
+        s.execution.log_tail.push("old line".to_string());
+        s.execution.received = 42;
+        s.execution.result_summary = Some("old summary".to_string());
+        s.execution.phase_label = Some("old phase".to_string());
+
+        s.begin_step(WizardStepKind::FlutterSdk);
+
+        assert_eq!(s.execution.status, StepExecStatus::Running);
+        assert_eq!(s.execution.kind, Some(WizardStepKind::FlutterSdk));
+        assert!(s.execution.log_tail.is_empty(), "log tail must be cleared");
+        assert_eq!(s.execution.received, 0, "received must be reset");
+        assert!(
+            s.execution.result_summary.is_none(),
+            "result_summary must be cleared"
+        );
+        assert!(
+            s.execution.phase_label.is_none(),
+            "phase_label must be cleared"
+        );
+        assert!(s.is_step_running());
+    }
+
+    #[test]
+    fn test_log_tail_is_bounded() {
+        let mut s = InstallWizardState::default();
+        for i in 0..(MAX_LOG_TAIL + 50) {
+            s.push_step_log(format!("line {i}"));
+        }
+        assert_eq!(
+            s.execution.log_tail.len(),
+            MAX_LOG_TAIL,
+            "log tail must not exceed MAX_LOG_TAIL"
+        );
+        assert!(
+            s.execution.log_tail.first().unwrap().contains("line 50"),
+            "oldest lines must be dropped: first line should be 'line 50'"
+        );
+    }
+
+    #[test]
+    fn test_finish_step_sets_terminal_status_succeeded() {
+        let mut s = InstallWizardState::default();
+        s.begin_step(WizardStepKind::AndroidTools);
+        assert!(s.is_step_running());
+
+        s.finish_step(StepExecStatus::Succeeded, "All done".to_string());
+
+        assert_eq!(s.execution.status, StepExecStatus::Succeeded);
+        assert_eq!(s.execution.result_summary.as_deref(), Some("All done"));
+        assert!(
+            !s.is_step_running(),
+            "is_step_running must be false after finish"
+        );
+    }
+
+    #[test]
+    fn test_finish_step_sets_terminal_status_failed() {
+        let mut s = InstallWizardState::default();
+        s.begin_step(WizardStepKind::Prerequisites);
+
+        s.finish_step(StepExecStatus::Failed, "error: network timeout".to_string());
+
+        assert_eq!(s.execution.status, StepExecStatus::Failed);
+        assert!(s
+            .execution
+            .result_summary
+            .as_deref()
+            .unwrap()
+            .contains("timeout"));
+        assert!(!s.is_step_running());
+    }
+
+    #[test]
+    fn test_progress_updates_do_not_touch_log() {
+        let mut s = InstallWizardState::default();
+        s.push_step_log("line 1".to_string());
+        s.push_step_log("line 2".to_string());
+
+        s.set_step_progress(1024, Some(4096));
+
+        assert_eq!(s.execution.log_tail.len(), 2, "log tail must be untouched");
+        assert_eq!(s.execution.received, 1024);
+        assert_eq!(s.execution.total, Some(4096));
+    }
+
+    #[test]
+    fn test_set_step_phase_does_not_touch_log_or_progress() {
+        let mut s = InstallWizardState::default();
+        s.push_step_log("log line".to_string());
+        s.execution.received = 100;
+        s.execution.total = Some(200);
+
+        s.set_step_phase("Downloading".to_string());
+
+        assert_eq!(s.execution.phase_label.as_deref(), Some("Downloading"));
+        assert_eq!(s.execution.log_tail.len(), 1, "log tail must be untouched");
+        assert_eq!(s.execution.received, 100, "received must be untouched");
+        assert_eq!(s.execution.total, Some(200), "total must be untouched");
+    }
+
+    #[test]
+    fn test_push_step_log_below_cap_retains_all_lines() {
+        let mut s = InstallWizardState::default();
+        for i in 0..10 {
+            s.push_step_log(format!("line {i}"));
+        }
+        assert_eq!(s.execution.log_tail.len(), 10);
+        assert_eq!(s.execution.log_tail[0], "line 0");
+        assert_eq!(s.execution.log_tail[9], "line 9");
     }
 }
