@@ -274,6 +274,11 @@ flutter-demon/
 │   │       │   ├── android.rs    # adb logcat capture
 │   │       │   ├── macos.rs      # macOS log stream capture
 │   │       │   └── ios.rs        # iOS simulator (xcrun simctl) + physical (idevicesyslog)
+│   │       ├── toolchain/        # Read-only toolchain diagnostics (Phase 1)
+│   │       │   ├── mod.rs        # run_preflight() — orchestration entry point
+│   │       │   ├── types.rs      # ToolchainReport, ComponentCheck, ComponentStatus, etc.
+│   │       │   ├── checks.rs     # Per-component probes (SDK, git, JDK, Android toolchain, OS prereqs)
+│   │       │   └── doctor.rs     # flutter doctor -v capture + marker parser
 │   │       └── vm_service/       # VM Service WebSocket client
 │   │           ├── mod.rs        # VmServiceHandle, VmRequestHandle, connection management
 │   │           ├── client.rs     # WebSocket client transport
@@ -337,6 +342,9 @@ flutter-demon/
 │   │       ├── log_view_state.rs # Scroll/viewport state
 │   │       ├── hyperlinks.rs     # Link detection and state
 │   │       ├── confirm_dialog.rs # Dialog state
+│   │       ├── install_wizard/   # Toolchain diagnostics modal state
+│   │       │   └── mod.rs        # InstallWizardState, WizardStep, WizardStepKind, StepStatus, WizardPane, build_steps()
+│   │       ├── handler/install_wizard/  # Navigation + action handlers for InstallWizard
 │   │       └── new_session_dialog/  # New session dialog state
 │   │           ├── state.rs
 │   │           ├── fuzzy.rs
@@ -374,6 +382,11 @@ flutter-demon/
 │               ├── new_session_dialog/
 │               │   ├── mod.rs
 │               │   └── target_selector.rs
+│               ├── install_wizard/   # Toolchain diagnostics panel
+│               │   ├── mod.rs        # Panel entry point
+│               │   ├── step_list.rs  # Left pane: ordered step list
+│               │   ├── step_detail.rs # Right pane: per-step detail view
+│               │   └── doctor_view.rs # Embedded flutter doctor -v output view
 │               └── devtools/         # DevTools panels
 │                   ├── mod.rs        # Tab bar + panel dispatch
 │                   ├── inspector/    # Widget Inspector (tree + layout explorer)
@@ -497,6 +510,10 @@ flutter-demon/
 | `native_logs/ios.rs` | `IosLogCapture` — simulator via `xcrun simctl log stream`, physical via `idevicesyslog` (macOS-only, `#[cfg(target_os = "macos")]`) |
 | `native_logs/custom.rs` | `CustomLogCapture` — spawns user-defined commands, reads stdout through format parsers; `CustomSourceConfig` — config for a single custom source; `create_custom_log_capture()` factory |
 | `native_logs/formats.rs` | `parse_line()` dispatch — routes raw output lines to `parse_raw()`, `parse_json()`, `parse_logcat_threadtime()`, or `parse_syslog()` based on `OutputFormat` |
+| `toolchain/mod.rs` | `run_preflight(project_path, explicit_sdk_path) -> ToolchainReport` — orchestrates all component checks and doctor text capture; never returns `Err`. Read-only diagnostics only (Phase 1). Reuses `find_flutter_sdk` + `probe_flutter_version`. |
+| `toolchain/types.rs` | Report types: `ToolchainReport`, `ComponentCheck`, `ComponentStatus`, `ComponentKind`, `HostPlatform`, `HostShell`, `DoctorLine`, `DoctorMarker` |
+| `toolchain/checks.rs` | Structured per-component probes — Flutter SDK, git, JDK, Android cmdline-tools/sdkmanager, platform-tools/adb, Android platforms, build-tools, licenses, and per-OS prerequisites. No install or network code. |
+| `toolchain/doctor.rs` | `flutter doctor -v` text capture and marker parser; recognises `[✓]`, `[!]`, `[✗]`, `[☠]` markers to produce `Vec<DoctorLine>` |
 
 **Flutter SDK Detection (`flutter_sdk/`):**
 
@@ -609,6 +626,8 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `hyperlinks.rs` | `LinkHighlightState` — link detection and navigation |
 | `confirm_dialog.rs` | `ConfirmDialogState` — confirmation dialog state |
 | `new_session_dialog/` | New session dialog state (fuzzy filtering, target selector, device groups) |
+| `install_wizard/` | `InstallWizardState`, `WizardStep`, `WizardStepKind`, `StepStatus`, `WizardPane`, `build_steps()` — state types for the two-pane toolchain diagnostics modal |
+| `handler/install_wizard/` | Navigation and action handlers for `UiMode::InstallWizard` |
 
 **Message Categories:**
 - Keyboard events (`Key`)
@@ -655,6 +674,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `confirm_dialog.rs` | Confirmation dialog widget |
 | `tag_filter.rs` | Native tag filter overlay — toggle per-tag visibility, shows tag counts |
 | `new_session_dialog/` | New session creation dialog |
+| `install_wizard/` | Two-pane toolchain diagnostics panel: `mod.rs` (panel entry), `step_list.rs` (left pane: ordered step list), `step_detail.rs` (right pane: per-step detail), `doctor_view.rs` (embedded `flutter doctor -v` output view) |
 
 ### `fdemon-dap` — DAP Server
 
@@ -850,7 +870,7 @@ Two gate checks sit above the per-mode dispatch in `handle_press`:
 
 **Modal Precedence and Sub-Modal Gates:**
 
-When a modal `UiMode` is active (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `FlutterVersion`, `EmulatorSelector`) or when `tag_filter_visible` is set, `render::view()` passes `None` (instead of `Some(&mut mouse_ctx)`) to `MainHeader` and `LogView`. Base-UI z=0 regions are therefore not registered during modal frames. Per-mode dispatchers calling `regions.hit_test(x, y, button)` see only the modal widget's own regions — explicit `z_index` filtering at the dispatcher level is unnecessary.
+When a modal `UiMode` is active (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `FlutterVersion`, `EmulatorSelector`, `InstallWizard`) or when `tag_filter_visible` is set, `render::view()` passes `None` (instead of `Some(&mut mouse_ctx)`) to `MainHeader` and `LogView`. Base-UI z=0 regions are therefore not registered during modal frames. Per-mode dispatchers calling `regions.hit_test(x, y, button)` see only the modal widget's own regions — explicit `z_index` filtering at the dispatcher level is unnecessary.
 
 `UiMode::LinkHighlight` is intentionally excluded from the modal gate: links are overlaid on top of the log view, and both the log-view scroll regions and the link-badge regions are expected to be interactive simultaneously.
 
@@ -2004,11 +2024,14 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
    - spawn_tool_availability_check — detect adb, xcrun simctl, idevicesyslog
    - spawn_bootable_device_discovery — list iOS simulators and Android AVDs
    - spawn_version_check — query GitHub releases API (or serve from on-disk cache); sends Message::NewVersionAvailable if a newer release exists. The handler drops this message silently if ui_mode has already transitioned away from Startup/NewSessionDialog (late-arrival gate).
-9. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
-   OR when [behavior] auto_launch=true AND a valid last_device is cached.
-   Otherwise: show New Session dialog. (See docs/CONFIGURATION.md for the full priority table.)
-10. tui::run_with_project(): Spawn Flutter process (if auto-launch fired)
-11. tui::run_loop(): Enter main event loop
+9. tui::run_with_project(): Flutter SDK resolution — if no SDK resolves, opens
+   UiMode::InstallWizard and emits UpdateAction::RunToolchainPreflight (background task).
+   InstallWizard can also be opened at any time via the `I` key from Normal mode.
+10. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
+    OR when [behavior] auto_launch=true AND a valid last_device is cached.
+    Otherwise: show New Session dialog. (See docs/CONFIGURATION.md for the full priority table.)
+11. tui::run_with_project(): Spawn Flutter process (if auto-launch fired)
+12. tui::run_loop(): Enter main event loop
 ```
 
 ### Hot Reload Flow
@@ -2109,6 +2132,7 @@ All possible events that can affect application state:
 - **File watcher**: `FilesChanged { count }`, `AutoReloadTriggered`
 - **Session management**: `ShowDeviceSelector`, `DeviceSelected { device }`, `NextSession`, `CloseCurrentSession`
 - **Mouse/clipboard**: `MouseCaptureChanged { active }` — sent by the TUI runner after completing a `SetMouseCapture` action; updates `AppState::mouse_capture_active`
+- **Toolchain diagnostics**: `ToolchainPreflightCompleted { report: ToolchainReport }` — sent by the background preflight task; the `install_wizard` handler stores the report on `InstallWizardState` and transitions each step to its resolved status
 - **Lifecycle**: `Quit`
 
 ### UpdateResult (Update Output)
@@ -2130,6 +2154,7 @@ The return type from `handler::update()`:
 - `PersistSettings { settings, project_path }` — Persist the current `Settings` to `.fdemon/config.toml` on a background task. Keeps the TEA event loop unblocked when a settings toggle (e.g. `Shift+H` in the Inspector) flips a persisted boolean. Emits `Message::SettingsPersisted` on success or `Message::SettingsPersistFailed` on failure.
 - `FetchLayoutData { session_id, node_id, vm_handle }` — Fetch layout data (constraints, size, flex info) for a widget via `ext.flutter.inspector.getLayoutExplorerNode`. `vm_handle` is hydrated by `process.rs` before dispatch.
 - `FetchInspectorProperties { session_id, node_id, vm_handle }` — Fetch widget properties and render-object sub-properties via the two-stage `ext.flutter.inspector.getProperties` pipeline. Dispatched alongside `FetchLayoutData` by `handle_open_details` via `UpdateResult::extra_actions`. `vm_handle` is hydrated by `process.rs` before dispatch.
+- `RunToolchainPreflight { project_path, explicit_sdk_path }` — Spawn a background task that calls `fdemon_daemon::toolchain::run_preflight()` and sends `Message::ToolchainPreflightCompleted { report }` when done. Never errors; results are always a `ToolchainReport`. Emitted when `UiMode::InstallWizard` is opened (at startup when no Flutter SDK resolves, or via the `I` keybinding from Normal mode).
 
 ---
 
@@ -2167,10 +2192,14 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `CommandSender`, `DaemonCommand` — Command dispatch
 - `ToolAvailability` — Tool detection
 
+- `run_preflight(project_path, explicit_sdk_path) -> ToolchainReport` — read-only toolchain diagnostics entry point (`toolchain/mod.rs`)
+- `ToolchainReport`, `ComponentCheck`, `ComponentStatus`, `ComponentKind`, `HostPlatform`, `HostShell`, `DoctorLine`, `DoctorMarker` — toolchain report types (`toolchain/types.rs`)
+
 **Internal** (`pub(crate)`):
 - JSON-RPC protocol parsing (`protocol.rs`)
 - Request tracking implementation
 - AVD/simulator utilities
+- Toolchain check and doctor implementation details (`toolchain/checks.rs`, `toolchain/doctor.rs`)
 
 #### `fdemon-app` — Application State and Orchestration
 
@@ -2187,6 +2216,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `services::StateService` — App state queries
 - `services::Clipboard`, `services::SystemClipboard`, `services::NullClipboard` — Clipboard write trait and runtime implementations (`services::MemoryClipboard` is exported only behind `#[cfg(test)]`)
 - `config::Settings`, `config::LaunchConfig` — Configuration types
+- `install_wizard::InstallWizardState`, `install_wizard::WizardStep`, `install_wizard::WizardStepKind`, `install_wizard::StepStatus`, `install_wizard::WizardPane` — toolchain diagnostics wizard state types
 
 **Internal** (`pub(crate)`):
 - TEA handler implementation (`handler/`)
