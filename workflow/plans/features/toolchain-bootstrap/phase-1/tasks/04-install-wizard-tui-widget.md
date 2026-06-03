@@ -106,3 +106,42 @@ mod tests {
 - Keep each file under ~500 lines; split a pane into helpers if it grows.
 - Do not reference any Phase 2 concepts (progress bars, step execution) — `progress.rs` is a Phase 2
   file and is **not** created here.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ae2ed166494230d85
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | NEW — `InstallWizardPanel<'a>` orchestrator: dim background, centered overlay, header (title + close hint), horizontal/vertical pane layout switching by `MIN_HORIZONTAL_WIDTH`, loading placeholder, footer with Phase 1 key hints, named layout constants with derivation comments |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_list.rs` | NEW — `StepListPane<'a>`: renders ordered step list with `✓/!/✗/…` status glyphs, selection highlight (accent bg when focused, subtle bg when unfocused), `step_list_pane()` convenience constructor |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | NEW — `StepDetailPane<'a>`: Doctor step delegates to `DoctorView`, component steps render `ComponentCheck` rows; writes `last_known_visible_height` Cell each frame (annotated), render-time scroll clamp safety net, `step_detail_pane()` convenience constructor |
+| `crates/fdemon-tui/src/widgets/install_wizard/doctor_view.rs` | NEW — `DoctorView<'a>`: renders `Option<&[DoctorLine]>` with per-marker coloring/glyph; `None` → unavailable placeholder; empty vec → no-output placeholder |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `pub mod install_wizard;` and `pub use install_wizard::InstallWizardPanel;` |
+| `crates/fdemon-tui/Cargo.toml` | Added `fdemon-daemon` as a regular workspace dependency (needed for `DoctorLine`, `DoctorMarker`, `ComponentCheck`, `ComponentStatus` types in production code) |
+
+### Notable Decisions/Tradeoffs
+
+1. **fdemon-daemon as runtime dep in fdemon-tui**: `fdemon-tui` previously only had `fdemon-daemon` as a dev-dep. The install wizard widgets need `DoctorLine`, `DoctorMarker`, `ComponentCheck`, `ComponentStatus` in production rendering code. Adding it as a runtime dep is architecturally sound (`tui → daemon` is not a circular dependency). Cannot add re-exports to `fdemon-app/src/lib.rs` because scope boundary forbids touching fdemon-app.
+
+2. **DoctorView accepts `&[DoctorLine]` not `&Vec<DoctorLine>`**: Changed from task spec to use the idiomatic slice reference, which allows `step_detail.rs` to pass a scrolled sub-slice without allocation. Clippy caught an `iter().cloned().collect()` issue that prompted this refactor.
+
+3. **Render-hint write happens before early returns**: In `StepDetailPane`, `last_known_visible_height.set(visible_height)` is written before any early-return path so the handler always gets an accurate height regardless of which content branch is taken.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (2650+512+815+842+1393+80+... all pass, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
+### Risks/Limitations
+
+1. **No render-branch wiring**: As specified, `InstallWizardPanel` is not yet rendered from `render/mod.rs` — that is task 05's scope. The widget is complete and tested in isolation but won't appear in the live TUI until task 05 connects it.
+
+2. **Scroll only applies to Doctor view sub-slice**: The `detail_scroll` field clamps the doctor lines slice passed to `DoctorView`. For component steps the scroll is applied via a corrected offset over the components vec. Both paths include render-time clamp safety nets.

@@ -58,3 +58,28 @@ modal-precedence list.
 - `docs/CONFIGURATION.md` is **not** touched in Phase 1 — no `[toolchain]` config keys are added
   until Phase 2/3.
 - Make targeted edits; do not rewrite whole documents. Follow content boundaries strictly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added `toolchain/` subsystem table entries and project tree under `fdemon-daemon`; added `install_wizard/` module and `handler/install_wizard/` to `fdemon-app` section and project tree; added `widgets/install_wizard/` panel to `fdemon-tui` section and project tree; added `InstallWizard` to `is_modal_ui_mode()` modal list; added `RunToolchainPreflight` `UpdateAction` variant and `ToolchainPreflightCompleted` `Message` variant to Key Types; updated startup sequence to note InstallWizard open path; updated `fdemon-daemon` and `fdemon-app` public API surface sections. |
+| `docs/CODE_STANDARDS.md` | Added `InstallWizard` to the modal-precedence list in the Region Registry Pattern step 3 guidance. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A — N/A (no violations found)
+
+### Notable Decisions/Tradeoffs
+
+1. **Startup sequence step renumbering**: Inserted the InstallWizard/SDK-resolution check as step 9 and renumbered the subsequent steps (10-12). This accurately reflects the conditional branch in the startup path.
+2. **Public API surface for toolchain types**: Added `run_preflight` and the report types to the `fdemon-daemon` public API section as they are the primary surface consumed by `fdemon-app`'s `RunToolchainPreflight` action; the internal check/doctor implementation details remain `pub(crate)`.
+3. **handler/install_wizard/ placement in project tree**: Represented as a sibling entry to `install_wizard/` under `fdemon-app/src/` in the tree, consistent with how `handler/devtools/` is shown relative to `handler/` elsewhere.

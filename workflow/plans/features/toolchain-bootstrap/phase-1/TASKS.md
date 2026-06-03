@@ -43,12 +43,12 @@ SDK is resolved. **No installation is performed in Phase 1** — every step is d
 
 | # | Task | Status | Depends On | Est. Hours | Crate |
 |---|------|--------|------------|------------|-------|
-| 1 | [01-toolchain-preflight-subsystem](tasks/01-toolchain-preflight-subsystem.md) | Not Started | - | 8-10h | `fdemon-daemon` |
-| 2 | [02-install-wizard-state-types](tasks/02-install-wizard-state-types.md) | Not Started | 1 | 4-5h | `fdemon-app` |
-| 3 | [03-install-wizard-app-wiring](tasks/03-install-wizard-app-wiring.md) | Not Started | 2 | 6-8h | `fdemon-app` |
-| 4 | [04-install-wizard-tui-widget](tasks/04-install-wizard-tui-widget.md) | Not Started | 2 | 6-8h | `fdemon-tui` |
-| 5 | [05-render-and-startup-hook](tasks/05-render-and-startup-hook.md) | Not Started | 3, 4 | 3-4h | `fdemon-tui` |
-| 6 | [06-update-docs](tasks/06-update-docs.md) | Not Started | 1,2,3,4,5 | 2-3h | docs |
+| 1 | [01-toolchain-preflight-subsystem](tasks/01-toolchain-preflight-subsystem.md) | ✅ Done | - | 8-10h | `fdemon-daemon` |
+| 2 | [02-install-wizard-state-types](tasks/02-install-wizard-state-types.md) | ✅ Done | 1 | 4-5h | `fdemon-app` |
+| 3 | [03-install-wizard-app-wiring](tasks/03-install-wizard-app-wiring.md) | ✅ Done | 2 | 6-8h | `fdemon-app` |
+| 4 | [04-install-wizard-tui-widget](tasks/04-install-wizard-tui-widget.md) | ✅ Done | 2 | 6-8h | `fdemon-tui` |
+| 5 | [05-render-and-startup-hook](tasks/05-render-and-startup-hook.md) | ✅ Done | 3, 4 | 3-4h | `fdemon-tui` |
+| 6 | [06-update-docs](tasks/06-update-docs.md) | ✅ Done | 1,2,3,4,5 | 2-3h | docs |
 
 ## Execution Waves
 

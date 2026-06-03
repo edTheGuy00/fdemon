@@ -189,3 +189,57 @@ mod tests {
   may be split into `checks/android.rs`, but a single `checks.rs` is acceptable for Phase 1.
 - Remediation/command-generation text is intentionally **deferred to Phase 4** — `ComponentCheck`
   has no `remediation` field in Phase 1 (`detail` only).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/lib.rs` | Added `pub mod toolchain;` and re-exports for all public toolchain types |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | NEW — `run_preflight()` orchestration, module declarations, re-exports |
+| `crates/fdemon-daemon/src/toolchain/types.rs` | NEW — `ToolchainReport`, `ComponentCheck`, `ComponentStatus`, `ComponentKind`, `HostPlatform`, `HostShell`, `DoctorLine`, `DoctorMarker`, `AndroidSdkRoot` |
+| `crates/fdemon-daemon/src/toolchain/checks.rs` | NEW — all component probe functions: `check_flutter`, `check_git`, `check_jdk`, `android_sdk_root`, `check_android_cmdline_tools`, `check_android_platform_tools`, `check_android_platform`, `check_android_build_tools`, `check_android_licenses`, `check_prerequisites` |
+| `crates/fdemon-daemon/src/toolchain/doctor.rs` | NEW — `capture_flutter_doctor` (async) + `parse_doctor_output` (pure) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`AndroidSdkRoot` as `pub(super)` newtype**: The Android SDK root path is wrapped in a newtype scoped to the toolchain module. This prevents callers from accidentally passing a raw `PathBuf` where an SDK root is expected, and clearly communicates intent at call sites.
+
+2. **Sync vs async Android checks**: The Android filesystem checks (`check_android_cmdline_tools`, `check_android_platform`, `check_android_build_tools`, `check_android_licenses`) are synchronous because they only do `is_file()`/`is_dir()`/`read_dir()` — no process spawning. They are called before `tokio::join!` to avoid lifetime issues with the `android_root_ref` borrow crossing async await points.
+
+3. **Local `strip_ansi` in doctor.rs**: The `flutter_sdk::diagnostics::strip_ansi` is `pub(crate)` and accessible from within `fdemon-daemon`. However, to keep the doctor parser self-contained and extend handling to OSC sequences (which the original doesn't handle), a local implementation was used. The extended version handles `ESC ]` sequences (titles, hyperlinks) that real `flutter doctor` output may contain.
+
+4. **`check_flutter` returns a tuple**: Returns `(ComponentCheck, Option<FlutterExecutable>)` so the orchestrator can decide whether to run `flutter doctor -v` without duplicating the SDK lookup.
+
+5. **checks.rs at ~650 lines**: Slightly over the ~500 line soft limit due to comprehensive doc comments and tests. Splitting Android checks into a sub-module is the recommended next step but deferred to keep the diff reviewable.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (842 tests in fdemon-daemon, 27 new toolchain tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added: 27 unit tests covering all acceptance criteria:
+- `parse_doctor_output` comprehensive classification and edge cases
+- `HostPlatform::detect()` compile-time matching
+- All Android SDK filesystem checks with tempdir fixtures
+- JDK version parsing (modern ≥17 Ok, legacy <17 Partial)
+- Process-spawning checks with no-panic guarantees
+- `run_preflight()` end-to-end with temp project path
+
+### Risks/Limitations
+
+1. **checks.rs line count**: At ~650 lines, it exceeds the ~500 line soft limit. The Android-specific checks could be moved to `checks/android.rs` in a follow-up.
+
+2. **`flutter doctor` capture**: On some CI environments, `flutter doctor` may be very slow or hang on first run (network checks, SDK cache population). The 60-second timeout mitigates this; the function returns `None` on timeout, which is the expected behavior.
+
+3. **`java -version` stderr capture**: Verified correct — `java -version` outputs to stderr on all JVM implementations tested. The implementation captures stderr only.
+
+4. **Linux `xz` tool detection**: `xz` is checked on Linux prerequisites. On some distributions, the tool is called `xz-utils` as a package but the binary is still `xz`. The check tries both the bare name and `ninja-build`/`xz-utils` fallbacks for the tools that commonly have renamed packages.

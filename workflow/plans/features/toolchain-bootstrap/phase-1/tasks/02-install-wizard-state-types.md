@@ -153,3 +153,38 @@ mod tests {
   only declared.
 - Do not add navigation/scroll *logic* here — that lives in the handler (task 03). This task is
   pure data + the `build_steps` mapper.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/mod.rs` | NEW — re-exports only, mirrors `flutter_version/mod.rs` |
+| `crates/fdemon-app/src/install_wizard/types.rs` | NEW — `WizardPane`, `WizardStepKind`, `StepStatus` enums |
+| `crates/fdemon-app/src/install_wizard/state.rs` | NEW — `InstallWizardState`, `WizardStep`, `build_steps()`, `rollup_status()`, 17 unit tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub mod install_wizard;` in alphabetical position between `input_mouse` and `log_view_state` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Git grouped with Prerequisites**: `ComponentKind::Git` is not assigned to a dedicated step in the task spec. Since Git is a system-level prerequisite required by Flutter, it is grouped with `Prerequisites` alongside `ComponentKind::Prerequisites`. This keeps the step count at five and matches user expectations.
+2. **Manual Debug impl for InstallWizardState**: Removed `#[derive(Debug)]` from `InstallWizardState` and implemented `Debug` manually (same pattern as `VersionListState`) so that `last_known_visible_height`'s `Cell<usize>` value is displayed instead of the internal `Cell` representation.
+3. **PathConfig status derivation**: The informational `PathConfig` step has no component checks. Its status is derived from the Flutter SDK components: `Ok` if any FlutterSdk check is `Ok`, `Pending` if no FlutterSdk checks exist, `Partial`/`Missing` otherwise.
+4. **rollup_status treats Unknown as Ok**: `ComponentStatus::Unknown` is treated the same as `Ok` in rollup (not escalated to Partial/Missing) since Unknown means the check was skipped due to a missing prerequisite, not a definitive failure.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (2650 fdemon-app tests including 17 new install_wizard tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (fixed doc overindentation and field-reassign-with-default clippy lints)
+
+### Risks/Limitations
+
+1. **No Git-specific step**: `ComponentKind::Git` is silently absorbed into Prerequisites. If a future task wants a dedicated Git step, `build_steps` and `WizardStepKind` would need to be extended.
+2. **PathConfig has no components**: The step is purely informational in Phase 1. Task 03 (handler) will need to handle navigation to this step gracefully since it has an empty `components` vec.

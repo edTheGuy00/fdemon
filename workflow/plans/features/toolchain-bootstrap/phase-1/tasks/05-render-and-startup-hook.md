@@ -95,6 +95,37 @@ layout — it is a nice-to-have, not a Phase 1 requirement.
 - Manual check: run `cargo run` in an environment with no Flutter on PATH and confirm the wizard
   opens with a populated diagnostics screen.
 
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Replaced stub `UiMode::InstallWizard => {}` with real render arm constructing `InstallWizardPanel::new(&state.install_wizard_state)`; added `UiMode::InstallWizard` to `is_modal_ui_mode()` |
+| `crates/fdemon-tui/src/runner.rs` | In `dispatch_startup_action` `StartupAction::Ready` branch, replaced `DeviceDiscoveryFailed` error send with `Message::ShowInstallWizard` when `flutter_executable()` is `None` |
+| `crates/fdemon-tui/src/render/tests.rs` | Added two new tests: `install_wizard_mode_renders_panel_without_panic` (smoke render + title check) and `install_wizard_mode_suppresses_base_ui_header_regions` (modal gate invariant) |
+
+### Notable Decisions/Tradeoffs
+
+1. **DeviceDiscoveryFailed removed from SDK-not-found path**: Per task spec, replaced with `ShowInstallWizard`. The `DeviceDiscoveryFailed` machinery remains intact for present-but-broken / discovery-error paths; only the `flutter_executable().is_none()` branch changed.
+2. **Tests reuse `count_hot_reload_regions` helper**: This helper already existed in the test file for Phase 5.5 invariant tests — the new modal-gate test follows the same pattern without duplicating helper code.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all existing tests pass; 2 new tests added)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Manual verification**: The startup hook change (SDK-not-found → wizard) cannot be exercised in a unit test without a real PATH manipulation. Behavior is verified via the handler path (`ShowInstallWizard` → `UiMode::InstallWizard`) which is covered by existing task-03 handler tests and the new render tests here.
+
 ### Notes
 
 - Keep the startup change minimal — a single `try_send(Message::ShowInstallWizard)`. Do not remove

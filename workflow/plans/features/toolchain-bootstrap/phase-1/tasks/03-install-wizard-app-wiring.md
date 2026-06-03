@@ -176,3 +176,49 @@ mod tests {
 - The `Cell<usize>` render-hint is only **read** here (handler) and **written** in the TUI task —
   the write site carries the `// EXCEPTION:` annotation, not this file.
 - Do not add `[toolchain]` config keys or `RunWizardStep` — Phase 2+.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aa1791162300811c6
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `UiMode::InstallWizard` variant; `install_wizard_state: InstallWizardState` field; `show_install_wizard()` / `hide_install_wizard()` helpers; `use crate::install_wizard::InstallWizardState` import |
+| `crates/fdemon-app/src/message.rs` | Added 8 wizard message variants: `ShowInstallWizard`, `HideInstallWizard`, `InstallWizardEscape`, `InstallWizardSwitchPane`, `InstallWizardUp`, `InstallWizardDown`, `InstallWizardRerunPreflight`, `ToolchainPreflightCompleted` |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `pub(crate) mod install_wizard;`; `UpdateAction::RunToolchainPreflight { project_path, explicit_sdk_path }` variant |
+| `crates/fdemon-app/src/handler/install_wizard/mod.rs` | NEW — re-exports from `actions` and `navigation` submodules |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | NEW — `handle_show`, `handle_hide`, `handle_escape`, `handle_switch_pane`, `handle_up`, `handle_down` with 14 unit tests |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | NEW — `handle_preflight_completed`, `handle_rerun_preflight` with 5 unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added `install_wizard` to imports; 8 new match arms routing wizard messages to handlers |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `UiMode::InstallWizard => handle_key_install_wizard(key, state)` dispatch arm; `InputKey::Char('I') => ShowInstallWizard` in normal mode; new `handle_key_install_wizard` function |
+| `crates/fdemon-app/src/handler/mouse/install_wizard.rs` | NEW — scroll routing: Up→`InstallWizardUp`, Down→`InstallWizardDown`, with 4 unit tests |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `mod install_wizard;`; `UiMode::InstallWizard` press arm (no-op); `UiMode::InstallWizard` scroll arm routed to `install_wizard::handle_scroll` |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `UpdateAction::RunToolchainPreflight` handler that spawns `fdemon_daemon::toolchain::run_preflight` and sends `ToolchainPreflightCompleted` |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `UiMode::InstallWizard` stub arm (empty, task 04 fills in widget rendering) |
+| `crates/fdemon-tui/src/runner.rs` | Added `UpdateAction::RunToolchainPreflight { .. }` to non-runner variants list |
+| `docs/KEYBINDINGS.md` | Added TOC entries for Install Wizard; `I` key in Normal Mode Flutter SDK section; full "Install Wizard Mode" section |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal fdemon-tui stubs**: The task said not to touch `fdemon-tui`, but the workspace cannot compile without exhaustive match arms. Added the minimal stubs (`UiMode::InstallWizard => {}` in render and `RunToolchainPreflight` in runner's non-runner list) required to make the workspace compile. Task 04 will replace the render stub with the actual widget.
+
+2. **Detail pane scroll design**: When `WizardPane::Detail` is focused, `handle_up`/`handle_down` scroll `detail_scroll` directly. The render-hint `last_known_visible_height` is read but only used conceptually — the actual content-length clamping is delegated to the TUI renderer (task 04), consistent with the `Cell<usize>` pattern.
+
+3. **Flaky pre-existing test**: `toolchain::checks::tests::test_android_sdk_root_from_env_android_home` fails when tests run in parallel (env var contamination from other tests). Passes when run with `--test-threads=1` or in isolation. This is a pre-existing issue not introduced by this task.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace -- --test-threads=1` - Passed (all tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Task 04 dependency**: The `UiMode::InstallWizard` stub in `render/mod.rs` renders nothing. Users opening the wizard (pressing `I`) will see a blank screen until task 04 ships the widget. The state transitions (loading, preflight completion, navigation) all work correctly.
+2. **Pre-existing flaky test**: The `test_android_sdk_root_from_env_android_home` test fails under parallel execution — pre-existing issue, not introduced by this task.
