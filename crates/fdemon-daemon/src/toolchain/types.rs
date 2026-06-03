@@ -216,6 +216,153 @@ pub enum DoctorMarker {
 #[derive(Debug, Clone)]
 pub(super) struct AndroidSdkRoot(pub PathBuf);
 
+// ── Phase 2 install types ─────────────────────────────────────────────────────
+
+/// How a managed Flutter SDK is installed.
+///
+/// `GitClone` keeps the SDK self-updatable via `flutter upgrade`; `Archive`
+/// is used on hosts where git is unavailable or a pre-built archive is preferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallMethod {
+    /// `git clone -b <channel> --depth 1` — keeps `flutter upgrade` working.
+    GitClone,
+    /// Download + verify + extract the release archive (no git required).
+    Archive,
+}
+
+/// Host CPU architecture, used to select the correct release archive.
+///
+/// Distinct from [`HostPlatform`] (which identifies the OS). The releases
+/// manifest URL is constructed from the OS; the archive within the manifest is
+/// selected by arch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostArch {
+    /// 64-bit x86 (amd64).
+    X64,
+    /// 64-bit ARM (aarch64 / Apple Silicon).
+    Arm64,
+    /// Unrecognised or unsupported architecture.
+    Unknown,
+}
+
+impl HostArch {
+    /// Detect the current host CPU architecture at compile time.
+    pub fn detect() -> Self {
+        if cfg!(target_arch = "x86_64") {
+            Self::X64
+        } else if cfg!(target_arch = "aarch64") {
+            Self::Arm64
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// Return the architecture label as it appears in the Flutter release
+    /// manifest's `dart_sdk_arch` field (e.g. `"x64"`, `"arm64"`).
+    pub fn as_manifest_str(self) -> Option<&'static str> {
+        match self {
+            Self::X64 => Some("x64"),
+            Self::Arm64 => Some("arm64"),
+            Self::Unknown => None,
+        }
+    }
+}
+
+/// A single entry from the Flutter releases manifest (`releases_<os>.json`).
+#[derive(Debug, Clone)]
+pub struct FlutterRelease {
+    /// Flutter version string, e.g. `"3.24.0"`.
+    pub version: String,
+    /// Release channel: `"stable"`, `"beta"`, or `"dev"`.
+    pub channel: String,
+    /// Relative archive path under [`FlutterReleaseManifest::base_url`].
+    pub archive: String,
+    /// Lowercase hex SHA-256 checksum of the archive file.
+    pub sha256: String,
+    /// Architecture label from the manifest (e.g. `"x64"`, `"arm64"`), or
+    /// `None` when the manifest entry predates multi-arch fields.
+    pub dart_sdk_arch: Option<String>,
+}
+
+/// The parsed Flutter releases manifest (`releases_<os>.json`).
+///
+/// Downloaded from the Flutter infrastructure and used to resolve the correct
+/// archive URL and checksum for a given channel and host architecture.
+#[derive(Debug, Clone)]
+pub struct FlutterReleaseManifest {
+    /// Base URL used to construct full archive download URLs.
+    /// Typically `"https://storage.googleapis.com/flutter_infra_release/releases"`.
+    pub base_url: String,
+    /// The hash of the current stable release (from `current_release.stable`).
+    pub current_stable_hash: Option<String>,
+    /// All available releases, newest first.
+    pub releases: Vec<FlutterRelease>,
+}
+
+impl FlutterReleaseManifest {
+    /// Resolve the best stable release for the given host architecture.
+    ///
+    /// Selection order:
+    /// 1. The first `stable` release whose `dart_sdk_arch` matches `arch`.
+    /// 2. If no arch-specific match exists, fall back to the first `stable`
+    ///    release regardless of arch (covers older manifests without per-arch
+    ///    entries).
+    ///
+    /// Returns `None` only when the manifest contains no stable releases at all.
+    pub fn resolve_stable(&self, arch: HostArch) -> Option<&FlutterRelease> {
+        let arch_str = arch.as_manifest_str();
+
+        // Pass 1: prefer an exact arch match.
+        if let Some(label) = arch_str {
+            if let Some(r) = self
+                .releases
+                .iter()
+                .find(|r| r.channel == "stable" && r.dart_sdk_arch.as_deref() == Some(label))
+            {
+                return Some(r);
+            }
+        }
+
+        // Pass 2: fall back to any stable release (no-arch or unknown arch).
+        self.releases.iter().find(|r| r.channel == "stable")
+    }
+}
+
+/// Resolved parameters for a managed Flutter SDK installation.
+#[derive(Debug, Clone)]
+pub struct FlutterInstallTarget {
+    /// How the SDK should be installed.
+    pub method: InstallMethod,
+    /// Flutter channel to install (e.g. `"stable"`).
+    pub channel: String,
+    /// Parent directory that will contain the version subdirectory.
+    pub install_root: PathBuf,
+    /// Name of the directory to create inside `install_root`
+    /// (e.g. `"stable"` or the resolved version string like `"3.24.0"`).
+    pub version_dir_name: String,
+}
+
+/// Progress event emitted during an archive download.
+#[derive(Debug, Clone, Copy)]
+pub struct DownloadProgress {
+    /// Number of bytes received so far.
+    pub received: u64,
+    /// Total expected bytes, or `None` when the server did not provide
+    /// a `Content-Length` header.
+    pub total: Option<u64>,
+}
+
+/// Final outcome of a managed Flutter SDK installation.
+#[derive(Debug, Clone)]
+pub struct FlutterInstallOutcome {
+    /// Resolved SDK root directory (the directory containing `bin/flutter`).
+    pub sdk_path: PathBuf,
+    /// Best-effort version label (e.g. `"3.24.0"` or `"stable"`).
+    pub version: String,
+    /// The install method that was used.
+    pub method: InstallMethod,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +437,141 @@ mod tests {
     #[test]
     fn test_component_status_partial_ne_ok() {
         assert_ne!(ComponentStatus::Partial, ComponentStatus::Ok);
+    }
+
+    // ── Phase 2 install type tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_host_arch_detect_matches_cfg() {
+        let detected = HostArch::detect();
+        if cfg!(target_arch = "x86_64") {
+            assert_eq!(detected, HostArch::X64);
+        } else if cfg!(target_arch = "aarch64") {
+            assert_eq!(detected, HostArch::Arm64);
+        } else {
+            assert_eq!(detected, HostArch::Unknown);
+        }
+    }
+
+    #[test]
+    fn test_host_arch_as_manifest_str() {
+        assert_eq!(HostArch::X64.as_manifest_str(), Some("x64"));
+        assert_eq!(HostArch::Arm64.as_manifest_str(), Some("arm64"));
+        assert_eq!(HostArch::Unknown.as_manifest_str(), None);
+    }
+
+    /// Helper: build a minimal `FlutterReleaseManifest` with two stable releases
+    /// that differ only in `dart_sdk_arch`.
+    fn make_manifest_with_two_arches() -> FlutterReleaseManifest {
+        FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![
+                FlutterRelease {
+                    version: "3.24.0".to_string(),
+                    channel: "stable".to_string(),
+                    archive: "stable/linux/flutter_linux_3.24.0-stable.tar.xz".to_string(),
+                    sha256: "aaaa".to_string(),
+                    dart_sdk_arch: Some("x64".to_string()),
+                },
+                FlutterRelease {
+                    version: "3.24.0".to_string(),
+                    channel: "stable".to_string(),
+                    archive: "stable/linux/flutter_linux_arm64_3.24.0-stable.tar.xz".to_string(),
+                    sha256: "bbbb".to_string(),
+                    dart_sdk_arch: Some("arm64".to_string()),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_resolve_stable_prefers_arch_match() {
+        // manifest with two stable releases (x64, arm64) → resolve_stable(Arm64) picks arm64
+        let manifest = make_manifest_with_two_arches();
+
+        let x64 = manifest
+            .resolve_stable(HostArch::X64)
+            .expect("x64 must resolve");
+        assert_eq!(x64.dart_sdk_arch.as_deref(), Some("x64"));
+        assert_eq!(x64.sha256, "aaaa");
+
+        let arm64 = manifest
+            .resolve_stable(HostArch::Arm64)
+            .expect("arm64 must resolve");
+        assert_eq!(arm64.dart_sdk_arch.as_deref(), Some("arm64"));
+        assert_eq!(arm64.sha256, "bbbb");
+    }
+
+    #[test]
+    fn test_resolve_stable_falls_back_when_no_arch() {
+        // Single stable release without `dart_sdk_arch` → still resolved for any arch.
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![FlutterRelease {
+                version: "3.22.0".to_string(),
+                channel: "stable".to_string(),
+                archive: "stable/linux/flutter_linux_3.22.0-stable.tar.xz".to_string(),
+                sha256: "cccc".to_string(),
+                dart_sdk_arch: None, // no arch field — older manifest entry
+            }],
+        };
+
+        // Both X64 and Arm64 should fall back to the single arch-less stable entry.
+        let r_x64 = manifest
+            .resolve_stable(HostArch::X64)
+            .expect("must resolve even without arch field");
+        assert_eq!(r_x64.sha256, "cccc");
+
+        let r_arm64 = manifest
+            .resolve_stable(HostArch::Arm64)
+            .expect("must resolve even without arch field");
+        assert_eq!(r_arm64.sha256, "cccc");
+    }
+
+    #[test]
+    fn test_resolve_stable_returns_none_for_empty_manifest() {
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![],
+        };
+        assert!(manifest.resolve_stable(HostArch::X64).is_none());
+    }
+
+    #[test]
+    fn test_resolve_stable_skips_non_stable_channels() {
+        // manifest contains only a beta release → resolve_stable must return None
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![FlutterRelease {
+                version: "3.25.0-0.1.pre".to_string(),
+                channel: "beta".to_string(),
+                archive: "beta/linux/flutter_linux_3.25.0-0.1.pre-beta.tar.xz".to_string(),
+                sha256: "dddd".to_string(),
+                dart_sdk_arch: Some("x64".to_string()),
+            }],
+        };
+        assert!(manifest.resolve_stable(HostArch::X64).is_none());
+    }
+
+    #[test]
+    fn test_install_method_is_copy() {
+        // Ensure InstallMethod can be copied without move.
+        let m = InstallMethod::GitClone;
+        let _m2 = m; // copy
+        assert_eq!(m, InstallMethod::GitClone);
+    }
+
+    #[test]
+    fn test_download_progress_is_copy() {
+        let p = DownloadProgress {
+            received: 1024,
+            total: Some(4096),
+        };
+        let _p2 = p; // copy
+        assert_eq!(p.received, 1024);
     }
 }

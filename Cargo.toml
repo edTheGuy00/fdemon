@@ -64,8 +64,19 @@ percent-encoding = "2"
 which = "8"
 dunce = "1"
 
-# HTTP client (HTTPS-capable, used by version_check)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# HTTP client (HTTPS-capable, used by version_check and install)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+
+# Archive handling for Flutter SDK install (pure-Rust only; no C dependencies)
+# zip v2.x: MSRV 1.73.0 — compatible with our 1.77.2 floor.
+# default-features = false avoids bzip2/zstd/time; `deflate` enables pure-Rust flate2 backend.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# tar: pure-Rust tar reader/writer. `default-features = false` drops xattr (Linux-only optional dep).
+tar = { version = "0.4", default-features = false }
+# lzma-rs: pure-Rust LZMA/XZ decoder (no liblzma C dependency).
+lzma-rs = { version = "0.3", features = ["stream"] }
+# sha2: pure-Rust SHA-256 for archive checksum verification.
+sha2 = "0.10"
 
 # Misc
 rand = "0.8"

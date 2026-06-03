@@ -25,8 +25,9 @@ mod doctor;
 mod types;
 
 pub use types::{
-    ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
-    HostShell, ToolchainReport,
+    ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, DownloadProgress,
+    FlutterInstallOutcome, FlutterInstallTarget, FlutterRelease, FlutterReleaseManifest, HostArch,
+    HostPlatform, HostShell, InstallMethod, ToolchainReport,
 };
 
 use std::path::Path;

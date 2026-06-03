@@ -22,6 +22,11 @@ toml.workspace = true
 dirs.workspace = true
 which.workspace = true
 dunce.workspace = true
+reqwest.workspace = true
+zip.workspace = true
+tar.workspace = true
+lzma-rs.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
