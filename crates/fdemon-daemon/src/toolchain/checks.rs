@@ -13,9 +13,29 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use crate::flutter_sdk::find_flutter_sdk;
+use crate::flutter_sdk::{diagnostics::strip_ansi, find_flutter_sdk};
 
 use super::types::{AndroidSdkRoot, ComponentCheck, ComponentKind, ComponentStatus, HostPlatform};
+
+/// Cap stored probe detail so a misbehaving tool's first line cannot bloat the report.
+const MAX_DETAIL_LEN: usize = 256;
+
+/// Strip ANSI escape sequences and truncate to [`MAX_DETAIL_LEN`] characters.
+///
+/// Applied to `detail` strings that originate from external process output.
+/// Code-authored static strings are **not** passed through this function.
+fn strip_and_truncate(s: &str) -> String {
+    let cleaned = strip_ansi(s);
+    if cleaned.len() <= MAX_DETAIL_LEN {
+        cleaned
+    } else {
+        // Truncate at a character boundary
+        cleaned
+            .char_indices()
+            .nth(MAX_DETAIL_LEN)
+            .map_or(cleaned.clone(), |(i, _)| cleaned[..i].to_string())
+    }
+}
 
 /// Timeout for lightweight `--version` style tool probes.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -95,7 +115,7 @@ pub async fn check_git() -> ComponentCheck {
     match result {
         Ok(Ok(output)) if output.status.success() => {
             let raw = String::from_utf8_lossy(&output.stdout);
-            let version = raw.trim().to_string();
+            let version = strip_and_truncate(raw.trim());
             ComponentCheck {
                 kind: ComponentKind::Git,
                 status: ComponentStatus::Ok,
@@ -103,7 +123,8 @@ pub async fn check_git() -> ComponentCheck {
             }
         }
         Ok(Ok(output)) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let raw_stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = strip_and_truncate(raw_stderr.trim());
             ComponentCheck {
                 kind: ComponentKind::Git,
                 status: ComponentStatus::Error,
@@ -184,7 +205,10 @@ pub async fn check_jdk() -> ComponentCheck {
 fn parse_jdk_output(text: &str) -> ComponentCheck {
     // Look for a version string like `"17.0.2"` or `"1.8.0_291"`
     // The first line typically has: openjdk version "X.Y.Z" ...
-    let first_line = text.lines().next().unwrap_or("");
+    // Strip ANSI codes that some JVM distributions emit on their version output.
+    let raw_first_line = text.lines().next().unwrap_or("");
+    let first_line = strip_ansi(raw_first_line);
+    let first_line = first_line.trim();
 
     if first_line.is_empty() {
         return ComponentCheck {
@@ -211,17 +235,18 @@ fn parse_jdk_output(text: &str) -> ComponentCheck {
                     status: ComponentStatus::Partial,
                     detail: format!("Java {v} (major {maj}) — Android requires JDK 17 or newer"),
                 },
+                // m5 fix: unparseable major version is not a confirmed-good JDK.
                 None => ComponentCheck {
                     kind: ComponentKind::Jdk,
-                    status: ComponentStatus::Ok,
-                    detail: format!("Java {v}"),
+                    status: ComponentStatus::Partial,
+                    detail: format!("Java {v} (could not determine major version)"),
                 },
             }
         }
         None => ComponentCheck {
             kind: ComponentKind::Jdk,
             status: ComponentStatus::Error,
-            detail: format!("could not parse java version from: {first_line}"),
+            detail: strip_and_truncate(&format!("could not parse java version from: {first_line}")),
         },
     }
 }
@@ -427,7 +452,7 @@ pub async fn check_android_platform_tools(root: Option<&AndroidSdkRoot>) -> Comp
     match result {
         Ok(Ok(output)) if output.status.success() => {
             let raw = String::from_utf8_lossy(&output.stdout);
-            let first_line = raw.lines().next().unwrap_or("adb").trim().to_string();
+            let first_line = strip_and_truncate(raw.lines().next().unwrap_or("adb").trim());
             ComponentCheck {
                 kind: ComponentKind::AndroidPlatformTools,
                 status: ComponentStatus::Ok,
@@ -738,25 +763,58 @@ mod tests {
 
     // ── android_sdk_root ──────────────────────────────────────────────────────
 
+    /// Restore environment variable values after a test that mutates them.
+    struct EnvGuard {
+        key: &'static str,
+        prior: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prior = std::env::var(key).ok();
+            // SAFETY: single-threaded by #[serial_test::serial]; no other thread reads these vars.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, prior }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let prior = std::env::var(key).ok();
+            // SAFETY: single-threaded by #[serial_test::serial]; no other thread reads these vars.
+            unsafe { std::env::remove_var(key) };
+            Self { key, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                // SAFETY: restoring a value that was present before the test began.
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                // SAFETY: variable was absent before the test; restore that state.
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
     #[test]
+    #[serial_test::serial]
     fn test_android_sdk_root_from_env_android_home() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
-        std::env::set_var("ANDROID_HOME", &path);
-        // Unset SDK_ROOT to avoid interference
-        std::env::remove_var("ANDROID_SDK_ROOT");
+        let _home = EnvGuard::set("ANDROID_HOME", &path);
+        let _sdk_root = EnvGuard::remove("ANDROID_SDK_ROOT");
 
         let result = android_sdk_root();
-        std::env::remove_var("ANDROID_HOME");
 
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, tmp.path());
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_android_sdk_root_returns_none_for_nonexistent_path() {
-        std::env::remove_var("ANDROID_HOME");
-        std::env::remove_var("ANDROID_SDK_ROOT");
+        let _home = EnvGuard::remove("ANDROID_HOME");
+        let _sdk_root = EnvGuard::remove("ANDROID_SDK_ROOT");
         // Default platform path is unlikely to exist in CI with a made-up name,
         // but we cannot set it to nothing easily — just verify no panic.
         let _ = android_sdk_root();
@@ -958,5 +1016,89 @@ OpenJDK Runtime Environment (build 11.0.20+8)
     async fn test_check_prerequisites_never_panics() {
         let platform = HostPlatform::detect();
         let _ = check_prerequisites(&platform).await;
+    }
+
+    // ── m5: JDK unparseable major is not Ok ───────────────────────────────────
+
+    /// A bare `"1"` version string has no parseable major (since the first component
+    /// is `1` — legacy format — but there is no second component). This must not
+    /// classify as `Ok`.
+    #[test]
+    fn test_parse_jdk_unparseable_major_is_not_ok() {
+        let text = "java version \"1\"\n";
+        let check = parse_jdk_output(text);
+        assert_ne!(
+            check.status,
+            ComponentStatus::Ok,
+            "unparseable major version must not be Ok; got {:?}",
+            check.status
+        );
+        assert!(
+            check.status == ComponentStatus::Partial || check.status == ComponentStatus::Error,
+            "expected Partial or Error, got {:?}",
+            check.status
+        );
+    }
+
+    /// Regression guard — Java 17 must still be classified as Ok.
+    #[test]
+    fn test_parse_jdk_modern_17_is_ok() {
+        let text = "openjdk version \"17.0.9\" 2023-10-17\nOpenJDK Runtime Environment\n";
+        let check = parse_jdk_output(text);
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(check.detail.contains("17.0.9"));
+    }
+
+    /// Java 8 (legacy `1.8.x` format) must yield Partial.
+    #[test]
+    fn test_parse_jdk_legacy_8_is_partial() {
+        let text = "java version \"1.8.0_291\"\nJava(TM) SE Runtime Environment\n";
+        let check = parse_jdk_output(text);
+        assert_eq!(check.status, ComponentStatus::Partial);
+        assert!(check.detail.contains("1.8.0_291"));
+    }
+
+    // ── n12: ANSI stripping and length-bounding ───────────────────────────────
+
+    /// `strip_and_truncate` must remove embedded ANSI codes and cap the result at
+    /// `MAX_DETAIL_LEN` characters.
+    #[test]
+    fn test_detail_strips_ansi_and_truncates() {
+        // Build a string with a CSI color code + a very long suffix
+        let long_suffix = "x".repeat(MAX_DETAIL_LEN + 50);
+        let input = format!("\x1b[31merror\x1b[0m: {long_suffix}");
+        let result = strip_and_truncate(&input);
+        // ANSI codes stripped
+        assert!(!result.contains('\x1b'), "ANSI escape survived stripping");
+        // Length bounded
+        assert!(
+            result.len() <= MAX_DETAIL_LEN,
+            "detail len {} exceeds MAX_DETAIL_LEN {}",
+            result.len(),
+            MAX_DETAIL_LEN
+        );
+        // Visible content preserved
+        assert!(
+            result.starts_with("error:"),
+            "content was mangled: {result:?}"
+        );
+    }
+
+    /// `strip_and_truncate` must leave short strings that contain no ANSI untouched.
+    #[test]
+    fn test_detail_passthrough_for_clean_short_string() {
+        let input = "git version 2.43.0";
+        assert_eq!(strip_and_truncate(input), input);
+    }
+
+    /// `parse_jdk_output` strips ANSI from the java -version first line before
+    /// version extraction.
+    #[test]
+    fn test_parse_jdk_strips_ansi_from_version_line() {
+        // Simulate a JVM that emits color codes around the version line
+        let text = "\x1b[32mopenjdk version \"17.0.9\" 2023-10-17\x1b[0m\n";
+        let check = parse_jdk_output(text);
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(check.detail.contains("17.0.9"));
     }
 }

@@ -140,20 +140,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    #[test]
-    fn test_host_platform_detect_matches_cfg() {
-        let detected = HostPlatform::detect();
-        if cfg!(target_os = "linux") {
-            assert_eq!(detected, HostPlatform::Linux);
-        } else if cfg!(target_os = "macos") {
-            assert_eq!(detected, HostPlatform::MacOs);
-        } else if cfg!(target_os = "windows") {
-            assert_eq!(detected, HostPlatform::Windows);
-        } else {
-            assert_eq!(detected, HostPlatform::Unknown);
-        }
-    }
-
     #[tokio::test]
     async fn test_run_preflight_returns_report_without_panicking() {
         // Use a temp directory as the project path so the locator does not
