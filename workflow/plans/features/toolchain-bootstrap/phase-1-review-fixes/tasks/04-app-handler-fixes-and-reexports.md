@@ -109,3 +109,36 @@ Add a bullet:
 - The re-export is the **prerequisite** for task 05 dropping the `fdemon-daemon` runtime dep from
   `fdemon-tui/Cargo.toml`. Land it here first.
 - Do not touch the TUI imports or `fdemon-tui/Cargo.toml` — that is task 05.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added re-entrancy guard to `handle_rerun_preflight`; added 2 new tests (`test_rerun_preflight_noops_when_already_loading`, `test_rerun_preflight_spawns_when_idle`); fixed `test_rerun_clears_status_message` to use idle state |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Removed dead `_effective` binding and `DEFAULT_VISIBLE_HEIGHT` constant; updated doc comment on `handle_down` |
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Added re-export of `ComponentCheck`, `ComponentStatus`, `DoctorLine`, `DoctorMarker` from `fdemon_daemon::toolchain` |
+| `docs/REVIEW_FOCUS.md` | Registered `InstallWizardState::last_known_visible_height` under current Cell render-hint usage |
+
+### Notable Decisions/Tradeoffs
+
+1. **Re-entrancy guard placement**: The guard checks `loading` before any state mutation, ensuring the function is truly a no-op (no state change, no action) when already loading. The existing `test_rerun_clears_status_message` test needed updating to put state into idle mode (`apply_report()`) before testing status_message clearing — the original test was constructing state in "loading=true" mode, which was testing behaviour that no longer holds after the guard.
+2. **Dead binding removal**: Removed `DEFAULT_VISIBLE_HEIGHT` constant entirely (only used by the dead binding), cleaned up the stale doc comment referencing it. The `handle_down` Detail branch now simply increments and delegates clamping to the renderer, which is documented in a brief inline comment.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all 6,357 tests passing, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-app --lib -- handler::install_wizard` - Passed (19 tests)
+
+### Risks/Limitations
+
+1. **No risks identified**: All changes are additive or local cleanups. The re-export adds a new public API surface to `fdemon-app`, which is the intended prerequisite for task 05.

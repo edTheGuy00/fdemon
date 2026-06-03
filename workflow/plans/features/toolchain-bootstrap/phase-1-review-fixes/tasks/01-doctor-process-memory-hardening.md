@@ -98,3 +98,40 @@ let indent = leading_spaces.min(MAX_DOCTOR_INDENT);
 - `read_to_end` after `take(..)` requires `use tokio::io::AsyncReadExt;` (already imported).
 - This task **exposes/extends** the shared `strip_ansi` that task 02 (n12) will consume — keep the
   signature `pub(crate) fn strip_ansi(&str) -> String`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/doctor.rs` | Added `kill_on_drop(true)` on Command; restructured I/O handle extraction before async block; capped both stdout and stderr reads via `AsyncReadExt::take(MAX_DOCTOR_OUTPUT_BYTES)`; added `MAX_DOCTOR_OUTPUT_BYTES` constant (1 MiB per stream); added `MAX_DOCTOR_INDENT` constant (32); capped `indent` in `parse_single_line`; removed local `strip_ansi`; imported `crate::flutter_sdk::diagnostics::strip_ansi`; fixed misleading timeout comment; added three new tests |
+| `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs` | Extended `strip_ansi` to handle OSC sequences (`ESC ]` ... `BEL`/`ESC \`) in addition to CSI; added four new tests including mixed CSI+OSC and OSC+ST variants |
+
+### Notable Decisions/Tradeoffs
+
+1. **`kill_on_drop(true)` approach**: The task suggested either `kill_on_drop(true)` or keeping `child` out of the async block for explicit `start_kill()`. Both approaches were implemented: `kill_on_drop(true)` is set on the Command (covers all drop paths), and the I/O handles are extracted before the async block so `child` is accessible (though with `kill_on_drop` set it is safe to let it drop at timeout). This gives defense-in-depth.
+
+2. **I/O handle extraction before timeout future**: To use `kill_on_drop` cleanly and make the flow explicit, `child.stdout.take()` and `child.stderr.take()` are called before the `tokio::time::timeout` closure. The `child` is then moved into the async block so it is dropped at the end of the happy path after `child.wait()`.
+
+3. **`AsyncReadExt::take` syntax**: The task noted this correctly. Using `AsyncReadExt::take(stdout, MAX_DOCTOR_OUTPUT_BYTES)` (as a free function form) works because `AsyncReadExt` is already imported. Both stdout and stderr reads are capped.
+
+4. **OSC ST two-char terminator**: The OSC terminator `ESC \` in the shared `strip_ansi` was handled correctly — after seeing `\x1b` inside an OSC sequence, one additional character is consumed (the `\`), matching the existing behavior in the old local copy.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites pass, no failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Timeout kill coverage**: `kill_on_drop(true)` sends SIGKILL on Unix and `TerminateProcess` on Windows. The signal is async — the OS may take a few milliseconds to actually terminate the process, but the Rust handle is released immediately. This is the standard safe approach and matches what other tools do.
+
+2. **OSC C1 ST (`\u{9C}`)**: The shared `strip_ansi` now handles `\u{9C}` as an OSC terminator (C1 String Terminator). This was present in the old local copy and is preserved. Real Flutter output uses BEL (`\x07`) or `ESC \` but C1 support is low-cost and correct.

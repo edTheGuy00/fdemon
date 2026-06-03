@@ -99,3 +99,38 @@ tests are hermetic.
   task 03.
 - `std::env::set_var` is `unsafe` on the workspace MSRV (1.77.2); the `unsafe` block is expected and
   not a clippy violation when annotated.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a2097366872094786
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks.rs` | JDK Partial fix (m5), ANSI strip+truncate on process-derived details (n12), serialized env tests with EnvGuard (m8), new acceptance-criteria tests |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Removed duplicate `test_host_platform_detect_matches_cfg` (m10) |
+
+### Notable Decisions/Tradeoffs
+
+1. **EnvGuard RAII pattern**: Instead of bare `set_var`/`remove_var` in test bodies, introduced a local `EnvGuard` struct that saves the prior value on construction and restores it on drop. This makes each env-mutating test hermetic even under `panic!`, and the `unsafe` blocks are co-located with the safety rationale comment.
+
+2. **`strip_and_truncate` helper**: Rather than inlining `strip_ansi` + truncation at every call-site, a private `strip_and_truncate` combines both operations. It is applied only to process-derived strings (stdout/stderr). Code-authored static strings like `"java not found on PATH"` are intentionally not run through it.
+
+3. **Truncation at char boundary**: Used `char_indices().nth(MAX_DETAIL_LEN)` to truncate at a character boundary, avoiding the potential panic from slicing a multi-byte character.
+
+4. **m5 — `None` arm returns `Partial`**: A bare `"1"` string (legacy format, first component is 1 but no second component) now returns `Partial` with a descriptive message rather than `Ok`. The message wording follows the task spec exactly: `"Java {v} (could not determine major version)"`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all 6,486 tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Truncation is char-count not byte-count**: `MAX_DETAIL_LEN = 256` means 256 Unicode codepoints. For purely ASCII tool output (git, java) this is equivalent to 256 bytes. If a tool produces multi-byte UTF-8, the stored string may be up to 4×256 bytes in the worst case. This is acceptable for the intended use (diagnostic display).

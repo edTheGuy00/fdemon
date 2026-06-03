@@ -117,3 +117,41 @@ explaining the defensive intent. Do not change the displayed behavior.
 - Do not reintroduce `DeviceDiscoveryFailed` removal anywhere else; only the startup branch changes.
 - If you judge the re-export pattern worth a one-line note in `ARCHITECTURE.md`, flag it in the
   completion summary for a `doc_maintainer` follow-up rather than editing the managed doc.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/runner.rs` | Added early-exit guard in `dispatch_startup_action`: when `flutter_executable()` is `None`, sends `ShowInstallWizard` via `try_send` and returns immediately, covering both `AutoStart` and `Ready` paths. Added two `#[tokio::test]` tests verifying both paths transition to `UiMode::InstallWizard` when no SDK is present. |
+| `crates/fdemon-tui/src/widgets/install_wizard/doctor_view.rs` | Repointed `use fdemon_daemon::toolchain::{DoctorLine, DoctorMarker}` → `use fdemon_app::install_wizard::{DoctorLine, DoctorMarker}`. |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Repointed non-test import to `fdemon_app::install_wizard::{ComponentCheck, ComponentStatus, InstallWizardState, WizardPane, WizardStepKind}`. Removed `_selected_index: usize` from `compute_corrected_scroll` and updated all 4 call sites (2 production + 2 test). Removed redundant `start.min(lines.len())` in Doctor branch (replaced with direct `corrected_scroll` use, doc-commented as guaranteed by the clamp). |
+| `crates/fdemon-tui/Cargo.toml` | Removed `fdemon-daemon` from `[dependencies]`; it was already present in `[dev-dependencies]` with `features = ["test-helpers"]`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Early-exit guard placement**: The check `flutter_executable().is_none()` is placed before the `match` so it applies uniformly to both `AutoStart` and `Ready`. The original `Ready` branch also had a fallback — the new guard replaces it, keeping the `Ready` branch clean with no dead else path.
+
+2. **Doctor branch simplification (n15)**: Instead of merely adding a comment, the `start.min(lines.len())` redundancy was removed entirely (the `if let Some(lines)` guard now ensures the slice index is valid, and `corrected_scroll` is already bounded). This is the minimal correct change; a comment is added explaining the guarantee.
+
+3. **Doc update note**: The `fdemon_app::install_wizard::*` re-export pattern (daemon types re-exported through app to break a presentation→daemon dep) is architecturally notable. Flagging for `doc_maintainer` to add a one-line note to the `fdemon-tui` section of `ARCHITECTURE.md` under "Dependencies: `fdemon-core`, `fdemon-app`".
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (6458+ tests total, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- New tests added: `test_dispatch_startup_ready_no_sdk_opens_wizard` and `test_dispatch_startup_autostart_no_sdk_opens_wizard` in `crates/fdemon-tui/src/runner.rs`
+
+### Risks/Limitations
+
+1. **Manual verification**: The test environment has no Flutter SDK so both new tests exercise the no-SDK path naturally. The "SDK present, AutoStart proceeds normally" path is already covered by existing handler tests in `fdemon-app` and was not changed by this task.
+
+2. **`fdemon-daemon` dev-dep only**: After the Cargo.toml change, `fdemon-daemon` is a dev-dependency of `fdemon-tui`. The `test_utils.rs` module (gated `#[cfg(test)]` in lib.rs) and all widget test modules that use `fdemon_daemon` types remain valid since dev-dependencies are available in test builds.
