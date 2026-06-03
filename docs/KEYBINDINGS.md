@@ -42,6 +42,11 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [General Controls](#general-controls-4)
   - [Pane Navigation](#pane-navigation)
   - [Version List Controls](#version-list-controls-when-installed-versions-pane-is-focused)
+- [Install Wizard Mode](#install-wizard-mode)
+  - [General Controls](#general-controls-5)
+  - [Pane Navigation](#pane-navigation-1)
+  - [Step List Controls](#step-list-controls-when-step-list-pane-is-focused)
+  - [Detail Pane Controls](#detail-pane-controls-when-detail-pane-is-focused)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -195,8 +200,11 @@ Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls
 | Key | Action | Description |
 |-----|--------|-------------|
 | `V` | Open Flutter Version Panel | Open the Flutter SDK version manager panel |
+| `I` | Open Install Wizard | Open the toolchain install wizard (runs a preflight check) |
 
 Once in Flutter Version mode, see [Flutter Version Mode](#flutter-version-mode) for detailed controls.
+
+Once in Install Wizard mode, see [Install Wizard Mode](#install-wizard-mode) for detailed controls.
 
 ### DAP Server
 
@@ -616,6 +624,49 @@ The panel has a two-pane layout:
 | `u` | Update Version | Update the selected Flutter SDK version |
 
 > **Note:** Switching to the active version or removing the active version are both blocked — the status bar will show an error message.
+
+---
+
+## Install Wizard Mode
+
+Enter Install Wizard mode by pressing `I` in Normal mode. This panel shows the results of a toolchain preflight check, grouped into five ordered steps.
+
+The panel has a two-pane layout:
+- **Step List** (left): Five ordered steps with roll-up status indicators
+- **Detail** (right): Per-step detail — component checks and embedded doctor output
+
+Preflight runs automatically when the wizard opens. Press `r` to re-run at any time.
+
+### General Controls
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Close Panel | Close the Install Wizard and return to Normal mode |
+| `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
+
+### Pane Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Tab` | Switch Pane | Toggle focus between Step List and Detail pane |
+
+### Step List Controls (when Step List pane is focused)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `k` / `↑` | Navigate Up | Move selection up in the step list |
+| `j` / `↓` | Navigate Down | Move selection down in the step list |
+| `r` | Re-run Preflight | Re-run the toolchain preflight check |
+
+### Detail Pane Controls (when Detail pane is focused)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `k` / `↑` | Scroll Up | Scroll the detail pane up |
+| `j` / `↓` | Scroll Down | Scroll the detail pane down |
+| `r` | Re-run Preflight | Re-run the toolchain preflight check |
+
+> **Note:** Step execution (running install commands) is not yet available in Phase 1. The wizard is read-only.
 
 ---
 

@@ -1705,6 +1705,33 @@ pub enum Message {
     /// Update the selected version (u key) — stub for Phase 3
     FlutterVersionUpdate,
 
+    // ── Install Wizard ────────────────────────────────────────────────────────
+    /// Open the Install Wizard panel (I key in Normal mode)
+    ShowInstallWizard,
+
+    /// Close the Install Wizard panel
+    HideInstallWizard,
+
+    /// Priority-ordered escape: close panel → return to Normal
+    InstallWizardEscape,
+
+    /// Switch pane focus (Tab key)
+    InstallWizardSwitchPane,
+
+    /// Navigate up in the step list or scroll detail pane up (k/Up)
+    InstallWizardUp,
+
+    /// Navigate down in the step list or scroll detail pane down (j/Down)
+    InstallWizardDown,
+
+    /// Re-run the toolchain preflight check (r key)
+    InstallWizardRerunPreflight,
+
+    /// Preflight task completed — populate the wizard with the report
+    ToolchainPreflightCompleted {
+        report: fdemon_daemon::toolchain::ToolchainReport,
+    },
+
     // ── Mouse Click Messages (Phase 5) ────────────────────────────────────────
     /// Click on a device row inside the NewSessionDialog Connected/Bootable list.
     ///

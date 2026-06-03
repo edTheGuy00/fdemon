@@ -10,6 +10,7 @@ use rand::Rng;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::flutter_version::FlutterVersionState;
+use crate::install_wizard::InstallWizardState;
 use crate::mouse_regions::{MouseRegions, MouseRegionsCell};
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
@@ -60,6 +61,9 @@ pub enum UiMode {
 
     /// DevTools panel mode - replaces log view with Inspector/Performance panels
     DevTools,
+
+    /// Install Wizard panel - guides users through Flutter toolchain setup
+    InstallWizard,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1427,6 +1431,13 @@ pub struct AppState {
     /// which snapshots the current `resolved_sdk` at open time.
     pub flutter_version_state: FlutterVersionState,
 
+    /// State for the Install Wizard panel overlay.
+    ///
+    /// Initialized to `InstallWizardState::default()` at startup.
+    /// Re-initialized via `show_install_wizard()` when the panel is opened,
+    /// which sets `visible = true` and `loading = true` while the preflight task runs.
+    pub install_wizard_state: InstallWizardState,
+
     /// Optional one-line notice rendered above the New Session Dialog on startup.
     ///
     /// Set by handlers such as `Message::NewVersionAvailable` to surface
@@ -1580,6 +1591,7 @@ impl AppState {
             shared_source_handles: Vec::new(),
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
+            install_wizard_state: InstallWizardState::default(),
             startup_notice: None,
             toasts: Vec::new(),
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
@@ -1704,6 +1716,22 @@ impl AppState {
     /// Closes the Flutter Version panel, returning to Normal mode.
     pub fn hide_flutter_version(&mut self) {
         self.flutter_version_state.visible = false;
+        self.ui_mode = UiMode::Normal;
+    }
+
+    /// Open the Install Wizard panel.
+    ///
+    /// Resets the wizard to a fresh loading state and transitions to
+    /// `UiMode::InstallWizard`. The caller is responsible for also dispatching
+    /// `UpdateAction::RunToolchainPreflight` to populate the report.
+    pub fn show_install_wizard(&mut self) {
+        self.install_wizard_state = InstallWizardState::opening();
+        self.ui_mode = UiMode::InstallWizard;
+    }
+
+    /// Close the Install Wizard panel and return to Normal mode.
+    pub fn hide_install_wizard(&mut self) {
+        self.install_wizard_state.visible = false;
         self.ui_mode = UiMode::Normal;
     }
 

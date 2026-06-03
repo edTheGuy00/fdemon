@@ -62,6 +62,7 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
         UiMode::Settings => handle_key_settings(state, key),
         UiMode::FlutterVersion => handle_key_flutter_version(key, state),
         UiMode::DevTools => handle_key_devtools(state, key),
+        UiMode::InstallWizard => handle_key_install_wizard(key, state),
     }
 }
 
@@ -354,6 +355,13 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         // future vim-style visual mode that might use lowercase 'v')
         InputKey::Char('V') => Some(Message::ShowFlutterVersion),
 
+        // ─────────────────────────────────────────────────────────
+        // Install Wizard
+        // ─────────────────────────────────────────────────────────
+        // 'I' - Open Install Wizard panel (uppercase; lowercase 'i' is used
+        // in FlutterVersion for Install)
+        InputKey::Char('I') => Some(Message::ShowInstallWizard),
+
         _ => None,
     }
 }
@@ -393,6 +401,39 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
         InputKey::Char('d') => Some(Message::FlutterVersionRemove),
         InputKey::Char('i') => Some(Message::FlutterVersionInstall),
         InputKey::Char('u') => Some(Message::FlutterVersionUpdate),
+
+        _ => None,
+    }
+}
+
+/// Handle key events in Install Wizard panel mode.
+///
+/// Key bindings:
+/// - `Ctrl+C` — force quit (always active)
+/// - `Esc` — close the panel (`InstallWizardEscape`)
+/// - `Tab` — switch between panes (`InstallWizardSwitchPane`)
+/// - `k`/`Up` — navigate up in the step list or scroll detail up
+/// - `j`/`Down` — navigate down in the step list or scroll detail down
+/// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
+///
+/// `Enter` is intentionally unbound in Phase 1 (step execution is Phase 2).
+fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message> {
+    match key {
+        // ── Global keys ───────────────────────────────────────────────────────
+        InputKey::CharCtrl('c') => Some(Message::Quit),
+
+        // ── Panel lifecycle ───────────────────────────────────────────────────
+        InputKey::Esc => Some(Message::InstallWizardEscape),
+
+        // ── Pane switching ────────────────────────────────────────────────────
+        InputKey::Tab => Some(Message::InstallWizardSwitchPane),
+
+        // ── Navigation ───────────────────────────────────────────────────────
+        InputKey::Char('k') | InputKey::Up => Some(Message::InstallWizardUp),
+        InputKey::Char('j') | InputKey::Down => Some(Message::InstallWizardDown),
+
+        // ── Actions ───────────────────────────────────────────────────────────
+        InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
 
         _ => None,
     }

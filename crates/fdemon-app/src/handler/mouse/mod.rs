@@ -7,6 +7,7 @@
 mod confirm_dialog; // Phase 5 task 05
 mod devtools;
 mod flutter_version;
+mod install_wizard;
 mod link_highlight;
 mod new_session;
 mod normal;
@@ -98,7 +99,8 @@ fn handle_press(
         UiMode::EmulatorSelector
         | UiMode::Loading
         | UiMode::SearchInput
-        | UiMode::FlutterVersion => None,
+        | UiMode::FlutterVersion
+        | UiMode::InstallWizard => None,
     }
 }
 
@@ -168,6 +170,7 @@ fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Me
         UiMode::Startup | UiMode::NewSessionDialog => new_session::handle_scroll(state, dir, mods),
         UiMode::LinkHighlight => link_highlight::handle_scroll(state, dir, mods),
         UiMode::FlutterVersion => flutter_version::handle_scroll(state, dir, mods),
+        UiMode::InstallWizard => install_wizard::handle_scroll(state, dir, mods),
         // Modes with no scrollable surface — explicitly no-op.
         UiMode::SearchInput
         | UiMode::ConfirmDialog
@@ -278,6 +281,7 @@ mod tests {
             UiMode::Settings,
             UiMode::FlutterVersion,
             UiMode::DevTools,
+            UiMode::InstallWizard,
         ] {
             assert_noop(mode, make_press());
         }
@@ -379,6 +383,19 @@ mod tests {
         assert!(
             handle_mouse(&mut state, scroll_up).is_some(),
             "FlutterVersion scroll-up should produce a message"
+        );
+    }
+
+    #[test]
+    fn test_scroll_produces_message_in_install_wizard_mode() {
+        let mut state = state_in_mode(UiMode::InstallWizard);
+        let scroll_up = make_scroll_up();
+        assert!(
+            matches!(
+                handle_mouse(&mut state, scroll_up),
+                Some(Message::InstallWizardUp)
+            ),
+            "InstallWizard scroll-up should produce InstallWizardUp"
         );
     }
 

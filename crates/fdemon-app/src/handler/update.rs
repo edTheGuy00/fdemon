@@ -15,10 +15,10 @@ use fdemon_core::{AppPhase, LogLevel, LogSource};
 use tracing::{info, warn};
 
 use super::{
-    daemon::handle_session_daemon_event, dap, devtools, flutter_version, keys::handle_key,
-    log_view, new_session, scroll, session::maybe_serve_devtools, session_lifecycle,
-    settings_dart_defines, settings_extra_args, settings_handlers, FetchTrigger, Task,
-    UpdateAction, UpdateResult,
+    daemon::handle_session_daemon_event, dap, devtools, flutter_version, install_wizard,
+    keys::handle_key, log_view, new_session, scroll, session::maybe_serve_devtools,
+    session_lifecycle, settings_dart_defines, settings_extra_args, settings_handlers, FetchTrigger,
+    Task, UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state.
@@ -3226,6 +3226,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::FlutterVersionProbeCompleted { result } => {
             flutter_version::handle_version_probe_completed(state, result)
+        }
+
+        // ── Install Wizard ─────────────────────────────────────────────────────
+        Message::ShowInstallWizard => install_wizard::handle_show(state),
+
+        Message::HideInstallWizard => install_wizard::handle_hide(state),
+
+        Message::InstallWizardEscape => install_wizard::handle_escape(state),
+
+        Message::InstallWizardSwitchPane => install_wizard::handle_switch_pane(state),
+
+        Message::InstallWizardUp => install_wizard::handle_up(state),
+
+        Message::InstallWizardDown => install_wizard::handle_down(state),
+
+        Message::InstallWizardRerunPreflight => install_wizard::handle_rerun_preflight(state),
+
+        Message::ToolchainPreflightCompleted { report } => {
+            install_wizard::handle_preflight_completed(state, report)
         }
 
         // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────

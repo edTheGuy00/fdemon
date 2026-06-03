@@ -403,6 +403,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state);
             frame.render_widget(panel, area);
         }
+        // Install Wizard panel — full rendering is handled by task 04.
+        // This stub keeps the workspace compiling while task 04 is in progress.
+        UiMode::InstallWizard => {
+            // TODO(task-04): render install_wizard::InstallWizardPanel here.
+        }
         // Legacy StartupDialog removed - use NewSessionDialog instead
         UiMode::DevTools => {
             // DevTools mode renders into the log area (below the header/tabs)

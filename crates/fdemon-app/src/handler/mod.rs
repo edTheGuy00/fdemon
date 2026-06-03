@@ -17,6 +17,7 @@
 //! - `scroll`: Scroll handlers
 //! - `log_view`: Log view operation handlers
 //! - `flutter_version`: Flutter Version panel handlers
+//! - `install_wizard`: Install Wizard panel handlers
 
 pub(crate) mod daemon;
 pub(crate) mod dap;
@@ -24,6 +25,7 @@ pub(crate) mod dap_backend;
 pub(crate) mod devtools;
 pub(crate) mod flutter_version;
 pub(crate) mod helpers;
+pub(crate) mod install_wizard;
 pub(crate) mod keys;
 pub(crate) mod log_view;
 pub(crate) mod mouse;
@@ -653,6 +655,19 @@ pub enum UpdateAction {
         /// Flutter executable from `state.resolved_sdk` at action creation time.
         /// `None` when no SDK is resolved — action is skipped.
         executable: Option<fdemon_daemon::FlutterExecutable>,
+    },
+
+    // ── Install Wizard ────────────────────────────────────────────────────────
+    /// Run the toolchain preflight check asynchronously.
+    ///
+    /// Spawns `fdemon_daemon::toolchain::run_preflight` in the background and
+    /// sends `Message::ToolchainPreflightCompleted` when it finishes.
+    /// `run_preflight` never returns `Err`, so there is no failure message.
+    RunToolchainPreflight {
+        /// Project root path passed to `run_preflight`.
+        project_path: std::path::PathBuf,
+        /// Explicit SDK path from `settings.flutter.sdk_path`, if set.
+        explicit_sdk_path: Option<std::path::PathBuf>,
     },
 
     /// Fire-and-forget a daemon command on the session's Flutter process stdin.

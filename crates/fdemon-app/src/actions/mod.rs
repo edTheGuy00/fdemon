@@ -796,6 +796,24 @@ pub fn handle_action(
             });
         }
 
+        // ── Install Wizard ────────────────────────────────────────────────────
+        UpdateAction::RunToolchainPreflight {
+            project_path,
+            explicit_sdk_path,
+        } => {
+            let msg_tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let report = fdemon_daemon::toolchain::run_preflight(
+                    &project_path,
+                    explicit_sdk_path.as_deref(),
+                )
+                .await;
+                let _ = msg_tx
+                    .send(crate::message::Message::ToolchainPreflightCompleted { report })
+                    .await;
+            });
+        }
+
         // ── Flutter Version Panel ─────────────────────────────────────────────
         UpdateAction::ScanInstalledSdks { active_sdk_root } => {
             let msg_tx = msg_tx.clone();
