@@ -3247,37 +3247,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             install_wizard::handle_preflight_completed(state, report)
         }
 
-        // ── Install Wizard — Step Execution (Phase 2, Task 05) ────────────────
-        // Stub: full handling lands in task 09; until then we return none() so
-        // the crate stays compiling between tasks.
-        Message::InstallWizardRunSelectedStep => {
-            // TODO(phase2-task-09): build FlutterStepParams / path_bin_dir from
-            // install_wizard_state, then return:
-            //   UpdateResult::action(UpdateAction::RunWizardStep { kind, install, path_bin_dir })
-            UpdateResult::none()
-        }
+        // ── Install Wizard — Step Execution (Phase 2, Task 09) ───────────────
+        Message::InstallWizardRunSelectedStep => install_wizard::handle_run_selected_step(state),
 
-        // These lifecycle messages are produced by RunWizardStep executor (task 08)
-        // and are fully handled in task 09.
-        Message::WizardStepStarted { .. } => {
-            // TODO(phase2-task-09): transition step status to Running.
-            UpdateResult::none()
-        }
-        Message::WizardStepLog { .. } => {
-            // TODO(phase2-task-09): append line to step detail log buffer.
-            UpdateResult::none()
-        }
-        Message::WizardDownloadProgress { .. } => {
-            // TODO(phase2-task-09): update download progress state.
-            UpdateResult::none()
-        }
-        Message::WizardStepCompleted { .. } => {
-            // TODO(phase2-task-09): transition step status to Ok; store sdk_path.
-            UpdateResult::none()
-        }
-        Message::WizardStepFailed { .. } => {
-            // TODO(phase2-task-09): transition step status to Failed; store reason.
-            UpdateResult::none()
+        // These lifecycle messages are produced by the RunWizardStep executor (task 08).
+        Message::WizardStepStarted { kind } => install_wizard::handle_step_started(state, kind),
+        Message::WizardStepLog { line, .. } => install_wizard::handle_step_log(state, line),
+        Message::WizardDownloadProgress {
+            received, total, ..
+        } => install_wizard::handle_step_progress(state, received, total),
+        Message::WizardStepCompleted {
+            kind,
+            summary,
+            sdk_path,
+        } => install_wizard::handle_step_completed(state, kind, summary, sdk_path),
+        Message::WizardStepFailed { reason, .. } => {
+            install_wizard::handle_step_failed(state, reason)
         }
 
         // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────

@@ -58,6 +58,12 @@ pub struct InstallWizardState {
     /// Separate from the per-step `StepStatus` rollup (which reflects preflight
     /// results). Updated by the lifecycle mutators on `InstallWizardState`.
     pub execution: StepExecution,
+    /// SDK path stashed after a successful `FlutterSdk` step execution.
+    ///
+    /// Set by the `WizardStepCompleted { kind: FlutterSdk, sdk_path: Some(p) }` handler
+    /// so that the subsequent `PathConfig` step can resolve the Flutter `bin/` directory
+    /// without re-running a preflight. Cleared when the wizard is closed.
+    pub installed_sdk_path: Option<std::path::PathBuf>,
 }
 
 impl InstallWizardState {
@@ -171,6 +177,7 @@ impl std::fmt::Debug for InstallWizardState {
                 &self.last_known_visible_height.get(),
             )
             .field("execution", &self.execution)
+            .field("installed_sdk_path", &self.installed_sdk_path)
             .finish()
     }
 }
