@@ -4,8 +4,11 @@
 //! Renders the detail for the currently selected [`WizardStep`]:
 //!
 //! - **Doctor step**: delegates to [`DoctorView`].
-//! - **Other steps**: renders each [`ComponentCheck`] as a single row:
-//!   `<glyph> <kind label>: <detail>`, colored by [`ComponentStatus`].
+//! - **Executable steps** (`FlutterSdk`, `PathConfig`): shows component checks
+//!   plus an "▶ Press Enter to …" action hint; switches to the live
+//!   [`StepProgress`] view while a run is in progress.
+//! - **Non-executable steps** (`Prerequisites`, `AndroidTools`, `Doctor`):
+//!   shows component checks plus "Available in a later phase" note.
 //!
 //! Vertical scroll is driven by `state.detail_scroll`.  The actual visible
 //! height is written back to `state.last_known_visible_height` each frame
@@ -22,12 +25,13 @@ use ratatui::{
 };
 
 use fdemon_app::install_wizard::{
-    ComponentCheck, ComponentStatus, InstallWizardState, WizardPane, WizardStepKind,
+    ComponentCheck, ComponentStatus, InstallWizardState, StepExecStatus, WizardPane, WizardStepKind,
 };
 
 use crate::theme::palette;
 
 use super::doctor_view::DoctorView;
+use super::progress::StepProgress;
 
 /// Glyph for `ComponentStatus::Ok`.
 const COMP_OK: &str = "✓";
@@ -45,20 +49,32 @@ const COMP_UNKNOWN: &str = "?";
 /// Derived from: 1 title row + 1 separator row = 2 rows.
 const HEADER_HEIGHT: u16 = 2;
 
+/// Height of the action hint row at the bottom of the detail body.
+///
+/// Derived from: 1 row for the "▶ Press Enter to …" / "Available in a later phase" hint.
+const ACTION_HINT_HEIGHT: u16 = 1;
+
 /// Right pane — per-step detail renderer.
 pub struct StepDetailPane<'a> {
     state: &'a InstallWizardState,
     focused: bool,
+    /// Animation frame for spinner in progress view.
+    animation_frame: u64,
 }
 
 impl<'a> StepDetailPane<'a> {
     /// Create a new step detail pane.
     ///
     /// # Arguments
-    /// * `state`   – Full install wizard state (read-only)
-    /// * `focused` – Whether this pane has keyboard focus
-    pub fn new(state: &'a InstallWizardState, focused: bool) -> Self {
-        Self { state, focused }
+    /// * `state`           – Full install wizard state (read-only)
+    /// * `focused`         – Whether this pane has keyboard focus
+    /// * `animation_frame` – Frame counter for spinner animation
+    pub fn new(state: &'a InstallWizardState, focused: bool, animation_frame: u64) -> Self {
+        Self {
+            state,
+            focused,
+            animation_frame,
+        }
     }
 
     /// Render the pane header: title + separator underline.
@@ -128,6 +144,74 @@ impl<'a> StepDetailPane<'a> {
         let line = Line::from(vec![Span::styled(text, Style::default().fg(color))]);
         Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
     }
+
+    /// Whether this step kind is executable (can be triggered with Enter).
+    fn is_executable(kind: WizardStepKind) -> bool {
+        matches!(
+            kind,
+            WizardStepKind::FlutterSdk | WizardStepKind::PathConfig
+        )
+    }
+
+    /// Action hint text for an executable step.
+    fn action_hint_text(kind: WizardStepKind) -> &'static str {
+        match kind {
+            WizardStepKind::FlutterSdk => "\u{25b6} Press Enter to install Flutter SDK", // ▶
+            WizardStepKind::PathConfig => "\u{25b6} Press Enter to add Flutter to PATH", // ▶
+            _ => "",
+        }
+    }
+
+    /// Render the action hint line for the bottom of the content area.
+    ///
+    /// Shows "▶ Press Enter to …" for executable steps, or
+    /// "Available in a later phase" for non-executable steps.
+    fn render_action_hint(&self, kind: WizardStepKind, y: u16, area: Rect, buf: &mut Buffer) {
+        if y >= area.y + area.height {
+            return;
+        }
+
+        let (text, color, bold) = if Self::is_executable(kind) {
+            (
+                Self::action_hint_text(kind).to_string(),
+                palette::ACCENT,
+                true,
+            )
+        } else if kind == WizardStepKind::Doctor {
+            // Doctor step is a display-only view; no action
+            return;
+        } else {
+            (
+                "  Available in a later phase".to_string(),
+                palette::TEXT_MUTED,
+                false,
+            )
+        };
+
+        let style = if bold {
+            Style::default().fg(color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(color)
+        };
+
+        let prefix = if Self::is_executable(kind) { "  " } else { "" };
+        let line = Line::from(Span::styled(format!("{prefix}{text}"), style));
+        Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
+    }
+
+    /// Whether the current execution is active for the given step kind.
+    ///
+    /// Returns `true` when `execution.kind == Some(kind)` and the status is
+    /// Running, Succeeded, or Failed (i.e. there is something live to show).
+    fn is_execution_active_for(&self, kind: WizardStepKind) -> bool {
+        if self.state.execution.kind != Some(kind) {
+            return false;
+        }
+        matches!(
+            self.state.execution.status,
+            StepExecStatus::Running | StepExecStatus::Succeeded | StepExecStatus::Failed
+        )
+    }
 }
 
 impl Widget for StepDetailPane<'_> {
@@ -162,6 +246,15 @@ impl Widget for StepDetailPane<'_> {
             return;
         };
 
+        // --- Live execution view ---
+        // When a run is active for the selected step, replace the static detail
+        // with the StepProgress view (occupies the full content_area).
+        if self.is_execution_active_for(step.kind) {
+            let progress = StepProgress::new(&self.state.execution, self.animation_frame);
+            progress.render(content_area, buf);
+            return;
+        }
+
         // Doctor step: delegate to DoctorView (with scroll applied)
         if step.kind == WizardStepKind::Doctor {
             let doctor_lines = self.state.report.as_ref().and_then(|r| r.doctor.as_ref());
@@ -178,33 +271,44 @@ impl Widget for StepDetailPane<'_> {
             return;
         }
 
-        // Other steps: render component checks
+        // Other steps: render component checks + action hint
         if step.components.is_empty() {
             // Informational step with no component checks (e.g., PathConfig)
-            let msg = Line::from(Span::styled(
-                "  No component checks for this step.",
-                Style::default().fg(palette::TEXT_MUTED),
-            ));
-            Paragraph::new(msg).render(
-                Rect::new(content_area.x, content_area.y, content_area.width, 1),
-                buf,
-            );
+            // Show action hint if there's space
+            if content_area.height >= ACTION_HINT_HEIGHT {
+                self.render_action_hint(step.kind, content_area.y, content_area, buf);
+            }
             return;
         }
+
+        // Components are present: render them, then action hint at the bottom.
+        // Reserve ACTION_HINT_HEIGHT rows at the bottom for the hint.
+        let component_height = content_area.height.saturating_sub(ACTION_HINT_HEIGHT) as usize;
+        let effective_visible = if component_height > 0 {
+            component_height
+        } else {
+            visible_height
+        };
 
         // Scroll clamp (render-time safety net)
         let corrected_scroll = compute_corrected_scroll(
             self.state.detail_scroll,
-            visible_height,
+            effective_visible,
             step.components.len(),
         );
 
         let start = corrected_scroll;
-        let end = (start + visible_height).min(step.components.len());
+        let end = (start + effective_visible).min(step.components.len());
 
         for (i, check) in step.components[start..end].iter().enumerate() {
             let y = content_area.y + i as u16;
             Self::render_component_row(check, y, content_area, buf);
+        }
+
+        // Action hint at the bottom of the content area
+        if content_area.height >= ACTION_HINT_HEIGHT {
+            let hint_y = content_area.y + content_area.height.saturating_sub(ACTION_HINT_HEIGHT);
+            self.render_action_hint(step.kind, hint_y, content_area, buf);
         }
     }
 }
@@ -230,14 +334,20 @@ fn compute_corrected_scroll(
 }
 
 /// Construct a [`StepDetailPane`] from the install wizard state.
-pub fn step_detail_pane(state: &InstallWizardState) -> StepDetailPane<'_> {
-    StepDetailPane::new(state, state.focused_pane == WizardPane::Detail)
+pub fn step_detail_pane(state: &InstallWizardState, animation_frame: u64) -> StepDetailPane<'_> {
+    StepDetailPane::new(
+        state,
+        state.focused_pane == WizardPane::Detail,
+        animation_frame,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_app::install_wizard::{InstallWizardState, WizardStep, WizardStepKind};
+    use fdemon_app::install_wizard::{
+        InstallWizardState, StepExecStatus, StepExecution, WizardStep, WizardStepKind,
+    };
     use fdemon_daemon::toolchain::{
         ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
         HostShell, ToolchainReport,
@@ -310,7 +420,7 @@ mod tests {
     #[test]
     fn test_doctor_view_renders_markers() {
         let state = make_state_with_doctor_step_selected();
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -323,7 +433,7 @@ mod tests {
     #[test]
     fn test_doctor_view_none_shows_unavailable() {
         let state = make_state_no_doctor();
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -343,7 +453,7 @@ mod tests {
             0,
             "hint should start at 0"
         );
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -357,7 +467,7 @@ mod tests {
     #[test]
     fn test_component_step_renders_check_rows() {
         let state = make_state_components();
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -375,26 +485,205 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_step_shows_no_components_message() {
-        let mut state = make_state_with_doctor_step_selected();
-        // Override selected_index to PathConfig (index 2) which has no components
-        state.selected_index = 2;
-        let pane = StepDetailPane::new(&state, true);
+    fn test_step_detail_shows_enter_hint_for_flutter_step() {
+        let state = make_state_components(); // FlutterSdk step selected (index 3)
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();
 
         assert!(
-            content.contains("No component"),
-            "informational step should show 'no components' message"
+            content.contains("Press Enter"),
+            "FlutterSdk step should show 'Press Enter' hint: '{content}'"
+        );
+        assert!(
+            content.contains("install Flutter SDK"),
+            "FlutterSdk step should mention 'install Flutter SDK': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_enter_hint_for_path_config_step() {
+        let mut state = make_state_components();
+        state.selected_index = 2; // PathConfig step
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Press Enter"),
+            "PathConfig step should show 'Press Enter' hint: '{content}'"
+        );
+        assert!(
+            content.contains("PATH"),
+            "PathConfig step hint should mention PATH: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_phase_for_non_executable_step() {
+        let mut state = make_state_components();
+        state.selected_index = 1; // AndroidTools step
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("later phase"),
+            "AndroidTools step should show 'Available in a later phase': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_phase_for_prerequisites_step() {
+        let mut state = make_state_components();
+        state.selected_index = 0; // Prerequisites step
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("later phase"),
+            "Prerequisites step should show 'Available in a later phase': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_progress_view_when_running() {
+        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+                                                 // Start a run for FlutterSdk
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Running,
+            phase_label: Some("Downloading".to_string()),
+            received: 50 * 1_048_576,
+            total: Some(100 * 1_048_576),
+            log_tail: vec!["Fetching...".to_string()],
+            result_summary: None,
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Progress view should show phase label and gauge
+        assert!(
+            content.contains("Downloading"),
+            "should show phase label when running: '{content}'"
+        );
+        // Normal component detail should NOT appear (progress replaced it)
+        // The "Press Enter" hint also should not appear (replaced by progress)
+        assert!(
+            !content.contains("Press Enter"),
+            "should not show Enter hint while running: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_success_summary_after_run() {
+        let mut state = make_state_components(); // FlutterSdk selected
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Succeeded,
+            phase_label: Some("Complete".to_string()),
+            received: 100 * 1_048_576,
+            total: Some(100 * 1_048_576),
+            log_tail: vec![],
+            result_summary: Some("Flutter SDK installed successfully.".to_string()),
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("installed successfully"),
+            "should show success summary: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_error_summary_on_failure() {
+        let mut state = make_state_components(); // FlutterSdk selected
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Failed,
+            phase_label: Some("Failed".to_string()),
+            received: 0,
+            total: None,
+            log_tail: vec!["Error: network timeout".to_string()],
+            result_summary: Some("Installation failed: network timeout".to_string()),
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("network timeout"),
+            "should show error summary on failure: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_progress_not_shown_for_different_step() {
+        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+                                                 // But execution is for a different step (PathConfig)
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::PathConfig),
+            status: StepExecStatus::Running,
+            phase_label: Some("Configuring PATH".to_string()),
+            ..StepExecution::default()
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // FlutterSdk step is selected, not PathConfig — so static detail appears
+        assert!(
+            content.contains("Flutter SDK"),
+            "should show FlutterSdk component detail, not PathConfig progress: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_empty_step_shows_no_components_message() {
+        let mut state = make_state_with_doctor_step_selected();
+        // Override selected_index to PathConfig (index 2) which has no components
+        state.selected_index = 2;
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // PathConfig is executable and has no component checks: shows Enter hint
+        assert!(
+            content.contains("Press Enter") || content.contains("PATH"),
+            "PathConfig informational step should show action hint: '{content}'"
         );
     }
 
     #[test]
     fn test_no_panic_loading_state() {
         let state = InstallWizardState::opening(); // loading=true, steps empty
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -403,7 +692,7 @@ mod tests {
     #[test]
     fn test_no_panic_tiny_area() {
         let state = make_state_with_doctor_step_selected();
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = Rect::new(0, 0, 5, 2);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -427,7 +716,7 @@ mod tests {
         let state = InstallWizardState::default(); // visible=false, no steps
         assert_eq!(state.last_known_visible_height.get(), 0);
 
-        let pane = StepDetailPane::new(&state, false);
+        let pane = StepDetailPane::new(&state, false, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -455,7 +744,7 @@ mod tests {
         }];
         state.selected_index = 0;
 
-        let pane = StepDetailPane::new(&state, true);
+        let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -464,5 +753,14 @@ mod tests {
             content.contains("✗"),
             "Missing component should render cross glyph"
         );
+    }
+
+    #[test]
+    fn test_no_panic_small_terminal() {
+        let state = make_state_components();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic
     }
 }

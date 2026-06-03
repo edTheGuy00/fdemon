@@ -22,6 +22,7 @@
 //! ```
 
 mod doctor_view;
+mod progress;
 mod step_detail;
 mod step_list;
 
@@ -83,15 +84,22 @@ const VERTICAL_STEP_LIST_HEIGHT: u16 = 9;
 /// from `&InstallWizardState`; no mutation except the `Cell<usize>` render-hint.
 pub struct InstallWizardPanel<'a> {
     state: &'a InstallWizardState,
+    /// Current animation frame for spinner animation in the progress view.
+    /// Comes from `AppState::animation_frame`.
+    animation_frame: u64,
 }
 
 impl<'a> InstallWizardPanel<'a> {
     /// Create a new Install Wizard Panel widget.
     ///
     /// # Arguments
-    /// * `state` – Panel state snapshot
-    pub fn new(state: &'a InstallWizardState) -> Self {
-        Self { state }
+    /// * `state`           – Panel state snapshot
+    /// * `animation_frame` – Frame counter for spinner animation (from `AppState::animation_frame`)
+    pub fn new(state: &'a InstallWizardState, animation_frame: u64) -> Self {
+        Self {
+            state,
+            animation_frame,
+        }
     }
 
     /// Render the panel header: title + close hint on row 1, subtitle on row 2.
@@ -198,7 +206,7 @@ impl<'a> InstallWizardPanel<'a> {
 
         Self::render_vertical_separator(chunks[1], buf);
 
-        let detail_pane = step_detail_pane(self.state);
+        let detail_pane = step_detail_pane(self.state, self.animation_frame);
         detail_pane.render(chunks[2], buf);
     }
 
@@ -220,7 +228,7 @@ impl<'a> InstallWizardPanel<'a> {
 
         self.render_separator(chunks[1], buf);
 
-        let detail_pane = step_detail_pane(self.state);
+        let detail_pane = step_detail_pane(self.state, self.animation_frame);
         detail_pane.render(chunks[2], buf);
     }
 
@@ -380,7 +388,7 @@ mod tests {
     #[test]
     fn test_renders_loading_placeholder() {
         let state = loading_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -394,7 +402,7 @@ mod tests {
     #[test]
     fn test_renders_without_panic_populated() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -403,7 +411,7 @@ mod tests {
     #[test]
     fn test_renders_without_panic_empty_steps() {
         let state = empty_steps_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -413,7 +421,7 @@ mod tests {
     fn test_renders_without_panic_step_no_components() {
         let mut state = populated_state();
         state.selected_index = 2; // PathConfig — no components
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -422,7 +430,7 @@ mod tests {
     #[test]
     fn test_header_shows_title() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -436,7 +444,7 @@ mod tests {
     #[test]
     fn test_header_shows_esc_close() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -448,7 +456,7 @@ mod tests {
     #[test]
     fn test_footer_shows_key_hints() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -461,7 +469,7 @@ mod tests {
     fn test_footer_shows_status_message() {
         let mut state = populated_state();
         state.status_message = Some("Checks complete.".into());
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -475,7 +483,7 @@ mod tests {
     #[test]
     fn test_too_small_renders_message() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 30, 8); // too small
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -484,7 +492,7 @@ mod tests {
     #[test]
     fn test_narrow_terminal_uses_vertical_layout() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         // Narrow area to force vertical layout
         let area = Rect::new(0, 0, 60, 40);
         let mut buf = Buffer::empty(area);
@@ -494,7 +502,7 @@ mod tests {
     #[test]
     fn test_wide_terminal_uses_horizontal_layout() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -503,7 +511,7 @@ mod tests {
     #[test]
     fn test_step_list_shows_status_glyphs() {
         let state = populated_state();
-        let widget = InstallWizardPanel::new(&state);
+        let widget = InstallWizardPanel::new(&state, 0);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);

@@ -408,7 +408,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Full-screen Install Wizard panel — renders centered over the terminal.
             // The underlying header and log view are already rendered above; here we
             // render the dimmed overlay + centered dialog on top of them.
-            let panel = widgets::InstallWizardPanel::new(&state.install_wizard_state);
+            let panel = widgets::InstallWizardPanel::new(
+                &state.install_wizard_state,
+                state.animation_frame,
+            );
             frame.render_widget(panel, area);
         }
         // Legacy StartupDialog removed - use NewSessionDialog instead
