@@ -8,7 +8,6 @@ description = "Terminal UI for Flutter Demon"
 [dependencies]
 fdemon-core.workspace = true
 fdemon-app.workspace = true
-fdemon-daemon.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 tokio.workspace = true

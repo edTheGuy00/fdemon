@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use fdemon_daemon::toolchain::{DoctorLine, DoctorMarker};
+use fdemon_app::install_wizard::{DoctorLine, DoctorMarker};
 
 use crate::theme::palette;
 

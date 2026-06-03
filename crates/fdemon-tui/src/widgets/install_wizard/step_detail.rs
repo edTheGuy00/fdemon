@@ -21,8 +21,9 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use fdemon_app::install_wizard::{InstallWizardState, WizardPane, WizardStepKind};
-use fdemon_daemon::toolchain::{ComponentCheck, ComponentStatus};
+use fdemon_app::install_wizard::{
+    ComponentCheck, ComponentStatus, InstallWizardState, WizardPane, WizardStepKind,
+};
 
 use crate::theme::palette;
 
@@ -165,19 +166,12 @@ impl Widget for StepDetailPane<'_> {
         if step.kind == WizardStepKind::Doctor {
             let doctor_lines = self.state.report.as_ref().and_then(|r| r.doctor.as_ref());
 
-            // Scroll clamp (render-time safety net)
-            let total_lines = doctor_lines.map(|l| l.len()).unwrap_or(1);
-            let corrected_scroll = compute_corrected_scroll(
-                self.state.detail_scroll,
-                self.state.selected_index,
-                visible_height,
-                total_lines,
-            );
-
             if let Some(lines) = doctor_lines {
-                let start = corrected_scroll.min(lines.len());
-                // Pass the scrolled slice directly — DoctorView accepts &[DoctorLine].
-                DoctorView::new(Some(&lines[start..])).render(content_area, buf);
+                // Scroll clamp (render-time safety net)
+                let corrected_scroll =
+                    compute_corrected_scroll(self.state.detail_scroll, visible_height, lines.len());
+                // corrected_scroll is guaranteed <= lines.len() by compute_corrected_scroll
+                DoctorView::new(Some(&lines[corrected_scroll..])).render(content_area, buf);
             } else {
                 DoctorView::new(None).render(content_area, buf);
             }
@@ -199,15 +193,13 @@ impl Widget for StepDetailPane<'_> {
         }
 
         // Scroll clamp (render-time safety net)
-        let total_lines = step.components.len();
         let corrected_scroll = compute_corrected_scroll(
             self.state.detail_scroll,
-            self.state.selected_index,
             visible_height,
-            total_lines,
+            step.components.len(),
         );
 
-        let start = corrected_scroll.min(step.components.len());
+        let start = corrected_scroll;
         let end = (start + visible_height).min(step.components.len());
 
         for (i, check) in step.components[start..end].iter().enumerate() {
@@ -222,9 +214,11 @@ impl Widget for StepDetailPane<'_> {
 /// Does not mutate state — returns a local corrected offset for this frame.
 /// The handler will use `last_known_visible_height` to update the real scroll
 /// on future keystrokes.
+///
+/// The returned value is guaranteed to be `<= total_lines` (i.e. a valid
+/// slice start), so callers do not need an additional `.min(len)` guard.
 fn compute_corrected_scroll(
     scroll_offset: usize,
-    _selected_index: usize,
     visible_height: usize,
     total_lines: usize,
 ) -> usize {
@@ -418,13 +412,13 @@ mod tests {
     #[test]
     fn test_compute_corrected_scroll_clamps_to_max() {
         // scroll_offset=100 with 5 total lines, 3 visible → max_scroll = 2
-        let corrected = compute_corrected_scroll(100, 0, 3, 5);
+        let corrected = compute_corrected_scroll(100, 3, 5);
         assert_eq!(corrected, 2, "scroll should be clamped to max_scroll");
     }
 
     #[test]
     fn test_compute_corrected_scroll_zero_height() {
-        let corrected = compute_corrected_scroll(5, 0, 0, 10);
+        let corrected = compute_corrected_scroll(5, 0, 10);
         assert_eq!(corrected, 0, "zero visible_height should return 0");
     }
 

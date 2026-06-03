@@ -275,6 +275,13 @@ pub async fn run() -> Result<()> {
 /// discovery and auto-launches the session). Ready state triggers device
 /// discovery directly so the NewSessionDialog is populated.
 ///
+/// # No-SDK early exit
+///
+/// When `flutter_executable()` is `None`, both startup paths would otherwise
+/// dead-end (AutoStart silently no-ops; Ready shows an empty dialog).  The
+/// early return opens the diagnostics wizard regardless of which path was
+/// chosen, giving the user actionable feedback.
+///
 /// # Ordering
 ///
 /// `process_message` is called synchronously before `run_loop` starts.
@@ -283,6 +290,14 @@ pub async fn run() -> Result<()> {
 /// return a follow-up `Message`, this call site must switch to
 /// `engine.msg_sender().try_send()` to preserve ordering.
 fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) {
+    // No resolvable SDK: open the diagnostics wizard from either startup path
+    // instead of a dead-end (Ready) or a silent no-op (AutoStart).
+    // Use try_send so a saturated channel does not block startup.
+    if engine.state.flutter_executable().is_none() {
+        let _ = engine.msg_sender().try_send(Message::ShowInstallWizard);
+        return;
+    }
+
     match action {
         startup::StartupAction::AutoStart { configs } => {
             // Auto-start detected: send StartAutoLaunch which triggers device
@@ -296,14 +311,10 @@ fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) 
             });
         }
         startup::StartupAction::Ready => {
-            // No auto-start — discover devices for the NewSessionDialog
+            // flutter_executable() is Some here (None was handled above).
+            // Discover devices so the NewSessionDialog is populated.
             if let Some(flutter) = engine.state.flutter_executable() {
                 spawn::spawn_device_discovery(engine.msg_sender(), flutter);
-            } else {
-                // SDK not found — open the diagnostics wizard instead of a dead-end
-                // error. ShowInstallWizard sets UiMode::InstallWizard and emits
-                // RunToolchainPreflight to begin background checks.
-                let _ = engine.msg_sender().try_send(Message::ShowInstallWizard);
             }
         }
     }
@@ -745,6 +756,69 @@ mod tests {
             toast.text.contains("Clipboard write failed"),
             "toast must mention 'Clipboard write failed', got: {}",
             toast.text
+        );
+    }
+
+    // ─── dispatch_startup_action — no-SDK wizard hook ────────────────────────
+
+    /// When `flutter_executable()` is `None`, `dispatch_startup_action` must
+    /// enqueue `ShowInstallWizard` for the `Ready` startup path and, after
+    /// `drain_pending_messages`, transition to `UiMode::InstallWizard`.
+    ///
+    /// In test environments the engine has no resolved SDK, so
+    /// `flutter_executable()` is always `None`, making this test deterministic
+    /// without mocking.
+    #[tokio::test]
+    async fn test_dispatch_startup_ready_no_sdk_opens_wizard() {
+        use fdemon_app::state::UiMode;
+
+        let mut engine = dummy_engine();
+        // Precondition: no SDK resolved in test environment
+        assert!(
+            engine.state.flutter_executable().is_none(),
+            "test engine must have no resolved SDK"
+        );
+
+        super::dispatch_startup_action(&mut engine, super::startup::StartupAction::Ready);
+
+        // Drain messages so ShowInstallWizard is processed
+        engine.drain_pending_messages();
+
+        assert_eq!(
+            engine.state.ui_mode,
+            UiMode::InstallWizard,
+            "Ready + no SDK must transition to UiMode::InstallWizard"
+        );
+    }
+
+    /// When `flutter_executable()` is `None`, `dispatch_startup_action` must
+    /// enqueue `ShowInstallWizard` for the `AutoStart` path as well.
+    ///
+    /// Previously `AutoStart` silently no-op'd when there was no SDK — this
+    /// test verifies the silent dead-end is closed.
+    #[tokio::test]
+    async fn test_dispatch_startup_autostart_no_sdk_opens_wizard() {
+        use fdemon_app::config::LoadedConfigs;
+        use fdemon_app::state::UiMode;
+
+        let mut engine = dummy_engine();
+        assert!(
+            engine.state.flutter_executable().is_none(),
+            "test engine must have no resolved SDK"
+        );
+
+        let configs = LoadedConfigs::default();
+        super::dispatch_startup_action(
+            &mut engine,
+            super::startup::StartupAction::AutoStart { configs },
+        );
+
+        engine.drain_pending_messages();
+
+        assert_eq!(
+            engine.state.ui_mode,
+            UiMode::InstallWizard,
+            "AutoStart + no SDK must transition to UiMode::InstallWizard"
         );
     }
 }
