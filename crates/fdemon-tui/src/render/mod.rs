@@ -121,6 +121,7 @@ fn is_modal_ui_mode(mode: &UiMode) -> bool {
             | UiMode::Settings
             | UiMode::FlutterVersion
             | UiMode::EmulatorSelector
+            | UiMode::InstallWizard
     )
 }
 
@@ -403,10 +404,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state);
             frame.render_widget(panel, area);
         }
-        // Install Wizard panel — full rendering is handled by task 04.
-        // This stub keeps the workspace compiling while task 04 is in progress.
         UiMode::InstallWizard => {
-            // TODO(task-04): render install_wizard::InstallWizardPanel here.
+            // Full-screen Install Wizard panel — renders centered over the terminal.
+            // The underlying header and log view are already rendered above; here we
+            // render the dimmed overlay + centered dialog on top of them.
+            let panel = widgets::InstallWizardPanel::new(&state.install_wizard_state);
+            frame.render_widget(panel, area);
         }
         // Legacy StartupDialog removed - use NewSessionDialog instead
         UiMode::DevTools => {

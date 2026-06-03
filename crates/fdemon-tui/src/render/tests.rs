@@ -1258,6 +1258,72 @@ fn phase5_5_renderer_invariant_link_highlight_keeps_main_header_regions() {
 }
 
 // ===========================================================================
+// InstallWizard Mode Tests (Task 05)
+// ===========================================================================
+
+/// Smoke test: `UiMode::InstallWizard` renders the `InstallWizardPanel` without
+/// panicking and produces a non-empty buffer containing the wizard title.
+///
+/// Acceptance criterion 1 (task 05): `view()` renders `InstallWizardPanel`
+/// over the full area when `UiMode::InstallWizard` is active.
+#[test]
+fn install_wizard_mode_renders_panel_without_panic() {
+    use fdemon_app::state::UiMode;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = AppState::new();
+    // Set the mode as the handler does (show_install_wizard + UiMode::InstallWizard).
+    state.ui_mode = UiMode::InstallWizard;
+    state.install_wizard_state = fdemon_app::install_wizard::InstallWizardState::opening();
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    // Must not panic.
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content.iter().map(|c| c.symbol()).collect();
+
+    assert!(
+        content.contains("Install Wizard"),
+        "UiMode::InstallWizard must render the Install Wizard panel title, got: {:?}",
+        &content[..content.len().min(200)]
+    );
+}
+
+/// `is_modal_ui_mode` invariant: `UiMode::InstallWizard` must be treated as a
+/// modal, so base-UI (header) click regions must NOT be registered while it is
+/// active.
+///
+/// Acceptance criterion 2 (task 05): `is_modal_ui_mode(&UiMode::InstallWizard)`
+/// returns `true`; base-UI widgets receive `None` as `MouseCtx`.
+#[test]
+fn install_wizard_mode_suppresses_base_ui_header_regions() {
+    use fdemon_app::state::UiMode;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::InstallWizard;
+    state.install_wizard_state = fdemon_app::install_wizard::InstallWizardState::opening();
+
+    // Wide terminal so that, if the modal gate were absent, the header WOULD
+    // register shortcut regions (as verified by the Phase-3 tests above).
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let hot_reload_count = count_hot_reload_regions(&state);
+    assert_eq!(
+        hot_reload_count, 0,
+        "InstallWizard mode must suppress header (base-UI) HotReload regions; \
+         found {} — InstallWizard may be missing from is_modal_ui_mode()",
+        hot_reload_count
+    );
+}
+
+// ===========================================================================
 // Normal Mode Snapshots
 // ===========================================================================
 
