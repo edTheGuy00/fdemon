@@ -133,6 +133,118 @@ pub struct Settings {
 
     #[serde(default)]
     pub flutter: FlutterSettings,
+
+    #[serde(default)]
+    pub toolchain: ToolchainSettings,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Toolchain Settings
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Flutter SDK install method for managed installs.
+///
+/// **Note on cross-crate design**: This local enum mirrors the `InstallMethod`
+/// that task 01 (`fdemon-daemon`) will define. A local copy here avoids
+/// introducing a circular config→daemon dependency at the `Settings` struct
+/// level; task 09 (wizard handler) maps this to the daemon type when needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallMethod {
+    /// Clone the Flutter repository via `git` and set the desired channel/version.
+    /// This is the canonical install mechanism and the default.
+    GitClone,
+    /// Download a pre-built Flutter archive from `storage.googleapis.com`.
+    /// Suitable for CI environments or systems without `git`.
+    Archive,
+}
+
+/// `[toolchain]` settings controlling the Install Wizard's managed installs.
+///
+/// Corresponds to the `[toolchain]` section in `.fdemon/config.toml`.
+/// All fields default gracefully — a missing `[toolchain]` block is equivalent
+/// to `ToolchainSettings::default()`.
+///
+/// Phase 2 reads: `channel`, `flutter_install_method`, `flutter_install_dir`.
+/// Phase 3 will consume: `android_sdk_root`, `android_api_level`,
+/// `cmdline_tools_build`, `jdk_path` — declared here to avoid a second
+/// config migration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ToolchainSettings {
+    /// Where managed Flutter SDKs are installed.
+    ///
+    /// Default (`None`) → `~/fvm/versions` (shared with the Flutter Version panel).
+    pub flutter_install_dir: Option<PathBuf>,
+
+    /// Channel for managed Flutter installs (`"stable"`, `"beta"`, `"main"`, etc.).
+    ///
+    /// Default: `"stable"`.
+    pub channel: String,
+
+    /// Flutter install method: `"git"` (default) or `"archive"`.
+    ///
+    /// Use `install_method()` to parse this into the typed [`InstallMethod`] enum.
+    pub flutter_install_method: String,
+
+    /// Android SDK root override (Phase 3).
+    ///
+    /// Default (`None`) → `~/.android/sdk` or `$ANDROID_HOME`.
+    pub android_sdk_root: Option<PathBuf>,
+
+    /// Android API level for `platforms/` and `build-tools/` installation (Phase 3).
+    ///
+    /// Default: `36`.
+    pub android_api_level: u32,
+
+    /// `cmdline-tools` build number override (Phase 3).
+    ///
+    /// Default (`None`) → install the latest available version.
+    pub cmdline_tools_build: Option<String>,
+
+    /// Explicit JDK 17 directory (Phase 3).
+    ///
+    /// Default (`None`) → auto-detect via `JAVA_HOME`, `which java`, etc.
+    pub jdk_path: Option<PathBuf>,
+}
+
+impl Default for ToolchainSettings {
+    fn default() -> Self {
+        Self {
+            flutter_install_dir: None,
+            channel: "stable".to_string(),
+            flutter_install_method: "git".to_string(),
+            android_sdk_root: None,
+            android_api_level: 36,
+            cmdline_tools_build: None,
+            jdk_path: None,
+        }
+    }
+}
+
+impl ToolchainSettings {
+    /// Parse `flutter_install_method` into the typed [`InstallMethod`] enum.
+    ///
+    /// Matching is case-insensitive. Unrecognised values default to
+    /// [`InstallMethod::GitClone`] with a debug-level log.
+    ///
+    /// | TOML value | Variant |
+    /// |---|---|
+    /// | `"git"` | `GitClone` |
+    /// | `"archive"` | `Archive` |
+    /// | anything else | `GitClone` (with debug log) |
+    pub fn install_method(&self) -> InstallMethod {
+        match self.flutter_install_method.to_lowercase().as_str() {
+            "git" => InstallMethod::GitClone,
+            "archive" => InstallMethod::Archive,
+            other => {
+                tracing::debug!(
+                    "Unknown flutter_install_method {:?}, defaulting to GitClone",
+                    other
+                );
+                InstallMethod::GitClone
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3777,5 +3889,149 @@ sdk_path = "/Users/me/flutter"
             ..Default::default()
         };
         assert!(!s.should_run_version_check());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ToolchainSettings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_toolchain_settings_default() {
+        let settings = ToolchainSettings::default();
+        assert_eq!(settings.channel, "stable");
+        assert_eq!(settings.flutter_install_method, "git");
+        assert!(settings.flutter_install_dir.is_none());
+        assert!(settings.android_sdk_root.is_none());
+        assert_eq!(settings.android_api_level, 36);
+        assert!(settings.cmdline_tools_build.is_none());
+        assert!(settings.jdk_path.is_none());
+    }
+
+    #[test]
+    fn test_parse_toolchain_section() {
+        let toml = r#"
+[toolchain]
+channel = "beta"
+flutter_install_method = "archive"
+android_api_level = 35
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.toolchain.channel, "beta");
+        assert_eq!(settings.toolchain.flutter_install_method, "archive");
+        assert_eq!(settings.toolchain.android_api_level, 35);
+        // Omitted fields use defaults
+        assert!(settings.toolchain.flutter_install_dir.is_none());
+        assert!(settings.toolchain.android_sdk_root.is_none());
+        assert!(settings.toolchain.cmdline_tools_build.is_none());
+        assert!(settings.toolchain.jdk_path.is_none());
+    }
+
+    #[test]
+    fn test_settings_without_toolchain_uses_defaults() {
+        let toml = "";
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.toolchain.channel, "stable");
+        assert_eq!(settings.toolchain.flutter_install_method, "git");
+        assert_eq!(settings.toolchain.android_api_level, 36);
+    }
+
+    #[test]
+    fn test_install_method_mapping() {
+        // Canonical lower-case values
+        let git = ToolchainSettings {
+            flutter_install_method: "git".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(git.install_method(), InstallMethod::GitClone);
+
+        let archive = ToolchainSettings {
+            flutter_install_method: "archive".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(archive.install_method(), InstallMethod::Archive);
+
+        // Unknown value → GitClone default
+        let unknown = ToolchainSettings {
+            flutter_install_method: "some-other-value".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(unknown.install_method(), InstallMethod::GitClone);
+    }
+
+    #[test]
+    fn test_install_method_mapping_case_insensitive() {
+        // Case-insensitive matching
+        let git_upper = ToolchainSettings {
+            flutter_install_method: "GIT".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(git_upper.install_method(), InstallMethod::GitClone);
+
+        let archive_mixed = ToolchainSettings {
+            flutter_install_method: "Archive".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(archive_mixed.install_method(), InstallMethod::Archive);
+    }
+
+    #[test]
+    fn test_toolchain_settings_round_trip() {
+        let original = ToolchainSettings {
+            flutter_install_dir: Some(PathBuf::from("/opt/flutter-versions")),
+            channel: "beta".to_string(),
+            flutter_install_method: "archive".to_string(),
+            android_sdk_root: Some(PathBuf::from("/opt/android-sdk")),
+            android_api_level: 34,
+            cmdline_tools_build: Some("10406996".to_string()),
+            jdk_path: Some(PathBuf::from("/usr/lib/jvm/java-17")),
+        };
+
+        let serialized = toml::to_string(&original).unwrap();
+        let deserialized: ToolchainSettings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(
+            deserialized.flutter_install_dir,
+            original.flutter_install_dir
+        );
+        assert_eq!(deserialized.channel, original.channel);
+        assert_eq!(
+            deserialized.flutter_install_method,
+            original.flutter_install_method
+        );
+        assert_eq!(deserialized.android_sdk_root, original.android_sdk_root);
+        assert_eq!(deserialized.android_api_level, original.android_api_level);
+        assert_eq!(
+            deserialized.cmdline_tools_build,
+            original.cmdline_tools_build
+        );
+        assert_eq!(deserialized.jdk_path, original.jdk_path);
+    }
+
+    #[test]
+    fn test_toolchain_settings_round_trip_via_settings() {
+        let mut settings = Settings::default();
+        settings.toolchain.channel = "main".to_string();
+        settings.toolchain.flutter_install_method = "archive".to_string();
+        settings.toolchain.flutter_install_dir = Some(PathBuf::from("/home/user/flutter-sdks"));
+
+        let serialized = toml::to_string(&settings).unwrap();
+        let deserialized: Settings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.toolchain.channel, "main");
+        assert_eq!(deserialized.toolchain.flutter_install_method, "archive");
+        assert_eq!(
+            deserialized.toolchain.flutter_install_dir,
+            Some(PathBuf::from("/home/user/flutter-sdks"))
+        );
+    }
+
+    #[test]
+    fn test_settings_default_includes_toolchain() {
+        let settings = Settings::default();
+        // Toolchain defaults should be present even without a [toolchain] section
+        assert_eq!(settings.toolchain.channel, "stable");
+        assert_eq!(settings.toolchain.flutter_install_method, "git");
+        assert_eq!(settings.toolchain.android_api_level, 36);
+        assert!(settings.toolchain.flutter_install_dir.is_none());
     }
 }

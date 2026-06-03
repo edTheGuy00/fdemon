@@ -210,7 +210,7 @@ pub enum UpdateAction {
     /// Emits [`Message::SettingsPersisted`] on success, or
     /// [`Message::SettingsPersistFailed`] on failure.
     PersistSettings {
-        settings: crate::config::Settings,
+        settings: Box<crate::config::Settings>,
         project_path: std::path::PathBuf,
     },
 

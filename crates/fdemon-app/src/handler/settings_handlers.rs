@@ -175,7 +175,7 @@ fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<Option<Up
             // file I/O never blocks the TEA event loop.  The caller must
             // dispatch the returned action.
             let action = UpdateAction::PersistSettings {
-                settings: state.settings.clone(),
+                settings: Box::new(state.settings.clone()),
                 project_path: state.project_path.clone(),
             };
             state.settings_view_state.clear_dirty();

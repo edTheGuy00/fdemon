@@ -844,7 +844,7 @@ pub fn handle_toggle_hide_implementation(state: &mut AppState) -> UpdateResult {
     // Persist asynchronously — file I/O runs on a background tokio task so the
     // TUI event loop is never stalled by disk writes.
     UpdateResult::action(UpdateAction::PersistSettings {
-        settings: state.settings.clone(),
+        settings: Box::new(state.settings.clone()),
         project_path: state.project_path.clone(),
     })
 }

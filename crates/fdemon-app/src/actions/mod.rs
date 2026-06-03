@@ -1464,7 +1464,7 @@ mod tests {
 
         handle_action(
             crate::UpdateAction::PersistSettings {
-                settings,
+                settings: Box::new(settings),
                 project_path: project_path.clone(),
             },
             msg_tx,
@@ -1516,7 +1516,7 @@ mod tests {
 
         handle_action(
             crate::UpdateAction::PersistSettings {
-                settings,
+                settings: Box::new(settings),
                 project_path: project_path.clone(),
             },
             msg_tx,
