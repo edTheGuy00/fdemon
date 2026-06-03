@@ -814,13 +814,217 @@ pub fn handle_action(
             });
         }
 
-        // TODO(phase2-task-08): implement the wizard step executor.
-        // `RunWizardStep` dispatches to the appropriate sub-executor (Flutter SDK
-        // download/clone or PATH config writer) and streams WizardStepLog /
-        // WizardDownloadProgress / WizardStepCompleted|Failed messages back to
-        // the TEA loop.  The stub below keeps the crate compiling until task 08 lands.
-        UpdateAction::RunWizardStep { .. } => {
-            // TODO(phase2-task-08): executor not yet implemented.
+        // ── Install Wizard Step Executor (Phase 2, Task 08) ──────────────────────
+        // Dispatches to the Flutter SDK installer or PATH config writer and streams
+        // progress back via the TEA message channel.  All I/O runs inside the
+        // spawned task; handlers in `handler/install_wizard/actions.rs` remain pure.
+        UpdateAction::RunWizardStep {
+            kind,
+            install,
+            path_bin_dir,
+        } => {
+            use crate::install_wizard::WizardStepKind;
+            use fdemon_daemon::toolchain::{
+                add_to_path, install_flutter, resolve_install_dir, FlutterInstallTarget,
+                HostPlatform, HostShell, InstallEvent, PathConfigOutcome,
+            };
+
+            let msg_tx = msg_tx.clone();
+
+            tokio::spawn(async move {
+                // ── Announce start ────────────────────────────────────────────
+                let _ = msg_tx
+                    .send(crate::message::Message::WizardStepStarted { kind })
+                    .await;
+
+                match kind {
+                    WizardStepKind::FlutterSdk => {
+                        // Guard: install params are required for the FlutterSdk step.
+                        let params = match install {
+                            Some(p) => p,
+                            None => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: "Missing install parameters for FlutterSdk step"
+                                            .to_string(),
+                                    })
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        // Resolve the install root (blocking I/O — kept trivial, just mkdir).
+                        let install_root = match resolve_install_dir(params.install_root.as_deref())
+                        {
+                            Ok(dir) => dir,
+                            Err(e) => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("Failed to resolve install dir: {e}"),
+                                    })
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        // Build the install target.
+                        let target = FlutterInstallTarget {
+                            method: params.method,
+                            channel: params.channel.clone(),
+                            install_root,
+                            // Use the channel name as the version directory name so the
+                            // SDK lands at `~/fvm/versions/stable`.  After install the
+                            // `version` file inside the SDK provides the concrete version.
+                            version_dir_name: params.channel.clone(),
+                        };
+
+                        // Clone a sender for the synchronous on_event callback.
+                        let tx_for_events = msg_tx.clone();
+
+                        let result = install_flutter(&target, move |ev| match ev {
+                            InstallEvent::Log(line) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardStepLog { kind, line },
+                                );
+                            }
+                            InstallEvent::Download(p) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardDownloadProgress {
+                                        kind,
+                                        received: p.received,
+                                        total: p.total,
+                                    },
+                                );
+                            }
+                            InstallEvent::Phase(label) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardStepLog {
+                                        kind,
+                                        line: format!("[{label}]"),
+                                    },
+                                );
+                            }
+                        })
+                        .await;
+
+                        match result {
+                            Ok(outcome) => {
+                                let summary = format!(
+                                    "Installed Flutter {} at {}",
+                                    outcome.version,
+                                    outcome.sdk_path.display()
+                                );
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepCompleted {
+                                        kind,
+                                        summary,
+                                        sdk_path: Some(outcome.sdk_path),
+                                    })
+                                    .await;
+                            }
+                            Err(e) => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("{e}"),
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+
+                    WizardStepKind::PathConfig => {
+                        // Guard: bin_dir is required for the PathConfig step.
+                        let bin_dir = match path_bin_dir {
+                            Some(d) => d,
+                            None => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: "Missing Flutter bin directory for PathConfig step"
+                                            .to_string(),
+                                    })
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        let shell = HostShell::detect();
+                        let platform = HostPlatform::detect();
+
+                        // `add_to_path` performs file I/O — run it on the blocking
+                        // thread pool so we do not stall the async executor.
+                        let result = tokio::task::spawn_blocking(move || {
+                            add_to_path(shell, platform, &bin_dir)
+                        })
+                        .await;
+
+                        match result {
+                            Ok(Ok(PathConfigOutcome::Written { rc_file })) => {
+                                let summary = format!(
+                                    "Added Flutter to PATH in {}. \
+                                     Restart your terminal for the change to take effect.",
+                                    rc_file.display()
+                                );
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepCompleted {
+                                        kind,
+                                        summary,
+                                        sdk_path: None,
+                                    })
+                                    .await;
+                            }
+                            Ok(Ok(PathConfigOutcome::AlreadyPresent { rc_file })) => {
+                                let summary = format!(
+                                    "Flutter is already in PATH ({}). \
+                                     No changes were made.",
+                                    rc_file.display()
+                                );
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepCompleted {
+                                        kind,
+                                        summary,
+                                        sdk_path: None,
+                                    })
+                                    .await;
+                            }
+                            Ok(Err(e)) => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("{e}"),
+                                    })
+                                    .await;
+                            }
+                            Err(join_err) => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("PATH config task panicked: {join_err}"),
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+
+                    // Non-executable kinds in this phase: report a clear failure so
+                    // the user knows the step is not yet actionable rather than
+                    // seeing a stale Running spinner.
+                    WizardStepKind::Prerequisites
+                    | WizardStepKind::AndroidTools
+                    | WizardStepKind::Doctor => {
+                        let _ = msg_tx
+                            .send(crate::message::Message::WizardStepFailed {
+                                kind,
+                                reason: "This step is not executable in this version of fdemon"
+                                    .to_string(),
+                            })
+                            .await;
+                    }
+                }
+            });
         }
 
         // ── Flutter Version Panel ─────────────────────────────────────────────
@@ -1539,6 +1743,219 @@ mod tests {
         assert!(
             matches!(msg, crate::message::Message::SettingsPersistFailed { .. }),
             "expected SettingsPersistFailed, got: {msg:?}"
+        );
+    }
+
+    // ── RunWizardStep dispatch tests ────────────────────────────────────────────
+
+    /// Shared helper: invoke `handle_action` with `RunWizardStep` and return the
+    /// message receiver so callers can assert on which messages arrive.
+    fn dispatch_run_wizard_step(
+        action: crate::UpdateAction,
+    ) -> tokio::sync::mpsc::Receiver<crate::message::Message> {
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(64);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot = Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<
+            std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>,
+        > = Arc::new(std::sync::Mutex::new(None));
+        let dap_debug_senders: Arc<
+            std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let project_path = std::path::PathBuf::from("/tmp");
+
+        handle_action(
+            action,
+            msg_tx,
+            None,
+            vec![],
+            session_tasks,
+            shutdown_rx,
+            &project_path,
+            fdemon_daemon::ToolAvailability::default(),
+            dap_server_handle,
+            vm_handle_for_dap,
+            dap_debug_senders,
+        );
+        msg_rx
+    }
+
+    /// Dispatching `RunWizardStep` always emits `WizardStepStarted` first,
+    /// regardless of step kind or param validity.  This guards the minimum
+    /// TEA contract: the executor announces itself before doing any work.
+    #[tokio::test]
+    async fn test_run_wizard_step_emits_started() {
+        use crate::install_wizard::WizardStepKind;
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::FlutterSdk,
+            install: None, // Missing params → WizardStepFailed will follow, but Started comes first.
+            path_bin_dir: None,
+        });
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for first message")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                first,
+                crate::message::Message::WizardStepStarted {
+                    kind: WizardStepKind::FlutterSdk
+                }
+            ),
+            "first message must be WizardStepStarted; got: {first:?}"
+        );
+    }
+
+    /// Missing `install` params for `FlutterSdk` step → `WizardStepFailed`.
+    #[tokio::test]
+    async fn test_run_wizard_step_flutter_sdk_missing_install_params_fails() {
+        use crate::install_wizard::WizardStepKind;
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::FlutterSdk,
+            install: None,
+            path_bin_dir: None,
+        });
+
+        // Consume WizardStepStarted.
+        let _started = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for WizardStepFailed")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                second,
+                crate::message::Message::WizardStepFailed {
+                    kind: WizardStepKind::FlutterSdk,
+                    ..
+                }
+            ),
+            "missing install params must produce WizardStepFailed; got: {second:?}"
+        );
+    }
+
+    /// Missing `path_bin_dir` for `PathConfig` step → `WizardStepFailed`.
+    #[tokio::test]
+    async fn test_run_wizard_step_pathconfig_missing_bindir_fails() {
+        use crate::install_wizard::WizardStepKind;
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::PathConfig,
+            install: None,
+            path_bin_dir: None, // Missing — executor must fail cleanly.
+        });
+
+        // Consume WizardStepStarted.
+        let _started = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for WizardStepFailed")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                second,
+                crate::message::Message::WizardStepFailed {
+                    kind: WizardStepKind::PathConfig,
+                    ..
+                }
+            ),
+            "missing path_bin_dir must produce WizardStepFailed; got: {second:?}"
+        );
+    }
+
+    /// Non-executable step kinds (Prerequisites, AndroidTools, Doctor) always
+    /// produce a `WizardStepFailed` with a clear reason message.
+    #[tokio::test]
+    async fn test_run_wizard_step_non_executable_kinds_fail() {
+        use crate::install_wizard::WizardStepKind;
+
+        for kind in [
+            WizardStepKind::Prerequisites,
+            WizardStepKind::AndroidTools,
+            WizardStepKind::Doctor,
+        ] {
+            let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+                kind,
+                install: None,
+                path_bin_dir: None,
+            });
+
+            // Consume WizardStepStarted.
+            let _started = tokio::time::timeout(std::time::Duration::from_secs(2), msg_rx.recv())
+                .await
+                .expect("timed out")
+                .expect("channel closed");
+
+            let result_msg = tokio::time::timeout(std::time::Duration::from_secs(2), msg_rx.recv())
+                .await
+                .expect("timed out waiting for WizardStepFailed")
+                .expect("channel closed");
+
+            assert!(
+                matches!(result_msg, crate::message::Message::WizardStepFailed { .. }),
+                "kind {kind:?} must produce WizardStepFailed; got: {result_msg:?}"
+            );
+        }
+    }
+
+    /// `PathConfig` step with a valid `path_bin_dir` runs `add_to_path` and
+    /// produces either `WizardStepCompleted` or `WizardStepFailed` (never hangs).
+    /// We use a temp directory as the home-dir override is not trivially injectable,
+    /// so `add_to_path` may succeed (writes the rc file) or fail (Unknown shell).
+    /// Either outcome is acceptable — what matters is that the executor terminates.
+    #[tokio::test]
+    async fn test_run_wizard_step_pathconfig_terminates() {
+        use crate::install_wizard::WizardStepKind;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::PathConfig,
+            install: None,
+            path_bin_dir: Some(bin_dir),
+        });
+
+        // Consume WizardStepStarted.
+        let _started = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for WizardStepStarted")
+            .expect("channel closed");
+
+        // The second message must be Completed or Failed — never absent.
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out: PathConfig step did not terminate")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                outcome,
+                crate::message::Message::WizardStepCompleted {
+                    kind: WizardStepKind::PathConfig,
+                    ..
+                } | crate::message::Message::WizardStepFailed {
+                    kind: WizardStepKind::PathConfig,
+                    ..
+                }
+            ),
+            "PathConfig executor must always terminate with Completed or Failed; got: {outcome:?}"
         );
     }
 }
