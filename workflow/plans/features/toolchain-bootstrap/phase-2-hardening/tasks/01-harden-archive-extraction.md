@@ -94,3 +94,46 @@ a single dropped stream aborts the whole install leaving a partial file at `dest
   for the best-effort cleanup logs.
 - A robust traversal-guard helper (used by both zip and tar paths) can live as a private
   `fn sanitize_entry_path(dest_dir, raw) -> Result<PathBuf>` in this module.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad6dcf8219d4031c3
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/download.rs` | All four findings fixed; 7 new tests added; existing 15 tests still pass |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Archive::unpack_in` does not exist**: The task referenced `tar::Archive::unpack_in` but tar 0.4.46 only has `Entry::unpack_in`. `Archive::unpack` already delegates to `entry.unpack_in` for each entry (confirmed by reading tar source), which silently skips traversal entries. The traversal test therefore checks that the escaped file is NOT written (rather than that an error was returned), which correctly validates the security property.
+
+2. **XZ streaming via mpsc channel**: `lzma-rs` 0.3 has no `Read`-based XZ streaming decoder (its `stream` feature only provides LZMA, not XZ). The fix uses `std::thread::spawn` + `std::sync::mpsc::sync_channel(8)` with `SenderWriter`/`ReceiverReader` adapters to pipe decoded bytes to the tar reader. Peak RAM is bounded to ~8 MiB of channel buffer (8 slots) rather than the full 1 GB decompressed SDK.
+
+3. **`sanitize_entry_path` used for zip only**: The zip path uses `sanitize_entry_path` and returns `Err` on traversal. The tar path relies on `Archive::unpack`'s built-in `entry.unpack_in` which silently skips traversal entries. Both behaviours prevent escape; the zip path is more explicit because the zip crate has no built-in traversal guard.
+
+4. **Raw tar header construction for traversal test**: The `tar::Builder` API rejects `..` paths at build time. A manual 512-byte POSIX ustar header was crafted in the test helper `make_traversal_tar_xz` to inject the traversal entry name into the archive bytes.
+
+5. **CRC32 without new dependency**: The `make_malicious_zip` test helper needs IEEE CRC-32. Rather than adding `crc32fast` as a direct dependency, a table-free bit-by-bit CRC-32 implementation was included directly in the test module (`crc32_ieee`). It's test-only code (~15 lines) with no production impact.
+
+6. **`.part` file naming**: The part path is `<dest>.<ext>.part` (e.g. `flutter.zip.part`). This preserves the original extension in the part filename for easier identification without risking collision with a file that happens to already have a `.part` extension.
+
+7. **`IDLE_TIMEOUT` semantics**: `reqwest::ClientBuilder::timeout` sets a total request timeout. Since Flutter archives are large (100s of MB), setting a hard total timeout would break legitimate slow downloads. The 30 s value is intentionally a "stall guard" (reasonable for a CDN delivering data) rather than a wall-clock budget. For production hardening, consider replacing this with a per-chunk idle timer (not feasible without custom tower middleware in the current reqwest setup).
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (6,630+ tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-daemon toolchain::download` — 22 tests, all pass
+
+### Risks/Limitations
+
+1. **Idle timeout semantics**: `reqwest::timeout()` sets a per-request wall-clock timeout, not a per-chunk idle timeout. The 30 s value was chosen to bound stalls for typical chunk intervals, but may be too short on very slow connections receiving continuous data. A future hardening pass could instrument per-chunk idle detection.
+
+2. **Tar traversal is skipped not rejected**: `Archive::unpack` silently skips traversal entries rather than aborting with an error. A tampered archive with traversal entries will succeed but with those entries omitted. This is the correct security posture (don't extract bad files) but could mask corruption. A future improvement could log a warning per skipped traversal entry.

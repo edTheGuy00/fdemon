@@ -68,12 +68,16 @@ Wave 1 (parallel — disjoint files, all worktree-isolated)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-harden-archive-extraction](tasks/01-harden-archive-extraction.md) | Not Started | - | 4-5h | `toolchain/download.rs` |
-| 02 | [02-harden-install-flow](tasks/02-harden-install-flow.md) | Not Started | - | 4-6h | `toolchain/flutter_install.rs` |
-| 03 | [03-harden-path-config](tasks/03-harden-path-config.md) | Not Started | - | 3-4h | `toolchain/path_config.rs` |
-| 04 | [04-wizard-phase-label-and-stash](tasks/04-wizard-phase-label-and-stash.md) | Not Started | - | 2-3h | `message.rs`, `actions/mod.rs`, `handler/install_wizard/actions.rs`, `handler/update.rs` |
-| 05 | [05-bounded-log-tail-and-ansi](tasks/05-bounded-log-tail-and-ansi.md) | Not Started | - | 2-3h | `install_wizard/types.rs`, `install_wizard/state.rs`, `widgets/install_wizard/progress.rs` |
-| 06 | [06-update-architecture-doc](tasks/06-update-architecture-doc.md) | Not Started | 01,02,03,04,05 | 1h | `docs/ARCHITECTURE.md` |
+| 01 | [01-harden-archive-extraction](tasks/01-harden-archive-extraction.md) | ✅ Done (CONCERN logged) | - | 4-5h | `toolchain/download.rs` |
+| 02 | [02-harden-install-flow](tasks/02-harden-install-flow.md) | ✅ Done | - | 4-6h | `toolchain/flutter_install.rs` |
+| 03 | [03-harden-path-config](tasks/03-harden-path-config.md) | ✅ Done | - | 3-4h | `toolchain/path_config.rs` |
+| 04 | [04-wizard-phase-label-and-stash](tasks/04-wizard-phase-label-and-stash.md) | ✅ Done | - | 2-3h | `message.rs`, `actions/mod.rs`, `handler/install_wizard/actions.rs`, `handler/update.rs` |
+| 05 | [05-bounded-log-tail-and-ansi](tasks/05-bounded-log-tail-and-ansi.md) | ✅ Done | - | 2-3h | `install_wizard/types.rs`, `install_wizard/state.rs`, `widgets/install_wizard/progress.rs` |
+| 06 | [06-update-architecture-doc](tasks/06-update-architecture-doc.md) | ✅ Done (fixed after FAIL) | 01,02,03,04,05 | 1h | `docs/ARCHITECTURE.md` |
+
+> **Wave 1 validation note (Task 01 — CONCERN):** Two acceptance items landed as documented PARTIAL, security outcome correct, non-blocking:
+> - **M1 (tar traversal):** `tar` 0.4 has no `Archive::unpack_in`; implementor used `Archive::unpack` which delegates to `Entry::unpack_in` and *skips* (not errors on) traversal entries. No file escapes `dest_dir`; fixture test passes.
+> - **M6a (download timeout):** `reqwest::timeout()` is a total-request cap, not a per-chunk idle/stall timer. A future hardening pass could add per-chunk idle detection (needs tower middleware).
 
 ## File Overlap Analysis
 

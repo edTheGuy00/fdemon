@@ -69,3 +69,38 @@ per CODE_STANDARDS Principle 4.
 - Keep `MAX_LOG_TAIL` unchanged; only the data structure changes.
 - If `strip_ansi` is not already re-exported where `progress.rs` can reach it, prefer
   consuming it via the existing `fdemon_core` path (TUI may depend on `fdemon-core`).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a8eba0dded3f3b8a8
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/types.rs` | Added `use std::collections::VecDeque`; changed `StepExecution::log_tail` field from `Vec<String>` to `VecDeque<String>` with updated doc comment |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Updated `begin_step` to use `VecDeque::new()`; updated `push_step_log` to use `pop_front()`/`push_back()` (O(1)); fixed test `first()` → `front()` and test `push()` → `push_back()` |
+| `crates/fdemon-tui/src/widgets/install_wizard/progress.rs` | Added `use fdemon_core::strip_ansi_codes`; added `RESULT_SUMMARY_HEIGHT` constant (used in layout); updated `render_log_tail` to iterate via `.iter().skip(skip)` (VecDeque-compatible) with ANSI stripping; updated all test helpers from `vec![...]` to `VecDeque::from(vec![...])` for `log_tail` fields; added `test_log_tail_ansi_stripped_before_render` test |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Updated 3 test `StepExecution` constructions from `vec![...]`/`vec![]` to `VecDeque::from(vec![...])` / `VecDeque::new()` to fix compilation (type change propagation) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`step_detail.rs` updated despite "only three files"**: The `Vec→VecDeque` type change in `types.rs` necessarily breaks any code that constructs `StepExecution` with struct-literal `log_tail: vec![...]`. Updating `step_detail.rs` tests was required for `cargo check --workspace` to pass. The task's "only three files" constraint was interpreted as covering the implementation files; test-helper compilation fixes in collateral files are unavoidable.
+
+2. **`VecDeque::from(vec![...])` in tests**: This is idiomatic for constructing a non-empty `VecDeque` from a literal. No helper macro was introduced since it's test-only boilerplate.
+
+3. **ANSI stripping in `render_log_tail` only**: The stripping is applied only at render time (not at push time via `push_step_log`). This keeps the stored data faithful to the original streamed output, which is useful for debugging, while protecting the Ratatui buffer from raw escape sequences.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No risk**: `VecDeque` supports the same `len()`, `is_empty()`, `iter()`, `front()`, `push_back()`, `pop_front()`, and `Index<usize>` operations used throughout the codebase. Behavioral equivalence is preserved.

@@ -80,3 +80,39 @@ is cleared after a successful PathConfig completion.
   widget alone (it already reads `phase_label`).
 - Deferred (out of scope, see REVIEW.md): m6 "Installed (precache incomplete)" status —
   do not implement here.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a45855be55ecb17b6
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `WizardStepPhase { kind: WizardStepKind, label: String }` variant next to other `WizardStep*` variants |
+| `crates/fdemon-app/src/actions/mod.rs` | Changed `InstallEvent::Phase(label)` arm to emit `WizardStepPhase` instead of formatting a `[label]` log line |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added `handle_step_phase` with kind-match guard; updated `handle_step_completed` to clear `installed_sdk_path` after PathConfig success; added 6 new unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added `Message::WizardStepPhase { kind, label }` arm routing to `handle_step_phase` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kind-guard in handle_step_phase**: mirrors `handle_step_log` and `handle_step_progress` — the guard checks `execution.kind == Some(kind)` which covers both "no step running" (execution.kind is None) and "kind mismatch" in a single branch.
+
+2. **Clear-on-consume chosen over documented precedence**: `installed_sdk_path` is cleared when PathConfig completes successfully (not on failure, so retries still work). This is less surprising than session-stash winning silently if the user later changes `sdk_path` and re-runs PathConfig.
+
+3. **Failure does not clear stash**: `handle_step_failed` leaves `installed_sdk_path` untouched so a PathConfig retry can still consume it.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2722 tests)
+- `cargo test --workspace` - Passed (all test suites pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No widget change needed**: `StepProgress` already reads `execution.phase_label`; the widget is live once this task populates the field correctly.
