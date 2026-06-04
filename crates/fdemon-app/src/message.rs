@@ -1736,6 +1736,20 @@ pub enum Message {
     /// command the user should run manually.
     InstallWizardCopyCommand,
 
+    /// Select the previous guided command within the selected step (`[` key).
+    ///
+    /// No-op when the selected step has 0 or 1 guided commands.
+    /// Steps with multiple commands (e.g. macOS Prerequisites: CLT / CocoaPods /
+    /// Rosetta) cycle backwards through the list.
+    InstallWizardPrevCommand,
+
+    /// Select the next guided command within the selected step (`]` key).
+    ///
+    /// No-op when the selected step has 0 or 1 guided commands.
+    /// Steps with multiple commands (e.g. macOS Prerequisites: CLT / CocoaPods /
+    /// Rosetta) cycle forwards through the list.
+    InstallWizardNextCommand,
+
     /// Preflight task completed — populate the wizard with the report
     ToolchainPreflightCompleted {
         report: fdemon_daemon::toolchain::ToolchainReport,

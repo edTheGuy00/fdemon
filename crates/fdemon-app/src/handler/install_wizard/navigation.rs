@@ -63,6 +63,7 @@ pub fn handle_up(state: &mut AppState) -> UpdateResult {
             if wiz.selected_index > 0 {
                 wiz.selected_index -= 1;
                 wiz.detail_scroll = 0;
+                wiz.selected_command_index = 0;
             }
         }
         WizardPane::Detail => {
@@ -89,6 +90,7 @@ pub fn handle_down(state: &mut AppState) -> UpdateResult {
             if wiz.selected_index < max {
                 wiz.selected_index += 1;
                 wiz.detail_scroll = 0;
+                wiz.selected_command_index = 0;
             }
         }
         WizardPane::Detail => {
@@ -98,6 +100,26 @@ pub fn handle_down(state: &mut AppState) -> UpdateResult {
             wiz.detail_scroll = wiz.detail_scroll.saturating_add(1);
         }
     }
+    UpdateResult::none()
+}
+
+/// Handle `InstallWizardPrevCommand` (`[` key) — select the previous guided command.
+///
+/// Calls [`InstallWizardState::select_prev_command`], which is a no-op when
+/// the currently selected step has 0 or 1 guided commands.
+/// Works regardless of which pane is focused.
+pub fn handle_prev_command(state: &mut AppState) -> UpdateResult {
+    state.install_wizard_state.select_prev_command();
+    UpdateResult::none()
+}
+
+/// Handle `InstallWizardNextCommand` (`]` key) — select the next guided command.
+///
+/// Calls [`InstallWizardState::select_next_command`], which is a no-op when
+/// the currently selected step has 0 or 1 guided commands.
+/// Works regardless of which pane is focused.
+pub fn handle_next_command(state: &mut AppState) -> UpdateResult {
+    state.install_wizard_state.select_next_command();
     UpdateResult::none()
 }
 
@@ -267,5 +289,151 @@ mod tests {
         state.install_wizard_state.detail_scroll = 0;
         handle_down(&mut state);
         assert_eq!(state.install_wizard_state.detail_scroll, 1);
+    }
+
+    // --- Step change resets selected_command_index ---
+
+    #[test]
+    fn test_step_nav_up_resets_selected_command_index() {
+        let mut state = state_with_wizard_open();
+        state.install_wizard_state.focused_pane = WizardPane::StepList;
+        state.install_wizard_state.selected_index = 2;
+        state.install_wizard_state.selected_command_index = 1;
+        handle_up(&mut state);
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "step up must reset selected_command_index"
+        );
+    }
+
+    #[test]
+    fn test_step_nav_down_resets_selected_command_index() {
+        let mut state = state_with_wizard_open();
+        state.install_wizard_state.focused_pane = WizardPane::StepList;
+        state.install_wizard_state.selected_index = 0;
+        state.install_wizard_state.selected_command_index = 1;
+        handle_down(&mut state);
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "step down must reset selected_command_index"
+        );
+    }
+
+    #[test]
+    fn test_detail_scroll_up_does_not_reset_command_index() {
+        let mut state = state_with_wizard_open();
+        state.install_wizard_state.focused_pane = WizardPane::Detail;
+        state.install_wizard_state.detail_scroll = 5;
+        state.install_wizard_state.selected_command_index = 1;
+        handle_up(&mut state);
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 1,
+            "detail scroll must not touch selected_command_index"
+        );
+    }
+
+    // --- handle_prev_command / handle_next_command ---
+
+    fn state_with_multi_command_prereqs() -> AppState {
+        use fdemon_daemon::toolchain::{
+            PREREQ_KEY_COCOAPODS, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+        };
+        let detail = format!(
+            "missing: {}, {}, {}",
+            PREREQ_KEY_XCODE_CLT, PREREQ_KEY_COCOAPODS, PREREQ_KEY_ROSETTA
+        );
+        let report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Prerequisites,
+                status: ComponentStatus::Missing,
+                detail,
+            }],
+            doctor: None,
+        };
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state.install_wizard_state.apply_report(report);
+        // Select Prerequisites (index 0) which has 3 commands.
+        state.install_wizard_state.selected_index = 0;
+        state
+    }
+
+    #[test]
+    fn test_handle_next_command_advances_index() {
+        let mut state = state_with_multi_command_prereqs();
+        assert_eq!(state.install_wizard_state.selected_command_index, 0);
+        handle_next_command(&mut state);
+        assert_eq!(state.install_wizard_state.selected_command_index, 1);
+        handle_next_command(&mut state);
+        assert_eq!(state.install_wizard_state.selected_command_index, 2);
+    }
+
+    #[test]
+    fn test_handle_next_command_clamps_at_last() {
+        let mut state = state_with_multi_command_prereqs();
+        state.install_wizard_state.selected_command_index = 2;
+        handle_next_command(&mut state);
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 2,
+            "must clamp at last index"
+        );
+    }
+
+    #[test]
+    fn test_handle_prev_command_retreats_index() {
+        let mut state = state_with_multi_command_prereqs();
+        state.install_wizard_state.selected_command_index = 2;
+        handle_prev_command(&mut state);
+        assert_eq!(state.install_wizard_state.selected_command_index, 1);
+        handle_prev_command(&mut state);
+        assert_eq!(state.install_wizard_state.selected_command_index, 0);
+    }
+
+    #[test]
+    fn test_handle_prev_command_saturates_at_zero() {
+        let mut state = state_with_multi_command_prereqs();
+        state.install_wizard_state.selected_command_index = 0;
+        handle_prev_command(&mut state);
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "must saturate at 0"
+        );
+    }
+
+    #[test]
+    fn test_handle_next_command_noop_for_single_command_step() {
+        let mut state = state_with_wizard_open();
+        // Single-component Linux report gives AndroidTools 1 guided command (JDK missing).
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Jdk,
+                status: ComponentStatus::Missing,
+                detail: String::new(),
+            }],
+            doctor: None,
+        };
+        state.install_wizard_state.apply_report(report);
+        state.install_wizard_state.selected_index = 1; // AndroidTools
+        state.install_wizard_state.selected_command_index = 0;
+        handle_next_command(&mut state);
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "next must be no-op for single-command step"
+        );
+    }
+
+    #[test]
+    fn test_handlers_work_regardless_of_focused_pane() {
+        // Verify that prev/next work even when Detail pane is focused.
+        let mut state = state_with_multi_command_prereqs();
+        state.install_wizard_state.focused_pane = WizardPane::Detail;
+        handle_next_command(&mut state);
+        assert_eq!(state.install_wizard_state.selected_command_index, 1);
+        handle_prev_command(&mut state);
+        assert_eq!(state.install_wizard_state.selected_command_index, 0);
     }
 }

@@ -50,6 +50,12 @@ pub struct InstallWizardState {
     pub steps: Vec<WizardStep>,
     /// Currently selected step index in the step list.
     pub selected_index: usize,
+    /// Index of the selected guided command within the selected step.
+    ///
+    /// Defaults to `0`. Advanced by `]` (`InstallWizardNextCommand`) and
+    /// retreated by `[` (`InstallWizardPrevCommand`). Reset to `0` whenever
+    /// the selected step changes (step list navigation or `apply_report`).
+    pub selected_command_index: usize,
     /// Detail-pane vertical scroll offset (includes embedded doctor view).
     pub detail_scroll: usize,
     /// The full preflight report; `None` until `apply_report` is called.
@@ -94,6 +100,7 @@ impl InstallWizardState {
     ///
     /// Replaces any existing steps, clears `loading`, and clamps
     /// `selected_index` if the new step list is shorter.
+    /// Also resets `selected_command_index` to 0 since the step list is rebuilt.
     pub fn apply_report(&mut self, report: ToolchainReport) {
         self.steps = build_steps(&report);
         self.report = Some(report);
@@ -101,6 +108,7 @@ impl InstallWizardState {
         if self.selected_index >= self.steps.len() {
             self.selected_index = 0;
         }
+        self.selected_command_index = 0;
     }
 
     /// Return the currently selected step, or `None` if the list is empty.
@@ -108,14 +116,47 @@ impl InstallWizardState {
         self.steps.get(self.selected_index)
     }
 
-    /// The guided command the `c` key should copy: the first guided command of the
-    /// currently selected step, if any.
+    /// The guided command the `c` key should copy: the command at
+    /// `selected_command_index` of the currently selected step, if any.
     ///
-    /// Returns `None` when the step list is empty or the selected step has no
-    /// guided commands. Intended for use by the key handler that copies to the
-    /// system clipboard.
+    /// Returns `None` when the step list is empty, the selected step has no
+    /// guided commands, or `selected_command_index` is out of range.
+    /// Intended for use by the key handler that copies to the system clipboard.
     pub fn selected_guided_command(&self) -> Option<&GuidedCommand> {
-        self.steps.get(self.selected_index)?.guided_commands.first()
+        let step = self.steps.get(self.selected_index)?;
+        step.guided_commands.get(self.selected_command_index)
+    }
+
+    /// Advance `selected_command_index` by 1, clamped to the last valid index.
+    ///
+    /// No-op when the selected step has 0 or 1 guided commands.
+    pub fn select_next_command(&mut self) {
+        let len = self
+            .steps
+            .get(self.selected_index)
+            .map(|s| s.guided_commands.len())
+            .unwrap_or(0);
+        if len <= 1 {
+            return;
+        }
+        if self.selected_command_index < len - 1 {
+            self.selected_command_index += 1;
+        }
+    }
+
+    /// Retreat `selected_command_index` by 1, saturating at 0.
+    ///
+    /// No-op when the selected step has 0 or 1 guided commands.
+    pub fn select_prev_command(&mut self) {
+        let len = self
+            .steps
+            .get(self.selected_index)
+            .map(|s| s.guided_commands.len())
+            .unwrap_or(0);
+        if len <= 1 {
+            return;
+        }
+        self.selected_command_index = self.selected_command_index.saturating_sub(1);
     }
 
     /// Whether a step is currently executing.
@@ -191,6 +232,7 @@ impl std::fmt::Debug for InstallWizardState {
             .field("focused_pane", &self.focused_pane)
             .field("steps", &self.steps)
             .field("selected_index", &self.selected_index)
+            .field("selected_command_index", &self.selected_command_index)
             .field("detail_scroll", &self.detail_scroll)
             .field("report", &self.report)
             .field("loading", &self.loading)
@@ -1166,6 +1208,197 @@ mod tests {
         let cmd = state.selected_guided_command();
         assert!(cmd.is_some());
         assert_eq!(cmd.unwrap().label, "Install JDK 17");
+    }
+
+    // --- selected_command_index tests ---
+
+    #[test]
+    fn test_selected_command_index_defaults_to_zero() {
+        let state = InstallWizardState::default();
+        assert_eq!(state.selected_command_index, 0);
+    }
+
+    #[test]
+    fn test_apply_report_resets_selected_command_index() {
+        let mut state = InstallWizardState {
+            selected_command_index: 2,
+            ..InstallWizardState::default()
+        };
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+        assert_eq!(
+            state.selected_command_index, 0,
+            "apply_report must reset selected_command_index to 0"
+        );
+    }
+
+    /// Build a state with a macOS Prerequisites step that has 3 guided commands
+    /// (CLT + CocoaPods + Rosetta all missing).
+    fn state_with_three_prereq_commands() -> InstallWizardState {
+        use fdemon_daemon::toolchain::{
+            HostShell, PREREQ_KEY_COCOAPODS, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+        };
+        let detail = format!(
+            "missing: {}, {}, {}",
+            PREREQ_KEY_XCODE_CLT, PREREQ_KEY_COCOAPODS, PREREQ_KEY_ROSETTA
+        );
+        let report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Prerequisites,
+                status: ComponentStatus::Missing,
+                detail,
+            }],
+            doctor: None,
+        };
+        let mut state = InstallWizardState::default();
+        state.apply_report(report);
+        // Select the Prerequisites step (index 0), which has 3 commands.
+        state.selected_index = 0;
+        state
+    }
+
+    #[test]
+    fn test_select_next_command_advances_index() {
+        let mut state = state_with_three_prereq_commands();
+        assert_eq!(state.selected_command_index, 0);
+        state.select_next_command();
+        assert_eq!(state.selected_command_index, 1);
+        state.select_next_command();
+        assert_eq!(state.selected_command_index, 2);
+    }
+
+    #[test]
+    fn test_select_next_command_clamps_at_last() {
+        let mut state = state_with_three_prereq_commands();
+        state.selected_command_index = 2;
+        state.select_next_command();
+        assert_eq!(state.selected_command_index, 2, "must clamp at last index");
+    }
+
+    #[test]
+    fn test_select_prev_command_retreats_index() {
+        let mut state = state_with_three_prereq_commands();
+        state.selected_command_index = 2;
+        state.select_prev_command();
+        assert_eq!(state.selected_command_index, 1);
+        state.select_prev_command();
+        assert_eq!(state.selected_command_index, 0);
+    }
+
+    #[test]
+    fn test_select_prev_command_saturates_at_zero() {
+        let mut state = state_with_three_prereq_commands();
+        state.selected_command_index = 0;
+        state.select_prev_command();
+        assert_eq!(state.selected_command_index, 0, "must saturate at 0");
+    }
+
+    #[test]
+    fn test_select_next_noop_for_single_command_step() {
+        let mut state = InstallWizardState::default();
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        state.apply_report(report);
+        // AndroidTools (index 1) has exactly 1 guided command.
+        state.selected_index = 1;
+        state.selected_command_index = 0;
+        state.select_next_command();
+        assert_eq!(
+            state.selected_command_index, 0,
+            "next must be no-op for single-command step"
+        );
+    }
+
+    #[test]
+    fn test_select_prev_noop_for_single_command_step() {
+        let mut state = InstallWizardState::default();
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        state.apply_report(report);
+        // AndroidTools (index 1) has exactly 1 guided command.
+        state.selected_index = 1;
+        state.selected_command_index = 0;
+        state.select_prev_command();
+        assert_eq!(
+            state.selected_command_index, 0,
+            "prev must be no-op for single-command step"
+        );
+    }
+
+    #[test]
+    fn test_select_next_noop_for_no_command_step() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+        // PathConfig (index 2) has 0 guided commands.
+        state.selected_index = 2;
+        state.selected_command_index = 0;
+        state.select_next_command();
+        assert_eq!(
+            state.selected_command_index, 0,
+            "next must be no-op for zero-command step"
+        );
+    }
+
+    #[test]
+    fn test_select_prev_noop_for_no_command_step() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+        // PathConfig (index 2) has 0 guided commands.
+        state.selected_index = 2;
+        state.selected_command_index = 0;
+        state.select_prev_command();
+        assert_eq!(
+            state.selected_command_index, 0,
+            "prev must be no-op for zero-command step"
+        );
+    }
+
+    #[test]
+    fn test_selected_guided_command_uses_index() {
+        let mut state = state_with_three_prereq_commands();
+        // Index 0 → CLT
+        assert_eq!(
+            state.selected_guided_command().map(|c| c.label.as_str()),
+            Some("Install Xcode Command Line Tools")
+        );
+        // Index 1 → CocoaPods
+        state.selected_command_index = 1;
+        assert_eq!(
+            state.selected_guided_command().map(|c| c.label.as_str()),
+            Some("Install CocoaPods")
+        );
+        // Index 2 → Rosetta
+        state.selected_command_index = 2;
+        assert_eq!(
+            state.selected_guided_command().map(|c| c.label.as_str()),
+            Some("Install Rosetta 2")
+        );
+    }
+
+    #[test]
+    fn test_selected_guided_command_returns_none_for_out_of_range_index() {
+        let mut state = InstallWizardState::default();
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        state.apply_report(report);
+        // AndroidTools (index 1) has 1 command.
+        state.selected_index = 1;
+        // Manually set out-of-range index (defensive clamping).
+        state.selected_command_index = 99;
+        assert!(
+            state.selected_guided_command().is_none(),
+            "out-of-range index must return None"
+        );
     }
 
     // --- prerequisites_guided_commands tests ---

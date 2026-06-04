@@ -416,7 +416,9 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `j`/`Down` — navigate down in the step list or scroll detail down
 /// - `Enter` — run (or retry) the selected wizard step (`InstallWizardRunSelectedStep`)
 /// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
-/// - `c` — copy the selected step's guided command to the clipboard (`InstallWizardCopyCommand`)
+/// - `c` — copy the selected guided command to the clipboard (`InstallWizardCopyCommand`)
+/// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
+/// - `]` — select the next guided command (`InstallWizardNextCommand`)
 fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message> {
     match key {
         // ── Global keys ───────────────────────────────────────────────────────
@@ -436,8 +438,11 @@ fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message
         // Run (or retry) the currently selected wizard step (Phase 2, Task 05).
         InputKey::Enter => Some(Message::InstallWizardRunSelectedStep),
         InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
-        // Copy the selected step's guided command to the clipboard (Phase 3, Task 04).
+        // Copy the selected guided command to the clipboard (Phase 3, Task 07).
         InputKey::Char('c') => Some(Message::InstallWizardCopyCommand),
+        // Cycle through multiple guided commands on a step (Phase 4, Task 04).
+        InputKey::Char('[') => Some(Message::InstallWizardPrevCommand),
+        InputKey::Char(']') => Some(Message::InstallWizardNextCommand),
 
         _ => None,
     }
