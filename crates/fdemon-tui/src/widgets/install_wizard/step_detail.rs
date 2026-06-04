@@ -65,9 +65,17 @@ const GUIDED_SECTION_HEADER_HEIGHT: u16 = 1;
 
 /// Minimum height required to render a single guided command block.
 ///
-/// Derived from: 1 blank row + 1 label + 1 command + 1 copy hint = 4 rows.
-/// The note row is optional and only rendered when space permits.
-const GUIDED_COMMAND_MIN_HEIGHT: u16 = 4;
+/// Derived from: label(1) + command-with-inline-`[c]`-copy(1) = 2 rows minimum.
+/// The `[c] copy` hint is rendered **inline on the command row** (not a separate row).
+/// The optional note row adds 1 more row when present.
+/// The leading blank row is **conditional**: it is skipped for command 0 when a
+/// caption was already rendered above (the caption provides visual separation);
+/// for i > 0 or when there is no caption, a blank row is prepended.
+///
+/// Real per-command height breakdown:
+///   - Command 0 under a caption: label(1) + command(1) + optional note(0–1) = 2–3 rows
+///   - Command i>0 (or command 0 without caption): blank(1) + label(1) + command(1) + optional note(0–1) = 3–4 rows
+const GUIDED_COMMAND_MIN_HEIGHT: u16 = 2;
 
 /// Minimum height required to render the JDK-required caption.
 ///
@@ -244,23 +252,71 @@ impl<'a> StepDetailPane<'a> {
         Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
     }
 
+    /// Compute the total row height needed to render the entire guided-command section
+    /// for `commands` and `step_kind`, without any clamping.
+    ///
+    /// Accounts for:
+    /// - Section header: `GUIDED_SECTION_HEADER_HEIGHT` rows (1)
+    /// - Optional per-step caption (AndroidTools / Prerequisites): `JDK_CAPTION_HEIGHT` rows (1)
+    /// - Per-command blocks: label(1) + command(1) + optional note(0–1) + optional leading blank
+    ///   (skipped for command 0 when a caption was rendered, i.e. `has_caption` is true).
+    ///
+    /// The caller is responsible for clamping this value to `content_area.height` before
+    /// using it as a layout reservation — the saturating clamp in [`Widget::render`] ensures
+    /// the resulting `Rect` never exceeds the content area.
+    fn guided_section_full_height(commands: &[GuidedCommand], step_kind: WizardStepKind) -> u16 {
+        if commands.is_empty() {
+            return 0;
+        }
+        let has_caption = matches!(
+            step_kind,
+            WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
+        );
+        let caption_rows: u16 = if has_caption { JDK_CAPTION_HEIGHT } else { 0 };
+
+        let mut cmd_rows: u16 = 0;
+        for (i, cmd) in commands.iter().enumerate() {
+            // Leading blank row: skipped for command 0 when a caption is present.
+            let needs_blank = i > 0 || !has_caption;
+            if needs_blank {
+                cmd_rows += 1;
+            }
+            // Label row (always 1)
+            cmd_rows += 1;
+            // Command row (always 1; [c] copy hint is inline, not a separate row)
+            cmd_rows += 1;
+            // Optional note row
+            if cmd.note.is_some() {
+                cmd_rows += 1;
+            }
+        }
+
+        GUIDED_SECTION_HEADER_HEIGHT + caption_rows + cmd_rows
+    }
+
     /// Render the guided-command section for a step that has guided commands.
     ///
     /// Layout (each row occupies one character-cell row):
     /// ```text
-    ///   [blank row]
     ///   Guided steps (run these yourself, then press 'r' to re-check):
     ///   [caption — AndroidTools: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
     ///
     ///     Install JDK 17
-    ///       $ sudo apt install openjdk-17-jdk
-    ///       or: sudo dnf install java-17-openjdk-devel        [c] copy
+    ///       $ sudo apt install openjdk-17-jdk       [c] copy
+    ///       or: sudo dnf install java-17-openjdk-devel
     /// ```
+    ///
+    /// The `[c] copy` hint is rendered **inline on the command row**, not as a separate row.
+    /// The leading blank row is **conditional**: skipped for command 0 when a caption was
+    /// rendered above (the caption provides visual separation from the header).
     ///
     /// The `[c] copy` hint and selection highlight follow `selected_command_index`
     /// so the visually-selected command is the one `c` will copy to the clipboard.
     ///
-    /// Returns the number of rows consumed (for callers that track y-offset).
+    /// When `area` is too small to render all commands, commands that would fall
+    /// outside `area` are clipped by the `y < area.y + area.height` bounds guards.
+    /// The caller must size `area` large enough (via [`guided_section_full_height`])
+    /// to avoid clipping visible commands.
     fn render_guided_commands(
         &self,
         commands: &[GuidedCommand],
@@ -468,20 +524,15 @@ impl Widget for StepDetailPane<'_> {
         // When guided commands exist we need room for them below the components.
         // When not, we need just ACTION_HINT_HEIGHT at the bottom.
         let bottom_section_height: u16 = if has_guided_commands {
-            // Guided-command block: header(1) + caption(1 for AndroidTools) + blank(1)
-            // + label(1) + command(1) + optional note(1) = up to 6 rows, minimum 4.
-            // We reserve GUIDED_COMMAND_MIN_HEIGHT + GUIDED_SECTION_HEADER_HEIGHT rows.
-            // AndroidTools adds the "JDK 17 required" caption row;
-            // Prerequisites adds the "Install the OS build tools …" caption row.
-            let caption_rows = if matches!(
-                step.kind,
-                WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
-            ) {
-                JDK_CAPTION_HEIGHT
-            } else {
-                0
-            };
-            GUIDED_SECTION_HEADER_HEIGHT + caption_rows + GUIDED_COMMAND_MIN_HEIGHT
+            // Compute the exact number of rows required to render all guided commands
+            // (header + caption + Σ per-command blocks), then clamp to content_area.height
+            // so the reservation never exceeds the available space.
+            //
+            // This ensures that when there are multiple guided commands (e.g. macOS
+            // Prerequisites: CLT + CocoaPods + Rosetta), all commands fit in the
+            // bottom section rather than only the first command being visible.
+            let full_height = Self::guided_section_full_height(&step.guided_commands, step.kind);
+            full_height.min(content_area.height)
         } else {
             ACTION_HINT_HEIGHT
         };
@@ -1359,5 +1410,248 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic even in tight space
+    }
+
+    // --- Phase 4 followup: M1 regression tests ---
+
+    /// Build an `InstallWizardState` with the Prerequisites step selected, a
+    /// `Prerequisites` component present (non-empty `components`), and three
+    /// guided commands (macOS: CLT + CocoaPods + Rosetta all missing).
+    ///
+    /// This is the production macOS path: `check_prerequisites()` always returns
+    /// a `Prerequisites` `ComponentCheck`, so `components` is non-empty while
+    /// `prerequisites_guided_commands()` returns 3 commands.  The combination
+    /// previously triggered the M1 clipping bug because `bottom_section_height`
+    /// was fixed at 6 rows (header + caption + GUIDED_COMMAND_MIN_HEIGHT) regardless
+    /// of how many commands were present.
+    fn make_state_prerequisites_macos_three_commands_with_component() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::Prerequisites,
+                title: "Prerequisites".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                // Non-empty components — this is the key difference from the original
+                // `make_state_prerequisites_macos_three_commands` helper which had
+                // `components: vec![]`.  With components present the layout takes the
+                // split path where the guided section is reserved at the bottom of the
+                // content area and is capped to `bottom_section_height` rows.
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Missing,
+                    detail: "missing: xcode-clt, cocoapods, rosetta".to_string(),
+                }],
+                guided_commands: vec![
+                    GuidedCommand {
+                        label: "Install Xcode Command Line Tools".to_string(),
+                        command: "xcode-select --install".to_string(),
+                        note: Some("Opens a GUI dialog to install CLT.".to_string()),
+                    },
+                    GuidedCommand {
+                        label: "Install CocoaPods".to_string(),
+                        command: "brew install cocoapods".to_string(),
+                        note: Some("or: sudo gem install cocoapods".to_string()),
+                    },
+                    GuidedCommand {
+                        label: "Install Rosetta 2".to_string(),
+                        command: "sudo softwareupdate --install-rosetta --agree-to-license"
+                            .to_string(),
+                        note: None,
+                    },
+                ],
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Regression test for M1: Prerequisites step with components non-empty and 3
+    /// guided commands — all three commands must render without clipping.
+    ///
+    /// Previously `bottom_section_height` was fixed at 6 rows (header + caption +
+    /// GUIDED_COMMAND_MIN_HEIGHT), so only command 0 could render.  After the fix,
+    /// `guided_section_full_height` computes the exact height needed and the bottom
+    /// section is sized accordingly.
+    #[test]
+    fn test_prerequisites_three_commands_with_component_no_clipping() {
+        let state = make_state_prerequisites_macos_three_commands_with_component();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Use a 30-row terminal — large enough to show components + all guided commands.
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("xcode-select"),
+            "CLT command (command 0) must render: '{content}'"
+        );
+        assert!(
+            content.contains("cocoapods"),
+            "CocoaPods command (command 1) must render: '{content}'"
+        );
+        assert!(
+            content.contains("softwareupdate"),
+            "Rosetta command (command 2) must render: '{content}'"
+        );
+    }
+
+    /// Regression test for M1: with `selected_command_index = 2` the selected
+    /// command's row, its selection highlight, and its `[c] copy` hint must be
+    /// visible when components are non-empty.
+    ///
+    /// `c` must copy a command that is currently visible (no visible/copied
+    /// divergence).
+    #[test]
+    fn test_prerequisites_selected_command_index_2_visible_with_component() {
+        let mut state = make_state_prerequisites_macos_three_commands_with_component();
+        state.selected_command_index = 2; // Rosetta — the third (last) command
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The selected command's text must be visible.
+        assert!(
+            content.contains("softwareupdate"),
+            "Rosetta command (selected_command_index=2) must be visible: '{content}'"
+        );
+        // The [c] copy hint must be visible (it appears on the command row of the
+        // selected command).
+        assert!(
+            content.contains("copy"),
+            "[c] copy hint must be visible when selected_command_index=2: '{content}'"
+        );
+
+        // Collect rows to verify the copy hint appears on/after the Rosetta command row.
+        let rows: Vec<String> = (0..area.height)
+            .map(|row| {
+                (0..area.width)
+                    .map(|col| buf.cell((col, row)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect()
+            })
+            .collect();
+
+        let rosetta_row = rows
+            .iter()
+            .position(|r| r.contains("softwareupdate"))
+            .expect("softwareupdate row must be visible");
+        let copy_row = rows
+            .iter()
+            .position(|r| r.contains("copy"))
+            .expect("copy hint row must be visible");
+
+        // The copy hint must be on the same row as the selected command (inline).
+        assert_eq!(
+            copy_row, rosetta_row,
+            "copy hint (row {copy_row}) must be on the same row as the Rosetta command (row {rosetta_row})"
+        );
+    }
+
+    /// Regression test: single-command AndroidTools / Prerequisites path is visually
+    /// unchanged after the fix.  The bottom section height should be the same as
+    /// before for a single command with a note.
+    #[test]
+    fn test_single_command_android_tools_visually_unchanged() {
+        let state = make_state_android_jdk_missing();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Install JDK 17"),
+            "single-command AndroidTools must still render label: '{content}'"
+        );
+        assert!(
+            content.contains("openjdk-17-jdk"),
+            "single-command AndroidTools must still render command: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "single-command AndroidTools must still show [c] copy: '{content}'"
+        );
+        assert!(
+            content.contains("sudo dnf"),
+            "single-command AndroidTools must still render note: '{content}'"
+        );
+    }
+
+    /// Regression test: no out-of-bounds Rect on a small terminal with the new
+    /// dynamic height calculation.  Must not panic even when the content area is
+    /// smaller than the full guided-section height.
+    #[test]
+    fn test_no_panic_small_terminal_with_component_and_multiple_commands() {
+        let state = make_state_prerequisites_macos_three_commands_with_component();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Very small terminal — the guided section will be clamped.
+        let area = Rect::new(0, 0, 40, 8);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic
+    }
+
+    /// Unit test for `guided_section_full_height` helper: 3-command Prerequisites
+    /// with notes on first two commands.
+    ///
+    /// Expected breakdown:
+    ///   - header: 1
+    ///   - caption (Prerequisites): 1
+    ///   - cmd 0 (has_caption=true, no blank): label(1) + cmd(1) + note(1) = 3
+    ///   - cmd 1 (blank=1): blank(1) + label(1) + cmd(1) + note(1) = 4
+    ///   - cmd 2 (blank=1, no note): blank(1) + label(1) + cmd(1) = 3
+    ///   Total = 1 + 1 + 3 + 4 + 3 = 12
+    #[test]
+    fn test_guided_section_full_height_three_commands() {
+        let commands = vec![
+            GuidedCommand {
+                label: "A".to_string(),
+                command: "cmd_a".to_string(),
+                note: Some("note_a".to_string()),
+            },
+            GuidedCommand {
+                label: "B".to_string(),
+                command: "cmd_b".to_string(),
+                note: Some("note_b".to_string()),
+            },
+            GuidedCommand {
+                label: "C".to_string(),
+                command: "cmd_c".to_string(),
+                note: None,
+            },
+        ];
+        let height =
+            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites);
+        assert_eq!(height, 12, "3-command Prerequisites section should need 12 rows");
+    }
+
+    /// Unit test for `guided_section_full_height` helper: single command with note,
+    /// AndroidTools (has caption).
+    ///
+    /// Expected breakdown:
+    ///   - header: 1
+    ///   - caption (AndroidTools): 1
+    ///   - cmd 0 (has_caption=true, no blank): label(1) + cmd(1) + note(1) = 3
+    ///   Total = 5
+    #[test]
+    fn test_guided_section_full_height_single_command_with_note() {
+        let commands = vec![GuidedCommand {
+            label: "Install JDK 17".to_string(),
+            command: "sudo apt install openjdk-17-jdk".to_string(),
+            note: Some("or: sudo dnf install java-17-openjdk-devel".to_string()),
+        }];
+        let height =
+            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::AndroidTools);
+        assert_eq!(height, 5, "single-command AndroidTools section with note should need 5 rows");
+    }
+
+    /// Unit test for `guided_section_full_height` helper: empty command list returns 0.
+    #[test]
+    fn test_guided_section_full_height_empty() {
+        let commands: Vec<GuidedCommand> = vec![];
+        let height =
+            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites);
+        assert_eq!(height, 0, "empty command list should return 0");
     }
 }
