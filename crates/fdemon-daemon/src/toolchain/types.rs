@@ -363,6 +363,104 @@ pub struct FlutterInstallOutcome {
     pub method: InstallMethod,
 }
 
+// ── Phase 3 Android install types ────────────────────────────────────────────
+
+/// Default Android command-line tools build number used to construct the
+/// download URL.
+///
+/// `cmdline-tools` has no stable build-less URL, so this is shipped as a known
+/// default and is overridable via `[toolchain] cmdline_tools_build` in
+/// `.fdemon/config.toml`.
+///
+/// Verify or update the current value at:
+/// <https://developer.android.com/studio#command-tools>
+pub const DEFAULT_CMDLINE_TOOLS_BUILD: &str = "11076708";
+
+/// Resolved parameters for a managed Android SDK installation.
+///
+/// Carries everything the installer (Phase 3, task 02) needs to download the
+/// Android command-line tools, run `sdkmanager`, and produce an
+/// [`AndroidInstallOutcome`].
+#[derive(Debug, Clone)]
+pub struct AndroidInstallTarget {
+    /// The resolved `ANDROID_HOME` target directory where the SDK will be
+    /// installed.
+    pub sdk_root: PathBuf,
+    /// The Android API level to install (e.g. `36`).
+    pub api_level: u32,
+    /// The `cmdline-tools` build number used to construct the download URL.
+    /// Resolved from config or defaults to [`DEFAULT_CMDLINE_TOOLS_BUILD`].
+    pub cmdline_tools_build: String,
+    /// Explicit JDK directory, if configured. When `None`, the installer uses
+    /// whatever `java` is on `PATH`.
+    pub jdk_path: Option<PathBuf>,
+    /// The host operating system, used to select the correct cmdline-tools
+    /// archive.
+    pub platform: HostPlatform,
+}
+
+/// Final outcome of a managed Android SDK installation.
+///
+/// Returned by the installer (Phase 3, task 02) so the app layer can persist
+/// `ANDROID_HOME` and update the wizard state.
+#[derive(Debug, Clone)]
+pub struct AndroidInstallOutcome {
+    /// The SDK root directory that was populated (equivalent to `ANDROID_HOME`).
+    pub sdk_root: PathBuf,
+    /// The `sdkmanager` package identifiers that were successfully installed,
+    /// e.g. `["platform-tools", "platforms;android-36", ...]`.
+    pub packages_installed: Vec<String>,
+}
+
+/// Build the Android `cmdline-tools` download URL for the given host platform
+/// and build number.
+///
+/// Returns `None` when `platform` is [`HostPlatform::Unknown`] (no matching
+/// OS slug exists).
+///
+/// # Example
+///
+/// ```
+/// use fdemon_daemon::toolchain::{cmdline_tools_url, HostPlatform};
+/// let url = cmdline_tools_url(HostPlatform::Linux, "11076708").unwrap();
+/// assert!(url.contains("commandlinetools-linux-11076708_latest.zip"));
+/// ```
+pub fn cmdline_tools_url(platform: HostPlatform, build: &str) -> Option<String> {
+    let os = match platform {
+        HostPlatform::Linux => "linux",
+        HostPlatform::MacOs => "mac",
+        HostPlatform::Windows => "win",
+        HostPlatform::Unknown => return None,
+    };
+    Some(format!(
+        "https://dl.google.com/android/repository/commandlinetools-{os}-{build}_latest.zip"
+    ))
+}
+
+/// Return the list of `sdkmanager` package identifiers required for a working
+/// Android development environment at the given API level.
+///
+/// The returned packages are:
+/// - `"platform-tools"` — `adb`, `fastboot`, etc.
+/// - `"platforms;android-<api>"` — SDK platform image.
+/// - `"build-tools;<api>.0.0"` — build tools matching the platform.
+/// - `"cmdline-tools;latest"` — self-update the command-line tools to `latest/`.
+///
+/// # Note on `build-tools` version
+///
+/// The `<api>.0.0` patch suffix is valid for all stable Android API releases.
+/// If a future API level lacks a `.0.0` patch release, the mismatch surfaces as
+/// a "package not found" error from `sdkmanager`, and the user can override
+/// `android_api_level` in `.fdemon/config.toml`.
+pub fn sdkmanager_packages(api_level: u32) -> Vec<String> {
+    vec![
+        "platform-tools".to_string(),
+        format!("platforms;android-{api_level}"),
+        format!("build-tools;{api_level}.0.0"),
+        "cmdline-tools;latest".to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +671,119 @@ mod tests {
         };
         let _p2 = p; // copy
         assert_eq!(p.received, 1024);
+    }
+
+    // ── Phase 3 Android install type tests ────────────────────────────────────
+
+    #[test]
+    fn test_cmdline_tools_url_per_os() {
+        assert!(cmdline_tools_url(HostPlatform::Linux, "123")
+            .unwrap()
+            .contains("commandlinetools-linux-123_latest.zip"));
+        assert!(cmdline_tools_url(HostPlatform::MacOs, "123")
+            .unwrap()
+            .contains("-mac-"));
+        assert!(cmdline_tools_url(HostPlatform::Windows, "123")
+            .unwrap()
+            .contains("-win-"));
+        assert!(cmdline_tools_url(HostPlatform::Unknown, "123").is_none());
+    }
+
+    #[test]
+    fn test_cmdline_tools_url_full_format() {
+        let url = cmdline_tools_url(HostPlatform::Linux, "11076708").unwrap();
+        assert_eq!(
+            url,
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+        );
+        let url_mac = cmdline_tools_url(HostPlatform::MacOs, "11076708").unwrap();
+        assert_eq!(
+            url_mac,
+            "https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip"
+        );
+        let url_win = cmdline_tools_url(HostPlatform::Windows, "11076708").unwrap();
+        assert_eq!(
+            url_win,
+            "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip"
+        );
+    }
+
+    #[test]
+    fn test_sdkmanager_packages_api_36() {
+        assert_eq!(
+            sdkmanager_packages(36),
+            vec![
+                "platform-tools",
+                "platforms;android-36",
+                "build-tools;36.0.0",
+                "cmdline-tools;latest"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sdkmanager_packages_api_34() {
+        let pkgs = sdkmanager_packages(34);
+        assert_eq!(pkgs[0], "platform-tools");
+        assert_eq!(pkgs[1], "platforms;android-34");
+        assert_eq!(pkgs[2], "build-tools;34.0.0");
+        assert_eq!(pkgs[3], "cmdline-tools;latest");
+        assert_eq!(pkgs.len(), 4);
+    }
+
+    #[test]
+    fn test_android_install_target_fields_accessible() {
+        // Verify the struct fields are pub and the type compiles correctly.
+        let target = AndroidInstallTarget {
+            sdk_root: PathBuf::from("/home/user/Android/Sdk"),
+            api_level: 36,
+            cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
+            jdk_path: None,
+            platform: HostPlatform::Linux,
+        };
+        assert_eq!(target.api_level, 36);
+        assert_eq!(target.cmdline_tools_build, DEFAULT_CMDLINE_TOOLS_BUILD);
+        assert!(target.jdk_path.is_none());
+        assert_eq!(target.platform, HostPlatform::Linux);
+    }
+
+    #[test]
+    fn test_android_install_target_with_jdk_path() {
+        let target = AndroidInstallTarget {
+            sdk_root: PathBuf::from("/opt/android-sdk"),
+            api_level: 35,
+            cmdline_tools_build: "12345678".to_string(),
+            jdk_path: Some(PathBuf::from("/usr/lib/jvm/java-21")),
+            platform: HostPlatform::MacOs,
+        };
+        assert!(target.jdk_path.is_some());
+        assert_eq!(
+            target.jdk_path.unwrap(),
+            PathBuf::from("/usr/lib/jvm/java-21")
+        );
+    }
+
+    #[test]
+    fn test_android_install_outcome_fields_accessible() {
+        let outcome = AndroidInstallOutcome {
+            sdk_root: PathBuf::from("/home/user/Android/Sdk"),
+            packages_installed: sdkmanager_packages(36),
+        };
+        assert_eq!(outcome.packages_installed.len(), 4);
+        assert!(outcome
+            .packages_installed
+            .contains(&"platform-tools".to_string()));
+        assert!(outcome
+            .packages_installed
+            .contains(&"platforms;android-36".to_string()));
+    }
+
+    #[test]
+    fn test_default_cmdline_tools_build_is_nonempty() {
+        assert!(!DEFAULT_CMDLINE_TOOLS_BUILD.is_empty());
+        // Must consist only of ASCII digits (valid build number).
+        assert!(DEFAULT_CMDLINE_TOOLS_BUILD
+            .chars()
+            .all(|c| c.is_ascii_digit()));
     }
 }

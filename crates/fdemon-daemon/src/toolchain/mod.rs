@@ -36,9 +36,10 @@ pub use flutter_install::{
 pub use path_config::{add_to_path, rc_file_for_shell, PathConfigOutcome};
 pub use process_stream::run_streaming;
 pub use types::{
+    cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,
     ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, DownloadProgress,
     FlutterInstallOutcome, FlutterInstallTarget, FlutterRelease, FlutterReleaseManifest, HostArch,
-    HostPlatform, HostShell, InstallMethod, ToolchainReport,
+    HostPlatform, HostShell, InstallMethod, ToolchainReport, DEFAULT_CMDLINE_TOOLS_BUILD,
 };
 
 use std::path::Path;
