@@ -808,6 +808,51 @@ pub fn handle_action(
                     explicit_sdk_path.as_deref(),
                 )
                 .await;
+
+                // If the preflight found a live Flutter SDK, re-resolve `AppState::resolved_sdk`
+                // so that `flutter_executable()` returns `Some` before `handle_preflight_completed`
+                // evaluates the handback predicate (Phase 5, Task 04).
+                //
+                // `run_preflight` calls `find_flutter_sdk` internally but discards the
+                // `FlutterSdk` struct — only the `ComponentStatus` makes it into the report.
+                // `AppState::resolved_sdk` is only updated via `Message::SdkResolved`, so
+                // without this step `flutter_executable()` stays `None` after a managed
+                // install even though the SDK file is present on disk.
+                let flutter_sdk_live = report.components.iter().any(|c| {
+                    c.kind == fdemon_daemon::toolchain::ComponentKind::FlutterSdk
+                        && c.status == fdemon_daemon::toolchain::ComponentStatus::Ok
+                });
+                if flutter_sdk_live {
+                    match tokio::task::spawn_blocking({
+                        let project_path = project_path.clone();
+                        let explicit_sdk_path = explicit_sdk_path.clone();
+                        move || {
+                            fdemon_daemon::flutter_sdk::find_flutter_sdk(
+                                &project_path,
+                                explicit_sdk_path.as_deref(),
+                            )
+                        }
+                    })
+                    .await
+                    {
+                        Ok(Ok(sdk)) => {
+                            let _ = msg_tx
+                                .send(crate::message::Message::SdkResolved { sdk })
+                                .await;
+                        }
+                        Ok(Err(e)) => {
+                            tracing::debug!(
+                                "RunToolchainPreflight: SDK re-resolution failed (non-fatal): {e}"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "RunToolchainPreflight: SDK re-resolution task panicked (non-fatal): {e}"
+                            );
+                        }
+                    }
+                }
+
                 let _ = msg_tx
                     .send(crate::message::Message::ToolchainPreflightCompleted { report })
                     .await;

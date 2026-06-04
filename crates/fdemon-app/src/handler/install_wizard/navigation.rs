@@ -5,7 +5,7 @@
 
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::install_wizard::WizardPane;
-use crate::state::AppState;
+use crate::state::{AppState, UiMode};
 
 /// Handle `ShowInstallWizard` — opens the Install Wizard panel.
 ///
@@ -25,17 +25,50 @@ pub fn handle_show(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle `HideInstallWizard` — closes the Install Wizard panel.
+///
+/// **Handback (Phase 5, Task 04).** When a live Flutter SDK exists at close
+/// time and the handback guard has not already fired, also dispatches
+/// `DiscoverDevices` and transitions toward the new-session/startup flow so
+/// the user lands in a populated launch dialog after a successful install.
 pub fn handle_hide(state: &mut AppState) -> UpdateResult {
     state.hide_install_wizard();
-    UpdateResult::none()
+    maybe_dispatch_discovery_on_close(state)
 }
 
 /// Handle `InstallWizardEscape` — priority-ordered escape from the panel.
 ///
-/// In Phase 1 there are no sub-modals, so this always closes the panel.
+/// When a step is running, `Esc` is handled by a higher-priority key arm
+/// (dispatching `InstallWizardCancelStep`); by the time this function is
+/// reached, no step is in flight.
+///
+/// **Handback (Phase 5, Task 04).** Same as `handle_hide`: when a live SDK
+/// exists and the guard is unset, dispatch device discovery and route to the
+/// new-session/startup mode.
 pub fn handle_escape(state: &mut AppState) -> UpdateResult {
     state.hide_install_wizard();
-    UpdateResult::none()
+    maybe_dispatch_discovery_on_close(state)
+}
+
+/// Shared handback helper for `handle_hide` and `handle_escape`.
+///
+/// When a live Flutter SDK exists (`flutter_executable().is_some()`) and the
+/// one-shot guard (`handback_done`) is unset, dispatches `DiscoverDevices` and
+/// transitions to `UiMode::Startup` (which shows the new-session dialog).
+///
+/// If the guard is already set (auto-close already fired discovery), this is
+/// a no-op — returns `UpdateResult::none()`.
+fn maybe_dispatch_discovery_on_close(state: &mut AppState) -> UpdateResult {
+    if state.install_wizard_state.handback_done {
+        return UpdateResult::none();
+    }
+    if let Some(flutter) = state.flutter_executable() {
+        state.install_wizard_state.handback_done = true;
+        // Route to Startup so the new-session dialog is shown once devices arrive.
+        state.ui_mode = UiMode::Startup;
+        UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
+    } else {
+        UpdateResult::none()
+    }
 }
 
 /// Handle `InstallWizardSwitchPane` — toggle focus between step list and detail pane.
@@ -441,5 +474,126 @@ mod tests {
         assert_eq!(state.install_wizard_state.selected_command_index, 1);
         handle_prev_command(&mut state);
         assert_eq!(state.install_wizard_state.selected_command_index, 0);
+    }
+
+    // ── Phase 5, Task 04: handback tests ─────────────────────────────────────
+
+    /// Helper: build an `AppState` with the wizard open and `resolved_sdk` set
+    /// to a minimal `FlutterSdk` so that `flutter_executable()` returns `Some`.
+    fn state_with_live_sdk() -> AppState {
+        use fdemon_daemon::{FlutterExecutable, FlutterSdk, SdkSource};
+
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state.install_wizard_state.apply_report(make_report());
+        // Inject a minimal resolved_sdk so flutter_executable() returns Some.
+        state.resolved_sdk = Some(FlutterSdk {
+            root: std::path::PathBuf::from("/opt/flutter"),
+            executable: FlutterExecutable::Direct(std::path::PathBuf::from(
+                "/opt/flutter/bin/flutter",
+            )),
+            source: SdkSource::ExplicitConfig,
+            version: "3.27.0".to_string(),
+            channel: Some("stable".to_string()),
+        });
+        state
+    }
+
+    #[test]
+    fn manual_close_with_live_sdk_spawns_discovery() {
+        // When Esc is pressed after a successful install (live SDK), handle_escape
+        // must dispatch DiscoverDevices and NOT return bare Normal mode.
+        let mut state = state_with_live_sdk();
+        assert!(
+            state.flutter_executable().is_some(),
+            "precondition: SDK must be live"
+        );
+
+        let result = handle_escape(&mut state);
+
+        // Must not remain in InstallWizard mode.
+        assert_ne!(
+            state.ui_mode,
+            UiMode::InstallWizard,
+            "Esc with live SDK must leave InstallWizard mode"
+        );
+        // Must dispatch DiscoverDevices.
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, crate::handler::UpdateAction::DiscoverDevices { .. })),
+            "handle_escape with live SDK must dispatch DiscoverDevices; got {:?}",
+            actions
+        );
+        // handback_done must be set.
+        assert!(
+            state.install_wizard_state.handback_done,
+            "handback_done must be true after manual close with live SDK"
+        );
+    }
+
+    #[test]
+    fn manual_close_without_live_sdk_returns_none() {
+        // When Esc is pressed with no live SDK, handle_escape must be a no-op
+        // (no DiscoverDevices, bare Normal mode).
+        let mut state = state_with_wizard_open();
+        // No resolved_sdk — flutter_executable() is None.
+        assert!(
+            state.flutter_executable().is_none(),
+            "precondition: SDK must be absent"
+        );
+
+        let result = handle_escape(&mut state);
+
+        // No discovery action.
+        let actions = result.actions();
+        assert!(
+            actions.is_empty(),
+            "handle_escape without live SDK must return no actions; got {:?}",
+            actions
+        );
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert!(!state.install_wizard_state.handback_done);
+    }
+
+    #[test]
+    fn second_manual_close_does_not_spawn_discovery_again() {
+        // After handback_done is set (e.g. auto-close already fired), a manual
+        // Esc must be a no-op — no second DiscoverDevices.
+        let mut state = state_with_live_sdk();
+        state.install_wizard_state.handback_done = true; // guard already set
+
+        let result = handle_escape(&mut state);
+
+        let actions = result.actions();
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, crate::handler::UpdateAction::DiscoverDevices { .. })),
+            "second Esc must not dispatch DiscoverDevices when handback_done is true; got {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn handle_hide_with_live_sdk_dispatches_discovery() {
+        // handle_hide must behave identically to handle_escape for the handback.
+        let mut state = state_with_live_sdk();
+
+        let result = handle_hide(&mut state);
+
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, crate::handler::UpdateAction::DiscoverDevices { .. })),
+            "handle_hide with live SDK must dispatch DiscoverDevices; got {:?}",
+            actions
+        );
+        assert!(
+            state.install_wizard_state.handback_done,
+            "handback_done must be true after handle_hide with live SDK"
+        );
     }
 }

@@ -104,6 +104,17 @@ pub struct InstallWizardState {
     /// running. Cleared (`take()`d) on completion, failure, or cancellation to
     /// prevent stale handles from lingering. `None` when no step is in flight.
     pub install_task: Option<InstallTaskHandle>,
+
+    /// One-shot guard that prevents device discovery from being dispatched more
+    /// than once per wizard session (Phase 5, Task 04).
+    ///
+    /// Set to `true` the first time the handback path fires — either via the
+    /// auto-close in `handle_preflight_completed` or via a manual Esc/HideInstallWizard
+    /// with a live SDK.  Prevents a race where both auto-close and an immediately
+    /// following Esc would each dispatch `DiscoverDevices`.
+    ///
+    /// Reset to `false` only when the wizard is fully re-opened via `opening()`.
+    pub handback_done: bool,
 }
 
 impl InstallWizardState {
@@ -188,6 +199,28 @@ impl InstallWizardState {
     /// to guard against concurrent step runs.
     pub fn is_step_running(&self) -> bool {
         self.execution.status == StepExecStatus::Running
+    }
+
+    /// Returns `true` when the last preflight report shows the Flutter SDK as live
+    /// (at least one `FlutterSdk` component with `ComponentStatus::Ok`).
+    ///
+    /// Used as the handback predicate in `handle_preflight_completed` and
+    /// `handle_hide`/`handle_escape`.  Returns `false` when no report has been
+    /// applied yet (early-exit before the first preflight completes).
+    ///
+    /// Note: this reads the *report*, not `AppState::resolved_sdk`.  After a
+    /// managed install the preflight re-run calls `find_flutter_sdk` itself and
+    /// reflects the result in `report.components`, so this predicate is reliable
+    /// once `apply_report` has processed the post-install report.
+    pub fn flutter_now_live(&self) -> bool {
+        let report = match self.report.as_ref() {
+            Some(r) => r,
+            None => return false,
+        };
+        report
+            .components
+            .iter()
+            .any(|c| c.kind == ComponentKind::FlutterSdk && c.status == ComponentStatus::Ok)
     }
 
     /// Begin a run: set `Running`, clear prior progress/log/summary, and record
@@ -287,6 +320,7 @@ impl std::fmt::Debug for InstallWizardState {
                 "install_task",
                 &self.install_task.as_ref().map(|_| "<running>"),
             )
+            .field("handback_done", &self.handback_done)
             .finish()
     }
 }
@@ -2110,6 +2144,180 @@ mod tests {
         assert!(
             prereq.guided_commands.is_empty(),
             "Prerequisites step must have no guided commands when all Ok"
+        );
+    }
+
+    // ── Phase 5, Task 04: flutter_now_live + 9-ComponentKind routing ──────────
+
+    #[test]
+    fn test_flutter_now_live_returns_false_when_no_report() {
+        let state = InstallWizardState::default();
+        assert!(
+            !state.flutter_now_live(),
+            "flutter_now_live must return false when no report has been applied"
+        );
+    }
+
+    #[test]
+    fn test_flutter_now_live_returns_true_when_flutter_ok() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk component is Ok"
+        );
+    }
+
+    #[test]
+    fn test_flutter_now_live_returns_false_when_flutter_missing() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Missing,
+        )]);
+        state.apply_report(report);
+        assert!(
+            !state.flutter_now_live(),
+            "flutter_now_live must return false when FlutterSdk component is Missing"
+        );
+    }
+
+    #[test]
+    fn test_flutter_now_live_returns_false_when_no_flutter_component() {
+        // Report has only Android components — no FlutterSdk entry.
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![make_check(
+            ComponentKind::AndroidCmdlineTools,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+        assert!(
+            !state.flutter_now_live(),
+            "flutter_now_live must return false when no FlutterSdk component is present"
+        );
+    }
+
+    #[test]
+    fn test_handback_done_defaults_to_false() {
+        let state = InstallWizardState::default();
+        assert!(!state.handback_done, "handback_done must default to false");
+    }
+
+    #[test]
+    fn test_opening_resets_handback_done() {
+        // `opening()` must reset handback_done so a re-opened wizard can hand back again.
+        let state = InstallWizardState::opening();
+        assert!(
+            !state.handback_done,
+            "opening() must reset handback_done to false"
+        );
+    }
+
+    /// Exhaustive test: all 9 `ComponentKind` variants must route to the correct
+    /// `WizardStep` bucket in `build_steps()`.
+    ///
+    /// Routing rules (from `build_steps` match arm):
+    /// - `Prerequisites`, `Git`                                    → `Prerequisites`
+    /// - `AndroidCmdlineTools`, `AndroidPlatformTools`,
+    ///   `AndroidPlatform`, `AndroidBuildTools`,
+    ///   `AndroidLicenses`, `Jdk`                                  → `AndroidTools`
+    /// - `FlutterSdk`                                              → `FlutterSdk`
+    #[test]
+    fn all_nine_component_kinds_route_to_correct_step() {
+        // Build a report with one component of each kind, all Ok.
+        let report = make_report(vec![
+            make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+        ]);
+
+        let steps = build_steps(&report);
+        assert_eq!(
+            steps.len(),
+            5,
+            "build_steps must always return exactly 5 steps"
+        );
+
+        let find_step = |kind: WizardStepKind| {
+            steps
+                .iter()
+                .find(|s| s.kind == kind)
+                .unwrap_or_else(|| panic!("{kind:?} step must be present"))
+        };
+
+        // Prerequisites step: Prerequisites + Git
+        let prereq = find_step(WizardStepKind::Prerequisites);
+        assert_eq!(
+            prereq.components.len(),
+            2,
+            "Prerequisites step must have exactly 2 components (Prerequisites + Git)"
+        );
+        assert!(
+            prereq
+                .components
+                .iter()
+                .all(|c| matches!(c.kind, ComponentKind::Prerequisites | ComponentKind::Git)),
+            "Prerequisites step must contain only Prerequisites and Git components"
+        );
+
+        // AndroidTools step: 6 components
+        let android = find_step(WizardStepKind::AndroidTools);
+        assert_eq!(
+            android.components.len(),
+            6,
+            "AndroidTools step must have exactly 6 components"
+        );
+        for c in &android.components {
+            assert!(
+                matches!(
+                    c.kind,
+                    ComponentKind::AndroidCmdlineTools
+                        | ComponentKind::AndroidPlatformTools
+                        | ComponentKind::AndroidPlatform
+                        | ComponentKind::AndroidBuildTools
+                        | ComponentKind::AndroidLicenses
+                        | ComponentKind::Jdk
+                ),
+                "component {:?} must not be in AndroidTools step",
+                c.kind
+            );
+        }
+
+        // PathConfig step: no components (informational)
+        let path_cfg = find_step(WizardStepKind::PathConfig);
+        assert!(
+            path_cfg.components.is_empty(),
+            "PathConfig step must have no components"
+        );
+
+        // FlutterSdk step: exactly 1 component
+        let flutter = find_step(WizardStepKind::FlutterSdk);
+        assert_eq!(
+            flutter.components.len(),
+            1,
+            "FlutterSdk step must have exactly 1 component"
+        );
+        assert_eq!(
+            flutter.components[0].kind,
+            ComponentKind::FlutterSdk,
+            "FlutterSdk step component must be FlutterSdk"
+        );
+
+        // Doctor step: no components (informational)
+        let doctor = find_step(WizardStepKind::Doctor);
+        assert!(
+            doctor.components.is_empty(),
+            "Doctor step must have no components"
         );
     }
 }

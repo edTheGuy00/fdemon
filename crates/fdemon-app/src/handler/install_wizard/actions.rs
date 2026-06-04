@@ -30,6 +30,13 @@ use fdemon_daemon::toolchain::ToolchainReport;
 /// Also fires `UpdateAction::ScanInstalledSdks` so the Flutter Version panel's
 /// cache is refreshed after a managed SDK install completes and the preflight
 /// re-runs (part of the `WizardStepCompleted(FlutterSdk)` message chain).
+///
+/// **Handback (Phase 5, Task 04).** When the report shows the Flutter SDK is
+/// live (`flutter_now_live()`) and the handback guard has not already fired
+/// (`handback_done == false`), the wizard is auto-closed and a
+/// `DiscoverDevices` action is returned so the launch dialog is populated.
+/// The `handback_done` flag prevents a second discovery if the user also
+/// manually closes the wizard.
 pub fn handle_preflight_completed(state: &mut AppState, report: ToolchainReport) -> UpdateResult {
     state.install_wizard_state.apply_report(report);
     state.install_wizard_state.status_message = None;
@@ -38,7 +45,22 @@ pub fn handle_preflight_completed(state: &mut AppState, report: ToolchainReport)
     // installed SDK.  `active_sdk_root` comes from the just-resolved SDK —
     // this is the same pattern used by `handle_switch_completed`.
     let active_sdk_root = state.resolved_sdk.as_ref().map(|sdk| sdk.root.clone());
-    UpdateResult::action(UpdateAction::ScanInstalledSdks { active_sdk_root })
+    let scan_action = UpdateAction::ScanInstalledSdks { active_sdk_root };
+
+    // Handback: auto-close the wizard and dispatch device discovery when
+    // Flutter is now live and the guard has not already fired.
+    if state.install_wizard_state.flutter_now_live() && !state.install_wizard_state.handback_done {
+        if let Some(flutter) = state.flutter_executable() {
+            state.install_wizard_state.handback_done = true;
+            state.hide_install_wizard();
+            return UpdateResult::actions_vec(vec![
+                scan_action,
+                UpdateAction::DiscoverDevices { flutter },
+            ]);
+        }
+    }
+
+    UpdateResult::action(scan_action)
 }
 
 /// Handle `InstallWizardRerunPreflight` — re-run the preflight check.
@@ -1637,6 +1659,194 @@ mod tests {
         assert!(
             !msg.starts_with("Failed"),
             "cancelled path must not start with 'Failed'; got: {msg}"
+        );
+    }
+
+    // ── Phase 5, Task 04: launch-dialog handback ──────────────────────────────
+
+    /// Helper: inject a minimal `FlutterSdk` so that `flutter_executable()` returns `Some`.
+    fn inject_live_sdk(state: &mut AppState) {
+        use fdemon_daemon::{FlutterExecutable, FlutterSdk, SdkSource};
+        state.resolved_sdk = Some(FlutterSdk {
+            root: std::path::PathBuf::from("/opt/flutter"),
+            executable: FlutterExecutable::Direct(std::path::PathBuf::from(
+                "/opt/flutter/bin/flutter",
+            )),
+            source: SdkSource::ExplicitConfig,
+            version: "3.27.0".to_string(),
+            channel: Some("stable".to_string()),
+        });
+    }
+
+    /// Build a report where the Flutter SDK component is `Ok` (Flutter is live).
+    fn make_live_flutter_report() -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
+        }
+    }
+
+    /// Build a report where the Flutter SDK component is `Missing`.
+    fn make_dead_flutter_report() -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Missing,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
+        }
+    }
+
+    /// When preflight re-runs after a successful Flutter install (`resolved_sdk` is `Some`
+    /// and the report shows Flutter live), the wizard must auto-close and `DiscoverDevices`
+    /// must be dispatched exactly once.
+    #[test]
+    fn preflight_completed_with_live_flutter_autocloses_and_discovers() {
+        use crate::state::UiMode;
+
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        inject_live_sdk(&mut state);
+        assert_eq!(state.ui_mode, UiMode::InstallWizard, "precondition");
+        assert!(!state.install_wizard_state.handback_done, "precondition");
+
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        // Wizard must be closed.
+        assert_ne!(
+            state.ui_mode,
+            UiMode::InstallWizard,
+            "wizard must auto-close when Flutter is live"
+        );
+        // handback_done must be set.
+        assert!(
+            state.install_wizard_state.handback_done,
+            "handback_done must be true after auto-close"
+        );
+        // DiscoverDevices must be among the returned actions.
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "DiscoverDevices action must be returned; got {:?}",
+            actions
+        );
+    }
+
+    /// When the handback guard is already set (first preflight already fired),
+    /// a second `handle_preflight_completed` call must NOT dispatch a second
+    /// `DiscoverDevices` action.
+    #[test]
+    fn handback_does_not_fire_twice() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        inject_live_sdk(&mut state);
+        // Pre-set the guard as if auto-close already fired once.
+        state.install_wizard_state.handback_done = true;
+
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        let actions = result.actions();
+        assert!(
+            !actions.iter().any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "second preflight must not dispatch DiscoverDevices when handback_done is true; got {:?}",
+            actions
+        );
+    }
+
+    /// When the preflight report does NOT show Flutter live (still missing),
+    /// `handle_preflight_completed` must NOT auto-close the wizard.
+    #[test]
+    fn preflight_completed_without_live_flutter_does_not_handback() {
+        use crate::state::UiMode;
+
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        inject_live_sdk(&mut state); // resolved_sdk is Some, but report says Missing
+
+        let result = handle_preflight_completed(&mut state, make_dead_flutter_report());
+
+        // Wizard must remain open (install still in progress / failed).
+        assert_eq!(
+            state.ui_mode,
+            UiMode::InstallWizard,
+            "wizard must remain open when Flutter SDK is still missing in report"
+        );
+        assert!(
+            !state.install_wizard_state.handback_done,
+            "handback_done must NOT be set when report shows Flutter missing"
+        );
+        // No DiscoverDevices.
+        let actions = result.actions();
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "must not dispatch DiscoverDevices when Flutter is still missing; got {:?}",
+            actions
+        );
+    }
+
+    /// Partial toolchain (Flutter live, Android missing) must still hand back —
+    /// handback is gated on Flutter only.
+    #[test]
+    fn partial_toolchain_still_handbacks_when_flutter_live() {
+        use crate::state::UiMode;
+
+        // Report: Flutter Ok, Android missing.
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![
+                ComponentCheck {
+                    kind: ComponentKind::FlutterSdk,
+                    status: ComponentStatus::Ok,
+                    detail: String::new(),
+                },
+                ComponentCheck {
+                    kind: ComponentKind::AndroidCmdlineTools,
+                    status: ComponentStatus::Missing,
+                    detail: String::new(),
+                },
+            ],
+            doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
+        };
+
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        inject_live_sdk(&mut state);
+
+        let result = handle_preflight_completed(&mut state, report);
+
+        // Wizard must auto-close even though Android is missing.
+        assert_ne!(
+            state.ui_mode,
+            UiMode::InstallWizard,
+            "wizard must handback even when Android tools are still missing"
+        );
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "DiscoverDevices must be dispatched even with partial toolchain; got {:?}",
+            actions
         );
     }
 }
