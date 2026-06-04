@@ -656,8 +656,9 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 |-----|--------|-------------|
 | `k` / `↑` | Navigate Up | Move selection up in the step list |
 | `j` / `↓` | Navigate Down | Move selection down in the step list |
-| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install or PATH config write) |
-| `r` | Re-run Preflight | Re-run the toolchain preflight check |
+| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write) |
+| `c` | Copy Guided Command | Copy the selected step's guided command to the clipboard (e.g. the JDK install command). No-op when the step has no guided command. |
+| `r` | Re-run Preflight | Re-run the toolchain preflight check (useful after completing a guided step such as installing JDK 17 outside fdemon) |
 
 ### Detail Pane Controls (when Detail pane is focused)
 

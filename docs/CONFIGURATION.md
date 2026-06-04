@@ -706,25 +706,34 @@ Control the Install Wizard's managed Flutter and Android toolchain installs. All
 [toolchain]
 # Where managed Flutter SDKs are installed (default: ~/fvm/versions/<version>)
 # flutter_install_dir = "~/fvm/versions"
-channel = "stable"                  # Phase 2: Flutter channel to install
-flutter_install_method = "git"      # Phase 2: "git" (default) or "archive"
-# android_sdk_root = "~/.android/sdk"   # Phase 3 (reserved)
-android_api_level = 36                  # Phase 3 (reserved)
-# cmdline_tools_build = "..."           # Phase 3 (reserved)
-# jdk_path = "/usr/lib/jvm/java-17-openjdk"  # Phase 3 (reserved)
+channel = "stable"                  # Flutter channel to install
+flutter_install_method = "git"      # "git" (default) or "archive"
+
+# Android SDK root (default: $ANDROID_HOME / $ANDROID_SDK_ROOT, else the per-OS
+# default: ~/Android/Sdk, ~/Library/Android/sdk, or %LOCALAPPDATA%\Android\Sdk).
+# Written automatically after a successful Android Tools install.
+# android_sdk_root = "~/.android/sdk"
+
+# Android API level for platforms/build-tools (default: 36).
+android_api_level = 36
+
+# cmdline-tools build number used in the download URL. Override only if the default
+# 404s (find the current value on https://developer.android.com/studio#command-tools).
+# cmdline_tools_build = "11076708"
+
+# Explicit JDK 17 directory, passed to `flutter config --jdk-dir`.
+# jdk_path = "/usr/lib/jvm/java-17-openjdk"
 ```
 
-| Property | Type | Default | Phase | Description |
-|----------|------|---------|-------|-------------|
-| `flutter_install_dir` | `string` | `~/fvm/versions` | 2 | Directory where managed Flutter SDKs are installed. Each version is placed in a `<version>` subdirectory. Shared with the Flutter Version panel's FVM cache. Leave unset to use the default. |
-| `channel` | `string` | `"stable"` | 2 | Flutter channel to install (`"stable"`, `"beta"`, `"main"`, etc.). Used by the Install Wizard when running the Flutter SDK install step. |
-| `flutter_install_method` | `string` | `"git"` | 2 | Flutter install method: `"git"` clones the Flutter repository (default); `"archive"` downloads a prebuilt archive. |
-| `android_sdk_root` | `string` | `~/.android/sdk` or `$ANDROID_HOME` | 3 (reserved) | Android SDK root directory override. When unset, fdemon checks `$ANDROID_HOME` then falls back to `~/.android/sdk`. |
-| `android_api_level` | `integer` | `36` | 3 (reserved) | Android API level for `platforms/` and `build-tools/` installation. |
-| `cmdline_tools_build` | `string` | (latest) | 3 (reserved) | `cmdline-tools` build number override. Leave unset to install the latest available version. |
-| `jdk_path` | `string` | (auto-detect) | 3 (reserved) | Explicit JDK 17 directory. When unset, fdemon auto-detects via `$JAVA_HOME` and `which java`. |
-
-> **Phase 3 reserved fields:** `android_sdk_root`, `android_api_level`, `cmdline_tools_build`, and `jdk_path` are parsed and stored but have no effect until Phase 3 of the toolchain-bootstrap feature. They are declared now to avoid a second config migration.
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `flutter_install_dir` | `string` | `~/fvm/versions` | Directory where managed Flutter SDKs are installed. Each version is placed in a `<version>` subdirectory. Shared with the Flutter Version panel's FVM cache. Leave unset to use the default. |
+| `channel` | `string` | `"stable"` | Flutter channel to install (`"stable"`, `"beta"`, `"main"`, etc.). Used by the Install Wizard when running the Flutter SDK install step. |
+| `flutter_install_method` | `string` | `"git"` | Flutter install method: `"git"` clones the Flutter repository (default); `"archive"` downloads a prebuilt archive. |
+| `android_sdk_root` | `string` | `$ANDROID_HOME` / `$ANDROID_SDK_ROOT`, else `~/Android/Sdk` (Linux/Windows) or `~/Library/Android/sdk` (macOS) | Android SDK root directory override. When unset, fdemon checks `$ANDROID_HOME` and `$ANDROID_SDK_ROOT` then falls back to the per-OS default. **Written automatically** after a successful Android Tools install via the Install Wizard. |
+| `android_api_level` | `integer` | `36` | Android API level for `platforms/` and `build-tools/` installation. |
+| `cmdline_tools_build` | `string` | (current) | `cmdline-tools` build number override, used in the download URL. Leave unset to use the current default. Override when the default URL 404s — find the latest build number at [developer.android.com/studio#command-tools](https://developer.android.com/studio#command-tools). |
+| `jdk_path` | `string` | (auto-detect) | Explicit JDK 17 directory, passed to `flutter config --jdk-dir`. When unset, fdemon auto-detects via `$JAVA_HOME` and `which java`. |
 
 ### Editor Settings
 
