@@ -111,5 +111,51 @@ small (e.g. 40x10) and larger areas.
 
 ## Completion Summary
 
-**Status:** Not Started
-</content>
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/progress.rs` | New file: `StepProgress` widget rendering live execution state (phase label, progress gauge/counter, log tail) |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added action hints ("Press Enter to…" / "Available in a later phase"), execution dispatch to `StepProgress`, `animation_frame` parameter |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Declared `mod progress;`, added `animation_frame` field to `InstallWizardPanel`, updated factory calls |
+| `crates/fdemon-tui/src/render/mod.rs` | Pass `state.animation_frame` to `InstallWizardPanel::new()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **animation_frame threading**: Added `animation_frame: u64` to `InstallWizardPanel` and threaded it to `step_detail_pane()` / `StepProgress`. This is consistent with how `log_view` and other animated widgets receive frame data — no wall-clock reads, deterministic in tests.
+
+2. **Progress replaces static detail**: When execution is active for the selected step, `StepProgress` occupies the full `content_area` (replacing component checks + action hint). This avoids complex layout mixing of static and live content.
+
+3. **Action hint placement**: For steps with components, the hint is anchored at the bottom of the content area (`content_area.y + height - 1`). Component rows are limited to `height - ACTION_HINT_HEIGHT` rows to leave room. For no-component steps (PathConfig), the hint shows at the top of the content area.
+
+4. **Non-executable step hint**: Prerequisites, AndroidTools, and Doctor steps show "Available in a later phase" (muted, no ▶) instead of an Enter hint. Doctor shows nothing (display-only view).
+
+5. **LineGauge for known total**: When `StepExecution::total` is `Some(n)`, a ratatui `LineGauge` is rendered with `filled_style`/`unfilled_style`. When `total` is `None`, a spinner + byte counter is shown.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (6301+ tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added (progress.rs: 9 tests, step_detail.rs: 11 new tests):
+- `test_progress_renders_bar_with_known_total`
+- `test_progress_renders_counter_with_unknown_total`
+- `test_step_detail_shows_enter_hint_for_flutter_step`
+- `test_step_detail_shows_enter_hint_for_path_config_step`
+- `test_step_detail_shows_phase_for_non_executable_step`
+- `test_progress_log_tail_clips_to_height`
+- `test_step_detail_shows_progress_view_when_running`
+- `test_step_detail_shows_success_summary_after_run`
+- `test_step_detail_shows_error_summary_on_failure`
+- `test_step_detail_progress_not_shown_for_different_step`
+- and more...
+
+### Risks/Limitations
+
+1. **Layer boundary**: `fdemon-tui` does not import from `fdemon-daemon` directly. All types (`StepExecution`, `StepExecStatus`, `WizardStepKind`) are consumed via `fdemon-app::install_wizard` re-exports, consistent with the architecture boundary.
+

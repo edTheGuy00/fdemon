@@ -119,5 +119,35 @@ fn test_enter_in_install_wizard_runs_selected_step() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** worktree-agent-a9fc7bed7700486de
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `InstallMethod` enum (scaffold for task 03; `Download` and `GitClone` variants) |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Re-exported `InstallMethod` from `types` |
+| `crates/fdemon-app/src/message.rs` | Added `WizardStepKind` import; added 6 new variants: `InstallWizardRunSelectedStep`, `WizardStepStarted`, `WizardStepLog`, `WizardDownloadProgress`, `WizardStepCompleted`, `WizardStepFailed` |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `WizardStepKind` import; added `FlutterStepParams` struct; added `UpdateAction::RunWizardStep` variant |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub arms for all 6 new Message variants, annotated `TODO(phase2-task-09)` |
+| `crates/fdemon-app/src/handler/keys.rs` | Bound `Enter` → `InstallWizardRunSelectedStep` in `handle_key_install_wizard`; updated doc comment; added `install_wizard_key_tests` module with 5 tests |
+| `crates/fdemon-app/src/actions/mod.rs` | Added stub arm for `UpdateAction::RunWizardStep`, annotated `TODO(phase2-task-08)` |
+| `crates/fdemon-tui/src/runner.rs` | Added `RunWizardStep` to the non-runner catch-all arm |
+
+### Notable Decisions/Tradeoffs
+
+1. **`InstallMethod` scaffold in daemon types**: `InstallMethod` is specified as a task 03 type. Since task 03 is not yet merged, task 05 adds a minimal two-variant scaffold (`Download`, `GitClone`) in `fdemon-daemon/src/toolchain/types.rs` so `fdemon-app` compiles. Task 03 should extend or replace this scaffold with the full type — the placement is intentionally in `types.rs` alongside the other toolchain types where task 03 will work.
+
+2. **Stub arms with `TODO` annotations**: All 6 new `Message` variants get `UpdateResult::none()` stubs in `update.rs` annotated with `// TODO(phase2-task-09)` so the crate stays compiling until task 09 implements the actual handlers. Similarly, `UpdateAction::RunWizardStep` gets a no-op stub in `actions/mod.rs` annotated `// TODO(phase2-task-08)`.
+
+3. **TUI runner catch-all coverage**: `fdemon-tui/src/runner.rs` has an exhaustive match on `UpdateAction` that routes non-runner variants to a `warn!` log. `RunWizardStep` was added there since the executor lives in `actions/mod.rs` (fdemon-app), not in the TUI runner.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all existing tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-app install_wizard_key_tests` — Passed (5 new tests)
 </content>

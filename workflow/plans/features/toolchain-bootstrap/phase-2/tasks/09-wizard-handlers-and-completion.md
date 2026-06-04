@@ -138,5 +138,38 @@ fn test_step_failed_records_reason_and_allows_retry() { ... }
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** worktree-agent-a074f4e7ff7292818
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `installed_sdk_path: Option<PathBuf>` field to `InstallWizardState`; updated `Debug` impl |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added 6 new step lifecycle handlers (`handle_run_selected_step`, `handle_step_started`, `handle_step_log`, `handle_step_progress`, `handle_step_completed`, `handle_step_failed`); added `map_install_method` helper; updated `handle_preflight_completed` to fire `ScanInstalledSdks`; added 13 new unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced 5 `TODO(phase2-task-09)` stub arms with real handler calls |
+
+### Notable Decisions/Tradeoffs
+
+1. **`begin_step` on dispatch vs `WizardStepStarted`**: Called `begin_step` on dispatch (in `handle_run_selected_step`) so the UI flips to `Running` immediately without waiting for the executor round-trip. `handle_step_started` remains idempotent and calls `begin_step` again when the executor message arrives — this is safe since `begin_step` resets all fields.
+
+2. **Message chain for FlutterSdk completion**: Used `UpdateResult::message_and_action` with `PersistSettings` as the action and `InstallWizardRerunPreflight` as the follow-up message. The chain is: `WizardStepCompleted(FlutterSdk)` → `PersistSettings` + `InstallWizardRerunPreflight` → `RunToolchainPreflight` → `ToolchainPreflightCompleted` → `ScanInstalledSdks`. No new `UpdateAction::Batch` introduced.
+
+3. **`handle_preflight_completed` now always fires `ScanInstalledSdks`**: This is correct behavior — after any preflight completes (initial open, re-run after install, or manual `r`), the FVM cache should be refreshed. The action is cheap (reads a directory listing).
+
+4. **`installed_sdk_path` stashing**: Added field to `InstallWizardState` so the PathConfig step can find the Flutter `bin/` dir after a FlutterSdk install without requiring the user to re-configure settings manually.
+
+5. **`map_install_method` helper**: Bridges the config-layer `InstallMethod` enum (in `fdemon-app/config/types.rs`) to the daemon-layer equivalent (in `fdemon-daemon/toolchain/types.rs`) so the config layer does not gain a runtime dependency on the daemon.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all crates, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+- `cargo test -p fdemon-app -- handler::install_wizard::actions` - 18/18 tests pass including all 5 task-specified test functions
+
+### Risks/Limitations
+
+1. **ScanInstalledSdks on every preflight**: The preflight-completed handler now always fires `ScanInstalledSdks`. This is a small change in behavior (previously it was a no-op), but is harmless — the action does a local directory scan and does not make network calls.
 </content>

@@ -137,5 +137,34 @@ to `git`/`flutter` behind availability checks so CI stays green on bare runners.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | NEW — full install module: `InstallEvent`, `resolve_install_dir`, `fetch_release_manifest`, `install_flutter`, plus private helpers and 21 unit tests |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `pub mod flutter_install;` and re-exported `archive_download_url`, `fetch_release_manifest`, `install_flutter`, `resolve_install_dir`, `InstallEvent` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`archive_install` drops the `target` parameter**: The archive path resolves the stable release from the manifest independently — it does not need the caller's `channel` field (which applies only to the git clone path). Removing the unused param eliminates a clippy warning and keeps the function signature minimal.
+2. **`archive_download_url` is `pub`**: Made public so task 08 (message bridge) can construct URLs for display purposes and tests can verify URL construction without going through the install flow.
+3. **Wire types (`RawManifest`, `RawRelease`, `RawCurrentRelease`) are private**: They are internal serde shapes and not part of the crate's public API. The public `FlutterReleaseManifest`/`FlutterRelease` types from task 01 are what callers see.
+4. **`RawCurrentRelease` is a struct with `#[derive(Deserialize)]`**: The real manifest has `beta`, `dev`, and `stable` fields in `current_release`. Only `stable` is surfaced in `FlutterReleaseManifest::current_stable_hash`; the others are silently ignored by serde.
+5. **Precache non-fatal**: Documented inline — `flutter precache` failure is logged as a warning event but `install_flutter` returns `Ok`. This matches the task spec.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Pass
+- `cargo check --workspace --all-targets` — Pass (0 warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Pass
+- `cargo test -p fdemon-daemon --lib -- toolchain::flutter_install` — 21/21 passed
+- `cargo test --workspace --lib` — 6351 passed; 0 failed
+
+### Risks/Limitations
+
+1. **`rename` across filesystems**: `std::fs::rename` fails if `install_root` and the OS temp dir are on different filesystems. This is unlikely for the default `~/fvm/versions` path (same filesystem as `$HOME`), but callers using explicit overrides on separate mount points will get an IO error. A fallback copy-then-delete could be added in a follow-up if needed.
+2. **FVM_CACHE_PATH env test**: The `test_resolve_install_dir_fvm_cache_path_env` test mutates a process-global env var without `serial_test`. Parallel test runs in the same process could see the mutated env var. The test restores the original value, which mitigates the risk, but a `serial_test` annotation would be safer. Left as-is since the existing codebase does not universally gate env-var tests with `serial_test`.
 </content>

@@ -136,5 +136,35 @@ async fn test_run_wizard_step_emits_started() { ... }
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | Replaced `TODO(phase2-task-08)` stub with full `RunWizardStep` executor; added 5 dispatch-level unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **try_send in on_event callback**: The `InstallEvent` callback is synchronous `FnMut`, so `try_send` is used for log/download/phase events inside the closure. `await`ed `send` is used for the terminal Started/Completed/Failed messages. This matches the task spec and avoids async-in-sync issues.
+
+2. **version_dir_name = channel name**: The task spec notes to use the channel string (e.g. `"stable"`) as `version_dir_name`, keeping the SDK at `~/fvm/versions/stable`. The concrete version is read post-install from the SDK's `version` file and reflected in `WizardStepCompleted.summary`.
+
+3. **Non-executable kinds produce WizardStepFailed**: Prerequisites, AndroidTools, and Doctor emit a clear failure message rather than silently dropping — this surfaces the unimplemented state to the UI so the Running spinner doesn't hang.
+
+4. **PathConfig uses spawn_blocking**: `add_to_path` is synchronous file I/O; wrapping it in `spawn_blocking` keeps the Tokio executor free.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo fmt --all -- --check` — Passed (after applying `cargo fmt --all`)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (all tests including 5 new dispatch tests)
+
+### Risks/Limitations
+
+1. **FlutterSdk step does real network I/O**: Tests only assert dispatch behavior (WizardStepStarted emitted, missing params → WizardStepFailed). Full install is not tested in unit tests since it requires network access, following the existing pattern used by RunToolchainPreflight.
+2. **PathConfig shell detection**: `HostShell::detect()` reads `$SHELL` from the environment; in CI with an Unknown shell the PathConfig step will emit `WizardStepFailed`. The test `test_run_wizard_step_pathconfig_terminates` accepts either Completed or Failed as valid outcomes.
 </content>

@@ -126,5 +126,33 @@ string-builder helpers that can be unit-tested cross-platform.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | New module: `PathConfigOutcome`, `rc_file_for_shell`, `add_to_path`, plus pure string helpers and 23 unit tests |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `pub mod path_config` declaration and `pub use path_config::{add_to_path, rc_file_for_shell, PathConfigOutcome}` re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **`fence_already_has_dir` gated with `#[cfg(test)]`**: The function is only used in tests; `apply_fence` already embeds the same check inline. Keeping it as a test-only helper avoids a dead_code warning without removing useful test expressiveness.
+2. **Temp-file naming**: Used `rc_file.with_extension("fdemon_tmp")` instead of the `tempfile` crate to avoid adding an import for a single write operation. The temp file is always in the same directory as the target, guaranteeing cross-filesystem atomicity via rename.
+3. **`is_fish_rc` matches on filename only**: Matching `config.fish` by filename (not path prefix) is sufficient since the only fish rc path we ever generate is `~/.config/fish/config.fish`. This keeps the helper simple and cross-platform.
+4. **Windows path logic is cross-platform compilable**: The `add_to_path_windows` function compiles on all platforms (no `#[cfg(target_os = "windows")]` guard on the function itself) so the pure string-builder tests for Windows path formatting run on Linux/macOS CI without issues.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (0 warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-daemon toolchain::path_config` — Passed (23/23 tests)
+- `cargo test --workspace --lib` — Passed (1417 tests, 0 failures)
+
+### Risks/Limitations
+
+1. **Windows not exercised on Linux CI**: The PowerShell execution path in `add_to_path_windows` is not invoked during tests on Linux/macOS. The pure string-builder format is validated by cross-platform tests, but the actual registry update is only exercised on Windows.
+2. **No `sudo` / system-wide profile**: By design — user-scope files only. Callers cannot modify `/etc/profile.d/` or similar system paths.
 </content>

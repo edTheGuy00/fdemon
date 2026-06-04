@@ -70,5 +70,29 @@ Phase 2 addition:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** worktree-agent-a4f35add0f5fab624
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Added `[toolchain]` section with all keys, defaults, and phase status; added automatic `[flutter] sdk_path` write note; updated Table of Contents; added `[toolchain]` block to the complete config example |
+| `docs/KEYBINDINGS.md` | Added `Enter` (Run / Retry Step) binding to the Install Wizard Step List Controls table; removed the stale "not yet available in Phase 1" note |
+
+### Notable Decisions/Tradeoffs
+
+1. **Table format with Phase column**: Added a `Phase` column to the `[toolchain]` property table so users can immediately see which keys are active now versus reserved for Phase 3, without having to read prose notes.
+2. **Stale note removal**: The "Step execution is not yet available in Phase 1" caveat note was removed since `Enter` is now wired and functional in Phase 2. Keeping it would have contradicted the new keybinding row.
+3. **`flutter_install_dir` type**: Documented as `string` in the table (matching how users would write it in TOML), while the Rust type is `Option<PathBuf>`. This matches the pattern used for other path settings in the same file.
+
+### Testing Performed
+
+- Cross-checked every `[toolchain]` key name and default against `ToolchainSettings` in `crates/fdemon-app/src/config/types.rs` — exact match on all 7 fields.
+- Cross-checked `Enter` → `Message::InstallWizardRunSelectedStep` against `handle_key_install_wizard()` in `crates/fdemon-app/src/handler/keys.rs` — confirmed present.
+- Confirmed no stale or invented keys; all documented keys match source.
+
+### Risks/Limitations
+
+1. **Phase 3 reserved fields**: `android_sdk_root`, `android_api_level`, `cmdline_tools_build`, `jdk_path` are documented but not yet active. If Phase 3 changes their semantics or defaults, these doc entries will need updating.
 </content>

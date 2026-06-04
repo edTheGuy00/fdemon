@@ -73,18 +73,18 @@ Wave 1 (parallel, no deps)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-daemon-install-deps-and-types](tasks/01-daemon-install-deps-and-types.md) | Not Started | - | 2-3h | root `Cargo.toml`, `fdemon-daemon/Cargo.toml`, `toolchain/types.rs` |
-| 02 | [02-download-extract-process-stream](tasks/02-download-extract-process-stream.md) | Not Started | 01 | 5-6h | `toolchain/download.rs`, `toolchain/process_stream.rs`, `toolchain/mod.rs` |
-| 03 | [03-managed-flutter-install](tasks/03-managed-flutter-install.md) | Not Started | 02 | 5-7h | `toolchain/flutter_install.rs`, `toolchain/mod.rs` |
-| 04 | [04-path-config-writer](tasks/04-path-config-writer.md) | Not Started | 03 | 4-5h | `toolchain/path_config.rs`, `toolchain/mod.rs` |
-| 05 | [05-wizard-step-protocol](tasks/05-wizard-step-protocol.md) | Not Started | - | 2-3h | `message.rs`, `handler/mod.rs`, `handler/keys.rs` |
-| 06 | [06-toolchain-config-settings](tasks/06-toolchain-config-settings.md) | Not Started | - | 2-3h | `config/types.rs` |
-| 07 | [07-wizard-exec-state](tasks/07-wizard-exec-state.md) | Not Started | - | 3-4h | `install_wizard/state.rs`, `install_wizard/types.rs`, `install_wizard/mod.rs` |
-| 08 | [08-run-wizard-step-executor](tasks/08-run-wizard-step-executor.md) | Not Started | 03, 04, 05 | 4-5h | `actions/mod.rs` |
-| 09 | [09-wizard-handlers-and-completion](tasks/09-wizard-handlers-and-completion.md) | Not Started | 05, 06, 07 | 4-5h | `handler/install_wizard/actions.rs`, `handler/update.rs` |
-| 10 | [10-tui-progress-and-detail](tasks/10-tui-progress-and-detail.md) | Not Started | 07 | 4-5h | `widgets/install_wizard/progress.rs`, `step_detail.rs`, `mod.rs` |
-| 11 | [11-update-architecture-doc](tasks/11-update-architecture-doc.md) | Not Started | 02,03,04,08,09,10 | 1-2h | `docs/ARCHITECTURE.md` |
-| 12 | [12-update-config-keybindings-docs](tasks/12-update-config-keybindings-docs.md) | Not Started | 05, 06 | 1h | `docs/CONFIGURATION.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-daemon-install-deps-and-types](tasks/01-daemon-install-deps-and-types.md) | ✅ Done | - | 2-3h | root `Cargo.toml`, `fdemon-daemon/Cargo.toml`, `toolchain/types.rs` |
+| 02 | [02-download-extract-process-stream](tasks/02-download-extract-process-stream.md) | ✅ Done | 01 | 5-6h | `toolchain/download.rs`, `toolchain/process_stream.rs`, `toolchain/mod.rs` |
+| 03 | [03-managed-flutter-install](tasks/03-managed-flutter-install.md) | ✅ Done | 02 | 5-7h | `toolchain/flutter_install.rs`, `toolchain/mod.rs` |
+| 04 | [04-path-config-writer](tasks/04-path-config-writer.md) | ✅ Done | 03 | 4-5h | `toolchain/path_config.rs`, `toolchain/mod.rs` |
+| 05 | [05-wizard-step-protocol](tasks/05-wizard-step-protocol.md) | ✅ Done | - | 2-3h | `message.rs`, `handler/mod.rs`, `handler/keys.rs` |
+| 06 | [06-toolchain-config-settings](tasks/06-toolchain-config-settings.md) | ✅ Done | - | 2-3h | `config/types.rs` |
+| 07 | [07-wizard-exec-state](tasks/07-wizard-exec-state.md) | ✅ Done | - | 3-4h | `install_wizard/state.rs`, `install_wizard/types.rs`, `install_wizard/mod.rs` |
+| 08 | [08-run-wizard-step-executor](tasks/08-run-wizard-step-executor.md) | ✅ Done | 03, 04, 05 | 4-5h | `actions/mod.rs` |
+| 09 | [09-wizard-handlers-and-completion](tasks/09-wizard-handlers-and-completion.md) | ✅ Done | 05, 06, 07 | 4-5h | `handler/install_wizard/actions.rs`, `handler/update.rs` |
+| 10 | [10-tui-progress-and-detail](tasks/10-tui-progress-and-detail.md) | ✅ Done | 07 | 4-5h | `widgets/install_wizard/progress.rs`, `step_detail.rs`, `mod.rs` |
+| 11 | [11-update-architecture-doc](tasks/11-update-architecture-doc.md) | ✅ Done | 02,03,04,08,09,10 | 1-2h | `docs/ARCHITECTURE.md` |
+| 12 | [12-update-config-keybindings-docs](tasks/12-update-config-keybindings-docs.md) | ✅ Done | 05, 06 | 1h | `docs/CONFIGURATION.md`, `docs/KEYBINDINGS.md` |
 
 ## File Overlap Analysis
 
@@ -161,6 +161,25 @@ Phase 2 is complete when:
 | Key | Mode | Action |
 |-----|------|--------|
 | `Enter` | InstallWizard | Run / retry the selected step (Flutter SDK or PATH Config only this phase) |
+
+## Orchestration Notes
+
+- **Wave 1 (01, 05, 06, 07): ✅ merged & verified.** Validator CONCERN on task 05:
+  its `InstallMethod` scaffold in `toolchain/types.rs` collided with task 01's
+  authoritative enum (variant `Download` vs `Archive`). Resolved at merge time by
+  keeping task 01's definition (`--ours`) and discarding the scaffold; task 05 uses
+  `InstallMethod` only as a field type in `FlutterStepParams`, so no code broke.
+  Full quality gate (fmt/clippy/test) green on integrated branch.
+- **Wave 2 (02, 09, 10, 12): ✅ merged & verified.** All PASS, clean merges
+  (no write-file overlap). Quality gate green.
+- **Waves 3–5 (03, 04, 08): ✅ done sequentially on branch.** All PASS. Quality
+  gate green (fmt/clippy clean, 0 test failures).
+- **Wave 6 (11, doc_maintainer): ✅ done.** Validator CONCERN: a *pre-existing*
+  Phase 1 inaccuracy in ARCHITECTURE.md (`handler/install_wizard/mod.rs` labeled
+  "Navigation…" when it is a re-export shim; `navigation.rs` omitted from the tree)
+  was not fixed by this task. Not a Phase 2 regression — all Phase 2 additions are
+  documented accurately. **Follow-up:** correct the `mod.rs` label and add a
+  `navigation.rs` row in a future doc pass.
 
 ## Notes
 

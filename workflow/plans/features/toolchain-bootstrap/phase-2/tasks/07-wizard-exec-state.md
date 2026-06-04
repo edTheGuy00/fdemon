@@ -128,5 +128,32 @@ fn test_progress_updates_do_not_touch_log() { ... }
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/types.rs` | Added `StepExecStatus` enum, `StepExecution` struct, `MAX_LOG_TAIL` constant; added tests for new types |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `execution: StepExecution` field to `InstallWizardState`; added `is_step_running`, `begin_step`, `push_step_log`, `set_step_progress`, `set_step_phase`, `finish_step` mutators; added `execution` to manual `Debug` impl; added 8 unit tests covering all acceptance criteria |
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Updated re-export to name new types explicitly (`StepExecStatus`, `StepExecution`, `MAX_LOG_TAIL`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Explicit re-export in mod.rs**: Changed `pub use types::*` to a named import list to make the public surface explicit, consistent with the existing pattern for `ComponentCheck` etc. All existing `pub use state::*` remains (state has only `WizardStep`, `InstallWizardState`, `build_steps`).
+2. **`begin_step` replaces the whole `StepExecution` struct**: This is the cleanest way to guarantee all fields are reset atomically — no risk of leftover state from a previous run leaking through.
+3. **`push_step_log` uses `Vec::remove(0)`**: Simple and correct for a 200-element cap. A `VecDeque` would be marginally more efficient at the front-removal, but `Vec` keeps the type consistent with the rest of the codebase and 200 entries is small enough that the O(n) shift is negligible.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app --lib -- install_wizard` - Passed (57 tests, 8 new)
+- `cargo test --workspace --lib` - Passed (1397 tests total)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`Vec::remove(0)` O(n) shift**: At `MAX_LOG_TAIL = 200` this is negligible, but if the cap is raised significantly in future, consider switching `log_tail` to `VecDeque<String>`.
 </content>

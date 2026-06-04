@@ -158,5 +158,45 @@ fn test_resolve_stable_falls_back_when_no_arch() {
 
 ## Completion Summary
 
-**Status:** Not Started
-</content>
+**Status:** Done
+**Branch:** worktree-agent-a63daa7fca1bb5e5b
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` (workspace root) | Added `zip = { version = "2", default-features = false, features = ["deflate"] }`, `tar = { version = "0.4", default-features = false }`, `lzma-rs = { version = "0.3", features = ["stream"] }`, `sha2 = "0.10"` to `[workspace.dependencies]`; added `stream` feature to `reqwest` |
+| `crates/fdemon-daemon/Cargo.toml` | Added `reqwest`, `zip`, `tar`, `lzma-rs`, `sha2` as workspace dependencies |
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `InstallMethod`, `HostArch` (with `detect()` + `as_manifest_str()`), `FlutterRelease`, `FlutterReleaseManifest` (with `resolve_stable()`), `FlutterInstallTarget`, `DownloadProgress`, `FlutterInstallOutcome`; 9 new unit tests |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Extended `pub use` re-exports to include all 7 new Phase 2 install types |
+
+### Notable Decisions/Tradeoffs
+
+1. **zip 2.x not zip "2" latest**: The crate `zip` has a pre-release `9.0.0-pre2` that requires Rust 1.88 (above our 1.77.2 MSRV). Cargo resolved `zip = "2"` to `2.4.2` (MSRV 1.73.0), which is compatible. Noted in the workspace TOML comment.
+
+2. **`tar` with `default-features = false`**: The `default` feature pulls in `xattr` (Linux-only optional dep). Disabling it keeps the dep cross-platform and lighter.
+
+3. **`reqwest` stream feature added**: The workspace reqwest declaration already had `rustls-tls` and `json`. Added `stream` feature here so task 02 (download) can use `bytes_stream()` / `StreamExt` without requiring a separate dependency change.
+
+4. **`lzma-rs` with `stream` feature**: The `stream` feature enables async/streaming XZ decode via `XzStreamDecoder`, which task 02 will need for `.tar.xz` extraction. Without it, only full-buffer decode is available.
+
+5. **`serde` omitted from new types**: Per task spec, new types are serde-agnostic. The manifest JSON deserializer will live in `flutter_install.rs` (task 03) with a private serde shape that maps into `FlutterReleaseManifest`.
+
+6. **`resolve_stable` two-pass approach**: First pass prefers exact arch match; second pass falls back to any stable entry (no-arch field). This handles both modern multi-arch manifests and older single-arch entries.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-daemon --lib toolchain::types` - Passed (14 tests)
+- `cargo test --workspace` - Passed (all suites green)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo tree -p fdemon-daemon | grep liblzma` - Returns nothing (pure-Rust XZ confirmed)
+
+### Risks/Limitations
+
+1. **zip version constraint**: We pin `"2"` which resolves to 2.4.x today. If the project later needs zip 3.x features it will require a separate bump. The pre-release v8/v9 series has a breaking API change and requires Rust 1.88+.
+
+2. **reqwest `stream` feature**: Adding `stream` to the workspace reqwest declaration may slightly increase compile time for crates that were previously only using `json`. Minimal impact expected.
+

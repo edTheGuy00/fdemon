@@ -126,5 +126,35 @@ fn test_install_method_mapping() { /* "git"→GitClone, "archive"→Archive, "x"
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `ToolchainSettings` struct, `InstallMethod` local enum, `toolchain` field on `Settings`, and 8 unit tests covering defaults, override parsing, round-trip, and `install_method()` mapping |
+| `crates/fdemon-app/src/handler/mod.rs` | Boxed `settings` field in `UpdateAction::PersistSettings` to resolve clippy `large_enum_variant` lint triggered by `Settings` growing with `ToolchainSettings` |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Updated `PersistSettings` construction to `Box::new(state.settings.clone())` |
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Updated `PersistSettings` construction to `Box::new(state.settings.clone())` |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated two `PersistSettings` test constructions to wrap settings in `Box::new` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local `InstallMethod` enum**: The task notes allow a local enum if `fdemon_daemon::toolchain::InstallMethod` does not exist yet (it is task 01's deliverable). A local `InstallMethod` was defined in `fdemon-app/src/config/types.rs` to avoid a premature cross-crate dependency. Task 09 (wizard handler) will map from this local enum to the daemon's type when wiring the execution path.
+
+2. **`UpdateAction::PersistSettings` boxing**: Adding `ToolchainSettings` increased `Settings`'s stack size enough to trigger the `clippy::large_enum_variant` lint on `PersistSettings`. The `settings` field was boxed (`Box<Settings>`) as recommended by clippy. All call sites updated; auto-deref means usage code (`&settings`, `settings.field`) is unchanged at all destructuring sites.
+
+3. **`#[serde(default)]` on `ToolchainSettings`**: Mirrors the existing `FlutterSettings` pattern exactly. A missing `[toolchain]` section in `config.toml` is treated as `ToolchainSettings::default()`, preserving backward compatibility for all existing config files.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2682 + others, zero failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Phase-3 Android fields are declared but untested end-to-end**: `android_sdk_root`, `android_api_level`, `cmdline_tools_build`, `jdk_path` are present in the struct and covered by round-trip tests, but no Phase-3 code consumes them yet. This is intentional per the task spec.
 </content>
