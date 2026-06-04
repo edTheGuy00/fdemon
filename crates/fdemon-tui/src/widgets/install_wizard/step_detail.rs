@@ -267,6 +267,25 @@ impl<'a> StepDetailPane<'a> {
         Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
     }
 
+    /// Height of a single guided-command block.
+    ///
+    /// A command block consists of:
+    /// - Optional leading blank row: present when `i > 0` or when there is no caption
+    ///   (i.e., `needs_blank = i > 0 || !has_caption`).
+    /// - Label row (always 1).
+    /// - Command row (always 1; `[c] copy` hint is inline, not a separate row).
+    /// - Optional note row (1 if `cmd.note.is_some()`, 0 otherwise).
+    ///
+    /// This is a pure function of the command and its position — shared between
+    /// [`guided_section_full_height`] (total) and [`compute_guided_window`] (windowing).
+    fn command_block_height(cmd: &GuidedCommand, i: usize, has_caption: bool) -> u16 {
+        let needs_blank = i > 0 || !has_caption;
+        let blank: u16 = if needs_blank { 1 } else { 0 };
+        let note: u16 = if cmd.note.is_some() { 1 } else { 0 };
+        // blank + label(1) + command(1) + note
+        blank + 1 + 1 + note
+    }
+
     /// Compute the total row height needed to render the entire guided-command section
     /// for `commands` and `step_kind`, without any clamping.
     ///
@@ -286,24 +305,80 @@ impl<'a> StepDetailPane<'a> {
         let has_caption = step_caption(step_kind).is_some();
         let caption_rows: u16 = if has_caption { JDK_CAPTION_HEIGHT } else { 0 };
 
-        let mut cmd_rows: u16 = 0;
-        for (i, cmd) in commands.iter().enumerate() {
-            // Leading blank row: skipped for command 0 when a caption is present.
-            let needs_blank = i > 0 || !has_caption;
-            if needs_blank {
-                cmd_rows += 1;
-            }
-            // Label row (always 1)
-            cmd_rows += 1;
-            // Command row (always 1; [c] copy hint is inline, not a separate row)
-            cmd_rows += 1;
-            // Optional note row
-            if cmd.note.is_some() {
-                cmd_rows += 1;
-            }
-        }
+        let cmd_rows: u16 = commands
+            .iter()
+            .enumerate()
+            .map(|(i, cmd)| Self::command_block_height(cmd, i, has_caption))
+            .sum();
 
         GUIDED_SECTION_HEADER_HEIGHT + caption_rows + cmd_rows
+    }
+
+    /// Compute the start index of the command window so that `selected_idx` is always
+    /// visible within `available_rows`.
+    ///
+    /// Algorithm (per-command-block windowing — no per-line scroll):
+    ///
+    /// 1. Start with `window_start = selected_idx` (the selected command is at the top).
+    /// 2. Walk backwards from `selected_idx - 1` toward 0, accumulating block heights.
+    ///    While the accumulated height plus the selected block's height fits within
+    ///    `available_rows`, pull the window start left.
+    /// 3. Return the largest `start` index such that:
+    ///    - The selected command block fits fully within `available_rows`.
+    ///    - As many preceding commands as possible are shown (greedy fill).
+    ///
+    /// When everything fits (`full_height <= available_rows`), the window starts at 0
+    /// and rendering is byte-for-byte unchanged.
+    fn compute_guided_window(
+        commands: &[GuidedCommand],
+        has_caption: bool,
+        available_rows: u16,
+        selected_idx: usize,
+    ) -> usize {
+        if commands.is_empty() || available_rows == 0 {
+            return 0;
+        }
+
+        let n = commands.len();
+        let selected_idx = selected_idx.min(n.saturating_sub(1));
+
+        // Height of the selected command block (position as if it appears at index 0
+        // within the window, i.e. treat it as "first entry after header+caption").
+        // We compute it with i=selected_idx because the blank-row rule depends on
+        // the command's original index (has_caption only suppresses the blank for i=0).
+        // However for windowing purposes we need to know how much space the block
+        // itself takes when rendered at *any* position in the window (after the header
+        // and caption are already drawn).  The blank is part of the per-block height
+        // and is always included by `command_block_height` for i>0.  For i=0 with a
+        // caption the blank is suppressed — that suppression applies to original-index
+        // 0 only; if we slide the window so that index 1 becomes the first rendered
+        // command, it still carries its blank row (i=1 → needs_blank=true).
+        let selected_block_h =
+            Self::command_block_height(&commands[selected_idx], selected_idx, has_caption);
+
+        // If the selected block alone does not fit, nothing can be done — start window
+        // at selected_idx so at least the first rows of it are shown (bounds guards
+        // in render_guided_commands prevent out-of-bounds writes).
+        if selected_block_h > available_rows {
+            return selected_idx;
+        }
+
+        let mut window_start = selected_idx;
+        let mut used: u16 = selected_block_h;
+
+        // Walk backwards, pulling the window start left while there is budget.
+        let mut i = selected_idx;
+        while i > 0 {
+            i -= 1;
+            let h = Self::command_block_height(&commands[i], i, has_caption);
+            if used.saturating_add(h) > available_rows {
+                break;
+            }
+            used += h;
+            window_start = i;
+        }
+
+        window_start
     }
 
     /// Render the guided-command section for a step that has guided commands.
@@ -325,10 +400,12 @@ impl<'a> StepDetailPane<'a> {
     /// The `[c] copy` hint and selection highlight follow `selected_command_index`
     /// so the visually-selected command is the one `c` will copy to the clipboard.
     ///
-    /// When `area` is too small to render all commands, commands that would fall
-    /// outside `area` are clipped by the `y < area.y + area.height` bounds guards.
-    /// The caller must size `area` large enough (via [`guided_section_full_height`])
-    /// to avoid clipping visible commands.
+    /// **Scroll window**: when `area` is too short to show all command blocks, a window of
+    /// command blocks anchored to `selected_command_index` is rendered instead of the full
+    /// list. The window is chosen so the selected command's full block (label + command +
+    /// optional note) always fits within `area`. See [`Self::compute_guided_window`].
+    ///
+    /// The `y < area.y + area.height` bounds guards are preserved as the final safety net.
     fn render_guided_commands(
         &self,
         commands: &[GuidedCommand],
@@ -372,7 +449,21 @@ impl<'a> StepDetailPane<'a> {
         // skip the leading blank for that case to avoid double-spacing.
         let has_caption = caption_text.is_some();
 
+        // Rows available for command blocks (after header and caption).
+        // When everything fits, window_start = 0 and rendering is unchanged.
+        let rows_for_commands = area
+            .height
+            .saturating_sub(GUIDED_SECTION_HEADER_HEIGHT)
+            .saturating_sub(if has_caption { JDK_CAPTION_HEIGHT } else { 0 });
+        let window_start =
+            Self::compute_guided_window(commands, has_caption, rows_for_commands, selected_idx);
+
         for (i, cmd) in commands.iter().enumerate() {
+            // Skip commands before the window start.
+            if i < window_start {
+                continue;
+            }
+
             // Blank separator before each command block.
             // Skip the leading blank when a caption was rendered above (the
             // caption already provides visual separation from the header).
@@ -1715,5 +1806,195 @@ mod tests {
             step_caption(WizardStepKind::Doctor).is_none(),
             "Doctor should have no caption"
         );
+    }
+
+    // --- F1 scroll-window: selected command always visible on short terminal ---
+
+    /// NEW (F1): Prerequisites step with component + 3 guided commands, area ≈10–12 rows,
+    /// `selected_command_index = 2` → the third command's text AND its `[c] copy` hint
+    /// must both appear in the rendered buffer (regression for F1 short-terminal clip).
+    ///
+    /// This is the canonical short-terminal regression test for task 02.
+    #[test]
+    fn test_short_terminal_selected_command_index_2_visible() {
+        let mut state = make_state_prerequisites_macos_three_commands_with_component();
+        state.selected_command_index = 2; // Rosetta — would be clipped before the fix
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Short pane — ~10 rows; the full guided section needs 12 rows (header + caption
+        // + 3 command blocks), so without windowing the third block would be clipped.
+        let area = Rect::new(0, 0, 100, 10);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The selected command's text must be visible.
+        assert!(
+            content.contains("softwareupdate"),
+            "Rosetta command (selected_command_index=2) must be visible at height 10: '{content}'"
+        );
+        // The [c] copy hint must be visible (inline on the command row of the selected command).
+        assert!(
+            content.contains("copy"),
+            "[c] copy hint must be visible when selected_command_index=2 at height 10: '{content}'"
+        );
+    }
+
+    /// NEW (F1): same fixture as above, `selected_command_index = 0` →
+    /// command 0 must be visible (no regression for the already-working case).
+    #[test]
+    fn test_short_terminal_selected_command_index_0_visible() {
+        let mut state = make_state_prerequisites_macos_three_commands_with_component();
+        state.selected_command_index = 0;
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 10);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("xcode-select"),
+            "CLT command (selected_command_index=0) must be visible at height 10: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "[c] copy hint must be visible when selected_command_index=0 at height 10: '{content}'"
+        );
+    }
+
+    /// Tall-terminal (height 30) with `selected_command_index = 2` remains unchanged:
+    /// all three commands render and the copy hint is on the Rosetta row.
+    #[test]
+    fn test_tall_terminal_selected_command_index_2_unchanged() {
+        let mut state = make_state_prerequisites_macos_three_commands_with_component();
+        state.selected_command_index = 2;
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // All three commands should be visible on a tall terminal.
+        assert!(
+            content.contains("xcode-select"),
+            "CLT command must be visible on tall terminal: '{content}'"
+        );
+        assert!(
+            content.contains("cocoapods"),
+            "CocoaPods command must be visible on tall terminal: '{content}'"
+        );
+        assert!(
+            content.contains("softwareupdate"),
+            "Rosetta command must be visible on tall terminal: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "[c] copy hint must be visible on tall terminal: '{content}'"
+        );
+    }
+
+    // --- Unit tests for compute_guided_window ---
+
+    /// `compute_guided_window`: when everything fits, start is 0.
+    #[test]
+    fn test_compute_guided_window_all_fit_returns_zero() {
+        let commands = vec![
+            GuidedCommand {
+                label: "A".to_string(),
+                command: "cmd_a".to_string(),
+                note: None,
+            },
+            GuidedCommand {
+                label: "B".to_string(),
+                command: "cmd_b".to_string(),
+                note: None,
+            },
+        ];
+        // Prerequisites has caption → cmd 0 costs 2, cmd 1 costs 3, total = 5.
+        // available_rows = 10 → everything fits, start should be 0.
+        let start = StepDetailPane::compute_guided_window(&commands, true, 10, 0);
+        assert_eq!(start, 0, "when all blocks fit, window should start at 0");
+    }
+
+    /// `compute_guided_window`: selected_idx=2, available_rows=3 (fits only cmd 2 = 3 rows).
+    /// Window start must be 2 so the selected command is visible.
+    #[test]
+    fn test_compute_guided_window_selected_last_short_budget() {
+        // 3 commands, no caption, each 3 rows (blank + label + cmd).
+        // available_rows = 3 → only cmd 2 fits. start should be 2.
+        let commands = vec![
+            GuidedCommand {
+                label: "A".to_string(),
+                command: "cmd_a".to_string(),
+                note: None,
+            },
+            GuidedCommand {
+                label: "B".to_string(),
+                command: "cmd_b".to_string(),
+                note: None,
+            },
+            GuidedCommand {
+                label: "C".to_string(),
+                command: "cmd_c".to_string(),
+                note: None,
+            },
+        ];
+        // has_caption=false → cmd 0 costs 2, cmd 1 costs 3, cmd 2 costs 3.
+        // available_rows = 3 (fits only cmd 2). selected_idx = 2.
+        let start = StepDetailPane::compute_guided_window(&commands, false, 3, 2);
+        assert_eq!(
+            start, 2,
+            "with budget for 1 command and selected=2, window must start at 2"
+        );
+    }
+
+    /// `compute_guided_window`: selected_idx=1, available_rows=6.
+    /// With has_caption=true: cmd 0 costs 2, cmd 1 costs 3, cmd 2 costs 3.
+    /// Budget 6 fits cmd 1 (3) + cmd 0 (2) = 5 ≤ 6, so start should be 0.
+    #[test]
+    fn test_compute_guided_window_greedy_fill_backwards() {
+        let commands = vec![
+            GuidedCommand {
+                label: "A".to_string(),
+                command: "cmd_a".to_string(),
+                note: None,
+            },
+            GuidedCommand {
+                label: "B".to_string(),
+                command: "cmd_b".to_string(),
+                note: None,
+            },
+            GuidedCommand {
+                label: "C".to_string(),
+                command: "cmd_c".to_string(),
+                note: None,
+            },
+        ];
+        // has_caption=true → cmd 0: 2 rows, cmd 1: 3 rows, cmd 2: 3 rows.
+        // selected=1, available=6: cmd 1(3) + cmd 0(2) = 5 ≤ 6 → start = 0.
+        let start = StepDetailPane::compute_guided_window(&commands, true, 6, 1);
+        assert_eq!(
+            start, 0,
+            "greedy backwards fill: cmd 0 + cmd 1 fit in budget 6, start should be 0"
+        );
+    }
+
+    /// `compute_guided_window`: empty command list returns 0.
+    #[test]
+    fn test_compute_guided_window_empty_commands() {
+        let commands: Vec<GuidedCommand> = vec![];
+        let start = StepDetailPane::compute_guided_window(&commands, true, 10, 0);
+        assert_eq!(start, 0, "empty command list should return 0");
+    }
+
+    /// `compute_guided_window`: available_rows=0 returns 0.
+    #[test]
+    fn test_compute_guided_window_zero_available() {
+        let commands = vec![GuidedCommand {
+            label: "A".to_string(),
+            command: "cmd_a".to_string(),
+            note: None,
+        }];
+        let start = StepDetailPane::compute_guided_window(&commands, true, 0, 0);
+        assert_eq!(start, 0, "zero available rows should return 0");
     }
 }
