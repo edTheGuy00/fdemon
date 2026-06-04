@@ -9,6 +9,11 @@ use std::path::PathBuf;
 ///
 /// Contains platform metadata, per-component statuses, and the parsed output
 /// of `flutter doctor -v` when Flutter is available.
+///
+/// The `linux_package_manager` and `winget_available` fields are pre-computed
+/// by the async `run_preflight` task so that the TEA `update()` path (which
+/// consumes this report via `build_steps`) remains a pure function of the
+/// report — no synchronous `which::which` I/O inside `update()`.
 #[derive(Debug, Clone)]
 pub struct ToolchainReport {
     /// The operating system platform the diagnostic ran on.
@@ -20,6 +25,17 @@ pub struct ToolchainReport {
     /// Parsed `flutter doctor -v` lines; `None` when Flutter is absent or
     /// capture timed out / failed.
     pub doctor: Option<Vec<DoctorLine>>,
+    /// Detected Linux package manager, pre-computed during preflight.
+    ///
+    /// `Some(pm)` on Linux (always populated, even when `pm` is
+    /// `LinuxPackageManager::Unknown`). `None` on non-Linux platforms where
+    /// the probe does not apply.
+    pub linux_package_manager: Option<crate::toolchain::checks::LinuxPackageManager>,
+    /// Whether `winget` is available on PATH, pre-computed during preflight.
+    ///
+    /// `true` on Windows when `winget` is found; always `false` on non-Windows
+    /// platforms.
+    pub winget_available: bool,
 }
 
 /// Status of a single toolchain component.

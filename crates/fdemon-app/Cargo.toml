@@ -18,7 +18,6 @@ thiserror.workspace = true
 regex.workspace = true
 rand.workspace = true
 color-eyre.workspace = true
-which.workspace = true
 toml.workspace = true
 dirs.workspace = true
 fs2.workspace = true

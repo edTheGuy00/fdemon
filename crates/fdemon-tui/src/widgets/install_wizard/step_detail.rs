@@ -643,6 +643,8 @@ mod tests {
                     indent: 0,
                 },
             ]),
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         }
     }
 
@@ -656,6 +658,8 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         }
     }
 
@@ -1623,7 +1627,10 @@ mod tests {
         ];
         let height =
             StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites);
-        assert_eq!(height, 12, "3-command Prerequisites section should need 12 rows");
+        assert_eq!(
+            height, 12,
+            "3-command Prerequisites section should need 12 rows"
+        );
     }
 
     /// Unit test for `guided_section_full_height` helper: single command with note,
@@ -1643,7 +1650,10 @@ mod tests {
         }];
         let height =
             StepDetailPane::guided_section_full_height(&commands, WizardStepKind::AndroidTools);
-        assert_eq!(height, 5, "single-command AndroidTools section with note should need 5 rows");
+        assert_eq!(
+            height, 5,
+            "single-command AndroidTools section with note should need 5 rows"
+        );
     }
 
     /// Unit test for `guided_section_full_height` helper: empty command list returns 0.

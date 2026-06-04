@@ -367,6 +367,8 @@ mod tests {
                     indent: 0,
                 },
             ]),
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         }
     }
 

@@ -7,9 +7,9 @@
 use std::cell::Cell;
 
 use fdemon_daemon::toolchain::{
-    detect_linux_package_manager, parse_missing_prereq_keys, ComponentCheck, ComponentKind,
-    ComponentStatus, HostPlatform, LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS,
-    PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+    parse_missing_prereq_keys, ComponentCheck, ComponentKind, ComponentStatus, HostPlatform,
+    LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA,
+    PREREQ_KEY_XCODE_CLT,
 };
 
 use super::types::{
@@ -302,19 +302,25 @@ fn jdk_guided_command(platform: HostPlatform) -> GuidedCommand {
 /// to show. Otherwise returns up to three `GuidedCommand`s depending on the
 /// host platform and which items are missing.
 ///
-/// - **Linux** — one combined command chosen by [`detect_linux_package_manager`];
-///   uses the `note` field for an alternative-manager hint (mirrors
-///   `jdk_guided_command`).
+/// - **Linux** — one combined command chosen by the pre-computed
+///   `report.linux_package_manager`; uses the `note` field for an
+///   alternative-manager hint (mirrors `jdk_guided_command`).
 /// - **macOS** — one command per missing item reported by
 ///   [`parse_missing_prereq_keys`], ordered CLT → CocoaPods → Rosetta.
-/// - **Windows** — `winget install Git.Git` when git is missing and winget is
-///   on PATH; otherwise a `note` pointing at the git-for-Windows download page.
+/// - **Windows** — `winget install Git.Git` when git is missing and
+///   `report.winget_available` is `true`; otherwise a `note` pointing at the
+///   git-for-Windows download page.
 /// - **Unknown** — empty (no actionable commands).
+///
+/// This function is a **pure function of the report**: both the package-manager
+/// detection (Linux) and winget availability (Windows) are pre-computed in the
+/// async `run_preflight` task and carried on `ToolchainReport`, so no
+/// synchronous `which::which` I/O occurs inside the TEA `update()` path.
 ///
 /// All command strings live here (app display concern), consistent with
 /// `jdk_guided_command` — the daemon stays detection-only.
 fn prerequisites_guided_commands(
-    platform: HostPlatform,
+    report: &ToolchainReport,
     components: &[ComponentCheck],
 ) -> Vec<GuidedCommand> {
     // Early-out: nothing to do when all prerequisites/git are Ok.
@@ -335,9 +341,12 @@ fn prerequisites_guided_commands(
         return Vec::new();
     }
 
-    match platform {
+    match report.platform {
         HostPlatform::Linux => {
-            let pm = detect_linux_package_manager();
+            // Use the package manager pre-computed by run_preflight (no which:: I/O here).
+            let pm = report
+                .linux_package_manager
+                .unwrap_or(LinuxPackageManager::Unknown);
             let (label, command, note): (&str, &str, Option<&str>) = match pm {
                 LinuxPackageManager::Apt => (
                     "Install Linux prerequisites (apt)",
@@ -379,6 +388,9 @@ fn prerequisites_guided_commands(
 
         HostPlatform::MacOs => {
             // Find the Prerequisites component detail to extract missing keys.
+            // TODO(phase-4-followup n3): the stringly-typed detail → parse_missing_prereq_keys
+            // cross-crate contract could be replaced by a typed Vec<&'static str> / enum-set
+            // field on ComponentCheck, eliminating the parse path entirely.
             let detail = components
                 .iter()
                 .find(|c| c.kind == ComponentKind::Prerequisites)
@@ -416,6 +428,9 @@ fn prerequisites_guided_commands(
 
         HostPlatform::Windows => {
             // Check if git is among the missing keys.
+            // TODO(phase-4-followup n3): the stringly-typed detail → parse_missing_prereq_keys
+            // cross-crate contract could be replaced by a typed Vec<&'static str> / enum-set
+            // field on ComponentCheck, eliminating the parse path entirely.
             let detail = components
                 .iter()
                 .find(|c| c.kind == ComponentKind::Prerequisites)
@@ -428,9 +443,9 @@ fn prerequisites_guided_commands(
                 return Vec::new();
             }
 
-            // Git is missing — check if winget is on PATH.
-            let winget_available = which::which("winget").is_ok();
-            if winget_available {
+            // Git is missing — use pre-computed winget availability from preflight.
+            // (No which::which call here — pure function of the report.)
+            if report.winget_available {
                 vec![GuidedCommand {
                     label: "Install Git for Windows".into(),
                     command: "winget install Git.Git".into(),
@@ -549,8 +564,9 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
 
     // Derive guided commands for the Prerequisites step. Returns [] when all
     // prerequisites are Ok, otherwise returns per-OS install commands derived
-    // from the detected package manager (Linux) or missing keys (macOS/Windows).
-    let prereq_guided = prerequisites_guided_commands(report.platform.clone(), &prerequisites);
+    // from the pre-computed package manager (Linux) or missing keys (macOS/Windows).
+    // Pure function of the report — no I/O in the TEA update() path.
+    let prereq_guided = prerequisites_guided_commands(report, &prerequisites);
 
     vec![
         WizardStep {
@@ -600,12 +616,35 @@ mod tests {
     use super::*;
 
     /// Build a minimal `ToolchainReport` for testing with the given components.
+    /// Uses Linux platform with no package manager (Unknown) and winget=false.
     fn make_report(components: Vec<ComponentCheck>) -> ToolchainReport {
         ToolchainReport {
             platform: HostPlatform::Linux,
             shell: HostShell::Bash,
             components,
             doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
+            winget_available: false,
+        }
+    }
+
+    /// Build a `ToolchainReport` for testing with the given platform and components.
+    fn make_report_for_platform(
+        platform: HostPlatform,
+        components: Vec<ComponentCheck>,
+    ) -> ToolchainReport {
+        let linux_package_manager = if matches!(platform, HostPlatform::Linux) {
+            Some(LinuxPackageManager::Unknown)
+        } else {
+            None
+        };
+        ToolchainReport {
+            platform,
+            shell: HostShell::Bash,
+            components,
+            doctor: None,
+            linux_package_manager,
+            winget_available: false,
         }
     }
 
@@ -982,6 +1021,11 @@ mod tests {
     // --- Guided command tests ---
 
     fn report_with_jdk(status: ComponentStatus, platform: HostPlatform) -> ToolchainReport {
+        let linux_package_manager = if matches!(platform, HostPlatform::Linux) {
+            Some(LinuxPackageManager::Unknown)
+        } else {
+            None
+        };
         ToolchainReport {
             platform,
             shell: HostShell::Bash,
@@ -991,6 +1035,8 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
+            linux_package_manager,
+            winget_available: false,
         }
     }
 
@@ -1254,6 +1300,8 @@ mod tests {
                 detail,
             }],
             doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
         };
         let mut state = InstallWizardState::default();
         state.apply_report(report);
@@ -1434,7 +1482,8 @@ mod tests {
             make_prereq_check(ComponentStatus::Ok),
             make_git_check(ComponentStatus::Ok),
         ];
-        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        let report = make_report_for_platform(HostPlatform::Linux, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert!(
             cmds.is_empty(),
             "must return empty when all prereqs are Ok; got: {cmds:?}"
@@ -1445,7 +1494,8 @@ mod tests {
     fn test_prereq_guided_empty_when_no_prereq_components() {
         // No Prerequisites/Git components at all → nothing to show.
         let components: Vec<ComponentCheck> = vec![];
-        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        let report = make_report_for_platform(HostPlatform::Linux, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert!(
             cmds.is_empty(),
             "must return empty when no prereq components"
@@ -1455,10 +1505,18 @@ mod tests {
     #[test]
     fn test_prereq_guided_linux_apt_returns_one_command() {
         // Simulate: prerequisites partial (some missing) on Linux.
-        // Since detect_linux_package_manager() is live, we can only assert
-        // that exactly one command is returned with the correct structure.
+        // Use the live-detected package manager to match the host environment.
+        let pm = fdemon_daemon::toolchain::detect_linux_package_manager();
         let components = vec![make_prereq_check(ComponentStatus::Partial)];
-        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(pm),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(cmds.len(), 1, "Linux must return exactly one command");
         assert!(
             !cmds[0].command.is_empty(),
@@ -1478,9 +1536,18 @@ mod tests {
     #[test]
     fn test_prereq_guided_linux_apt_command_content() {
         // Test the apt command string directly by constructing the expected output.
+        // The report carries the pre-computed PM — no live detection inside the function.
         let pm = fdemon_daemon::toolchain::detect_linux_package_manager();
         let components = vec![make_prereq_check(ComponentStatus::Partial)];
-        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(pm),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(cmds.len(), 1);
 
         // Verify the command matches the detected package manager.
@@ -1506,7 +1573,10 @@ mod tests {
                     "dnf system should use dnf; got: {}",
                     cmds[0].command
                 );
-                assert!(cmds[0].note.is_some(), "dnf command must have an alternative note");
+                assert!(
+                    cmds[0].note.is_some(),
+                    "dnf command must have an alternative note"
+                );
             }
             LinuxPackageManager::Yum => {
                 assert!(
@@ -1519,7 +1589,10 @@ mod tests {
                     "yum arm must not invoke dnf (dnf is absent on yum-only systems); got: {}",
                     cmds[0].command
                 );
-                assert!(cmds[0].note.is_some(), "yum command must have a caveat note");
+                assert!(
+                    cmds[0].note.is_some(),
+                    "yum command must have a caveat note"
+                );
             }
             LinuxPackageManager::Pacman => {
                 assert!(cmds[0].command.contains("pacman"));
@@ -1540,6 +1613,179 @@ mod tests {
         }
     }
 
+    /// Verify specific package manager arms by injecting a known PM into the report.
+    /// This tests the pure dispatch logic without depending on the host environment.
+    #[test]
+    fn test_prereq_guided_linux_pm_dispatch_pure() {
+        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+
+        // Test Apt arm
+        let report_apt = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Apt),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report_apt, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("apt-get"),
+            "Apt arm must use apt-get"
+        );
+        assert!(
+            cmds[0].command.contains("libgtk-3-dev"),
+            "Apt arm must include libgtk-3-dev"
+        );
+        assert!(
+            cmds[0].note.is_some(),
+            "Apt arm must have an alternative note"
+        );
+
+        // Test Dnf arm
+        let report_dnf = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Dnf),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report_dnf, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(cmds[0].command.contains("dnf"), "Dnf arm must use dnf");
+        assert!(
+            cmds[0].note.is_some(),
+            "Dnf arm must have an alternative note"
+        );
+
+        // Test Yum arm
+        let report_yum = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Yum),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report_yum, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(cmds[0].command.contains("yum"), "Yum arm must use yum");
+        assert!(
+            !cmds[0].command.contains("dnf"),
+            "Yum arm must not call dnf"
+        );
+        assert!(cmds[0].note.is_some(), "Yum arm must have a caveat note");
+
+        // Test Pacman arm
+        let report_pacman = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Pacman),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report_pacman, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("pacman"),
+            "Pacman arm must use pacman"
+        );
+        assert!(
+            cmds[0].command.contains("--needed"),
+            "Pacman arm must use --needed"
+        );
+        assert!(cmds[0].note.is_some(), "Pacman arm must have a note");
+
+        // Test Zypper arm
+        let report_zypper = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Zypper),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report_zypper, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("zypper"),
+            "Zypper arm must use zypper"
+        );
+        assert!(cmds[0].note.is_some(), "Zypper arm must have a note");
+
+        // Test Unknown arm
+        let report_unknown = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report_unknown, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("https://"),
+            "Unknown PM arm must use docs URL"
+        );
+        assert!(cmds[0].note.is_none(), "Unknown PM arm must have no note");
+    }
+
+    /// Verify that winget_available=true from the report selects the winget command.
+    #[test]
+    fn test_prereq_guided_windows_winget_available_uses_winget_command() {
+        use fdemon_daemon::toolchain::PREREQ_KEY_GIT;
+        let detail = format!("missing: {}", PREREQ_KEY_GIT);
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        let report = ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: true, // pre-computed: winget IS available
+        };
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(
+            cmds[0].command, "winget install Git.Git",
+            "must use winget when available"
+        );
+        assert!(cmds[0].note.is_none());
+    }
+
+    /// Verify that winget_available=false from the report falls back to the URL.
+    #[test]
+    fn test_prereq_guided_windows_winget_unavailable_uses_url_fallback() {
+        use fdemon_daemon::toolchain::PREREQ_KEY_GIT;
+        let detail = format!("missing: {}", PREREQ_KEY_GIT);
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        let report = ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false, // pre-computed: winget NOT available
+        };
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("git-scm.com"),
+            "must use URL when winget unavailable"
+        );
+        assert!(cmds[0].note.is_some(), "URL fallback must have a note");
+    }
+
     #[test]
     fn test_prereq_guided_macos_clt_missing() {
         use fdemon_daemon::toolchain::PREREQ_KEY_XCODE_CLT;
@@ -1548,7 +1794,8 @@ mod tests {
             ComponentStatus::Missing,
             &detail,
         )];
-        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        let report = make_report_for_platform(HostPlatform::MacOs, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(cmds.len(), 1, "one command for CLT only");
         assert!(
             cmds[0].command.contains("xcode-select"),
@@ -1570,7 +1817,8 @@ mod tests {
             ComponentStatus::Missing,
             &detail,
         )];
-        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        let report = make_report_for_platform(HostPlatform::MacOs, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(cmds.len(), 1);
         assert!(
             cmds[0].command.contains("cocoapods"),
@@ -1595,7 +1843,8 @@ mod tests {
             ComponentStatus::Missing,
             &detail,
         )];
-        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        let report = make_report_for_platform(HostPlatform::MacOs, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(cmds.len(), 1);
         assert!(
             cmds[0].command.contains("rosetta"),
@@ -1617,7 +1866,8 @@ mod tests {
             ComponentStatus::Missing,
             &detail,
         )];
-        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        let report = make_report_for_platform(HostPlatform::MacOs, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(
             cmds.len(),
             3,
@@ -1638,7 +1888,8 @@ mod tests {
     #[test]
     fn test_prereq_guided_macos_ok_returns_empty() {
         let components = vec![make_prereq_check(ComponentStatus::Ok)];
-        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        let report = make_report_for_platform(HostPlatform::MacOs, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert!(
             cmds.is_empty(),
             "macOS must return empty when prerequisites Ok"
@@ -1647,34 +1898,39 @@ mod tests {
 
     #[test]
     fn test_prereq_guided_windows_git_missing_no_winget() {
-        // Simulate windows with git missing, no winget on PATH.
-        // Since we can't control PATH easily in tests, we test the logic
-        // using a custom detail string and check the fallback URL behavior.
+        // Simulate windows with git missing and winget NOT available (winget_available=false).
         use fdemon_daemon::toolchain::PREREQ_KEY_GIT;
         let detail = format!("missing: {}", PREREQ_KEY_GIT);
         let components = vec![make_prereq_check_with_detail(
             ComponentStatus::Missing,
             &detail,
         )];
-        // On non-Windows, winget will not be found, so we get the URL fallback.
-        let cmds = prerequisites_guided_commands(HostPlatform::Windows, &components);
+        // Explicitly set winget_available=false to test the URL fallback.
+        let report = ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert_eq!(cmds.len(), 1, "one command for missing git");
         assert_eq!(cmds[0].label, "Install Git for Windows");
-        // Either winget command or URL fallback depending on host.
-        let is_winget = cmds[0].command == "winget install Git.Git";
-        let is_url = cmds[0].command.contains("git-scm.com");
         assert!(
-            is_winget || is_url,
-            "must be winget or URL fallback; got: {}",
+            cmds[0].command.contains("git-scm.com"),
+            "must use URL fallback when winget_available=false; got: {}",
             cmds[0].command
         );
+        assert!(cmds[0].note.is_some(), "URL fallback must have a note");
     }
 
     #[test]
     fn test_prereq_guided_windows_git_ok_returns_empty() {
         // Git present (Ok) on Windows → no guided command needed.
         let components = vec![make_prereq_check(ComponentStatus::Ok)];
-        let cmds = prerequisites_guided_commands(HostPlatform::Windows, &components);
+        let report = make_report_for_platform(HostPlatform::Windows, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert!(
             cmds.is_empty(),
             "must return empty when windows prereqs are Ok"
@@ -1684,7 +1940,8 @@ mod tests {
     #[test]
     fn test_prereq_guided_unknown_platform_returns_empty() {
         let components = vec![make_prereq_check(ComponentStatus::Partial)];
-        let cmds = prerequisites_guided_commands(HostPlatform::Unknown, &components);
+        let report = make_report_for_platform(HostPlatform::Unknown, components.clone());
+        let cmds = prerequisites_guided_commands(&report, &components);
         assert!(cmds.is_empty(), "Unknown platform must return empty");
     }
 
@@ -1703,6 +1960,8 @@ mod tests {
                 detail,
             }],
             doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
         };
         let steps = build_steps(&report);
         let prereq = steps
@@ -1734,6 +1993,8 @@ mod tests {
                 detail: "Xcode Command Line Tools and CocoaPods installed".to_string(),
             }],
             doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
         };
         let steps = build_steps(&report);
         let prereq = steps

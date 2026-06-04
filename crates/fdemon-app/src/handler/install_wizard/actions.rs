@@ -441,6 +441,8 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         }
     }
 
@@ -946,6 +948,8 @@ mod tests {
                 },
             ],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         }
     }
 
@@ -1018,6 +1022,8 @@ mod tests {
             shell: HostShell::Bash,
             components: vec![],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         });
         select_step(&mut state, WizardStepKind::AndroidTools);
 
@@ -1327,6 +1333,8 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         });
         select_step(&mut state, WizardStepKind::AndroidTools);
 

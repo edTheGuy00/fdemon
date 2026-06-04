@@ -141,6 +141,8 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         }
     }
 
@@ -351,6 +353,8 @@ mod tests {
                 detail,
             }],
             doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
         };
         let mut state = AppState::new();
         state.show_install_wizard();
@@ -415,6 +419,8 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
+            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            winget_available: false,
         };
         state.install_wizard_state.apply_report(report);
         state.install_wizard_state.selected_index = 1; // AndroidTools

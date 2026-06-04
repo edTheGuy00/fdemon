@@ -104,6 +104,21 @@ pub async fn run_preflight(
     let build_tools_check = checks::check_android_build_tools(android_root_ref);
     let licenses_check = checks::check_android_licenses(android_root_ref);
 
+    // Detect package-manager and winget availability in the async preflight so
+    // that `prerequisites_guided_commands` (called from `build_steps` in the
+    // TEA `update()` path) can be a pure function of the report — no
+    // synchronous `which::which` I/O inside `update()`.
+    let linux_package_manager = if matches!(platform, HostPlatform::Linux) {
+        Some(checks::detect_linux_package_manager())
+    } else {
+        None
+    };
+    let winget_available = if matches!(platform, HostPlatform::Windows) {
+        which::which("winget").is_ok()
+    } else {
+        false
+    };
+
     // Run async checks concurrently
     let (git_check, jdk_check, platform_tools_check, prereq_check, doctor_output) = tokio::join!(
         checks::check_git(),
@@ -132,6 +147,8 @@ pub async fn run_preflight(
         shell,
         components,
         doctor: doctor_output,
+        linux_package_manager,
+        winget_available,
     };
 
     tracing::debug!(
@@ -212,10 +229,50 @@ mod tests {
             shell: HostShell::Bash,
             components: vec![],
             doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
         };
         assert_eq!(report.platform, HostPlatform::Linux);
         assert_eq!(report.shell, HostShell::Bash);
         assert!(report.components.is_empty());
         assert!(report.doctor.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_run_preflight_populates_linux_package_manager_on_linux() {
+        // On Linux, linux_package_manager must be Some(_).
+        // On other platforms, it must be None.
+        // We accept any LinuxPackageManager variant — the exact result depends
+        // on what is installed on the test host.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let report = run_preflight(tmp.path(), None).await;
+
+        if cfg!(target_os = "linux") {
+            assert!(
+                report.linux_package_manager.is_some(),
+                "linux_package_manager must be Some on Linux"
+            );
+        } else {
+            assert!(
+                report.linux_package_manager.is_none(),
+                "linux_package_manager must be None on non-Linux"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_preflight_populates_winget_available() {
+        // On non-Windows hosts winget must always be false (binary not present).
+        // On Windows we accept any bool — winget may or may not be installed.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let report = run_preflight(tmp.path(), None).await;
+
+        if !cfg!(target_os = "windows") {
+            assert!(
+                !report.winget_available,
+                "winget_available must be false on non-Windows"
+            );
+        }
+        // On Windows any bool is acceptable.
     }
 }
