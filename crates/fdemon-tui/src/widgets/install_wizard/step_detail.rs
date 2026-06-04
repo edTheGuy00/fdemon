@@ -1605,6 +1605,7 @@ mod tests {
     ///   - cmd 0 (has_caption=true, no blank): label(1) + cmd(1) + note(1) = 3
     ///   - cmd 1 (blank=1): blank(1) + label(1) + cmd(1) + note(1) = 4
     ///   - cmd 2 (blank=1, no note): blank(1) + label(1) + cmd(1) = 3
+    ///
     ///   Total = 1 + 1 + 3 + 4 + 3 = 12
     #[test]
     fn test_guided_section_full_height_three_commands() {
@@ -1640,6 +1641,7 @@ mod tests {
     ///   - header: 1
     ///   - caption (AndroidTools): 1
     ///   - cmd 0 (has_caption=true, no blank): label(1) + cmd(1) + note(1) = 3
+    ///
     ///   Total = 5
     #[test]
     fn test_guided_section_full_height_single_command_with_note() {
