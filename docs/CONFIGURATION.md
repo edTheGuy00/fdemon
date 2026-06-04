@@ -735,6 +735,42 @@ android_api_level = 36
 | `cmdline_tools_build` | `string` | (current) | `cmdline-tools` build number override, used in the download URL. Leave unset to use the current default. Override when the default URL 404s — find the latest build number at [developer.android.com/studio#command-tools](https://developer.android.com/studio#command-tools). |
 | `jdk_path` | `string` | (auto-detect) | Explicit JDK 17 directory, passed to `flutter config --jdk-dir`. When unset, fdemon auto-detects via `$JAVA_HOME` and `which java`. |
 
+#### Android install assumptions
+
+The managed Android SDK install makes two assumptions that can fail silently. Both have escape hatches in `[toolchain]`.
+
+**1. `build-tools;<api>.0.0` patch-version assumption**
+
+When installing Android packages, fdemon requests `build-tools;<api>.0.0` (e.g. `build-tools;36.0.0` for the default `android_api_level = 36`). This is the patch version that Google publishes for every stable API level. If a future API level ships with a different initial patch (e.g. `.0.1`) — or if the `.0.0` package is withdrawn from the `sdkmanager` index — the install step will fail with a "package not found" error from `sdkmanager`.
+
+**Remediation:** Lower `android_api_level` to a stable API level that has a published `.0.0` build-tools package:
+
+```toml
+[toolchain]
+android_api_level = 35   # fall back to 35 if 36.0.0 is not available
+```
+
+Run the Install Wizard again after changing the value. You can also run `sdkmanager --list | grep build-tools` to see what is actually available.
+
+**2. `cmdline_tools_build` URL assumption**
+
+The Android command-line tools (`sdkmanager`, `avdmanager`) are downloaded from a URL of the form:
+
+```
+https://dl.google.com/android/repository/commandlinetools-<os>-<build>_latest.zip
+```
+
+There is no build-less "latest" URL for this archive. fdemon ships a default build number (`11076708`) that is current at release time, but Google rotates this number when they publish a new version. When the default build number is stale, the download step will fail with an HTTP 404.
+
+**Remediation:** Override `cmdline_tools_build` with the current build number. Find the up-to-date value in the **Command line tools only** section at [developer.android.com/studio#command-tools](https://developer.android.com/studio#command-tools) — it appears in the download filename (e.g. `commandlinetools-linux-12345678_latest.zip`):
+
+```toml
+[toolchain]
+cmdline_tools_build = "12345678"   # replace with the current build number
+```
+
+Run the Install Wizard again after setting this value.
+
 ### Editor Settings
 
 Configure editor integration for opening files from stack traces.
