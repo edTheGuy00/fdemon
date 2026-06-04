@@ -82,6 +82,21 @@ const GUIDED_COMMAND_MIN_HEIGHT: u16 = 2;
 /// Derived from: 1 row for "JDK 17 required before installing Android tools".
 const JDK_CAPTION_HEIGHT: u16 = 1;
 
+/// The per-step caption rendered above the guided-command list, if any.
+///
+/// Single source of truth for both the height reservation
+/// (`guided_section_full_height`) and the renderer (`render_guided_commands`),
+/// so the two can never disagree on which steps have a caption.
+fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
+    match kind {
+        WizardStepKind::AndroidTools => Some("  JDK 17 required before installing Android tools"),
+        WizardStepKind::Prerequisites => {
+            Some("  Install the OS build tools below, then press r to re-check")
+        }
+        _ => None,
+    }
+}
+
 /// Right pane — per-step detail renderer.
 pub struct StepDetailPane<'a> {
     state: &'a InstallWizardState,
@@ -268,10 +283,7 @@ impl<'a> StepDetailPane<'a> {
         if commands.is_empty() {
             return 0;
         }
-        let has_caption = matches!(
-            step_kind,
-            WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
-        );
+        let has_caption = step_caption(step_kind).is_some();
         let caption_rows: u16 = if has_caption { JDK_CAPTION_HEIGHT } else { 0 };
 
         let mut cmd_rows: u16 = 0;
@@ -343,15 +355,7 @@ impl<'a> StepDetailPane<'a> {
         }
 
         // Per-step caption rendered above the command list.
-        let caption_text = match step_kind {
-            WizardStepKind::AndroidTools => {
-                Some("  JDK 17 required before installing Android tools")
-            }
-            WizardStepKind::Prerequisites => {
-                Some("  Install the OS build tools below, then press r to re-check")
-            }
-            _ => None,
-        };
+        let caption_text = step_caption(step_kind);
         if let Some(caption) = caption_text {
             if y < area.y + area.height {
                 let caption_style = Style::default()
@@ -1665,5 +1669,51 @@ mod tests {
         let height =
             StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites);
         assert_eq!(height, 0, "empty command list should return 0");
+    }
+
+    // --- step_caption helper unit tests ---
+
+    #[test]
+    fn test_step_caption_android_tools_returns_some() {
+        let caption = step_caption(WizardStepKind::AndroidTools);
+        assert!(caption.is_some(), "AndroidTools should have a caption");
+        assert!(
+            caption.unwrap().contains("JDK 17"),
+            "AndroidTools caption should mention JDK 17"
+        );
+    }
+
+    #[test]
+    fn test_step_caption_prerequisites_returns_some() {
+        let caption = step_caption(WizardStepKind::Prerequisites);
+        assert!(caption.is_some(), "Prerequisites should have a caption");
+        assert!(
+            caption.unwrap().contains("OS build tools"),
+            "Prerequisites caption should mention OS build tools"
+        );
+    }
+
+    #[test]
+    fn test_step_caption_flutter_sdk_returns_none() {
+        assert!(
+            step_caption(WizardStepKind::FlutterSdk).is_none(),
+            "FlutterSdk should have no caption"
+        );
+    }
+
+    #[test]
+    fn test_step_caption_path_config_returns_none() {
+        assert!(
+            step_caption(WizardStepKind::PathConfig).is_none(),
+            "PathConfig should have no caption"
+        );
+    }
+
+    #[test]
+    fn test_step_caption_doctor_returns_none() {
+        assert!(
+            step_caption(WizardStepKind::Doctor).is_none(),
+            "Doctor should have no caption"
+        );
     }
 }
