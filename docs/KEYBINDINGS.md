@@ -637,6 +637,8 @@ The panel has a two-pane layout:
 
 Preflight runs automatically when the wizard opens. Press `r` to re-run at any time.
 
+> **Guided vs executable steps:** Some steps (such as FlutterSdk and PathConfig) can be run directly by pressing `Enter`. The **Prerequisites step is guided-only** — `Enter` has no effect there. Instead, the wizard shows per-OS install commands (e.g. the Linux package-manager command, macOS Xcode CLT / CocoaPods / Rosetta commands, or Windows Git for Windows). Use `[` / `]` to cycle between commands when a step offers multiple options, copy the selected command with `c`, run it in your terminal, then press `r` to re-check.
+
 ### General Controls
 
 | Key | Action | Description |
@@ -656,9 +658,11 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 |-----|--------|-------------|
 | `k` / `↑` | Navigate Up | Move selection up in the step list |
 | `j` / `↓` | Navigate Down | Move selection down in the step list |
-| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write) |
-| `c` | Copy Guided Command | Copy the selected step's guided command to the clipboard (e.g. the JDK install command). No-op when the step has no guided command. |
-| `r` | Re-run Preflight | Re-run the toolchain preflight check (useful after completing a guided step such as installing JDK 17 outside fdemon) |
+| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write). No-op on guided-only steps (e.g. Prerequisites). |
+| `[` | Previous Command | Select the previous guided command on the current step (e.g. cycle backward through macOS Prerequisites: Xcode CLT → Rosetta). No-op when only one command is available. |
+| `]` | Next Command | Select the next guided command on the current step (e.g. cycle forward through macOS Prerequisites: Xcode CLT → CocoaPods → Rosetta). No-op when only one command is available. |
+| `c` | Copy Selected Guided Command | Copy the currently selected guided command to the clipboard (e.g. the JDK install command or a per-OS prerequisite install command). No-op when the step has no guided command. |
+| `r` | Re-run Preflight | Re-run the toolchain preflight check (useful after completing a guided step such as installing JDK 17 or OS prerequisites outside fdemon) |
 
 ### Detail Pane Controls (when Detail pane is focused)
 
