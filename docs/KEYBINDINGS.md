@@ -643,7 +643,7 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Esc` | Close Panel | Close the Install Wizard and return to Normal mode |
+| `Esc` | Cancel Step / Close Panel | **Context-dependent:** when an install step is currently Running, cancels the in-flight step (signals the `CancellationToken`, resets execution to Idle) and stays in the wizard. When no step is running (idle, completed, or failed), closes the Install Wizard and returns to Normal mode. If Flutter is live when closing, the wizard also triggers device discovery and routes to the startup flow. |
 | `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
 
 ### Pane Navigation

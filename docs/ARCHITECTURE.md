@@ -487,14 +487,14 @@ flutter-demon/
 | `discovery.rs` | Flutter project detection: `is_runnable_flutter_project()`, `discover_flutter_projects()`, `ProjectType` enum |
 | `stack_trace.rs` | Stack trace parsing and rendering |
 | `ansi.rs` | ANSI escape sequence handling |
-| `error.rs` | Custom `Error` enum with variants for each error category. Includes `Result<T>` alias and `ResultExt` trait for error context |
+| `error.rs` | Custom `Error` enum with variants for each error category. Phase 5 adds `Error::Cancelled` (recoverable) — returned when a `CancellationToken` fires during a download or install. Includes `Result<T>` alias and `ResultExt` trait for error context |
 | `logging.rs` | Sets up file-based logging via `tracing` (stdout is owned by TUI) |
 | `prelude.rs` | Re-exports common types (`Result`, `Error`, tracing macros) |
 
 ### `fdemon-daemon` — Flutter Process Infrastructure
 
 **Location**: `crates/fdemon-daemon/`
-**Dependencies**: `fdemon-core`; Phase 2 toolchain install adds: `reqwest` (rustls-tls, archive download), `zip`, `tar`, `lzma-rs` (tar.xz extraction), `sha2` (SHA-256 verification). All network and archive code is isolated inside `toolchain/`.
+**Dependencies**: `fdemon-core`; Phase 2 toolchain install adds: `reqwest` (rustls-tls, archive download), `zip`, `tar`, `lzma-rs` (tar.xz extraction), `sha2` (SHA-256 verification). Phase 5 adds: `fs4` (disk-space preflight in `toolchain/download.rs`), `tokio-util` (provides `CancellationToken` for abortable downloads). All network and archive code is isolated inside `toolchain/`.
 **Purpose**: Manages Flutter child processes, JSON-RPC communication, and toolchain installation
 
 | File | Purpose |
@@ -526,10 +526,10 @@ flutter-demon/
 | `toolchain/types.rs` | Phase 1 report types: `ToolchainReport`, `ComponentCheck`, `ComponentStatus`, `ComponentKind`, `HostPlatform`, `HostShell`, `DoctorLine`, `DoctorMarker`. Phase 2 install types: `InstallMethod`, `HostArch`, `FlutterRelease`, `FlutterReleaseManifest`, `FlutterInstallTarget`, `DownloadProgress`, `FlutterInstallOutcome`. Phase 3 Android install types: `AndroidInstallTarget` (sdk_root, api_level, cmdline_tools_build, jdk_path), `AndroidInstallOutcome` (sdk_root, installed_packages), `cmdline_tools_url` (URL builder by platform/build), `sdkmanager_packages` (required package list for an API level), `DEFAULT_CMDLINE_TOOLS_BUILD`. Phase 4 followup: `ToolchainReport` gains two pre-computed environment-detection fields — `linux_package_manager: Option<LinuxPackageManager>` (populated on Linux by `run_preflight`; `None` on other platforms) and `winget_available: bool` (populated on Windows by `run_preflight`; always `false` elsewhere) — so that `prerequisites_guided_commands` in `fdemon-app` is a pure function of the report with no synchronous `which::which` I/O inside the TEA `update()` path. |
 | `toolchain/checks/` | Structured per-component probes — Flutter SDK, git, JDK, Android cmdline-tools/sdkmanager, platform-tools/adb, Android platforms, build-tools, licenses, and per-OS prerequisites (`mod.rs`, `android.rs`, `prerequisites.rs`). No install or network code. `android.rs` owns `resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf` — the single shared SDK-root resolver (env-var chain + platform default; always returns a `PathBuf` even when the path does not yet exist). `android_sdk_root() -> Option<AndroidSdkRoot>` is a thin check-time wrapper that delegates to `resolve_android_sdk_root_path(None)` and then filters with `is_dir()`. Both are re-exported via `checks/mod.rs` → `toolchain/mod.rs` → `fdemon-daemon` lib, making `resolve_android_sdk_root_path` the single source of truth consumed by both the install executor and post-install checks. Phase 4 followup: `prerequisites.rs` gains the pure helper `detect_from_candidates(present: &[&str]) -> LinuxPackageManager` (precedence-ordered mapping from which-found binaries to package manager enum); `detect_linux_package_manager` dispatches through it, enabling deterministic unit tests without filesystem probing. |
 | `toolchain/doctor.rs` | `flutter doctor -v` text capture and marker parser; recognises `[✓]`, `[!]`, `[✗]`, `[☠]` markers to produce `Vec<DoctorLine>` |
-| `toolchain/download.rs` | Streaming archive download (`download_to_file` with `DownloadProgress` callback, download timeout, bounded retry, `.part`-file-rename on completion), SHA-256 verification (`verify_sha256`), traversal-safe zip extraction (`extract_zip` — zip-slip path sanitization, symlink guards), traversal-safe tar.xz extraction (`extract_tar_xz` — tar path + symlink guards, streaming xz decode via mpsc channel for bounded RAM usage, pure-Rust `lzma-rs`), and unified dispatch (`extract_archive`). |
+| `toolchain/download.rs` | Streaming archive download (`download_to_file` with `DownloadProgress` callback, download timeout, bounded retry, `.part`-file-rename on completion), SHA-256 verification (`verify_sha256`), traversal-safe zip extraction (`extract_zip` — zip-slip path sanitization, symlink guards), traversal-safe tar.xz extraction (`extract_tar_xz` — tar path + symlink guards, streaming xz decode via mpsc channel for bounded RAM usage, pure-Rust `lzma-rs`), and unified dispatch (`extract_archive`). Phase 5 adds: `ensure_disk_space(path, required_bytes)` (uses `fs4` statvfs — called before download and extraction to fail fast with a clear error rather than running out of space mid-transfer); `check_network_connectivity(url)` (≤5 s HEAD probe — called in `fetch_release_manifest` before initiating an archive download); `CancellationToken` (from `tokio-util`) threaded through `download_to_file`, `install_flutter`, and `install_android_tools` via `tokio::select!`; `PartFileGuard` RAII type that removes the `.part` file on `Drop` so aborted downloads leave no partial artefacts. XZ decode threads self-terminate on `BrokenPipe` when the consumer side cancels. |
 | `toolchain/process_stream.rs` | `run_streaming` — merges stdout and stderr of a long-running child process into a single ordered stream of lines, for streaming git-clone and similar operations. Phase 3 adds `run_streaming_with_input` — identical but pipes `stdin_data` to the child before closing stdin (EOF), enabling non-interactive license acceptance (`sdkmanager --licenses`); accepts extra `env` pairs (e.g. `JAVA_HOME`) injected into the child's environment. |
 | `toolchain/flutter_install.rs` | Managed Flutter SDK install: `install_flutter` (git-clone default with `--` option terminator and channel validation before invocation, archive-download fallback honoring the configured channel in the archive path), atomic temp-dir-then-rename, non-fatal `flutter precache`. Reclaims incomplete `final_dir` partials on retry. Serializes concurrent installs via an advisory lockfile (`LockGuard`) created atomically under the install root. Manifest fetches carry timeouts; `FVM_CACHE_PATH` is validated to be absolute before use. Helpers: `fetch_release_manifest`, `archive_download_url`, `resolve_install_dir`. Event type: `InstallEvent`. |
-| `toolchain/path_config.rs` | Idempotent, marker-fenced PATH export writes to shell rc files for bash, zsh, and fish — one export block per rc file, guarded by begin/end markers so repeated runs are idempotent. On Windows, the PATH value is passed to PowerShell out-of-band via the `FDEMON_NEW_PATH` environment variable (not interpolated into the script string) to prevent injection. On POSIX/fish, `bin_dir` is validated and single-quoted before being written to rc files. macOS bash selects `.bash_profile` or `.profile` based on which file exists. `add_to_path(bin_dir, shell) -> PathConfigOutcome`. `rc_file_for_shell(shell) -> Option<PathBuf>`. Phase 3 adds `add_android_env(shell, platform, sdk_root) -> Result<PathConfigOutcome>` — writes `ANDROID_HOME` and the `cmdline-tools/latest/bin` + `platform-tools` PATH entries in a separate, distinctly-fenced block; idempotent (detects and replaces the existing block if the SDK root changed). |
+| `toolchain/path_config.rs` | Idempotent, marker-fenced PATH export writes to shell rc files for bash, zsh, and fish — one export block per rc file, guarded by begin/end markers so repeated runs are idempotent. On Windows, the PATH value is passed to PowerShell out-of-band via the `FDEMON_NEW_PATH` environment variable (not interpolated into the script string) to prevent injection; Phase 5 adds a best-effort `WM_SETTINGCHANGE` broadcast after writing so the new PATH takes effect in running processes without requiring a sign-out. On POSIX/fish, `bin_dir` is validated and single-quoted before being written to rc files. macOS bash selects `.bash_profile` or `.profile` based on which file exists. `add_to_path(bin_dir, shell) -> PathConfigOutcome`. `rc_file_for_shell(shell) -> Option<PathBuf>`. Phase 3 adds `add_android_env(shell, platform, sdk_root) -> Result<PathConfigOutcome>` — writes `ANDROID_HOME` and the `cmdline-tools/latest/bin` + `platform-tools` PATH entries in a separate, distinctly-fenced block; idempotent (detects and replaces the existing block if the SDK root changed); Phase 5 also appends the `WM_SETTINGCHANGE` broadcast for `ANDROID_HOME` writes on Windows. |
 | `toolchain/android_install.rs` | Phase 3. `install_android_tools(target, on_event)` — full Android SDK install flow: download `cmdline-tools` zip for the host platform, extract to a temp directory, relocate to `<sdk_root>/cmdline-tools/latest` (atomic POSIX rename), accept SDK licenses non-interactively via `sdkmanager --licenses` (feeds `y\n` through stdin using `run_streaming_with_input`), then install the required packages via `sdkmanager`. All progress reported as `InstallEvent` callbacks. Returns `AndroidInstallOutcome`. `resolve_cmdline_tools_url(target)` is the testable URL-builder helper. |
 | `toolchain/jdk.rs` | Phase 3. `resolve_jdk_home() -> Option<PathBuf>` — best-effort JDK home resolution: checks `$JAVA_HOME` first, then walks from the `java` binary found via `which`. `configure_flutter_jdk_dir(flutter, jdk_dir)` — runs `flutter config --jdk-dir=<dir>` so the Flutter CLI uses the specified JDK when building Android targets. |
 
@@ -644,8 +644,8 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `hyperlinks.rs` | `LinkHighlightState` — link detection and navigation |
 | `confirm_dialog.rs` | `ConfirmDialogState` — confirmation dialog state |
 | `new_session_dialog/` | New session dialog state (fuzzy filtering, target selector, device groups) |
-| `install_wizard/` | `InstallWizardState`, `WizardStep`, `WizardStepKind`, `StepStatus`, `WizardPane`, `build_steps()` — state types for the two-pane toolchain diagnostics modal. Phase 2 adds `StepExecution` and `StepExecStatus` (tracks running/succeeded/failed install state and log tail on `InstallWizardState.execution`) plus `installed_sdk_path` (stashed path from a just-completed FlutterSdk step, cleared after the PathConfig step consumes it). `StepExecution::log_tail` is a bounded `VecDeque<String>` storing raw lines; O(1) front-eviction via `pop_front`. ANSI codes are stripped at render time by the `StepProgress` widget in `progress.rs`, not before storage. Phase 3 adds `GuidedCommand` (`label`, `command`, `note`) — a copy-paste command shown for privileged/GUI actions the wizard cannot auto-run; `WizardStep.guided_commands: Vec<GuidedCommand>` populated by `build_steps()` (e.g. JDK install command when the JDK component is not `Ok`); `InstallWizardState::selected_guided_command()` returns the command at `selected_command_index` of the selected step for the `c` key handler. Phase 4 adds `selected_command_index: usize` to `InstallWizardState` (defaults to 0, reset on step change and `apply_report`); `select_next_command()` / `select_prev_command()` advance/retreat the index (clamped/saturating, no-op for steps with 0 or 1 commands); `selected_guided_command()` is now index-aware; `prerequisites_guided_commands(report, components)` generates per-OS install commands for the Prerequisites step as a pure function of `ToolchainReport` (reads `report.linux_package_manager` and `report.winget_available` — no `which::which` I/O in the TEA `update()` path). |
-| `handler/install_wizard/` | Navigation and action handlers for `UiMode::InstallWizard`. `mod.rs` is a re-export shim; `navigation.rs` holds the up/down and pane-switch handlers. Phase 2 adds `actions.rs` — handles `WizardStepStarted/Log/Progress/DownloadProgress/Completed/Failed/Phase` messages, chains `PersistSettings` → re-run preflight → `ScanInstalledSdks` on `WizardStepCompleted(FlutterSdk)`. Phase 3 extends `actions.rs`: `AndroidTools` step is now executable but gated — dispatches `RunWizardStep` only when the JDK preflight component is `Ok`, otherwise surfaces a status message pointing the user to the guided JDK install command; `PathConfig` step executor now also calls `add_android_env` when an `android_sdk_root` is present; `InstallWizardCopyCommand` message handler copies `selected_guided_command()` to the system clipboard. Phase 4 extends `navigation.rs` with `handle_prev_command` / `handle_next_command` (bound to `[` / `]` keys, delegate to `select_prev_command()` / `select_next_command()`, work regardless of focused pane, reset `selected_command_index` to 0 on step list navigation). Phase 4 extends `actions.rs`: `Prerequisites` Enter arm is split from `Doctor` — the stub "Available in a later phase" message is replaced with the guided "Run the listed command(s), then press r to re-check." message; `Doctor` Enter still shows the "later phase" stub. |
+| `install_wizard/` | `InstallWizardState`, `WizardStep`, `WizardStepKind`, `StepStatus`, `WizardPane`, `build_steps()` — state types for the two-pane toolchain diagnostics modal. Phase 2 adds `StepExecution` and `StepExecStatus` (tracks running/succeeded/failed install state and log tail on `InstallWizardState.execution`) plus `installed_sdk_path` (stashed path from a just-completed FlutterSdk step, cleared after the PathConfig step consumes it). `StepExecution::log_tail` is a bounded `VecDeque<String>` storing raw lines; O(1) front-eviction via `pop_front`. ANSI codes are stripped at render time by the `StepProgress` widget in `progress.rs`, not before storage. Phase 3 adds `GuidedCommand` (`label`, `command`, `note`) — a copy-paste command shown for privileged/GUI actions the wizard cannot auto-run; `WizardStep.guided_commands: Vec<GuidedCommand>` populated by `build_steps()` (e.g. JDK install command when the JDK component is not `Ok`); `InstallWizardState::selected_guided_command()` returns the command at `selected_command_index` of the selected step for the `c` key handler. Phase 4 adds `selected_command_index: usize` to `InstallWizardState` (defaults to 0, reset on step change and `apply_report`); `select_next_command()` / `select_prev_command()` advance/retreat the index (clamped/saturating, no-op for steps with 0 or 1 commands); `selected_guided_command()` is now index-aware; `prerequisites_guided_commands(report, components)` generates per-OS install commands for the Prerequisites step as a pure function of `ToolchainReport` (reads `report.linux_package_manager` and `report.winget_available` — no `which::which` I/O in the TEA `update()` path). Phase 5 adds `install_task: Option<InstallTaskHandle>` to `InstallWizardState` — an `InstallTaskHandle` bundles the `CancellationToken` and `JoinHandle` for the in-flight install task; populated by `WizardInstallTaskReady` and cleared when the step completes, fails, or is cancelled. `flutter_now_live() -> bool` predicate returns `true` when the preflight report shows Flutter as `Ok`. `handback_done: bool` one-shot guard prevents duplicate device-discovery dispatches. |
+| `handler/install_wizard/` | Navigation and action handlers for `UiMode::InstallWizard`. `mod.rs` is a re-export shim; `navigation.rs` holds the up/down and pane-switch handlers. Phase 2 adds `actions.rs` — handles `WizardStepStarted/Log/Progress/DownloadProgress/Completed/Failed/Phase` messages, chains `PersistSettings` → re-run preflight → `ScanInstalledSdks` on `WizardStepCompleted(FlutterSdk)`. Phase 3 extends `actions.rs`: `AndroidTools` step is now executable but gated — dispatches `RunWizardStep` only when the JDK preflight component is `Ok`, otherwise surfaces a status message pointing the user to the guided JDK install command; `PathConfig` step executor now also calls `add_android_env` when an `android_sdk_root` is present; `InstallWizardCopyCommand` message handler copies `selected_guided_command()` to the system clipboard. Phase 4 extends `navigation.rs` with `handle_prev_command` / `handle_next_command` (bound to `[` / `]` keys, delegate to `select_prev_command()` / `select_next_command()`, work regardless of focused pane, reset `selected_command_index` to 0 on step list navigation). Phase 4 extends `actions.rs`: `Prerequisites` Enter arm is split from `Doctor` — the stub "Available in a later phase" message is replaced with the guided "Run the listed command(s), then press r to re-check." message; `Doctor` Enter still shows the "later phase" stub. Phase 5 extends `actions.rs`: `handle_cancel_step` cancels the token on `InstallWizardState.install_task` and resets execution to Idle; `handle_preflight_completed` checks `flutter_now_live()` and, when true and `handback_done` is unset, auto-closes the wizard and dispatches `DiscoverDevices`; `Esc` / `HideInstallWizard` with a live SDK also dispatches `DiscoverDevices` and routes to `UiMode::Startup`; `RunToolchainPreflight` emits `SdkResolved` so `flutter_executable()` resolves after a managed install. |
 
 **Message Categories:**
 - Keyboard events (`Key`)
@@ -654,7 +654,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 - Control commands (`HotReload`, `HotRestart`, `StopApp`)
 - Session management (`NextSession`, `CloseCurrentSession`)
 - Device/emulator management (`ShowDeviceSelector`, `LaunchEmulator`)
-- Install wizard step execution: `InstallWizardRunSelectedStep` (Enter on a runnable step), `WizardStepStarted { kind }`, `WizardStepLog { kind, line }`, `WizardDownloadProgress { kind, received, total }`, `WizardStepCompleted { kind, summary, sdk_path }`, `WizardStepFailed { kind, reason }`, `WizardStepPhase { kind, label }` — routes to `handle_step_phase` → `set_step_phase` to drive the live phase row in the `StepProgress` widget. Phase 3 adds `InstallWizardCopyCommand` — copies the selected step's first `GuidedCommand.command` to the system clipboard (bound to `c`).
+- Install wizard step execution: `InstallWizardRunSelectedStep` (Enter on a runnable step), `WizardStepStarted { kind }`, `WizardStepLog { kind, line }`, `WizardDownloadProgress { kind, received, total }`, `WizardStepCompleted { kind, summary, sdk_path }`, `WizardStepFailed { kind, reason }`, `WizardStepPhase { kind, label }` — routes to `handle_step_phase` → `set_step_phase` to drive the live phase row in the `StepProgress` widget. Phase 3 adds `InstallWizardCopyCommand` — copies the selected step's first `GuidedCommand.command` to the system clipboard (bound to `c`). Phase 5 adds `InstallWizardCancelStep` — dispatched by `Esc` while a step is Running; cancels via the stored token, resets execution to Idle; `WizardInstallTaskReady { token, handle }` — sent by the executor immediately after spawning, before the first `WizardStepStarted`, so the cancel token and `JoinHandle` (`InstallTaskHandle`) are available on `InstallWizardState` the moment the step goes Running. `handle_step_failed` distinguishes `Error::Cancelled` (shows neutral "Cancelled" status) from other errors (shows "Failed — press Enter to retry or r to re-check").
 
 ### `fdemon-tui` — Terminal UI (Presentation Layer)
 
@@ -695,7 +695,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `confirm_dialog.rs` | Confirmation dialog widget |
 | `tag_filter.rs` | Native tag filter overlay — toggle per-tag visibility, shows tag counts |
 | `new_session_dialog/` | New session creation dialog |
-| `install_wizard/` | Two-pane toolchain diagnostics panel: `mod.rs` (panel entry), `step_list.rs` (left pane: ordered step list), `step_detail.rs` (right pane: per-step detail with Enter action hints for runnable steps; Phase 3 adds guided-command block — label, command text, optional alternative note, and `c` key copy hint), `doctor_view.rs` (embedded `flutter doctor -v` output view), `progress.rs` (Phase 2: `StepProgress` widget — live progress bar, byte counter, and scrolling log tail shown while a step is running) |
+| `install_wizard/` | Two-pane toolchain diagnostics panel: `mod.rs` (panel entry), `step_list.rs` (left pane: ordered step list; Phase 5 adds a run-failed badge `✗` on failed steps), `step_detail.rs` (right pane: per-step detail with Enter action hints for runnable steps; Phase 3 adds guided-command block — label, command text, optional alternative note, and `c` key copy hint), `doctor_view.rs` (embedded `flutter doctor -v` output view), `progress.rs` (Phase 2: `StepProgress` widget — live progress bar, byte counter, and scrolling log tail shown while a step is running; Phase 5 adds "Esc cancels" hint in the `StepProgress` footer while a step is Running) |
 
 ### `fdemon-dap` — DAP Server
 
@@ -725,11 +725,24 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `server/session.rs` | `DapClientSession`, `NoopBackend` (test-only backend) |
 | `transport/stdio.rs` | Stdio transport for IDE integration testing |
 
-### `flutter-demon` (Binary) — Headless Mode
+### `flutter-demon` (Binary) — CLI and Headless Mode
 
-**Location**: `src/headless/`
+**Location**: `src/`
 **Dependencies**: `fdemon-core`, `fdemon-daemon`, `fdemon-app`, `fdemon-tui`, `fdemon-dap`
-**Purpose**: Binary entry point, CLI parsing, headless NDJSON mode
+**Purpose**: Binary entry point, CLI parsing, headless NDJSON mode, `doctor` subcommand
+
+**CLI Surface:**
+
+The binary uses a clap default-subcommand idiom to preserve the existing `fdemon /path`, `--headless`, and `--dap-*` flag surface while also exposing named subcommands.
+
+| Subcommand / flag | Purpose |
+|-------------------|---------|
+| `fdemon [path]` *(default)* | Launch TUI for the Flutter project at `path` (or cwd if omitted) |
+| `fdemon doctor` | Run a read-only toolchain preflight check (`src/doctor.rs`), print `[STATUS] kind — detail` lines plus captured `flutter doctor` output to stdout, and exit 0 if all components are `Ok`, else exit 1 |
+| `--headless` | Non-TUI NDJSON mode (existing) |
+| `--dap-*` | DAP server flags (existing) |
+
+`src/doctor.rs` calls `fdemon_daemon::toolchain::run_preflight()` (the same entry point used by the install wizard) and renders `ComponentStatus` via its `Display` impl. `fdemon setup` (managed-install CLI) is deferred.
 
 **Headless Mode:**
 
@@ -2048,6 +2061,10 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
 9. tui::run_with_project(): Flutter SDK resolution — if no SDK resolves, opens
    UiMode::InstallWizard and emits UpdateAction::RunToolchainPreflight (background task).
    InstallWizard can also be opened at any time via the `I` key from Normal mode.
+   Phase 5: after a managed Flutter install completes and the post-install preflight
+   shows Flutter live, the wizard auto-closes and dispatches DiscoverDevices, handing
+   control back to the normal session-launch flow. Manual close (Esc) with a live SDK
+   triggers the same handback path.
 10. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
     OR when [behavior] auto_launch=true AND a valid last_device is cached.
     Otherwise: show New Session dialog. (See docs/CONFIGURATION.md for the full priority table.)
@@ -2099,7 +2116,7 @@ Running       Set ONLY on the app.started daemon event
 
 The key invariant: process attachment and `app.start` advance the phase to `Launching`; only `app.started` advances it to `Running`. This prevents a false-running display during long first-compile cycles.
 
-### Install Wizard Step Execution Flow (Phase 2)
+### Install Wizard Step Execution Flow (Phase 2 + Phase 5)
 
 When the user presses Enter on a runnable wizard step (`FlutterSdk` or `PathConfig`):
 
@@ -2115,14 +2132,18 @@ UpdateAction::RunWizardStep { kind, install, path_bin_dir }
     ▼
 handle_action() in actions/mod.rs
     │  spawns background task off the Tokio thread pool
-    ├── msg_tx.send(Message::WizardStepStarted { kind })        — always first
+    ├── msg_tx.send(Message::WizardInstallTaskReady { token, handle })  — Phase 5: sent first
+    │     TEA handler stores InstallTaskHandle on InstallWizardState
+    ├── msg_tx.send(Message::WizardStepStarted { kind })
     │
     ├── [FlutterSdk step]
-    │     install_flutter() streams InstallEvent via run_streaming (git-clone)
-    │     or download_to_file + extract_archive (archive path)
+    │     ensure_disk_space() + check_network_connectivity()           — Phase 5 preflights
+    │     install_flutter(target, token, on_event) streams InstallEvent
+    │     via run_streaming (git-clone) or download_to_file + extract_archive (archive)
     │     → msg_tx.send(Message::WizardStepLog { kind, line })  — per output line
     │     → msg_tx.send(Message::WizardStepCompleted { kind, sdk_path, .. })
     │       or WizardStepFailed { kind, reason }
+    │         (if Error::Cancelled → shows "Cancelled"; otherwise "Failed — retry or r")
     │
     └── [PathConfig step]
           add_to_path(bin_dir, shell) writes shell rc file
@@ -2136,9 +2157,20 @@ WizardStepCompleted(FlutterSdk, sdk_path=Some(p)):
     2. installed_sdk_path ← p           (stashed for PathConfig step; cleared after PathConfig succeeds)
     3. UpdateAction::PersistSettings           (write .fdemon/config.toml)
     4. Message::InstallWizardRerunPreflight    (follow-up message)
-       → UpdateAction::RunToolchainPreflight   (re-runs checks)
+       → UpdateAction::RunToolchainPreflight   (re-runs checks; Phase 5: also emits SdkResolved)
        → ToolchainPreflightCompleted           (refreshes wizard step statuses)
+         Phase 5: handle_preflight_completed checks flutter_now_live();
+                  if true and handback_done unset → auto-closes wizard,
+                  dispatches DiscoverDevices, sets handback_done
        → UpdateAction::ScanInstalledSdks       (re-scans FVM cache)
+
+Esc while a step is Running (Phase 5):
+    → Message::InstallWizardCancelStep
+      → handle_cancel_step(): cancel InstallWizardState.install_task token,
+        reset execution to Idle
+
+Esc / HideInstallWizard with Flutter live (Phase 5):
+    → dispatches DiscoverDevices, routes to UiMode::Startup
 ```
 
 The TUI `StepProgress` widget (`widgets/install_wizard/progress.rs`) renders the live `StepExecution` state: a progress bar (when `DownloadProgress.total` is known), a byte counter, a phase label (driven by `WizardStepPhase` → `set_step_phase`), and a scrolling ANSI-sanitized tail of the last `MAX_LOG_TAIL` log lines from the bounded `log_tail: VecDeque<String>`. The `RESULT_SUMMARY_HEIGHT` constant controls how many lines are reserved for the step result summary.
@@ -2221,7 +2253,7 @@ The return type from `handler::update()`:
 - `FetchLayoutData { session_id, node_id, vm_handle }` — Fetch layout data (constraints, size, flex info) for a widget via `ext.flutter.inspector.getLayoutExplorerNode`. `vm_handle` is hydrated by `process.rs` before dispatch.
 - `FetchInspectorProperties { session_id, node_id, vm_handle }` — Fetch widget properties and render-object sub-properties via the two-stage `ext.flutter.inspector.getProperties` pipeline. Dispatched alongside `FetchLayoutData` by `handle_open_details` via `UpdateResult::extra_actions`. `vm_handle` is hydrated by `process.rs` before dispatch.
 - `RunToolchainPreflight { project_path, explicit_sdk_path }` — Spawn a background task that calls `fdemon_daemon::toolchain::run_preflight()` and sends `Message::ToolchainPreflightCompleted { report }` when done. Never errors; results are always a `ToolchainReport`. Emitted when `UiMode::InstallWizard` is opened (at startup when no Flutter SDK resolves, or via the `I` keybinding from Normal mode).
-- `RunWizardStep { kind, install, path_bin_dir }` — Spawn the Phase 2 install executor for a selected wizard step. For `FlutterSdk` steps, `install: Some(FlutterStepParams)` carries the resolved `FlutterInstallTarget` and target directory; for `PathConfig` steps, `path_bin_dir: Some(PathBuf)` carries the Flutter `bin/` directory to add. The executor streams progress back via `WizardStep*` messages. Emitted by `InstallWizardRunSelectedStep` handling when the selected step is `FlutterSdk` or `PathConfig`.
+- `RunWizardStep { kind, install, path_bin_dir }` — Spawn the Phase 2 install executor for a selected wizard step. For `FlutterSdk` steps, `install: Some(FlutterStepParams)` carries the resolved `FlutterInstallTarget` and target directory; for `PathConfig` steps, `path_bin_dir: Some(PathBuf)` carries the Flutter `bin/` directory to add. The executor streams progress back via `WizardStep*` messages. Phase 5: the executor creates a `CancellationToken`, sends `WizardInstallTaskReady { token, handle }` before the first progress message, then threads the token into `install_flutter` / `install_android_tools` so `InstallWizardCancelStep` can abort in-flight work. Emitted by `InstallWizardRunSelectedStep` handling when the selected step is `FlutterSdk` or `PathConfig`.
 
 ---
 
@@ -2265,6 +2297,8 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `install_flutter`, `fetch_release_manifest`, `archive_download_url`, `resolve_install_dir`, `InstallEvent` — Phase 2 Flutter SDK install API (`toolchain/flutter_install.rs`)
 - `run_streaming` — Phase 2 child-process line streaming (`toolchain/process_stream.rs`)
 - `download_to_file`, `verify_sha256`, `extract_zip`, `extract_tar_xz`, `extract_archive` — Phase 2 download and archive helpers (`toolchain/download.rs`)
+- `ensure_disk_space`, `check_network_connectivity` — Phase 5 preflight helpers (`toolchain/download.rs`)
+- `PartFileGuard` — Phase 5 RAII partial-file cleanup (`toolchain/download.rs`)
 - `add_to_path`, `rc_file_for_shell`, `PathConfigOutcome` — Phase 2 shell rc file PATH writers (`toolchain/path_config.rs`)
 - `resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf` — shared Android SDK root resolver; single source of truth for install-time and check-time SDK path resolution (`toolchain/checks/android.rs`, re-exported via `toolchain/mod.rs`)
 
@@ -2291,6 +2325,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `config::Settings`, `config::LaunchConfig` — Configuration types
 - `install_wizard::InstallWizardState`, `install_wizard::WizardStep`, `install_wizard::WizardStepKind`, `install_wizard::StepStatus`, `install_wizard::WizardPane` — toolchain diagnostics wizard state types
 - `install_wizard::StepExecution`, `install_wizard::StepExecStatus` — Phase 2 per-step execution state (running/succeeded/failed, log tail, progress bytes)
+- `install_wizard::InstallTaskHandle` — Phase 5 bundle of `CancellationToken` + `JoinHandle` for the active install task; held on `InstallWizardState.install_task`
 - `config::ToolchainSettings` — Phase 2 `[toolchain]` config block (install method, channel, directories)
 
 **Internal** (`pub(crate)`):
