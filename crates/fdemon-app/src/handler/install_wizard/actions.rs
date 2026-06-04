@@ -208,7 +208,16 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             }
         }
 
-        WizardStepKind::Prerequisites | WizardStepKind::Doctor => {
+        WizardStepKind::Prerequisites => {
+            // Prerequisites is non-executable: the wizard cannot auto-run
+            // privileged package-manager or GUI commands. Instead, direct the
+            // user to the guided command(s) shown in the detail pane.
+            state.install_wizard_state.status_message =
+                Some("Run the listed command(s), then press r to re-check.".to_string());
+            UpdateResult::none()
+        }
+
+        WizardStepKind::Doctor => {
             state.install_wizard_state.status_message =
                 Some("Available in a later phase".to_string());
             UpdateResult::none()
@@ -1365,5 +1374,67 @@ mod tests {
         } else {
             panic!("expected WriteClipboard action");
         }
+    }
+
+    // ── Prerequisites vs Doctor status message ───────────────────────────────
+
+    #[test]
+    fn test_prerequisites_enter_returns_guided_message_not_later_phase() {
+        // Prerequisites is non-executable; pressing Enter must set a "guided"
+        // status message directing the user to run listed command(s), not the
+        // old "Available in a later phase" stub.
+        let mut state = state_with_preflight();
+        select_step(&mut state, WizardStepKind::Prerequisites);
+
+        let result = handle_run_selected_step(&mut state);
+
+        // Must not dispatch RunWizardStep.
+        assert!(
+            result.action.is_none(),
+            "Prerequisites Enter must not dispatch RunWizardStep; got {:?}",
+            result.action
+        );
+        assert!(
+            result.message.is_none(),
+            "Prerequisites Enter must not dispatch any message; got {:?}",
+            result.message
+        );
+        // Status message must be the new guided message.
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("Run the listed command") || msg.contains("re-check"),
+            "Prerequisites status_message must be the guided message; got: {msg}"
+        );
+        assert!(
+            !msg.contains("later phase"),
+            "Prerequisites must not show 'later phase' message anymore; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_doctor_enter_still_returns_later_phase_message() {
+        // Doctor step must still show "Available in a later phase" — unchanged.
+        let mut state = state_with_preflight();
+        select_step(&mut state, WizardStepKind::Doctor);
+
+        let result = handle_run_selected_step(&mut state);
+
+        assert!(
+            result.action.is_none(),
+            "Doctor Enter must not dispatch RunWizardStep"
+        );
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("later phase"),
+            "Doctor must still show 'later phase' message; got: {msg}"
+        );
     }
 }

@@ -7,7 +7,9 @@
 use std::cell::Cell;
 
 use fdemon_daemon::toolchain::{
-    ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, ToolchainReport,
+    detect_linux_package_manager, parse_missing_prereq_keys, ComponentCheck, ComponentKind,
+    ComponentStatus, HostPlatform, LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS,
+    PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 
 use super::types::{
@@ -252,6 +254,161 @@ fn jdk_guided_command(platform: HostPlatform) -> GuidedCommand {
     }
 }
 
+/// Per-OS guided commands for the `Prerequisites` step.
+///
+/// Returns an empty `Vec` when all prerequisites/git checks are `Ok` — nothing
+/// to show. Otherwise returns up to three `GuidedCommand`s depending on the
+/// host platform and which items are missing.
+///
+/// - **Linux** — one combined command chosen by [`detect_linux_package_manager`];
+///   uses the `note` field for an alternative-manager hint (mirrors
+///   `jdk_guided_command`).
+/// - **macOS** — one command per missing item reported by
+///   [`parse_missing_prereq_keys`], ordered CLT → CocoaPods → Rosetta.
+/// - **Windows** — `winget install Git.Git` when git is missing and winget is
+///   on PATH; otherwise a `note` pointing at the git-for-Windows download page.
+/// - **Unknown** — empty (no actionable commands).
+///
+/// All command strings live here (app display concern), consistent with
+/// `jdk_guided_command` — the daemon stays detection-only.
+fn prerequisites_guided_commands(
+    platform: HostPlatform,
+    components: &[ComponentCheck],
+) -> Vec<GuidedCommand> {
+    // Early-out: nothing to do when all prerequisites/git are Ok.
+    let all_ok = components
+        .iter()
+        .filter(|c| matches!(c.kind, ComponentKind::Prerequisites | ComponentKind::Git))
+        .all(|c| c.status == ComponentStatus::Ok);
+
+    if all_ok && !components.is_empty() {
+        return Vec::new();
+    }
+
+    // If there are no prerequisite or git components at all, nothing to show.
+    let has_prereq_or_git = components
+        .iter()
+        .any(|c| matches!(c.kind, ComponentKind::Prerequisites | ComponentKind::Git));
+    if !has_prereq_or_git {
+        return Vec::new();
+    }
+
+    match platform {
+        HostPlatform::Linux => {
+            let pm = detect_linux_package_manager();
+            let (label, command, note): (&str, &str, Option<&str>) = match pm {
+                LinuxPackageManager::Apt => (
+                    "Install Linux prerequisites (apt)",
+                    "sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev",
+                    Some("or: sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel"),
+                ),
+                LinuxPackageManager::Dnf => (
+                    "Install Linux prerequisites (dnf)",
+                    "sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
+                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                ),
+                LinuxPackageManager::Yum => (
+                    "Install Linux prerequisites (yum)",
+                    "sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
+                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                ),
+                LinuxPackageManager::Pacman => (
+                    "Install Linux prerequisites (pacman)",
+                    "sudo pacman -S --needed curl git unzip xz zip glu clang cmake ninja pkgconf gtk3",
+                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                ),
+                LinuxPackageManager::Zypper => (
+                    "Install Linux prerequisites (zypper)",
+                    "sudo zypper in curl git unzip xz zip Mesa-libGLU1 clang gcc cmake ninja pkg-config gtk3-devel",
+                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                ),
+                LinuxPackageManager::Unknown => (
+                    "Install Linux prerequisites",
+                    "https://docs.flutter.dev/get-started/install/linux",
+                    None,
+                ),
+            };
+            vec![GuidedCommand {
+                label: label.into(),
+                command: command.into(),
+                note: note.map(Into::into),
+            }]
+        }
+
+        HostPlatform::MacOs => {
+            // Find the Prerequisites component detail to extract missing keys.
+            let detail = components
+                .iter()
+                .find(|c| c.kind == ComponentKind::Prerequisites)
+                .map(|c| c.detail.as_str())
+                .unwrap_or("");
+            let missing_keys = parse_missing_prereq_keys(detail);
+
+            let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+            // Order: CLT → CocoaPods → Rosetta (most-likely-missing first).
+            if missing_keys.contains(&PREREQ_KEY_XCODE_CLT) {
+                cmds.push(GuidedCommand {
+                    label: "Install Xcode Command Line Tools".into(),
+                    command: "xcode-select --install".into(),
+                    note: Some("Opens a GUI dialog to install CLT.".into()),
+                });
+            }
+            if missing_keys.contains(&PREREQ_KEY_COCOAPODS) {
+                cmds.push(GuidedCommand {
+                    label: "Install CocoaPods".into(),
+                    command: "brew install cocoapods".into(),
+                    note: Some("or: sudo gem install cocoapods".into()),
+                });
+            }
+            if missing_keys.contains(&PREREQ_KEY_ROSETTA) {
+                cmds.push(GuidedCommand {
+                    label: "Install Rosetta 2".into(),
+                    command: "sudo softwareupdate --install-rosetta --agree-to-license".into(),
+                    note: None,
+                });
+            }
+
+            cmds
+        }
+
+        HostPlatform::Windows => {
+            // Check if git is among the missing keys.
+            let detail = components
+                .iter()
+                .find(|c| c.kind == ComponentKind::Prerequisites)
+                .map(|c| c.detail.as_str())
+                .unwrap_or("");
+            let missing_keys = parse_missing_prereq_keys(detail);
+
+            if !missing_keys.contains(&fdemon_daemon::toolchain::PREREQ_KEY_GIT) {
+                // Git is present — no guided command needed.
+                return Vec::new();
+            }
+
+            // Git is missing — check if winget is on PATH.
+            let winget_available = which::which("winget").is_ok();
+            if winget_available {
+                vec![GuidedCommand {
+                    label: "Install Git for Windows".into(),
+                    command: "winget install Git.Git".into(),
+                    note: None,
+                }]
+            } else {
+                vec![GuidedCommand {
+                    label: "Install Git for Windows".into(),
+                    command: "https://git-scm.com/downloads/win".into(),
+                    note: Some(
+                        "Download and run the Git for Windows installer from the URL above.".into(),
+                    ),
+                }]
+            }
+        }
+
+        HostPlatform::Unknown => Vec::new(),
+    }
+}
+
 /// Return `true` when a JDK needs user attention: the component list has no
 /// `Jdk` entry at all, or the entry is not `Ok`.
 ///
@@ -348,13 +505,18 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
         Vec::new()
     };
 
+    // Derive guided commands for the Prerequisites step. Returns [] when all
+    // prerequisites are Ok, otherwise returns per-OS install commands derived
+    // from the detected package manager (Linux) or missing keys (macOS/Windows).
+    let prereq_guided = prerequisites_guided_commands(report.platform.clone(), &prerequisites);
+
     vec![
         WizardStep {
             kind: WizardStepKind::Prerequisites,
             title: "Prerequisites".to_string(),
             status: prerequisites_status,
             components: prerequisites,
-            guided_commands: Vec::new(),
+            guided_commands: prereq_guided,
         },
         WizardStep {
             kind: WizardStepKind::AndroidTools,
@@ -1004,5 +1166,333 @@ mod tests {
         let cmd = state.selected_guided_command();
         assert!(cmd.is_some());
         assert_eq!(cmd.unwrap().label, "Install JDK 17");
+    }
+
+    // --- prerequisites_guided_commands tests ---
+
+    fn make_prereq_check(status: ComponentStatus) -> ComponentCheck {
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status,
+            detail: String::new(),
+        }
+    }
+
+    fn make_prereq_check_with_detail(status: ComponentStatus, detail: &str) -> ComponentCheck {
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status,
+            detail: detail.to_string(),
+        }
+    }
+
+    fn make_git_check(status: ComponentStatus) -> ComponentCheck {
+        ComponentCheck {
+            kind: ComponentKind::Git,
+            status,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_prereq_guided_empty_when_all_ok() {
+        // When both Prerequisites and Git are Ok, no commands needed.
+        let components = vec![
+            make_prereq_check(ComponentStatus::Ok),
+            make_git_check(ComponentStatus::Ok),
+        ];
+        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        assert!(
+            cmds.is_empty(),
+            "must return empty when all prereqs are Ok; got: {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_empty_when_no_prereq_components() {
+        // No Prerequisites/Git components at all → nothing to show.
+        let components: Vec<ComponentCheck> = vec![];
+        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        assert!(
+            cmds.is_empty(),
+            "must return empty when no prereq components"
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_linux_apt_returns_one_command() {
+        // Simulate: prerequisites partial (some missing) on Linux.
+        // Since detect_linux_package_manager() is live, we can only assert
+        // that exactly one command is returned with the correct structure.
+        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        assert_eq!(cmds.len(), 1, "Linux must return exactly one command");
+        assert!(
+            !cmds[0].command.is_empty(),
+            "command must not be empty on Linux"
+        );
+        // The command must mention common Flutter Linux prerequisites.
+        // We accept any package manager output here (CI may have any PM).
+        assert!(
+            cmds[0].command.contains("curl")
+                || cmds[0].command.contains("flutter")
+                || cmds[0].command.contains("https://"),
+            "Linux command must reference install packages or Flutter docs URL; got: {}",
+            cmds[0].command
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_linux_apt_command_content() {
+        // Test the apt command string directly by constructing the expected output.
+        let pm = fdemon_daemon::toolchain::detect_linux_package_manager();
+        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+        let cmds = prerequisites_guided_commands(HostPlatform::Linux, &components);
+        assert_eq!(cmds.len(), 1);
+
+        // Verify the command matches the detected package manager.
+        match pm {
+            LinuxPackageManager::Apt => {
+                assert!(
+                    cmds[0].command.contains("apt-get"),
+                    "apt system should use apt-get; got: {}",
+                    cmds[0].command
+                );
+                assert!(
+                    cmds[0].command.contains("libgtk-3-dev"),
+                    "apt command must include libgtk-3-dev"
+                );
+                assert!(
+                    cmds[0].note.is_some(),
+                    "apt command must have an alternative note"
+                );
+            }
+            LinuxPackageManager::Dnf | LinuxPackageManager::Yum => {
+                assert!(cmds[0].command.contains("dnf"));
+                assert!(cmds[0].note.is_some());
+            }
+            LinuxPackageManager::Pacman => {
+                assert!(cmds[0].command.contains("pacman"));
+                assert!(cmds[0].command.contains("--needed"));
+                assert!(cmds[0].note.is_some());
+            }
+            LinuxPackageManager::Zypper => {
+                assert!(cmds[0].command.contains("zypper"));
+                assert!(cmds[0].note.is_some());
+            }
+            LinuxPackageManager::Unknown => {
+                assert!(
+                    cmds[0].command.contains("https://"),
+                    "Unknown PM must use docs URL"
+                );
+                assert!(cmds[0].note.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_prereq_guided_macos_clt_missing() {
+        use fdemon_daemon::toolchain::PREREQ_KEY_XCODE_CLT;
+        let detail = format!("missing: {}", PREREQ_KEY_XCODE_CLT);
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        assert_eq!(cmds.len(), 1, "one command for CLT only");
+        assert!(
+            cmds[0].command.contains("xcode-select"),
+            "CLT command must use xcode-select; got: {}",
+            cmds[0].command
+        );
+        // CocoaPods must NOT be in the list.
+        assert!(
+            !cmds.iter().any(|c| c.command.contains("cocoapods")),
+            "cocoapods must not appear when only CLT is missing"
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_macos_cocoapods_missing() {
+        use fdemon_daemon::toolchain::PREREQ_KEY_COCOAPODS;
+        let detail = format!("missing: {}", PREREQ_KEY_COCOAPODS);
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("cocoapods"),
+            "CocoaPods command must use brew install cocoapods; got: {}",
+            cmds[0].command
+        );
+        assert!(
+            cmds[0].note.is_some(),
+            "CocoaPods must have an alternative gem note"
+        );
+        assert!(
+            cmds[0].note.as_deref().unwrap().contains("gem"),
+            "alternative note must mention gem"
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_macos_rosetta_missing() {
+        use fdemon_daemon::toolchain::PREREQ_KEY_ROSETTA;
+        let detail = format!("missing: {}", PREREQ_KEY_ROSETTA);
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("rosetta"),
+            "Rosetta command must use softwareupdate; got: {}",
+            cmds[0].command
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_macos_all_three_missing_ordered() {
+        use fdemon_daemon::toolchain::{
+            PREREQ_KEY_COCOAPODS, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+        };
+        let detail = format!(
+            "missing: {}, {}, {}",
+            PREREQ_KEY_XCODE_CLT, PREREQ_KEY_COCOAPODS, PREREQ_KEY_ROSETTA
+        );
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        assert_eq!(
+            cmds.len(),
+            3,
+            "all three macOS missing items must be returned"
+        );
+        // Order: CLT → CocoaPods → Rosetta
+        assert!(
+            cmds[0].command.contains("xcode-select"),
+            "first must be CLT"
+        );
+        assert!(
+            cmds[1].command.contains("cocoapods"),
+            "second must be CocoaPods"
+        );
+        assert!(cmds[2].command.contains("rosetta"), "third must be Rosetta");
+    }
+
+    #[test]
+    fn test_prereq_guided_macos_ok_returns_empty() {
+        let components = vec![make_prereq_check(ComponentStatus::Ok)];
+        let cmds = prerequisites_guided_commands(HostPlatform::MacOs, &components);
+        assert!(
+            cmds.is_empty(),
+            "macOS must return empty when prerequisites Ok"
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_windows_git_missing_no_winget() {
+        // Simulate windows with git missing, no winget on PATH.
+        // Since we can't control PATH easily in tests, we test the logic
+        // using a custom detail string and check the fallback URL behavior.
+        use fdemon_daemon::toolchain::PREREQ_KEY_GIT;
+        let detail = format!("missing: {}", PREREQ_KEY_GIT);
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Missing,
+            &detail,
+        )];
+        // On non-Windows, winget will not be found, so we get the URL fallback.
+        let cmds = prerequisites_guided_commands(HostPlatform::Windows, &components);
+        assert_eq!(cmds.len(), 1, "one command for missing git");
+        assert_eq!(cmds[0].label, "Install Git for Windows");
+        // Either winget command or URL fallback depending on host.
+        let is_winget = cmds[0].command == "winget install Git.Git";
+        let is_url = cmds[0].command.contains("git-scm.com");
+        assert!(
+            is_winget || is_url,
+            "must be winget or URL fallback; got: {}",
+            cmds[0].command
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_windows_git_ok_returns_empty() {
+        // Git present (Ok) on Windows → no guided command needed.
+        let components = vec![make_prereq_check(ComponentStatus::Ok)];
+        let cmds = prerequisites_guided_commands(HostPlatform::Windows, &components);
+        assert!(
+            cmds.is_empty(),
+            "must return empty when windows prereqs are Ok"
+        );
+    }
+
+    #[test]
+    fn test_prereq_guided_unknown_platform_returns_empty() {
+        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+        let cmds = prerequisites_guided_commands(HostPlatform::Unknown, &components);
+        assert!(cmds.is_empty(), "Unknown platform must return empty");
+    }
+
+    #[test]
+    fn test_build_steps_prereq_guided_wired_for_missing_prereqs() {
+        // Verify that build_steps populates Prerequisites.guided_commands from
+        // prerequisites_guided_commands (not always Vec::new()).
+        use fdemon_daemon::toolchain::{HostShell, PREREQ_KEY_XCODE_CLT};
+        let detail = format!("missing: {}", PREREQ_KEY_XCODE_CLT);
+        let report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Prerequisites,
+                status: ComponentStatus::Missing,
+                detail,
+            }],
+            doctor: None,
+        };
+        let steps = build_steps(&report);
+        let prereq = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Prerequisites)
+            .expect("Prerequisites step must exist");
+        assert_eq!(
+            prereq.guided_commands.len(),
+            1,
+            "Prerequisites step must have guided command when CLT missing"
+        );
+        assert!(
+            prereq.guided_commands[0].command.contains("xcode-select"),
+            "guided command must reference xcode-select; got: {}",
+            prereq.guided_commands[0].command
+        );
+    }
+
+    #[test]
+    fn test_build_steps_prereq_guided_empty_when_prereqs_ok() {
+        // When prerequisites are all Ok, the step must have no guided commands.
+        use fdemon_daemon::toolchain::HostShell;
+        let report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Prerequisites,
+                status: ComponentStatus::Ok,
+                detail: "Xcode Command Line Tools and CocoaPods installed".to_string(),
+            }],
+            doctor: None,
+        };
+        let steps = build_steps(&report);
+        let prereq = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Prerequisites)
+            .expect("Prerequisites step must exist");
+        assert!(
+            prereq.guided_commands.is_empty(),
+            "Prerequisites step must have no guided commands when all Ok"
+        );
     }
 }

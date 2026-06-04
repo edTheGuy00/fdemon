@@ -794,6 +794,7 @@ dependencies = [
  "toml",
  "tracing",
  "trait-variant",
+ "which",
  "wiremock",
 ]
 
