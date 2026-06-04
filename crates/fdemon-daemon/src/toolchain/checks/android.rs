@@ -147,7 +147,7 @@ pub fn check_android_cmdline_tools(root: Option<&AndroidSdkRoot>) -> ComponentCh
 }
 
 /// Platform-appropriate name for the `sdkmanager` binary.
-pub(super) fn sdkmanager_bin_name() -> &'static str {
+pub fn sdkmanager_bin_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "sdkmanager.bat"
     } else {

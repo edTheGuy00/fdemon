@@ -20,21 +20,27 @@
 //! - [`HostPlatform`], [`HostShell`]
 //! - [`DoctorLine`], [`DoctorMarker`]
 
+mod android_install;
 mod checks;
 mod doctor;
 pub mod download;
 pub mod flutter_install;
+pub mod jdk;
 pub mod path_config;
 pub mod process_stream;
 mod types;
 
+pub use android_install::{
+    install_android_tools, relocate_cmdline_tools, resolve_cmdline_tools_url,
+};
 pub use download::{download_to_file, extract_archive, extract_tar_xz, extract_zip, verify_sha256};
 pub use flutter_install::{
     archive_download_url, fetch_release_manifest, install_flutter, resolve_install_dir,
     InstallEvent,
 };
+pub use jdk::{configure_flutter_jdk_dir, resolve_jdk_home};
 pub use path_config::{add_to_path, rc_file_for_shell, PathConfigOutcome};
-pub use process_stream::run_streaming;
+pub use process_stream::{run_streaming, run_streaming_with_input};
 pub use types::{
     cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,
     ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, DownloadProgress,

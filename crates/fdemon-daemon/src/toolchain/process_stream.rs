@@ -138,6 +138,147 @@ where
     Ok(status)
 }
 
+// ── run_streaming_with_input ─────────────────────────────────────────────────
+
+/// Run `program` with `args`, write `stdin_data` to the child's stdin (then
+/// close it), forward each merged stdout/stderr line to `on_line`, and return
+/// the exit status.
+///
+/// This is identical to [`run_streaming`] except the child's stdin is piped.
+/// After writing `stdin_data` the write end of the pipe is dropped (EOF), which
+/// unblocks programs that read stdin until EOF (e.g. `sdkmanager --licenses`).
+///
+/// `env` pairs are added to the child's environment on top of the inherited
+/// environment (e.g. `JAVA_HOME` when the JDK is not on `PATH`).
+///
+/// # Arguments
+///
+/// * `program` — The executable to run.
+/// * `args` — Slice of argument strings.
+/// * `cwd` — Optional working directory for the child process.
+/// * `env` — Extra environment variables to set for the child.
+/// * `stdin_data` — Bytes to write to the child's stdin before EOF.
+/// * `on_line` — Callback invoked once per merged output line.
+///
+/// # Returns
+///
+/// The [`ExitStatus`] of the child. A non-zero status is **not** treated as an
+/// error by this function; the caller is responsible for interpretation.
+///
+/// # Errors
+///
+/// Returns an error when the child cannot be spawned, when writing to its stdin
+/// fails unexpectedly, or when reading stdout/stderr fails.
+pub async fn run_streaming_with_input<F>(
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+    env: &[(&str, &str)],
+    stdin_data: &[u8],
+    mut on_line: F,
+) -> Result<ExitStatus>
+where
+    F: FnMut(String) + Send,
+{
+    use tokio::io::AsyncWriteExt;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    for (key, val) in env {
+        cmd.env(key, val);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Error::process(format!("failed to spawn `{program}`: {e}")))?;
+
+    // Write stdin_data and close stdin before reading output.
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| Error::process(format!("could not capture stdin of `{program}`")))?;
+
+    let stdin_bytes = stdin_data.to_vec();
+    let write_result = async move {
+        if !stdin_bytes.is_empty() {
+            stdin.write_all(&stdin_bytes).await?;
+        }
+        stdin.flush().await?;
+        // Drop stdin to send EOF to the child.
+        drop(stdin);
+        Ok::<(), std::io::Error>(())
+    };
+
+    // Take stdout/stderr before starting to drive output.
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::process(format!("could not capture stdout of `{program}`")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::process(format!("could not capture stderr of `{program}`")))?;
+
+    // Channel to merge stdout and stderr lines.
+    let (tx, mut rx) = mpsc::channel::<String>(LINE_CHANNEL_CAPACITY);
+
+    let tx_out = tx.clone();
+    let tx_err = tx;
+
+    // Reader task for stdout.
+    let stdout_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if tx_out.send(line).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Reader task for stderr.
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if tx_err.send(line).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Drive stdin write concurrently with output draining.
+    // We spawn the write as a task so that output can flow freely even while
+    // stdin is being written (prevents deadlock on large stdin payloads).
+    let write_task = tokio::spawn(write_result);
+
+    // Drain the merged line channel and forward to the callback.
+    while let Some(line) = rx.recv().await {
+        on_line(line);
+    }
+
+    // Wait for all tasks.
+    if let Ok(Err(e)) = write_task.await {
+        tracing::warn!("stdin write error for `{program}`: {e}");
+    }
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| Error::process(format!("failed to wait for `{program}`: {e}")))?;
+
+    Ok(status)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -234,6 +375,68 @@ mod tests {
             matches!(err, fdemon_core::Error::Process { .. }),
             "expected Process error, got {err:?}"
         );
+    }
+
+    // ── run_streaming_with_input tests ───────────────────────────────────────
+
+    /// `run_streaming_with_input` pipes stdin to the child and captures output.
+    ///
+    /// `cat` on Unix echoes stdin to stdout; we assert the echoed lines appear.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_streaming_with_input_echoes_stdin() {
+        let input = b"line_one\nline_two\n";
+        let mut lines: Vec<String> = Vec::new();
+        let status = run_streaming_with_input("cat", &[], None, &[], input, |l| lines.push(l))
+            .await
+            .expect("run_streaming_with_input must not error");
+
+        assert!(status.success(), "cat must exit 0");
+        let joined = lines.join(" ");
+        assert!(
+            joined.contains("line_one"),
+            "output must contain 'line_one': {joined:?}"
+        );
+        assert!(
+            joined.contains("line_two"),
+            "output must contain 'line_two': {joined:?}"
+        );
+    }
+
+    /// Extra environment variables are forwarded to the child.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_streaming_with_input_env_forwarded() {
+        let mut lines: Vec<String> = Vec::new();
+        let status = run_streaming_with_input(
+            "sh",
+            &["-c", "echo $FDEMON_TEST_VAR"],
+            None,
+            &[("FDEMON_TEST_VAR", "hello_from_env")],
+            &[],
+            |l| lines.push(l),
+        )
+        .await
+        .expect("must not error");
+
+        assert!(status.success());
+        let joined = lines.join(" ");
+        assert!(
+            joined.contains("hello_from_env"),
+            "env var must be forwarded: {joined:?}"
+        );
+    }
+
+    /// Non-zero exit from `run_streaming_with_input` is returned to caller.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_streaming_with_input_nonzero_exit_returned() {
+        let status = run_streaming_with_input("sh", &["-c", "exit 7"], None, &[], &[], |_| {})
+            .await
+            .expect("must not error on non-zero exit");
+
+        assert!(!status.success());
+        assert_eq!(status.code(), Some(7));
     }
 
     /// Working directory is forwarded to the child when `cwd` is `Some`.

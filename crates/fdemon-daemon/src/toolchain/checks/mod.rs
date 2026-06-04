@@ -20,6 +20,7 @@ mod prerequisites;
 pub use android::{
     android_sdk_root, check_android_build_tools, check_android_cmdline_tools,
     check_android_licenses, check_android_platform, check_android_platform_tools,
+    sdkmanager_bin_name,
 };
 pub use prerequisites::check_prerequisites;
 
