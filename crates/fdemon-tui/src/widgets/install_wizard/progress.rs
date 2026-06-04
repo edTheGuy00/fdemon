@@ -48,6 +48,11 @@ const SEPARATOR_HEIGHT: u16 = 1;
 /// Derived from: 1 row for the success/failure summary text.
 const RESULT_SUMMARY_HEIGHT: u16 = 1;
 
+/// Height of the "Esc cancels" hint row shown while a step is Running.
+///
+/// Derived from: 1 row for the cancel affordance hint.
+const CANCEL_HINT_HEIGHT: u16 = 1;
+
 /// Glyph shown when a step succeeded.
 const SUCCESS_GLYPH: &str = "\u{2713}"; // ✓
 /// Glyph shown when a step failed.
@@ -59,6 +64,9 @@ const FAILED_GLYPH: &str = "\u{2717}"; // ✗
 /// - Line 1: phase label + status glyph / spinner
 /// - Line 2: download progress gauge (when `total` is known) or byte counter
 ///   with spinner (when `total` is unknown)
+/// - Optional bottom row: "  [Esc] Cancel" hint while status is `Running`
+///   (controlled by the `show_cancel_hint` field, set by the detail-pane
+///   renderer in `step_detail.rs`)
 /// - Remaining rows: the tail of `log_tail`, clipped to available height
 ///
 /// This widget is stateless and reads purely from `&StepExecution`.  Pass the
@@ -68,18 +76,27 @@ pub struct StepProgress<'a> {
     exec: &'a StepExecution,
     /// Current animation frame for spinner — from `AppState::animation_frame`.
     animation_frame: u64,
+    /// When `true`, render an "  [Esc] Cancel" hint at the bottom of the view.
+    ///
+    /// Set by `step_detail.rs` when the execution status is `Running` so the
+    /// user knows they can press Esc to abort the ongoing operation.  The hint
+    /// is absent for `Succeeded`/`Failed`/`Idle` states.
+    show_cancel_hint: bool,
 }
 
 impl<'a> StepProgress<'a> {
     /// Create a new step progress widget.
     ///
     /// # Arguments
-    /// * `exec`            – Live execution state to render.
-    /// * `animation_frame` – Frame counter for spinner animation.
-    pub fn new(exec: &'a StepExecution, animation_frame: u64) -> Self {
+    /// * `exec`              – Live execution state to render.
+    /// * `animation_frame`   – Frame counter for spinner animation.
+    /// * `show_cancel_hint`  – Show "[Esc] Cancel" hint when `true` (pass `true`
+    ///   when `exec.status == Running`).
+    pub fn new(exec: &'a StepExecution, animation_frame: u64, show_cancel_hint: bool) -> Self {
         Self {
             exec,
             animation_frame,
+            show_cancel_hint,
         }
     }
 
@@ -216,6 +233,21 @@ impl<'a> StepProgress<'a> {
         }
     }
 
+    /// Render the "[Esc] Cancel" hint row.
+    ///
+    /// Shown at the bottom of the progress view while a step is `Running`.
+    /// Consistent with the existing key-hint styling used in the wizard footer.
+    fn render_cancel_hint(area: Rect, buf: &mut Buffer) {
+        if area.height < 1 {
+            return;
+        }
+        let line = Line::from(vec![
+            Span::styled("  [Esc]", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(" Cancel", Style::default().fg(palette::TEXT_SECONDARY)),
+        ]);
+        Paragraph::new(line).render(Rect::new(area.x, area.y, area.width, 1), buf);
+    }
+
     /// Render the result summary line (shown on Succeeded or Failed).
     fn render_result_summary(&self, area: Rect, buf: &mut Buffer) {
         if area.height < 1 {
@@ -249,7 +281,8 @@ impl Widget for StepProgress<'_> {
 
         // For terminal states (Succeeded/Failed), show: phase row + separator +
         // result summary + (optional) log tail remainder.
-        // For Running/Idle, show: phase row + progress row + separator + log tail.
+        // For Running/Idle, show: phase row + progress row + separator + log tail
+        //   + optional "[Esc] Cancel" hint at the bottom.
         let is_terminal = matches!(
             self.exec.status,
             StepExecStatus::Succeeded | StepExecStatus::Failed
@@ -269,8 +302,26 @@ impl Widget for StepProgress<'_> {
             // chunks[1] is blank (separator space)
             self.render_result_summary(chunks[2], buf);
             self.render_log_tail(chunks[3], buf);
+        } else if self.show_cancel_hint {
+            // Running with cancel hint:
+            // phase(1) | progress(1) | separator(1) | log_tail(min 0) | cancel_hint(1)
+            let chunks = Layout::vertical([
+                Constraint::Length(PHASE_ROW_HEIGHT),
+                Constraint::Length(PROGRESS_ROW_HEIGHT),
+                Constraint::Length(SEPARATOR_HEIGHT),
+                Constraint::Min(0), // log tail (may be empty, absorbs slack)
+                Constraint::Length(CANCEL_HINT_HEIGHT),
+            ])
+            .split(area);
+
+            self.render_phase_row(chunks[0], buf);
+            self.render_progress_row(chunks[1], buf);
+            // chunks[2] is blank separator
+            self.render_log_tail(chunks[3], buf);
+            Self::render_cancel_hint(chunks[4], buf);
         } else {
-            // Layout: phase(1) | progress(1) | separator(1) | log_tail(min 0)
+            // Running/Idle without cancel hint:
+            // phase(1) | progress(1) | separator(1) | log_tail(min 0)
             let chunks = Layout::vertical([
                 Constraint::Length(PHASE_ROW_HEIGHT),
                 Constraint::Length(PROGRESS_ROW_HEIGHT),
@@ -362,7 +413,7 @@ mod tests {
     #[test]
     fn test_progress_renders_bar_with_known_total() {
         let exec = make_running_exec_known_total();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -382,7 +433,7 @@ mod tests {
     #[test]
     fn test_progress_renders_counter_with_unknown_total() {
         let exec = make_running_exec_unknown_total();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -403,7 +454,7 @@ mod tests {
     #[test]
     fn test_progress_shows_phase_label() {
         let exec = make_running_exec_known_total();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -430,7 +481,7 @@ mod tests {
         // Small area: 40x10, after header section (3 rows) only 7 rows for log
         let area = small_area();
         let mut buf = Buffer::empty(area);
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         widget.render(area, &mut buf); // must not panic, must clip
 
         // Only the most recent lines should appear — lines 43-49 are in tail
@@ -445,7 +496,7 @@ mod tests {
     #[test]
     fn test_progress_shows_success_summary() {
         let exec = make_succeeded_exec();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -460,7 +511,7 @@ mod tests {
     #[test]
     fn test_progress_shows_failure_summary() {
         let exec = make_failed_exec();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -475,7 +526,7 @@ mod tests {
     #[test]
     fn test_progress_renders_without_panic_tiny_area() {
         let exec = make_running_exec_known_total();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = Rect::new(0, 0, 5, 2);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -484,7 +535,7 @@ mod tests {
     #[test]
     fn test_progress_renders_without_panic_zero_area() {
         let exec = make_running_exec_known_total();
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = Rect::new(0, 0, 0, 0);
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1)); // need at least 1x1 buf
         widget.render(area, &mut buf); // must not panic
@@ -499,8 +550,8 @@ mod tests {
         let mut buf0 = Buffer::empty(area);
         let mut buf10 = Buffer::empty(area);
 
-        StepProgress::new(&exec, 0).render(area, &mut buf0);
-        StepProgress::new(&exec, 20).render(area, &mut buf10); // 20 / 2 = frame 10 vs 0
+        StepProgress::new(&exec, 0, false).render(area, &mut buf0);
+        StepProgress::new(&exec, 20, false).render(area, &mut buf10); // 20 / 2 = frame 10 vs 0
 
         // Content may differ due to spinner (not guaranteed but likely for 10 frame advance)
         let c0 = collect_content(&buf0, area);
@@ -515,7 +566,7 @@ mod tests {
     #[test]
     fn test_progress_idle_renders_without_panic() {
         let exec = StepExecution::default(); // Idle status
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -529,7 +580,7 @@ mod tests {
             log_tail: std::collections::VecDeque::new(),
             ..StepExecution::default()
         };
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
@@ -547,7 +598,7 @@ mod tests {
             ]),
             ..StepExecution::default()
         };
-        let widget = StepProgress::new(&exec, 0);
+        let widget = StepProgress::new(&exec, 0, false);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -565,5 +616,71 @@ mod tests {
             !content.contains('\x1b'),
             "raw ESC byte must not appear in buffer: '{content}'"
         );
+    }
+
+    // --- Phase 5 task 06: cancel hint tests ---
+
+    #[test]
+    fn detail_shows_esc_cancels_hint_while_running() {
+        // show_cancel_hint=true → "[Esc]" and "Cancel" must appear in the buffer.
+        let exec = make_running_exec_known_total();
+        let widget = StepProgress::new(&exec, 0, true);
+        let area = large_area();
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content = collect_content(&buf, area);
+
+        assert!(
+            content.contains("Esc"),
+            "[Esc] must appear when show_cancel_hint=true: '{content}'"
+        );
+        assert!(
+            content.contains("Cancel"),
+            "'Cancel' must appear when show_cancel_hint=true: '{content}'"
+        );
+    }
+
+    #[test]
+    fn detail_hides_cancel_hint_when_show_cancel_hint_false() {
+        // show_cancel_hint=false → no "[Esc]" or "Cancel" in the buffer.
+        let exec = make_running_exec_known_total();
+        let widget = StepProgress::new(&exec, 0, false);
+        let area = large_area();
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content = collect_content(&buf, area);
+
+        assert!(
+            !content.contains("Cancel"),
+            "'Cancel' must NOT appear when show_cancel_hint=false: '{content}'"
+        );
+    }
+
+    #[test]
+    fn detail_hides_cancel_hint_for_terminal_states() {
+        // Even with show_cancel_hint=true, terminal states (Succeeded/Failed)
+        // do not reach the cancel-hint layout branch — the hint must not appear.
+        for exec in [make_succeeded_exec(), make_failed_exec()] {
+            let widget = StepProgress::new(&exec, 0, true);
+            let area = large_area();
+            let mut buf = Buffer::empty(area);
+            widget.render(area, &mut buf);
+            let content = collect_content(&buf, area);
+
+            assert!(
+                !content.contains("Cancel"),
+                "terminal state must NOT show 'Cancel' hint (status={:?}): '{content}'",
+                exec.status
+            );
+        }
+    }
+
+    #[test]
+    fn cancel_hint_does_not_panic_tiny_area() {
+        let exec = make_running_exec_known_total();
+        let widget = StepProgress::new(&exec, 0, true);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf); // must not panic
     }
 }

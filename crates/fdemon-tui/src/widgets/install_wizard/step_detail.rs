@@ -573,7 +573,14 @@ impl Widget for StepDetailPane<'_> {
         // When a run is active for the selected step, replace the static detail
         // with the StepProgress view (occupies the full content_area).
         if self.is_execution_active_for(step.kind) {
-            let progress = StepProgress::new(&self.state.execution, self.animation_frame);
+            // Show the "[Esc] Cancel" hint only while the step is actively Running,
+            // not when it has already reached a terminal state (Succeeded/Failed).
+            let show_cancel_hint = self.state.execution.status == StepExecStatus::Running;
+            let progress = StepProgress::new(
+                &self.state.execution,
+                self.animation_frame,
+                show_cancel_hint,
+            );
             progress.render(content_area, buf);
             return;
         }
@@ -1996,5 +2003,121 @@ mod tests {
         }];
         let start = StepDetailPane::compute_guided_window(&commands, true, 0, 0);
         assert_eq!(start, 0, "zero available rows should return 0");
+    }
+
+    // --- Phase 5 task 06: "Esc cancels" hint + retry-prompt visibility tests ---
+
+    #[test]
+    fn detail_shows_esc_cancels_hint_while_running() {
+        // While execution status is Running for the selected step, the detail pane
+        // must show an "Esc" cancel hint (passed through StepProgress).
+        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Running,
+            phase_label: Some("Downloading".to_string()),
+            received: 10 * 1_048_576,
+            total: Some(100 * 1_048_576),
+            log_tail: std::collections::VecDeque::new(),
+            result_summary: None,
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Esc"),
+            "detail pane should show 'Esc' cancel hint while Running: '{content}'"
+        );
+        assert!(
+            content.contains("Cancel"),
+            "detail pane should show 'Cancel' while Running: '{content}'"
+        );
+    }
+
+    #[test]
+    fn detail_hides_cancel_hint_when_idle() {
+        // When no step is running (execution.status=Idle), the cancel hint must
+        // not appear; the static detail view is rendered instead.
+        let state = make_state_components(); // FlutterSdk selected, execution=Idle
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            !content.contains("Cancel"),
+            "detail pane must NOT show 'Cancel' hint when idle: '{content}'"
+        );
+        // The static Enter hint should still be present (step is executable)
+        assert!(
+            content.contains("Press Enter"),
+            "static Enter hint should still appear when idle: '{content}'"
+        );
+    }
+
+    #[test]
+    fn detail_hides_cancel_hint_after_succeeded() {
+        // After a successful run the cancel hint must not appear.
+        let mut state = make_state_components();
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Succeeded,
+            phase_label: Some("Complete".to_string()),
+            received: 100 * 1_048_576,
+            total: Some(100 * 1_048_576),
+            log_tail: std::collections::VecDeque::new(),
+            result_summary: Some("Flutter SDK installed successfully.".to_string()),
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            !content.contains("Cancel"),
+            "detail pane must NOT show 'Cancel' hint after success: '{content}'"
+        );
+        assert!(
+            content.contains("installed successfully"),
+            "success summary should be visible: '{content}'"
+        );
+    }
+
+    #[test]
+    fn detail_hides_cancel_hint_after_failed() {
+        // After a failed run the cancel hint must not appear.
+        let mut state = make_state_components();
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Failed,
+            phase_label: Some("Failed".to_string()),
+            received: 0,
+            total: None,
+            log_tail: std::collections::VecDeque::from(vec!["Error: network timeout".to_string()]),
+            result_summary: Some("Installation failed: network timeout".to_string()),
+        };
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            !content.contains("Cancel"),
+            "detail pane must NOT show 'Cancel' hint after failure: '{content}'"
+        );
+        assert!(
+            content.contains("network timeout"),
+            "failure summary should be visible after failure: '{content}'"
+        );
     }
 }

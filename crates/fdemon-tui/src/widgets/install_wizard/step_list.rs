@@ -12,6 +12,14 @@
 //! | `Partial`    | `!`   | yellow |
 //! | `Missing`    | `✗`   | red    |
 //! | `Pending`    | `…`   | dim    |
+//!
+//! ## Run-Failed Badge
+//!
+//! When the most-recent execution for a step ended in `StepExecStatus::Failed`,
+//! the step's preflight rollup badge is replaced with a red `✗` run-failed
+//! indicator. This makes it immediately clear that *this run* failed,
+//! independently of the stale preflight status (which can still read
+//! Missing/Partial after a failed run — by design).
 
 use ratatui::{
     buffer::Buffer,
@@ -21,7 +29,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use fdemon_app::install_wizard::{StepStatus, WizardPane, WizardStep};
+use fdemon_app::install_wizard::{StepStatus, WizardPane, WizardStep, WizardStepKind};
 
 use crate::theme::palette;
 
@@ -34,6 +42,13 @@ const GLYPH_MISSING: &str = "✗";
 /// Glyph for `StepStatus::Pending`.
 const GLYPH_PENDING: &str = "…";
 
+/// Glyph shown when a step's most-recent execution ended in failure.
+///
+/// This overrides the preflight rollup badge to make the run failure visually
+/// distinct.  Uses the same `✗` codepoint as `GLYPH_MISSING` but is rendered
+/// in red regardless of the step's underlying `StepStatus`.
+const GLYPH_RUN_FAILED: &str = "✗";
+
 /// Height of the pane title header (label + separator).
 ///
 /// Derived from: 1 title row + 1 separator row = 2 rows.
@@ -44,20 +59,32 @@ pub struct StepListPane<'a> {
     steps: &'a [WizardStep],
     selected_index: usize,
     focused: bool,
+    /// The step kind whose most-recent execution ended in failure, if any.
+    ///
+    /// When `Some(kind)`, the badge for that step is rendered as the run-failed
+    /// indicator (`GLYPH_RUN_FAILED`, red) rather than the preflight rollup badge.
+    failed_step_kind: Option<WizardStepKind>,
 }
 
 impl<'a> StepListPane<'a> {
     /// Create a new step list pane.
     ///
     /// # Arguments
-    /// * `steps`          – Ordered list of wizard steps
-    /// * `selected_index` – Currently selected step index
-    /// * `focused`        – Whether this pane has keyboard focus
-    pub fn new(steps: &'a [WizardStep], selected_index: usize, focused: bool) -> Self {
+    /// * `steps`            – Ordered list of wizard steps
+    /// * `selected_index`   – Currently selected step index
+    /// * `focused`          – Whether this pane has keyboard focus
+    /// * `failed_step_kind` – Step kind whose last execution failed (badge override)
+    pub fn new(
+        steps: &'a [WizardStep],
+        selected_index: usize,
+        focused: bool,
+        failed_step_kind: Option<WizardStepKind>,
+    ) -> Self {
         Self {
             steps,
             selected_index,
             focused,
+            failed_step_kind,
         }
     }
 
@@ -122,8 +149,21 @@ impl<'a> StepListPane<'a> {
         buf: &mut Buffer,
     ) {
         let is_selected = index == self.selected_index;
-        let glyph = Self::status_glyph(step.status);
-        let glyph_color = Self::status_color(step.status);
+
+        // Run-failed badge takes precedence over the preflight rollup badge.
+        // This makes it unambiguous that *this run* failed, independent of the
+        // stale preflight status (which can still read Missing/Partial after a
+        // failed run — by design).
+        let run_failed = self.failed_step_kind == Some(step.kind);
+
+        let (glyph, glyph_color) = if run_failed {
+            (GLYPH_RUN_FAILED, palette::STATUS_RED)
+        } else {
+            (
+                Self::status_glyph(step.status),
+                Self::status_color(step.status),
+            )
+        };
 
         let row_style = if is_selected && self.focused {
             Style::default()
@@ -210,13 +250,23 @@ impl Widget for StepListPane<'_> {
 
 /// Construct a [`StepListPane`] from the install wizard state fields.
 ///
+/// `failed_step_kind` should be set to the execution's `kind` when the execution
+/// status is `StepExecStatus::Failed`, so the step-list badge shows the
+/// run-failed indicator for that step.  Pass `None` otherwise.
+///
 /// This is a convenience constructor used by [`super::InstallWizardPanel`].
 pub fn step_list_pane<'a>(
     steps: &'a [WizardStep],
     selected_index: usize,
     focused_pane: WizardPane,
+    failed_step_kind: Option<WizardStepKind>,
 ) -> StepListPane<'a> {
-    StepListPane::new(steps, selected_index, focused_pane == WizardPane::StepList)
+    StepListPane::new(
+        steps,
+        selected_index,
+        focused_pane == WizardPane::StepList,
+        failed_step_kind,
+    )
 }
 
 #[cfg(test)]
@@ -265,7 +315,7 @@ mod tests {
     #[test]
     fn test_renders_step_list_with_status_glyphs() {
         let steps = make_steps();
-        let pane = StepListPane::new(&steps, 0, true);
+        let pane = StepListPane::new(&steps, 0, true, None);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -280,7 +330,7 @@ mod tests {
     #[test]
     fn test_renders_step_titles() {
         let steps = make_steps();
-        let pane = StepListPane::new(&steps, 0, true);
+        let pane = StepListPane::new(&steps, 0, true, None);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -308,7 +358,7 @@ mod tests {
     fn test_selected_step_highlighted() {
         let steps = make_steps();
         // Select step 1 (index 1)
-        let pane = StepListPane::new(&steps, 1, true);
+        let pane = StepListPane::new(&steps, 1, true, None);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -332,7 +382,7 @@ mod tests {
     #[test]
     fn test_unfocused_selected_uses_subtle_highlight() {
         let steps = make_steps();
-        let pane = StepListPane::new(&steps, 0, false); // not focused
+        let pane = StepListPane::new(&steps, 0, false, None); // not focused
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -349,7 +399,7 @@ mod tests {
     #[test]
     fn test_renders_without_panic_empty_steps() {
         let steps: Vec<WizardStep> = vec![];
-        let pane = StepListPane::new(&steps, 0, true);
+        let pane = StepListPane::new(&steps, 0, true, None);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -358,7 +408,7 @@ mod tests {
     #[test]
     fn test_renders_without_panic_tiny_area() {
         let steps = make_steps();
-        let pane = StepListPane::new(&steps, 0, true);
+        let pane = StepListPane::new(&steps, 0, true, None);
         let area = Rect::new(0, 0, 5, 2);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -367,7 +417,7 @@ mod tests {
     #[test]
     fn test_header_shows_in_focused_state() {
         let steps = make_steps();
-        let pane = StepListPane::new(&steps, 0, true);
+        let pane = StepListPane::new(&steps, 0, true, None);
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -375,6 +425,90 @@ mod tests {
         assert!(
             content.contains("Setup Steps"),
             "header label should appear"
+        );
+    }
+
+    // --- Phase 5 task 06: run-failed badge tests ---
+
+    #[test]
+    fn step_list_shows_failed_indicator_after_failed_execution() {
+        // FlutterSdk step (index 2, status=Missing) — execution failed → badge
+        // must be red ✗.
+        // Select index 0 (not FlutterSdk) so the FlutterSdk row is NOT
+        // selected+focused; that lets us observe the run-failed badge colour
+        // rather than the accent-row override.
+        let steps = make_steps();
+        let pane = StepListPane::new(&steps, 0, true, Some(WizardStepKind::FlutterSdk));
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+
+        // FlutterSdk row is at y = HEADER_HEIGHT(2) + index(2) = 4.
+        // The glyph cell is at x=2 (two leading spaces), y=4.
+        // The step is NOT selected (selected_index=0), so the glyph colour is
+        // the badge colour — STATUS_RED for run-failed.
+        let glyph_cell = &buf[(2, 4)];
+        assert_eq!(
+            glyph_cell.fg,
+            palette::STATUS_RED,
+            "run-failed glyph should be red; got {:?}",
+            glyph_cell.fg
+        );
+        // Confirm the glyph symbol is ✗
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            content.contains('✗'),
+            "run-failed indicator glyph (✗) must appear: '{content}'"
+        );
+    }
+
+    #[test]
+    fn step_list_failed_badge_does_not_affect_other_steps() {
+        // Execution failed for FlutterSdk (index 2); other steps must retain
+        // their preflight rollup badges.
+        // Select index 2 (FlutterSdk) as current, so the other step rows are
+        // NOT selected+focused and we can read their unmodified badge colours.
+        let steps = make_steps();
+        let pane = StepListPane::new(&steps, 2, true, Some(WizardStepKind::FlutterSdk));
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+
+        // Prerequisites row (index 0) is at y = HEADER_HEIGHT(2) + 0 = 2; badge x=2.
+        // Status=Ok → glyph should be STATUS_GREEN (unselected row, no run-failed).
+        let prereq_glyph_cell = &buf[(2, 2)];
+        assert_eq!(
+            prereq_glyph_cell.fg,
+            palette::STATUS_GREEN,
+            "Prerequisites (Ok) badge should stay green; run-failed only applies to FlutterSdk"
+        );
+
+        // AndroidTools row (index 1) at y=3; Status=Partial → STATUS_YELLOW.
+        let android_glyph_cell = &buf[(2, 3)];
+        assert_eq!(
+            android_glyph_cell.fg,
+            palette::STATUS_YELLOW,
+            "AndroidTools (Partial) badge should stay yellow; run-failed only applies to FlutterSdk"
+        );
+    }
+
+    #[test]
+    fn step_list_no_failed_badge_when_execution_is_none() {
+        // With failed_step_kind=None the Missing FlutterSdk step shows STATUS_RED
+        // (its normal preflight badge) rather than a run-failed override.
+        // Select index 0 to keep FlutterSdk unselected so its glyph colour is
+        // directly observable.
+        let steps = make_steps();
+        let pane = StepListPane::new(&steps, 0, true, None);
+        let area = make_area();
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        // FlutterSdk (index 2, Missing) unselected → STATUS_RED fg.
+        let cell = &buf[(2, 4)];
+        assert_eq!(
+            cell.fg,
+            palette::STATUS_RED,
+            "Missing step should show STATUS_RED badge when no run-failed override"
         );
     }
 }

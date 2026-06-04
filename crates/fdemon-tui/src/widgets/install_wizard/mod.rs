@@ -188,6 +188,20 @@ impl<'a> InstallWizardPanel<'a> {
         );
     }
 
+    /// Compute the `failed_step_kind` to pass to `step_list_pane`.
+    ///
+    /// Returns `Some(kind)` when the wizard's execution state records a `Failed`
+    /// status for a step run, so the step-list badge for that step can be
+    /// replaced with the run-failed indicator.
+    fn failed_execution_kind(&self) -> Option<fdemon_app::install_wizard::WizardStepKind> {
+        use fdemon_app::install_wizard::StepExecStatus;
+        if self.state.execution.status == StepExecStatus::Failed {
+            self.state.execution.kind
+        } else {
+            None
+        }
+    }
+
     /// Render horizontal (side-by-side) pane layout.
     fn render_horizontal_panes(&self, area: Rect, buf: &mut Buffer) {
         let chunks = Layout::horizontal([
@@ -201,6 +215,7 @@ impl<'a> InstallWizardPanel<'a> {
             &self.state.steps,
             self.state.selected_index,
             self.state.focused_pane,
+            self.failed_execution_kind(),
         );
         list_pane.render(chunks[0], buf);
 
@@ -223,6 +238,7 @@ impl<'a> InstallWizardPanel<'a> {
             &self.state.steps,
             self.state.selected_index,
             self.state.focused_pane,
+            self.failed_execution_kind(),
         );
         list_pane.render(chunks[0], buf);
 
