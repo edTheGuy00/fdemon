@@ -640,7 +640,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `hyperlinks.rs` | `LinkHighlightState` — link detection and navigation |
 | `confirm_dialog.rs` | `ConfirmDialogState` — confirmation dialog state |
 | `new_session_dialog/` | New session dialog state (fuzzy filtering, target selector, device groups) |
-| `install_wizard/` | `InstallWizardState`, `WizardStep`, `WizardStepKind`, `StepStatus`, `WizardPane`, `build_steps()` — state types for the two-pane toolchain diagnostics modal. Phase 2 adds `StepExecution` and `StepExecStatus` (tracks running/succeeded/failed install state and log tail on `InstallWizardState.execution`) plus `installed_sdk_path` (stashed path from a just-completed FlutterSdk step, cleared after the PathConfig step consumes it). `StepExecution::log_tail` is a bounded `VecDeque<String>`; lines are ANSI-stripped before being pushed, enabling O(1) eviction from the front. |
+| `install_wizard/` | `InstallWizardState`, `WizardStep`, `WizardStepKind`, `StepStatus`, `WizardPane`, `build_steps()` — state types for the two-pane toolchain diagnostics modal. Phase 2 adds `StepExecution` and `StepExecStatus` (tracks running/succeeded/failed install state and log tail on `InstallWizardState.execution`) plus `installed_sdk_path` (stashed path from a just-completed FlutterSdk step, cleared after the PathConfig step consumes it). `StepExecution::log_tail` is a bounded `VecDeque<String>` storing raw lines; O(1) front-eviction via `pop_front`. ANSI codes are stripped at render time by the `StepProgress` widget in `progress.rs`, not before storage. |
 | `handler/install_wizard/` | Navigation and action handlers for `UiMode::InstallWizard`. `mod.rs` is a re-export shim; `navigation.rs` holds the up/down and pane-switch handlers. Phase 2 adds `actions.rs` — handles `WizardStepStarted/Log/Progress/DownloadProgress/Completed/Failed/Phase` messages, chains `PersistSettings` → re-run preflight → `ScanInstalledSdks` on `WizardStepCompleted(FlutterSdk)`. |
 
 **Message Categories:**
@@ -650,7 +650,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 - Control commands (`HotReload`, `HotRestart`, `StopApp`)
 - Session management (`NextSession`, `CloseCurrentSession`)
 - Device/emulator management (`ShowDeviceSelector`, `LaunchEmulator`)
-- Install wizard step execution: `InstallWizardRunSelectedStep` (Enter on a runnable step), `WizardStepStarted { kind }`, `WizardStepLog { kind, line }`, `WizardStepProgress { kind, progress }`, `WizardStepDownloadProgress { kind, progress }`, `WizardStepCompleted { kind, sdk_path, path_bin_dir, outcome }`, `WizardStepFailed { kind, reason }`, `WizardStepPhase { kind, label }` — routes to `handle_step_phase` → `set_step_phase` to drive the live phase row in the `StepProgress` widget
+- Install wizard step execution: `InstallWizardRunSelectedStep` (Enter on a runnable step), `WizardStepStarted { kind }`, `WizardStepLog { kind, line }`, `WizardDownloadProgress { kind, received, total }`, `WizardStepCompleted { kind, summary, sdk_path }`, `WizardStepFailed { kind, reason }`, `WizardStepPhase { kind, label }` — routes to `handle_step_phase` → `set_step_phase` to drive the live phase row in the `StepProgress` widget
 
 ### `fdemon-tui` — Terminal UI (Presentation Layer)
 
@@ -2122,10 +2122,10 @@ handle_action() in actions/mod.rs
     │
     └── [PathConfig step]
           add_to_path(bin_dir, shell) writes shell rc file
-          → msg_tx.send(Message::WizardStepCompleted { kind, path_bin_dir, .. })
+          → msg_tx.send(Message::WizardStepCompleted { kind, summary, sdk_path: None })
             or WizardStepFailed { kind, reason }
 
-WizardStepLog → InstallWizardState.push_step_log()   (ANSI-stripped; rendered by progress.rs)
+WizardStepLog → InstallWizardState.push_step_log()   (raw line stored; ANSI stripped at render time by progress.rs)
 WizardStepPhase → handle_step_phase() → set_step_phase()  (updates live phase row in StepProgress)
 WizardStepCompleted(FlutterSdk, sdk_path=Some(p)):
     1. settings.flutter.sdk_path ← p
@@ -2194,7 +2194,7 @@ All possible events that can affect application state:
 - **Session management**: `ShowDeviceSelector`, `DeviceSelected { device }`, `NextSession`, `CloseCurrentSession`
 - **Mouse/clipboard**: `MouseCaptureChanged { active }` — sent by the TUI runner after completing a `SetMouseCapture` action; updates `AppState::mouse_capture_active`
 - **Toolchain diagnostics**: `ToolchainPreflightCompleted { report: ToolchainReport }` — sent by the background preflight task; the `install_wizard` handler stores the report on `InstallWizardState` and transitions each step to its resolved status
-- **Install wizard step execution** (Phase 2): `InstallWizardRunSelectedStep` (Enter key on a runnable step), `WizardStepStarted { kind }`, `WizardStepLog { kind, line }` (streaming output line from git-clone or precache — ANSI-stripped before storage), `WizardStepCompleted { kind, sdk_path, path_bin_dir, outcome }`, `WizardStepFailed { kind, reason }`, `WizardStepPhase { kind, label }` (routes to `handle_step_phase` → `set_step_phase`; drives the live phase row in the `StepProgress` widget, replacing the previous dead `[label]` log line approach)
+- **Install wizard step execution** (Phase 2): `InstallWizardRunSelectedStep` (Enter key on a runnable step), `WizardStepStarted { kind }`, `WizardStepLog { kind, line }` (streaming output line from git-clone or precache — raw line stored in bounded `VecDeque`; ANSI codes stripped at render time by the `StepProgress` widget in `progress.rs`), `WizardDownloadProgress { kind, received, total }`, `WizardStepCompleted { kind, summary, sdk_path }`, `WizardStepFailed { kind, reason }`, `WizardStepPhase { kind, label }` (routes to `handle_step_phase` → `set_step_phase`; drives the live phase row in the `StepProgress` widget, replacing the previous dead `[label]` log line approach)
 - **Lifecycle**: `Quit`
 
 ### UpdateResult (Update Output)
