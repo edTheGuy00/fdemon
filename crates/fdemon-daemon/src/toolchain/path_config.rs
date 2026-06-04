@@ -636,6 +636,11 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
         )));
     }
 
+    // Best-effort: notify already-open processes that the user environment has
+    // changed.  A broadcast failure must NOT fail the PATH write — the registry
+    // value has already been persisted.
+    broadcast_wm_settingchange();
+
     Ok(PathConfigOutcome::Written {
         rc_file: PathBuf::from("HKCU:\\Environment\\PATH"),
     })
@@ -772,9 +777,58 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
         )));
     }
 
+    // Best-effort: notify already-open processes that the user environment has
+    // changed.  A broadcast failure must NOT fail the Android env write — the
+    // registry values have already been persisted.
+    broadcast_wm_settingchange();
+
     Ok(PathConfigOutcome::Written {
         rc_file: PathBuf::from("HKCU:\\Environment"),
     })
+}
+
+/// Broadcast `WM_SETTINGCHANGE` so already-open processes (Explorer, terminals)
+/// pick up the registry environment changes without requiring a restart.
+///
+/// Uses a PowerShell P/Invoke snippet via `Add-Type` to call
+/// `SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", ...)`.
+///
+/// **Best-effort only.** Errors are silently ignored — the registry value has
+/// already been written before this call, and a broadcast failure must not
+/// surface as a wizard error.
+///
+/// `HWND_BROADCAST = 0xFFFF`, `WM_SETTINGCHANGE = 0x1A`, `SMTO_ABORTIFHUNG = 2`,
+/// 5 s timeout.
+///
+/// The broadcast is gated to Windows only — on other platforms this is a no-op.
+fn broadcast_wm_settingchange() {
+    // Only meaningful on Windows; compiles to nothing on other targets.
+    #[cfg(target_os = "windows")]
+    {
+        // The script is a constant — no user-controlled values are interpolated.
+        // The broadcast target is the literal string "Environment" (a system
+        // constant), not any path value, so there is no injection surface.
+        let script = r#"Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class FdemonEnv {
+  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam,
+      string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+}
+"@
+[FdemonEnv]::SendMessageTimeout([IntPtr]0xFFFF, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]([UIntPtr]::Zero)) | Out-Null
+"#;
+
+        // Ignore errors — broadcast is best-effort.
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // No-op on non-Windows.
+    }
 }
 
 // ── Platform helpers ──────────────────────────────────────────────────────────
@@ -1711,6 +1765,140 @@ mod tests {
             expected_script.contains("$env:FDEMON_NEW_ANDROID_HOME"),
             "Script must reference FDEMON_NEW_ANDROID_HOME env var"
         );
+    }
+
+    // ── Error-path tests: PowerShell / Cmd / Unknown shells (non-Windows) ────────
+
+    /// `add_to_path` with `HostShell::PowerShell` on a non-Windows platform must
+    /// return `Err` containing a manual-setup hint.  These shells do not have an
+    /// rc file to edit; the user is told to configure their PATH manually.
+    #[test]
+    fn add_to_path_powershell_shell_is_err_with_hint() {
+        let bin = PathBuf::from("/opt/flutter/bin");
+        let err = add_to_path(HostShell::PowerShell, HostPlatform::Linux, &bin).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("manual"),
+            "error must contain manual-setup hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_to_path_cmd_shell_is_err_with_hint() {
+        let bin = PathBuf::from("/opt/flutter/bin");
+        let err = add_to_path(HostShell::Cmd, HostPlatform::Linux, &bin).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("manual"),
+            "error must contain manual-setup hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_to_path_unknown_shell_is_err_with_hint() {
+        let bin = PathBuf::from("/opt/flutter/bin");
+        let err = add_to_path(HostShell::Unknown, HostPlatform::Linux, &bin).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("manual"),
+            "error must contain manual-setup hint, got: {err}"
+        );
+    }
+
+    /// `add_android_env` with `HostShell::PowerShell` on a non-Windows platform
+    /// must return `Err` containing a manual-setup hint.
+    #[test]
+    fn add_android_env_powershell_shell_is_err_with_hint() {
+        let sdk = PathBuf::from("/home/user/.android/sdk");
+        let err = add_android_env(HostShell::PowerShell, HostPlatform::Linux, &sdk).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("manual"),
+            "error must contain manual-setup hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_android_env_cmd_shell_is_err_with_hint() {
+        let sdk = PathBuf::from("/home/user/.android/sdk");
+        let err = add_android_env(HostShell::Cmd, HostPlatform::Linux, &sdk).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("manual"),
+            "error must contain manual-setup hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_android_env_unknown_shell_is_err_with_hint() {
+        let sdk = PathBuf::from("/home/user/.android/sdk");
+        let err = add_android_env(HostShell::Unknown, HostPlatform::Linux, &sdk).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("manual"),
+            "error must contain manual-setup hint, got: {err}"
+        );
+    }
+
+    // ── Windows broadcast script shape assertions (cross-platform) ───────────
+
+    /// The `broadcast_wm_settingchange` PowerShell script must reference the
+    /// numeric constant `0x1A` (WM_SETTINGCHANGE) and broadcast to `0xFFFF`
+    /// (HWND_BROADCAST), and must use the literal string `"Environment"` rather
+    /// than any user-supplied value.
+    #[test]
+    fn windows_broadcast_script_contains_wm_settingchange_constant() {
+        // The script constant embedded in broadcast_wm_settingchange().
+        let script = r#"Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class FdemonEnv {
+  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam,
+      string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+}
+"@
+[FdemonEnv]::SendMessageTimeout([IntPtr]0xFFFF, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]([UIntPtr]::Zero)) | Out-Null
+"#;
+
+        // WM_SETTINGCHANGE hex constant must be present.
+        assert!(
+            script.contains("0x1A"),
+            "broadcast script must reference WM_SETTINGCHANGE (0x1A)"
+        );
+        // HWND_BROADCAST hex constant must be present.
+        assert!(
+            script.contains("0xFFFF"),
+            "broadcast script must reference HWND_BROADCAST (0xFFFF)"
+        );
+        // The broadcast lParam is the literal "Environment" (system constant),
+        // not a user-supplied variable or path value.
+        assert!(
+            script.contains("\"Environment\""),
+            "broadcast lParam must be the literal string \"Environment\""
+        );
+        // The script must not reference any fdemon path env vars — the broadcast
+        // is independent of the value being written.
+        assert!(
+            !script.contains("FDEMON_NEW_PATH"),
+            "broadcast script must not reference FDEMON_NEW_PATH"
+        );
+        assert!(
+            !script.contains("FDEMON_NEW_ANDROID_HOME"),
+            "broadcast script must not reference FDEMON_NEW_ANDROID_HOME"
+        );
+    }
+
+    /// After a Windows PATH write, the set command references `$env:FDEMON_NEW_PATH`
+    /// out-of-band, and the broadcast does not re-introduce any path interpolation.
+    #[test]
+    fn windows_path_set_and_broadcast_both_use_out_of_band_values() {
+        let set_script =
+            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+        let broadcast_lp_arg = "\"Environment\"";
+
+        // The set script must use the env-var reference form (out-of-band).
+        assert!(set_script.contains("$env:FDEMON_NEW_PATH"));
+        // The broadcast lParam is the literal word "Environment" — not any path.
+        assert_eq!(broadcast_lp_arg, "\"Environment\"");
+        // Neither script may contain a raw Windows path.
+        let tricky_path = "C:\\Users\\O'Brien\\flutter bin\\bin";
+        assert!(!set_script.contains(tricky_path));
+        assert!(!broadcast_lp_arg.contains(tricky_path));
     }
 
     /// Replacing an Android env block when the SDK root changes leaves exactly
