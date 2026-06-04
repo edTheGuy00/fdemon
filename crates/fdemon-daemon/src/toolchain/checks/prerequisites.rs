@@ -175,7 +175,8 @@ const LINUX_REQUIRED_TOOLS: &[&str] = &[
 const GTK_ITEM_LABEL: &str = "libgtk-3-dev";
 
 async fn check_linux_prerequisites() -> ComponentCheck {
-    let mut missing: Vec<String> = Vec::new();
+    let mut missing_binaries: Vec<String> = Vec::new();
+    let mut pkg_config_found = false;
 
     // ── Binary probes (which::which) ─────────────────────────────────────────
     for tool in LINUX_REQUIRED_TOOLS {
@@ -188,35 +189,72 @@ async fn check_linux_prerequisites() -> ComponentCheck {
                 // package) is installed without creating the `xz` symlink
                 "xz" => which::which("xz-utils").is_ok(),
                 // pkg-config may be provided as `pkgconf` on Fedora / Arch
-                "pkg-config" => which::which("pkgconf").is_ok(),
+                "pkg-config" => {
+                    let alias_ok = which::which("pkgconf").is_ok();
+                    if !alias_ok {
+                        // Neither pkg-config nor pkgconf found; GTK probe
+                        // cannot run, so track this separately.
+                        missing_binaries.push(tool.to_string());
+                        continue;
+                    }
+                    pkg_config_found = true;
+                    true // alias found — do not add to missing_binaries
+                }
                 _ => false,
             };
             if !alias_found {
-                missing.push(tool.to_string());
+                missing_binaries.push(tool.to_string());
+            }
+        } else {
+            if *tool == "pkg-config" {
+                pkg_config_found = true;
             }
         }
     }
 
     // ── GTK dev-headers probe (pkg-config --exists gtk+-3.0) ─────────────────
     // `which` cannot detect library dev-headers — only pkg-config can.
-    // A non-zero exit or spawn failure means the headers are absent.
-    let gtk_present = probe_pkg_config_exists("gtk+-3.0").await;
-    if !gtk_present {
-        missing.push(GTK_ITEM_LABEL.to_string());
-    }
+    // When pkg-config itself is absent the GTK probe cannot run; we skip it
+    // rather than falsely asserting GTK missing (n1 — GTK double-report fix).
+    // Only probe GTK when pkg-config (or its pkgconf alias) is available.
+    let gtk_missing = if pkg_config_found {
+        !probe_pkg_config_exists("gtk+-3.0").await
+    } else {
+        false // undetermined — do not assert missing
+    };
 
     // ── Aggregate result ──────────────────────────────────────────────────────
-    if missing.is_empty() {
+    //
+    // Status semantics (consistent with macOS/Windows):
+    //   - Any absent required binary → `Missing` (the component is not present)
+    //   - GTK headers absent but all binaries present → `Partial` (present but
+    //     degraded: binaries work, but GTK header build path will fail)
+    //   - All present → `Ok`
+    if missing_binaries.is_empty() && !gtk_missing {
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Ok,
             detail: "All required Linux tools present".to_string(),
         }
+    } else if !missing_binaries.is_empty() {
+        // One or more required binaries absent — treat as Missing, matching
+        // the macOS/Windows contract where definitive absence → Missing.
+        let mut all_missing = missing_binaries.clone();
+        if gtk_missing {
+            all_missing.push(GTK_ITEM_LABEL.to_string());
+        }
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status: ComponentStatus::Missing,
+            detail: format!("{}{}", MISSING_PREFIX, all_missing.join(", ")),
+        }
     } else {
+        // Only GTK headers are absent; all required binaries are present.
+        // Partial = "present but degraded": tools work, GTK dev-headers missing.
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Partial,
-            detail: format!("Missing: {}", missing.join(", ")),
+            detail: format!("{}{}", MISSING_PREFIX, GTK_ITEM_LABEL),
         }
     }
 }
@@ -417,6 +455,10 @@ async fn check_windows_prerequisites() -> ComponentCheck {
     build_windows_check_from_presence(git_present, winget_present)
 }
 
+/// Caveat appended to Windows `Ok` detail to flag the unverified VS C++
+/// workload.  A real `vswhere.exe` probe remains out of scope (deferred).
+const WINDOWS_MSVC_CAVEAT: &str = r#"Visual Studio C++ build tools not verified; install "Desktop development with C++" if Windows desktop builds fail"#;
+
 /// Build a [`ComponentCheck`] from the Windows git/winget presence flags.
 ///
 /// This is the pure, testable core of [`check_windows_prerequisites`].
@@ -427,7 +469,9 @@ async fn check_windows_prerequisites() -> ComponentCheck {
 /// **Notes:**
 /// - PowerShell is not gated (assumed present on Windows 10 1903+).
 /// - Visual Studio "Desktop development with C++" (`vswhere.exe`) is not probed
-///   here — users should install it via the Visual Studio Installer.
+///   here — a caveat is appended to the `Ok` detail so that users with git but
+///   no MSVC C++ toolchain are not misled into thinking everything is ready.
+///   A real `vswhere.exe` probe remains out of scope (deferred to a later phase).
 pub(crate) fn build_windows_check_from_presence(
     git_present: bool,
     winget_present: bool,
@@ -440,11 +484,14 @@ pub(crate) fn build_windows_check_from_presence(
 
     if missing_keys.is_empty() {
         let detail = if winget_present {
-            "Git found; winget available".to_string()
+            format!("Git found; winget available. {}", WINDOWS_MSVC_CAVEAT)
         } else {
             // winget absent is informational — it's present on Win10 1903+, but
             // older systems may lack it.  We still report Ok when git is present.
-            "Git found; winget not found (install Git for Windows manually if needed)".to_string()
+            format!(
+                "Git found; winget not found (install Git for Windows manually if needed). {}",
+                WINDOWS_MSVC_CAVEAT
+            )
         };
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
@@ -462,32 +509,50 @@ pub(crate) fn build_windows_check_from_presence(
 
 // ─── Pure helpers exposed for unit testing ───────────────────────────────────
 
-/// Map a set of missing items (by canonical name) and a GTK-present flag
-/// into a [`ComponentCheck`].
+/// Map a set of missing binary tools and a GTK-present flag into a
+/// [`ComponentCheck`].
 ///
-/// This pure function is the testable core of [`check_linux_prerequisites`];
-/// call it from tests to exercise the status-mapping logic without spawning
-/// processes.
+/// This pure function mirrors the status-mapping logic of
+/// [`check_linux_prerequisites`] without spawning processes.
+///
+/// # Status semantics
+///
+/// - `missing_tools` is empty **and** `gtk_present` → `Ok`
+/// - `missing_tools` is non-empty → `Missing` (required binaries absent, detail
+///   uses `MISSING_PREFIX`; GTK is also appended when `!gtk_present`)
+/// - `missing_tools` is empty **and** `!gtk_present` → `Partial` (binaries
+///   present but GTK dev-headers absent — "present but degraded"; uses
+///   `MISSING_PREFIX`)
 #[cfg(test)]
 pub(crate) fn build_linux_check_from_missing(
     missing_tools: &[&str],
     gtk_present: bool,
 ) -> ComponentCheck {
-    let mut missing: Vec<String> = missing_tools.iter().map(|s| s.to_string()).collect();
-    if !gtk_present {
-        missing.push(GTK_ITEM_LABEL.to_string());
-    }
-    if missing.is_empty() {
-        ComponentCheck {
+    if missing_tools.is_empty() && gtk_present {
+        return ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Ok,
             detail: "All required Linux tools present".to_string(),
+        };
+    }
+
+    if !missing_tools.is_empty() {
+        // Required binaries absent → Missing (consistent with macOS/Windows).
+        let mut all_missing: Vec<String> = missing_tools.iter().map(|s| s.to_string()).collect();
+        if !gtk_present {
+            all_missing.push(GTK_ITEM_LABEL.to_string());
+        }
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status: ComponentStatus::Missing,
+            detail: format!("{}{}", MISSING_PREFIX, all_missing.join(", ")),
         }
     } else {
+        // Only GTK headers absent — binaries OK, dev-headers degraded.
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Partial,
-            detail: format!("Missing: {}", missing.join(", ")),
+            detail: format!("{}{}", MISSING_PREFIX, GTK_ITEM_LABEL),
         }
     }
 }
@@ -541,9 +606,14 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_git_appears_in_detail() {
+    fn test_missing_git_yields_missing_status() {
+        // Required binary absent → Missing (matches macOS/Windows contract).
         let check = build_linux_check_from_missing(&["git"], true);
-        assert_eq!(check.status, ComponentStatus::Partial);
+        assert_eq!(
+            check.status,
+            ComponentStatus::Missing,
+            "absent required binary must yield Missing, not Partial"
+        );
         assert!(
             check.detail.contains("git"),
             "detail should mention 'git', got: {}",
@@ -552,12 +622,29 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_zip_appears_in_detail() {
+    fn test_missing_git_uses_missing_prefix() {
+        // m2: detail must use lowercase MISSING_PREFIX, not capital-M "Missing:"
+        let check = build_linux_check_from_missing(&["git"], true);
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must start with '{}' (lowercase), got: {}",
+            MISSING_PREFIX,
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_missing_zip_yields_missing_status() {
         let check = build_linux_check_from_missing(&["zip"], true);
-        assert_eq!(check.status, ComponentStatus::Partial);
+        assert_eq!(check.status, ComponentStatus::Missing);
         assert!(
             check.detail.contains("zip"),
             "detail should mention 'zip', got: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must use lowercase MISSING_PREFIX, got: {}",
             check.detail
         );
     }
@@ -565,7 +652,12 @@ mod tests {
     #[test]
     fn test_missing_multiple_tools_all_appear_in_detail() {
         let check = build_linux_check_from_missing(&["git", "cmake", "clang"], true);
-        assert_eq!(check.status, ComponentStatus::Partial);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must use MISSING_PREFIX, got: {}",
+            check.detail
+        );
         assert!(
             check.detail.contains("git"),
             "missing git in: {}",
@@ -586,9 +678,21 @@ mod tests {
     // ── GTK dev-headers ───────────────────────────────────────────────────────
 
     #[test]
-    fn test_gtk_missing_maps_to_partial_with_label_in_detail() {
+    fn test_gtk_only_missing_maps_to_partial() {
+        // GTK headers absent but all binaries present → Partial ("present but
+        // degraded"): binaries work, but GTK-dependent build path will fail.
         let check = build_linux_check_from_missing(&[], false);
-        assert_eq!(check.status, ComponentStatus::Partial);
+        assert_eq!(
+            check.status,
+            ComponentStatus::Partial,
+            "GTK-only absence must yield Partial (degraded), got: {:?}",
+            check.status
+        );
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "GTK-only Partial must use MISSING_PREFIX, got: {}",
+            check.detail
+        );
         assert!(
             check.detail.contains(GTK_ITEM_LABEL),
             "detail should mention '{}', got: {}",
@@ -605,9 +709,19 @@ mod tests {
     }
 
     #[test]
-    fn test_gtk_missing_plus_missing_tool_both_in_detail() {
+    fn test_gtk_missing_plus_missing_binary_yields_missing_status() {
+        // When required binaries are also absent the status escalates to Missing.
         let check = build_linux_check_from_missing(&["cmake"], false);
-        assert_eq!(check.status, ComponentStatus::Partial);
+        assert_eq!(
+            check.status,
+            ComponentStatus::Missing,
+            "required binary absent must yield Missing even when GTK also absent"
+        );
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must use MISSING_PREFIX, got: {}",
+            check.detail
+        );
         assert!(
             check.detail.contains("cmake"),
             "cmake missing from: {}",
@@ -616,6 +730,54 @@ mod tests {
         assert!(
             check.detail.contains(GTK_ITEM_LABEL),
             "{GTK_ITEM_LABEL} missing from: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_linux_detail_prefix_is_lowercase_missing() {
+        // m2 regression: detail must start with MISSING_PREFIX (lowercase "missing: ")
+        // not the old capital-M ad-hoc string.
+        for tools in [&["git"][..], &["cmake"], &["ninja", "clang"]] {
+            let check = build_linux_check_from_missing(tools, true);
+            assert!(
+                check.detail.starts_with(MISSING_PREFIX),
+                "expected lowercase '{}' prefix, got: {}",
+                MISSING_PREFIX,
+                check.detail
+            );
+            assert!(
+                !check.detail.starts_with("Missing:"),
+                "capital-M 'Missing:' must not appear, got: {}",
+                check.detail
+            );
+        }
+    }
+
+    // ── n1: GTK double-report ─────────────────────────────────────────────────
+    // When pkg-config itself is missing, the helper models the live function's
+    // behaviour: GTK is not additionally pushed to the missing list since the
+    // probe is genuinely undeterminable.  The test uses build_linux_check_from_missing
+    // with pkg-config as a missing binary; GTK state is left as "not probed"
+    // (gtk_present = true in the helper, to isolate the binary-missing path).
+
+    #[test]
+    fn test_pkg_config_missing_does_not_double_report_gtk() {
+        // Simulate: pkg-config absent (binary loop adds it to missing_binaries),
+        // but because pkg-config is gone, the GTK probe cannot run.
+        // In the live function, gtk_missing = false when pkg_config_found = false.
+        // The test helper encodes this as: pass pkg-config in missing_tools, and
+        // gtk_present = true (since we did not probe it).
+        let check = build_linux_check_from_missing(&["pkg-config"], true);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(
+            check.detail.contains("pkg-config"),
+            "pkg-config must appear in missing list: {}",
+            check.detail
+        );
+        assert!(
+            !check.detail.contains(GTK_ITEM_LABEL),
+            "GTK must not be reported missing when pkg-config is absent (undetermined): {}",
             check.detail
         );
     }
@@ -892,6 +1054,39 @@ mod tests {
         // winget absent does not fail the gate — git is the critical item
         let check = build_windows_check_from_presence(true, false);
         assert_eq!(check.status, ComponentStatus::Ok);
+    }
+
+    #[test]
+    fn test_windows_ok_detail_contains_msvc_caveat() {
+        // m4: Windows Ok detail must flag the unverified VS C++ workload so
+        // that git-only presence does not overstate readiness.
+        let check_with_winget = build_windows_check_from_presence(true, true);
+        assert!(
+            check_with_winget.detail.contains("C++"),
+            "Ok detail must mention C++ caveat, got: {}",
+            check_with_winget.detail
+        );
+
+        let check_without_winget = build_windows_check_from_presence(true, false);
+        assert!(
+            check_without_winget.detail.contains("C++"),
+            "Ok detail (no winget) must mention C++ caveat, got: {}",
+            check_without_winget.detail
+        );
+    }
+
+    #[test]
+    fn test_windows_ok_detail_does_not_embed_missing_prefix() {
+        // The Ok detail should not start with "missing:" — that prefix is only
+        // for the Missing status path.
+        let check = build_windows_check_from_presence(true, true);
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(
+            !check.detail.starts_with(MISSING_PREFIX),
+            "Ok detail must not start with '{}', got: {}",
+            MISSING_PREFIX,
+            check.detail
+        );
     }
 
     #[test]
