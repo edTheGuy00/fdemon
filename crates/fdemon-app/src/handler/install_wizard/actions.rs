@@ -16,11 +16,11 @@
 //!   - `handle_preflight_completed` fires `ScanInstalledSdks` (FVM cache refresh)
 
 use crate::config::types::InstallMethod;
-use crate::handler::{FlutterStepParams, UpdateAction, UpdateResult};
+use crate::handler::{AndroidStepParams, FlutterStepParams, UpdateAction, UpdateResult};
 use crate::install_wizard::WizardStepKind;
 use crate::message::Message;
 use crate::state::AppState;
-use fdemon_daemon::toolchain::ToolchainReport;
+use fdemon_daemon::toolchain::{ComponentKind, ComponentStatus, ToolchainReport};
 
 /// Handle `ToolchainPreflightCompleted` — populate the wizard with the report.
 ///
@@ -120,6 +120,38 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             })
         }
 
+        WizardStepKind::AndroidTools => {
+            // JDK gate: sdkmanager requires a JDK 17. If the preflight JDK component
+            // is not Ok, do NOT dispatch a privileged install — point the user at the
+            // guided command (shown in the detail pane) and ask them to re-check.
+            if jdk_status(state) != ComponentStatus::Ok {
+                state.install_wizard_state.status_message = Some(
+                    "Install JDK 17 first (see the command below), then press 'r' to re-check."
+                        .into(),
+                );
+                return UpdateResult::none();
+            }
+
+            let ts = &state.settings.toolchain;
+            let params = AndroidStepParams {
+                sdk_root: ts.android_sdk_root.clone(),
+                api_level: ts.android_api_level,
+                cmdline_tools_build: ts.cmdline_tools_build.clone(),
+                jdk_path: ts.jdk_path.clone(),
+            };
+
+            // Flip UI to Running immediately before the async round-trip.
+            state.install_wizard_state.begin_step(kind);
+
+            UpdateResult::action(UpdateAction::RunWizardStep {
+                kind,
+                install: None,
+                path_bin_dir: None,
+                android_sdk_root: None,
+                android: Some(params),
+            })
+        }
+
         WizardStepKind::PathConfig => {
             // Prefer the sdk_path stashed by a just-completed FlutterSdk step,
             // then the settings-configured explicit path, then the resolved SDK root.
@@ -140,6 +172,9 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
 
             match bin_dir {
                 Some(bin) => {
+                    // Include the Android SDK root so the executor can write ANDROID_HOME.
+                    let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
+
                     // Flip UI to Running immediately.
                     state.install_wizard_state.begin_step(kind);
 
@@ -147,7 +182,7 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                         kind,
                         install: None,
                         path_bin_dir: Some(bin),
-                        android_sdk_root: None,
+                        android_sdk_root,
                         android: None,
                     })
                 }
@@ -159,7 +194,7 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             }
         }
 
-        WizardStepKind::Prerequisites | WizardStepKind::AndroidTools | WizardStepKind::Doctor => {
+        WizardStepKind::Prerequisites | WizardStepKind::Doctor => {
             state.install_wizard_state.status_message =
                 Some("Available in a later phase".to_string());
             UpdateResult::none()
@@ -260,6 +295,28 @@ pub fn handle_step_completed(
         }
     }
 
+    if kind == WizardStepKind::AndroidTools {
+        // The executor passes the resolved Android SDK root via `sdk_path` so that
+        // `settings.toolchain.android_sdk_root` can be updated and persisted.
+        // Re-run preflight afterwards so the Android checks flip to Ok.
+        if let Some(root) = sdk_path {
+            state.settings.toolchain.android_sdk_root = Some(root);
+
+            // Chain: persist settings → re-run preflight.
+            let project_path = state.project_path.clone();
+            return UpdateResult::message_and_action(
+                Message::InstallWizardRerunPreflight,
+                UpdateAction::PersistSettings {
+                    settings: Box::new(state.settings.clone()),
+                    project_path,
+                },
+            );
+        }
+        // Even without a resolved SDK root, re-run preflight so any partial
+        // installs are reflected in the step list.
+        return UpdateResult::message(Message::InstallWizardRerunPreflight);
+    }
+
     if kind == WizardStepKind::PathConfig {
         // Clear the session stash once PathConfig has successfully consumed it.
         // The stash was set on a successful FlutterSdk completion and is used
@@ -285,9 +342,55 @@ pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult 
     UpdateResult::none()
 }
 
+/// Handle `InstallWizardCopyCommand` — copy the selected step's guided command
+/// to the clipboard (`c` key).
+///
+/// Pushes a `WriteClipboard` action (intercepted by the runner in `process.rs`)
+/// and sets a brief status message confirming the copy. When no guided command
+/// is available for the selected step, sets a "no command" status message
+/// instead.
+///
+/// Pure: no I/O, no async.
+pub fn handle_copy_command(state: &mut AppState) -> UpdateResult {
+    match state.install_wizard_state.selected_guided_command() {
+        Some(cmd) => {
+            let text = cmd.command.clone();
+            state.install_wizard_state.status_message = Some(format!("Copied: {}", text));
+            UpdateResult::action(UpdateAction::WriteClipboard { text })
+        }
+        None => {
+            state.install_wizard_state.status_message =
+                Some("No command to copy for this step.".into());
+            UpdateResult::none()
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Return the status of the `Jdk` component from the current preflight report.
+///
+/// Used by the `AndroidTools` dispatch arm to gate the install action on a
+/// present JDK 17 — `sdkmanager` requires a JDK to run.
+///
+/// Returns `ComponentStatus::Missing` (i.e. "not Ok") when:
+/// - The preflight report has not been populated yet (`report` is `None`).
+/// - The report contains no `Jdk` component entry.
+fn jdk_status(state: &AppState) -> ComponentStatus {
+    state
+        .install_wizard_state
+        .report
+        .as_ref()
+        .and_then(|r| {
+            r.components
+                .iter()
+                .find(|c| c.kind == ComponentKind::Jdk)
+                .map(|c| c.status.clone())
+        })
+        .unwrap_or(ComponentStatus::Missing)
+}
 
 /// Convert the config-layer `InstallMethod` to the daemon-layer equivalent.
 ///
@@ -803,5 +906,352 @@ mod tests {
             state.install_wizard_state.installed_sdk_path.is_some(),
             "installed_sdk_path must NOT be cleared on a failed PathConfig step"
         );
+    }
+
+    // ── Android Tools handler tests ───────────────────────────────────────────
+
+    /// Build a report that includes a JDK component with the given status.
+    fn make_report_with_jdk(jdk_status: ComponentStatus) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![
+                ComponentCheck {
+                    kind: ComponentKind::FlutterSdk,
+                    status: ComponentStatus::Ok,
+                    detail: String::new(),
+                },
+                ComponentCheck {
+                    kind: ComponentKind::Jdk,
+                    status: jdk_status,
+                    detail: String::new(),
+                },
+            ],
+            doctor: None,
+        }
+    }
+
+    /// Build a fresh state with the wizard open and a JDK at the given status.
+    fn wizard_state_with_jdk(jdk_status: ComponentStatus) -> AppState {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state
+            .install_wizard_state
+            .apply_report(make_report_with_jdk(jdk_status));
+        state
+    }
+
+    /// Select the given step kind in the wizard step list.
+    fn select_step(state: &mut AppState, kind: WizardStepKind) {
+        let idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == kind)
+            .expect("step kind not found in wizard steps");
+        state.install_wizard_state.selected_index = idx;
+    }
+
+    #[test]
+    fn test_android_step_gated_when_jdk_missing() {
+        let mut state = wizard_state_with_jdk(ComponentStatus::Missing);
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        let r = handle_run_selected_step(&mut state);
+
+        assert!(
+            r.action.is_none(),
+            "must not dispatch RunWizardStep when JDK is missing; got {:?}",
+            r.action
+        );
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("JDK 17"),
+            "status_message must mention JDK 17; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_android_step_gated_when_jdk_partial() {
+        let mut state = wizard_state_with_jdk(ComponentStatus::Partial);
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        let r = handle_run_selected_step(&mut state);
+
+        assert!(
+            r.action.is_none(),
+            "must not dispatch when JDK is Partial; got {:?}",
+            r.action
+        );
+    }
+
+    #[test]
+    fn test_android_step_gated_when_no_report() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        // No report applied — loading is true, report is None.
+        // Apply an empty report so steps exist but JDK entry is absent.
+        state.install_wizard_state.apply_report(ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![],
+            doctor: None,
+        });
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        let r = handle_run_selected_step(&mut state);
+
+        assert!(
+            r.action.is_none(),
+            "must not dispatch when no JDK entry in report"
+        );
+    }
+
+    #[test]
+    fn test_android_step_dispatches_when_jdk_ok() {
+        let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        let r = handle_run_selected_step(&mut state);
+
+        assert!(
+            matches!(
+                r.action,
+                Some(UpdateAction::RunWizardStep {
+                    kind: WizardStepKind::AndroidTools,
+                    android: Some(_),
+                    install: None,
+                    ..
+                })
+            ),
+            "must dispatch RunWizardStep(AndroidTools) when JDK is Ok; got {:?}",
+            r.action
+        );
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "begin_step must have been called before returning the action"
+        );
+    }
+
+    #[test]
+    fn test_android_step_params_sourced_from_settings() {
+        let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
+        state.settings.toolchain.android_sdk_root = Some(std::path::PathBuf::from("/opt/android"));
+        state.settings.toolchain.android_api_level = 34;
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        let r = handle_run_selected_step(&mut state);
+
+        if let Some(UpdateAction::RunWizardStep {
+            android: Some(params),
+            ..
+        }) = r.action
+        {
+            assert_eq!(
+                params.sdk_root,
+                Some(std::path::PathBuf::from("/opt/android")),
+                "sdk_root must be sourced from settings"
+            );
+            assert_eq!(
+                params.api_level, 34,
+                "api_level must be sourced from settings"
+            );
+        } else {
+            panic!("expected RunWizardStep with AndroidStepParams");
+        }
+    }
+
+    #[test]
+    fn test_completed_android_persists_sdk_root_and_reruns_preflight() {
+        let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::AndroidTools);
+        let root = std::path::PathBuf::from("/home/user/.local/share/fdemon/android");
+
+        let result = handle_step_completed(
+            &mut state,
+            WizardStepKind::AndroidTools,
+            "Android SDK installed".into(),
+            Some(root.clone()),
+        );
+
+        // settings.toolchain.android_sdk_root must be updated.
+        assert_eq!(
+            state.settings.toolchain.android_sdk_root.as_ref(),
+            Some(&root),
+            "android_sdk_root must be written to settings"
+        );
+        // Action must be PersistSettings.
+        assert!(
+            matches!(result.action, Some(UpdateAction::PersistSettings { .. })),
+            "must return PersistSettings action; got {:?}",
+            result.action
+        );
+        // Follow-up message must be InstallWizardRerunPreflight.
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "must return InstallWizardRerunPreflight follow-up; got {:?}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn test_completed_android_without_sdk_root_still_reruns_preflight() {
+        let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::AndroidTools);
+
+        let result = handle_step_completed(
+            &mut state,
+            WizardStepKind::AndroidTools,
+            "Partial install".into(),
+            None,
+        );
+
+        // No PersistSettings when sdk_path is None.
+        assert!(
+            result.action.is_none(),
+            "must not return PersistSettings when no sdk_root; got {:?}",
+            result.action
+        );
+        // Must still re-run preflight.
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "must still re-run preflight when sdk_root is absent; got {:?}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn test_pathconfig_dispatch_includes_android_sdk_root() {
+        let mut state = state_with_preflight();
+        // Set an Android SDK root in settings.
+        state.settings.toolchain.android_sdk_root =
+            Some(std::path::PathBuf::from("/opt/android-sdk"));
+        // Give it a Flutter SDK path so PathConfig can resolve a bin dir.
+        state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
+        state.install_wizard_state.selected_index = 2; // PathConfig
+
+        let r = handle_run_selected_step(&mut state);
+
+        if let Some(UpdateAction::RunWizardStep {
+            kind: WizardStepKind::PathConfig,
+            android_sdk_root,
+            ..
+        }) = r.action
+        {
+            assert_eq!(
+                android_sdk_root,
+                Some(std::path::PathBuf::from("/opt/android-sdk")),
+                "PathConfig dispatch must include android_sdk_root from settings"
+            );
+        } else {
+            panic!(
+                "expected RunWizardStep(PathConfig) with android_sdk_root; got {:?}",
+                r.action
+            );
+        }
+    }
+
+    // ── handle_copy_command tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_copy_command_pushes_write_clipboard() {
+        // AndroidTools step has a JDK guided command when JDK is missing.
+        let mut state = wizard_state_with_jdk(ComponentStatus::Missing);
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        // Verify precondition: guided command must exist.
+        assert!(
+            state
+                .install_wizard_state
+                .selected_guided_command()
+                .is_some(),
+            "precondition: AndroidTools step must have a guided command when JDK is missing"
+        );
+
+        let result = handle_copy_command(&mut state);
+
+        // Must return WriteClipboard action.
+        assert!(
+            matches!(result.action, Some(UpdateAction::WriteClipboard { .. })),
+            "handle_copy_command must return WriteClipboard action; got {:?}",
+            result.action
+        );
+        // Status message must confirm the copy.
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.starts_with("Copied:"),
+            "status_message must confirm copy; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_copy_command_sets_status_when_no_command() {
+        // FlutterSdk step has no guided commands.
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+
+        // Verify precondition: no guided command.
+        assert!(
+            state
+                .install_wizard_state
+                .selected_guided_command()
+                .is_none(),
+            "precondition: FlutterSdk step must have no guided commands"
+        );
+
+        let result = handle_copy_command(&mut state);
+
+        // Must return no action.
+        assert!(
+            result.action.is_none(),
+            "handle_copy_command must return no action when no command; got {:?}",
+            result.action
+        );
+        // Status message must explain there's nothing to copy.
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("No command"),
+            "status_message must indicate no command available; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_copy_command_text_matches_guided_command() {
+        // AndroidTools with missing JDK → guided command is JDK install cmd.
+        let mut state = wizard_state_with_jdk(ComponentStatus::Missing);
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        let expected_cmd = state
+            .install_wizard_state
+            .selected_guided_command()
+            .map(|c| c.command.clone())
+            .unwrap();
+
+        let result = handle_copy_command(&mut state);
+
+        if let Some(UpdateAction::WriteClipboard { text }) = result.action {
+            assert_eq!(
+                text, expected_cmd,
+                "WriteClipboard text must match the guided command"
+            );
+        } else {
+            panic!("expected WriteClipboard action");
+        }
     }
 }

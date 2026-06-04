@@ -3243,9 +3243,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::InstallWizardRerunPreflight => install_wizard::handle_rerun_preflight(state),
 
-        // Copy the selected step's guided command to the clipboard (Phase 3, Task 04).
-        // Full implementation lands in task 07; this stub keeps the match exhaustive.
-        Message::InstallWizardCopyCommand => UpdateResult::none(),
+        // Copy the selected step's guided command to the clipboard (Phase 3, Task 07).
+        Message::InstallWizardCopyCommand => install_wizard::handle_copy_command(state),
 
         Message::ToolchainPreflightCompleted { report } => {
             install_wizard::handle_preflight_completed(state, report)
