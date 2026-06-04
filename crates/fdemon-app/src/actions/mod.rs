@@ -956,8 +956,9 @@ pub fn handle_action(
 
                         // Resolve the SDK root: use the provided path, or fall back to
                         // environment variables and the platform default.
-                        let resolved_sdk_root =
-                            resolve_android_sdk_root(params.sdk_root.as_deref());
+                        let resolved_sdk_root = fdemon_daemon::resolve_android_sdk_root_path(
+                            params.sdk_root.as_deref(),
+                        );
 
                         let target = AndroidInstallTarget {
                             sdk_root: resolved_sdk_root,
@@ -1548,63 +1549,6 @@ fn remove_flutter_version_path(path: &std::path::Path) -> fdemon_core::Result<()
     std::fs::remove_dir_all(path).map_err(|e| {
         fdemon_core::Error::config(format!("Failed to remove {}: {e}", path.display()))
     })
-}
-
-/// Resolve the Android SDK root directory for the install executor.
-///
-/// Resolution order:
-/// 1. The `sdk_root` provided by the caller (e.g. from `[toolchain] android_sdk_root`
-///    in `.fdemon/config.toml` or from a previous install step).
-/// 2. `$ANDROID_HOME` environment variable (if set and non-empty).
-/// 3. `$ANDROID_SDK_ROOT` environment variable (if set and non-empty).
-/// 4. Platform-specific default:
-///    - Linux:   `~/Android/Sdk`
-///    - macOS:   `~/Library/Android/sdk`
-///    - Windows: `%LOCALAPPDATA%\Android\Sdk`
-///
-/// Always returns a `PathBuf` — even when none of the above are set, returns the
-/// platform default so the installer can create the directory.
-fn resolve_android_sdk_root(sdk_root: Option<&std::path::Path>) -> std::path::PathBuf {
-    // 1. Caller-provided path.
-    if let Some(p) = sdk_root {
-        return p.to_path_buf();
-    }
-
-    // 2. ANDROID_HOME
-    if let Ok(home) = std::env::var("ANDROID_HOME") {
-        let p = std::path::PathBuf::from(&home);
-        if !home.is_empty() {
-            return p;
-        }
-    }
-
-    // 3. ANDROID_SDK_ROOT
-    if let Ok(sdk) = std::env::var("ANDROID_SDK_ROOT") {
-        let p = std::path::PathBuf::from(&sdk);
-        if !sdk.is_empty() {
-            return p;
-        }
-    }
-
-    // 4. Platform default.
-    #[cfg(target_os = "macos")]
-    if let Some(home) = dirs::home_dir() {
-        return home.join("Library").join("Android").join("sdk");
-    }
-
-    #[cfg(target_os = "windows")]
-    if let Some(local_app_data) = dirs::data_local_dir() {
-        return local_app_data.join("Android").join("Sdk");
-    }
-
-    // Linux and all other platforms.
-    if let Some(home) = dirs::home_dir() {
-        return home.join("Android").join("Sdk");
-    }
-
-    // Last resort: relative path in the current directory (should never be reached
-    // on a well-configured system, but is preferable to panicking).
-    std::path::PathBuf::from("Android/Sdk")
 }
 
 /// Write `.fvmrc` in the project root and re-resolve the Flutter SDK.
@@ -2276,13 +2220,13 @@ mod tests {
         );
     }
 
-    // ── resolve_android_sdk_root unit tests ─────────────────────────────────────
+    // ── resolve_android_sdk_root_path unit tests (via daemon re-export) ─────────
 
     /// When a caller-provided path is given, it must be returned as-is.
     #[test]
     fn test_resolve_android_sdk_root_uses_provided_path() {
         let path = std::path::Path::new("/opt/android/sdk");
-        let result = resolve_android_sdk_root(Some(path));
+        let result = fdemon_daemon::resolve_android_sdk_root_path(Some(path));
         assert_eq!(result, std::path::PathBuf::from("/opt/android/sdk"));
     }
 
@@ -2293,17 +2237,17 @@ mod tests {
         std::env::remove_var("ANDROID_SDK_ROOT");
         std::env::set_var("ANDROID_HOME", "/custom/android/home");
 
-        let result = resolve_android_sdk_root(None);
+        let result = fdemon_daemon::resolve_android_sdk_root_path(None);
         std::env::remove_var("ANDROID_HOME");
 
         assert_eq!(result, std::path::PathBuf::from("/custom/android/home"));
     }
 
-    /// `resolve_android_sdk_root` never panics even when no env vars are set and
+    /// `resolve_android_sdk_root_path` never panics even when no env vars are set and
     /// the home dir is unavailable (returns the platform fallback or last-resort).
     #[test]
     fn test_resolve_android_sdk_root_never_panics() {
         // We cannot easily remove HOME/USERPROFILE but the function must not panic.
-        let _result = resolve_android_sdk_root(None);
+        let _result = fdemon_daemon::resolve_android_sdk_root_path(None);
     }
 }

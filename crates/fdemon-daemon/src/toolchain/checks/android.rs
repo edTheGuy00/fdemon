@@ -17,52 +17,76 @@ use super::PROBE_TIMEOUT;
 
 // ─── Android SDK root resolver ────────────────────────────────────────────────
 
-/// Resolve the Android SDK root path.
+/// Unconditionally resolve the Android SDK root path from an optional caller
+/// override, environment variables, and the platform-specific default.
 ///
-/// Checks in this order:
-/// 1. `$ANDROID_HOME` environment variable
-/// 2. `$ANDROID_SDK_ROOT` environment variable
-/// 3. Platform-specific default location:
-///    - Linux: `~/Android/Sdk`
-///    - macOS: `~/Library/Android/sdk`
+/// Resolution order:
+/// 1. `override_path` — the caller-supplied path (e.g. from
+///    `[toolchain] android_sdk_root` in `.fdemon/config.toml` or from a
+///    previous install step).
+/// 2. `$ANDROID_HOME` environment variable (if set and non-empty).
+/// 3. `$ANDROID_SDK_ROOT` environment variable (if set and non-empty).
+/// 4. Platform-specific default:
+///    - Linux:   `~/Android/Sdk`
+///    - macOS:   `~/Library/Android/sdk`
 ///    - Windows: `%LOCALAPPDATA%\Android\Sdk`
+/// 5. Last resort: `PathBuf::from("Android/Sdk")` — returned when
+///    `dirs::home_dir()` is `None` (headless/container environments).
 ///
-/// Returns the first path that **exists** on the filesystem, or `None` if none
-/// do.
+/// This function **always** returns a `PathBuf`, even when the path does not
+/// yet exist on the filesystem. It is the shared source of truth for both the
+/// install executor (which creates the directory) and the post-install check
+/// (which filters by `is_dir()`).
+///
+/// See [`android_sdk_root`] for the check-time variant that additionally
+/// requires the resolved path to be an existing directory.
+pub fn resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf {
+    // 1. Caller-provided path.
+    if let Some(p) = override_path {
+        return p.to_path_buf();
+    }
+
+    // 2. ANDROID_HOME
+    if let Ok(home) = std::env::var("ANDROID_HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home);
+        }
+    }
+
+    // 3. ANDROID_SDK_ROOT
+    if let Ok(sdk) = std::env::var("ANDROID_SDK_ROOT") {
+        if !sdk.is_empty() {
+            return PathBuf::from(sdk);
+        }
+    }
+
+    // 4. Platform-specific default (or last resort when home_dir is None).
+    platform_default_android_sdk().unwrap_or_else(|| PathBuf::from("Android/Sdk"))
+}
+
+/// Resolve the Android SDK root path, returning `Some` only when the resolved
+/// path is an **existing directory** on the filesystem.
+///
+/// Delegates env-var resolution to [`resolve_android_sdk_root_path`] (with no
+/// caller override), then applies an `is_dir()` filter and wraps the result in
+/// the `AndroidSdkRoot` newtype.
+///
+/// This is the check-time variant used during toolchain preflight. For the
+/// install executor, use [`resolve_android_sdk_root_path`] directly.
 pub fn android_sdk_root() -> Option<AndroidSdkRoot> {
-    // 1. ANDROID_HOME
-    if let Ok(path) = std::env::var("ANDROID_HOME") {
-        let p = PathBuf::from(&path);
-        if p.is_dir() {
-            tracing::debug!("Android SDK root from ANDROID_HOME: {}", p.display());
-            return Some(AndroidSdkRoot(p));
-        }
+    let path = resolve_android_sdk_root_path(None);
+    if path.is_dir() {
+        tracing::debug!("Android SDK root resolved to: {}", path.display());
+        Some(AndroidSdkRoot(path))
+    } else {
+        None
     }
-
-    // 2. ANDROID_SDK_ROOT
-    if let Ok(path) = std::env::var("ANDROID_SDK_ROOT") {
-        let p = PathBuf::from(&path);
-        if p.is_dir() {
-            tracing::debug!("Android SDK root from ANDROID_SDK_ROOT: {}", p.display());
-            return Some(AndroidSdkRoot(p));
-        }
-    }
-
-    // 3. Platform-specific default
-    if let Some(default_path) = platform_default_android_sdk() {
-        if default_path.is_dir() {
-            tracing::debug!(
-                "Android SDK root from platform default: {}",
-                default_path.display()
-            );
-            return Some(AndroidSdkRoot(default_path));
-        }
-    }
-
-    None
 }
 
 /// Return the platform-specific default Android SDK installation path.
+///
+/// Returns `None` only on unsupported platforms or when the home/local-app-data
+/// directory cannot be determined.
 fn platform_default_android_sdk() -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
@@ -81,7 +105,7 @@ fn platform_default_android_sdk() -> Option<PathBuf> {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        None
+        dirs::home_dir().map(|h| h.join("Android").join("Sdk"))
     }
 }
 
@@ -540,6 +564,88 @@ mod tests {
     fn test_check_android_licenses_unknown_when_no_root() {
         let check = check_android_licenses(None);
         assert_eq!(check.status, ComponentStatus::Unknown);
+    }
+
+    // ── resolve_android_sdk_root_path ─────────────────────────────────────────
+
+    /// With `$ANDROID_HOME` set to an existing tempdir, the unconditional
+    /// resolver and the check-time resolver must agree on the same path.
+    #[test]
+    #[serial_test::serial]
+    fn test_resolvers_agree_on_android_home() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let _home = EnvGuard::set("ANDROID_HOME", &path);
+        let _sdk = EnvGuard::remove("ANDROID_SDK_ROOT");
+
+        let unconditional = resolve_android_sdk_root_path(None);
+        let check_time = android_sdk_root().map(|r| r.0);
+
+        // Both must resolve to the tempdir.
+        assert_eq!(unconditional, tmp.path(), "unconditional resolver mismatch");
+        assert_eq!(
+            check_time,
+            Some(tmp.path().to_path_buf()),
+            "check-time resolver mismatch"
+        );
+        // They must agree with each other.
+        assert_eq!(
+            unconditional,
+            check_time.unwrap(),
+            "resolvers disagree on ANDROID_HOME input"
+        );
+    }
+
+    /// With no env vars set, both resolvers return the same platform-default
+    /// string (they may or may not agree on whether the path exists).
+    #[test]
+    #[serial_test::serial]
+    fn test_resolvers_agree_on_platform_default_string() {
+        let _home = EnvGuard::remove("ANDROID_HOME");
+        let _sdk = EnvGuard::remove("ANDROID_SDK_ROOT");
+
+        let unconditional = resolve_android_sdk_root_path(None);
+        // android_sdk_root() returns None when the default path doesn't exist,
+        // but its internal resolved path (before the is_dir() filter) must match
+        // what the unconditional resolver returns.  We can't compare the filtered
+        // result directly, so we verify the unconditional resolver matches the
+        // platform default.
+        let platform_default =
+            platform_default_android_sdk().unwrap_or_else(|| PathBuf::from("Android/Sdk"));
+        assert_eq!(
+            unconditional, platform_default,
+            "unconditional resolver diverged from platform_default_android_sdk()"
+        );
+    }
+
+    /// `resolve_android_sdk_root_path` honours the caller-supplied override and
+    /// does not consult env vars when an override is given.
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_path_honours_caller_override() {
+        // Even if ANDROID_HOME points somewhere else, override wins.
+        let _home = EnvGuard::set("ANDROID_HOME", "/some/other/path");
+        let _sdk = EnvGuard::remove("ANDROID_SDK_ROOT");
+
+        let override_path = PathBuf::from("/my/custom/sdk");
+        let result = resolve_android_sdk_root_path(Some(&override_path));
+        assert_eq!(result, override_path);
+    }
+
+    /// `resolve_android_sdk_root_path` returns a path even when all env vars
+    /// are absent (no panic guarantee).
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_path_never_panics_with_no_env() {
+        let _home = EnvGuard::remove("ANDROID_HOME");
+        let _sdk = EnvGuard::remove("ANDROID_SDK_ROOT");
+
+        let result = resolve_android_sdk_root_path(None);
+        // Must return *something* — the exact value is platform-dependent.
+        assert!(
+            !result.as_os_str().is_empty(),
+            "resolver returned empty path"
+        );
     }
 
     // ── process-spawning check (no panic guarantee) ───────────────────────────
