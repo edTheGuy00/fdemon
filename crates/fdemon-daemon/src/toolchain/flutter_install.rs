@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 
 use fdemon_core::{Error, Result};
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 
 use super::download::{
     check_network_connectivity, download_to_file, ensure_disk_space, extract_archive,
@@ -464,9 +465,19 @@ fn read_installed_version(sdk_root: &Path, fallback: &str) -> String {
 /// precache; the user can run `flutter precache` manually or the caller can
 /// retry.
 ///
+/// ## Cancellation
+///
+/// Pass a [`CancellationToken`] to support user-initiated cancellation.  The
+/// token is checked at attempt boundaries and forwarded to [`download_to_file`]
+/// for fine-grained per-chunk cancellation.  A pre-cancelled token causes an
+/// immediate return of [`fdemon_core::Error::Cancelled`] before any I/O.
+///
+/// For a non-cancellable install, pass `CancellationToken::new()`.
+///
 /// # Errors
 ///
 /// Returns an error when:
+/// - The token is already cancelled.
 /// - The channel name fails validation.
 /// - The lockfile cannot be acquired.
 /// - The temp directory cannot be created.
@@ -475,11 +486,16 @@ fn read_installed_version(sdk_root: &Path, fallback: &str) -> String {
 /// - The atomic rename fails.
 pub async fn install_flutter<F>(
     target: &FlutterInstallTarget,
+    cancel: CancellationToken,
     mut on_event: F,
 ) -> Result<FlutterInstallOutcome>
 where
     F: FnMut(InstallEvent) + Send,
 {
+    // Pre-cancel check: if the token is already cancelled, return immediately.
+    if cancel.is_cancelled() {
+        return Err(Error::cancelled("Flutter install cancelled before start"));
+    }
     // ── Channel validation (M2: prevent git argument injection) ──────────────
     validate_channel(&target.channel)?;
 
@@ -533,7 +549,7 @@ where
     })?;
 
     // Wrap the install body in a closure to ensure temp-dir cleanup on error.
-    let result = install_inner(target, &tmp_dir, &final_dir, &mut on_event).await;
+    let result = install_inner(target, &tmp_dir, &final_dir, cancel, &mut on_event).await;
 
     match result {
         Ok(outcome) => Ok(outcome),
@@ -561,6 +577,7 @@ async fn install_inner<F>(
     target: &FlutterInstallTarget,
     tmp_dir: &Path,
     final_dir: &Path,
+    cancel: CancellationToken,
     on_event: &mut F,
 ) -> Result<FlutterInstallOutcome>
 where
@@ -575,7 +592,7 @@ where
     let sdk_root_in_tmp: PathBuf = if use_git {
         git_install(target, tmp_dir, on_event).await?
     } else {
-        archive_install(target, tmp_dir, on_event).await?
+        archive_install(target, tmp_dir, cancel, on_event).await?
     };
 
     // ── Reclaim incomplete final_dir (M5) ────────────────────────────────────
@@ -718,6 +735,7 @@ where
 async fn archive_install<F>(
     target: &FlutterInstallTarget,
     tmp_dir: &Path,
+    cancel: CancellationToken,
     on_event: &mut F,
 ) -> Result<PathBuf>
 where
@@ -759,7 +777,7 @@ where
     on_event(InstallEvent::Phase("Downloading"));
     on_event(InstallEvent::Log(format!("Downloading {archive_url}")));
 
-    download_to_file(&archive_url, &archive_path, |p| {
+    download_to_file(&archive_url, &archive_path, cancel, |p| {
         on_event(InstallEvent::Download(p));
     })
     .await?;
@@ -1433,7 +1451,7 @@ mod tests {
         };
 
         let mut events: Vec<InstallEvent> = Vec::new();
-        let outcome = install_flutter(&target, |e| events.push(e))
+        let outcome = install_flutter(&target, CancellationToken::new(), |e| events.push(e))
             .await
             .expect("short-circuit must succeed");
 
@@ -1458,7 +1476,7 @@ mod tests {
             version_dir_name: "bad".to_owned(),
         };
 
-        let err = install_flutter(&target, |_| {})
+        let err = install_flutter(&target, CancellationToken::new(), |_| {})
             .await
             .expect_err("must fail on invalid channel");
         assert!(err.to_string().contains("starts with '-'"), "error: {err}");
@@ -1711,6 +1729,38 @@ mod tests {
         assert!(
             msg.contains("parse") || msg.contains("json") || msg.contains("JSON"),
             "error message must mention a JSON parse failure: {msg}"
+        );
+    }
+
+    // ── Cancellation ──────────────────────────────────────────────────────────
+
+    /// A pre-cancelled token must cause `install_flutter` to return
+    /// `Error::Cancelled` before any I/O is performed.
+    #[tokio::test]
+    async fn test_install_flutter_precancelled_returns_cancelled() {
+        let tmp = TempDir::new().unwrap();
+
+        let target = FlutterInstallTarget {
+            method: InstallMethod::GitClone,
+            channel: "stable".to_owned(),
+            install_root: tmp.path().to_owned(),
+            version_dir_name: "stable".to_owned(),
+        };
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = install_flutter(&target, token, |_| {})
+            .await
+            .expect_err("pre-cancelled install must return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
+
+        // No lockfile or temp dirs should have been created.
+        let lock_path = tmp.path().join(".fdemon-install.lock");
+        assert!(
+            !lock_path.exists(),
+            "lockfile must not be created for pre-cancelled install"
         );
     }
 }

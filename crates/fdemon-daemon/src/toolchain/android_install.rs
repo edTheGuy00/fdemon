@@ -35,6 +35,7 @@
 use std::path::{Path, PathBuf};
 
 use fdemon_core::{Error, Result};
+use tokio_util::sync::CancellationToken;
 
 use super::checks::sdkmanager_bin_name;
 use super::download::{download_to_file, ensure_disk_space, extract_zip};
@@ -105,17 +106,32 @@ pub fn resolve_cmdline_tools_url(target: &AndroidInstallTarget) -> Result<String
 ///    through stdin.
 /// 5. **Install packages** by running `sdkmanager <packages…>`.
 ///
+/// ## Cancellation
+///
+/// Pass a [`CancellationToken`] to support user-initiated cancellation.  A
+/// pre-cancelled token causes an immediate return of
+/// [`fdemon_core::Error::Cancelled`] before any I/O.  The token is also
+/// forwarded to [`download_to_file`] for per-chunk cancellation during the
+/// archive download step.
+///
+/// For a non-cancellable install, pass `CancellationToken::new()`.
+///
 /// ## Errors
 ///
 /// Returns `Err` on download failure (including HTTP 4xx), spawn failure, or
 /// non-zero `sdkmanager` exit. Temp directories are cleaned up on failure.
 pub async fn install_android_tools<F>(
     target: &AndroidInstallTarget,
+    cancel: CancellationToken,
     mut on_event: F,
 ) -> Result<AndroidInstallOutcome>
 where
     F: FnMut(InstallEvent) + Send,
 {
+    // Pre-cancel check: if the token is already cancelled, return immediately.
+    if cancel.is_cancelled() {
+        return Err(Error::cancelled("Android install cancelled before start"));
+    }
     // ── Resolve URL ──────────────────────────────────────────────────────────
     let url = resolve_cmdline_tools_url(target)?;
 
@@ -155,7 +171,7 @@ where
         ))
     })?;
 
-    let result = install_android_tools_inner(target, &tmp_dir, &url, &mut on_event).await;
+    let result = install_android_tools_inner(target, &tmp_dir, &url, cancel, &mut on_event).await;
 
     // Clean up the temp dir on either success or failure.
     if tmp_dir.exists() {
@@ -176,6 +192,7 @@ async fn install_android_tools_inner<F>(
     target: &AndroidInstallTarget,
     tmp_dir: &Path,
     url: &str,
+    cancel: CancellationToken,
     on_event: &mut F,
 ) -> Result<AndroidInstallOutcome>
 where
@@ -185,7 +202,7 @@ where
     on_event(InstallEvent::Phase("Downloading command-line tools"));
 
     let tmp_zip = tmp_dir.join("cmdline-tools.zip");
-    download_to_file(url, &tmp_zip, |p: DownloadProgress| {
+    download_to_file(url, &tmp_zip, cancel, |p: DownloadProgress| {
         on_event(InstallEvent::Download(p));
     })
     .await
@@ -641,5 +658,31 @@ mod tests {
             path_str.contains("sdkmanager"),
             "path must end with sdkmanager: {path_str}"
         );
+    }
+
+    // ── Cancellation ──────────────────────────────────────────────────────────
+
+    /// A pre-cancelled token must cause `install_android_tools` to return
+    /// `Error::Cancelled` before any I/O is performed.
+    #[tokio::test]
+    async fn test_install_android_tools_precancelled_returns_cancelled() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        let target = AndroidInstallTarget {
+            sdk_root: tmp.path().to_owned(),
+            api_level: 36,
+            cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
+            jdk_path: None,
+            platform: HostPlatform::Linux,
+        };
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = install_android_tools(&target, token, |_| {})
+            .await
+            .expect_err("pre-cancelled install must return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
     }
 }

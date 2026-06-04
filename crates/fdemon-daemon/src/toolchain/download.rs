@@ -8,6 +8,8 @@
 //!   before starting a download, bounding the offline stall to ≤5 s.
 //! - [`download_to_file`] — streaming HTTP download with connect/idle timeouts,
 //!   bounded retry, `.part`-file staging, and progress reporting.
+//!   Takes a [`tokio_util::sync::CancellationToken`] so an in-flight download
+//!   can be cancelled cleanly without leaving a `.part` file behind.
 //! - [`verify_sha256`] — synchronous SHA-256 checksum verification.
 //! - [`extract_zip`] — extract a `.zip` archive, preserving Unix mode bits.
 //!   Rejects path-traversal entries (zip-slip).
@@ -28,6 +30,15 @@
 //!   failure (e.g. `fs4` error on an exotic FS) surfaces a readable error
 //!   rather than silently continuing or panicking.
 //!
+//! ## Cancellation
+//!
+//! `download_to_file` accepts a `CancellationToken`. When the token is
+//! cancelled, the streaming loop exits on the next chunk boundary and returns
+//! [`fdemon_core::Error::Cancelled`].  A [`PartFileGuard`] is armed on entry
+//! and disarmed only on success; it removes the `.part` file from disk in its
+//! `Drop` implementation, ensuring no orphan files remain after cancellation or
+//! any other early-exit path (including an `abort()` on the outer `JoinHandle`).
+//!
 //! ## Streaming XZ Decompression
 //!
 //! `lzma-rs` 0.3's XZ decoder (`lzma_rs::xz_decompress`) uses a push API
@@ -37,6 +48,20 @@
 //! decoded bytes through an in-process channel, and expose a `Read` adapter on
 //! the receiving end.  This keeps peak RAM proportional to the XZ block size
 //! (typically a few MiB) rather than the full decompressed SDK (~1 GB).
+//!
+//! ## XZ Decode Thread Teardown on Cancellation
+//!
+//! The XZ decode thread in [`extract_tar_xz`] is a `std::thread`, not a Tokio
+//! task, so it cannot be cancelled via `JoinHandle::abort()`.  When the
+//! `ReceiverReader` is dropped (e.g. because the tar crate returned early due to
+//! an error), the `SenderWriter` receives `BrokenPipe` on the next
+//! `SenderWriter::write` call and the decode loop terminates promptly.
+//! Verification: `SenderWriter::write` calls `SyncSender::send`, whose only
+//! error variant is `SendError` (receiver disconnected), which we map to
+//! `io::ErrorKind::BrokenPipe`.  `lzma_rs::xz_decompress` propagates `Write`
+//! errors up immediately via `?`, so the thread exits on the very next write
+//! after the receiver is dropped — no looping or blocking.  No additional
+//! token-check in `SenderWriter::write` is needed.
 
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
@@ -45,6 +70,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use fdemon_core::{Error, Result};
@@ -143,12 +169,63 @@ pub(crate) async fn check_network_connectivity(client: &reqwest::Client, url: &s
         .map_err(|e| Error::process(format!("no network connectivity: cannot reach {url} ({e})")))
 }
 
+// ── Part-file Drop Guard ──────────────────────────────────────────────────────
+
+/// RAII guard that removes a `.part` file from disk when dropped.
+///
+/// The guard is **armed** on construction and **disarmed** only on success via
+/// [`PartFileGuard::disarm`].  This guarantees that no orphaned `.part` file
+/// is left behind after any early-exit path, including:
+///
+/// - A cancelled download (user pressed Esc / cancellation token fired).
+/// - A network or I/O error during streaming.
+/// - An outer `JoinHandle::abort()` that drops the future mid-await.
+///
+/// Panics in the guarded code path are also covered because `Drop` runs even
+/// on unwind.
+pub(crate) struct PartFileGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartFileGuard {
+    /// Create a new armed guard for `path`.
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    /// Disarm the guard so the file is **not** removed on drop.
+    ///
+    /// Call this after a successful rename (`.part` → final destination) so
+    /// the guard does not attempt to delete a file that no longer exists.
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Err(e) = std::fs::remove_file(&self.path) {
+                // Not finding the file (NotFound) is fine — it may never have
+                // been created (e.g. pre-cancel) or may have already been
+                // removed by a previous cleanup attempt.
+                if e.kind() != io::ErrorKind::NotFound {
+                    debug!(path = ?self.path, error = %e,
+                        "PartFileGuard: failed to remove .part file (best-effort)");
+                }
+            }
+        }
+    }
+}
+
 // ── Download ─────────────────────────────────────────────────────────────────
 
 /// Stream a URL to `dest`, invoking `on_progress` after each chunk arrives.
 ///
 /// Downloads are staged to `<dest>.part` and renamed to `dest` only on
-/// success. On failure the `.part` file is removed (best-effort).
+/// success.  On failure or cancellation the `.part` file is removed by a
+/// [`PartFileGuard`] that is armed on entry and disarmed only on success.
 ///
 /// The function retries up to [`MAX_DOWNLOAD_ATTEMPTS`] times on transient
 /// failures (network errors, non-4xx HTTP errors).  Each retry restarts from
@@ -158,14 +235,36 @@ pub(crate) async fn check_network_connectivity(client: &reqwest::Client, url: &s
 /// [`DownloadProgress::total`] so the caller can render a progress bar.  When
 /// the server omits `Content-Length`, `total` is `None` for all callbacks.
 ///
+/// ## Cancellation
+///
+/// Pass a [`CancellationToken`] to support user-initiated cancellation.  When
+/// the token is cancelled, the streaming loop exits at the next chunk boundary
+/// and returns [`fdemon_core::Error::Cancelled`].  No `.part` file is left
+/// behind — the `PartFileGuard` removes it in `Drop`.
+///
+/// For a non-cancellable download, pass `CancellationToken::new()` (an
+/// unowned, never-cancelled token).
+///
 /// # Errors
 ///
-/// Returns an error if all attempts fail, on HTTP 4xx responses, or on I/O
-/// errors while writing to `dest`.
-pub async fn download_to_file<F>(url: &str, dest: &Path, mut on_progress: F) -> Result<()>
+/// - [`fdemon_core::Error::Cancelled`] when the token is cancelled mid-stream.
+/// - [`fdemon_core::Error::Process`] when all attempts fail or on HTTP 4xx.
+/// - [`fdemon_core::Error::Io`] on I/O errors while writing to `dest`.
+pub async fn download_to_file<F>(
+    url: &str,
+    dest: &Path,
+    cancel: CancellationToken,
+    mut on_progress: F,
+) -> Result<()>
 where
     F: FnMut(DownloadProgress),
 {
+    // Pre-cancel check: if the token is already cancelled, return immediately
+    // without performing any I/O.
+    if cancel.is_cancelled() {
+        return Err(Error::cancelled("download cancelled before start"));
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(concat!("fdemon/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(CONNECT_TIMEOUT)
@@ -186,9 +285,20 @@ where
     let probe_dir = dest.parent().unwrap_or_else(|| Path::new("."));
     ensure_disk_space(probe_dir, ARCHIVE_DISK_BUDGET_BYTES)?;
 
+    // Arm the Drop guard. It removes the `.part` file unless `disarm()` is
+    // called on the success path just before the rename.  This covers all
+    // early-exit paths including cancellation, errors, and `JoinHandle::abort`.
+    let mut part_guard = PartFileGuard::new(part_path.clone());
+
     let mut last_err: Option<Error> = None;
 
     for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
+        // Per-attempt cancellation check so a cancel between retries exits
+        // immediately without issuing another HTTP request.
+        if cancel.is_cancelled() {
+            return Err(Error::cancelled("download cancelled"));
+        }
+
         if attempt > 1 {
             debug!(
                 attempt,
@@ -223,7 +333,6 @@ where
 
         // 4xx errors are not retriable (bad URL, auth, etc.).
         if status.is_client_error() {
-            cleanup_part_file(&part_path);
             return Err(Error::process(format!("HTTP {status} for {url}")));
         }
 
@@ -237,25 +346,42 @@ where
         let mut stream = response.bytes_stream();
         let mut stream_err: Option<Error> = None;
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = match chunk_result {
-                Ok(c) => c,
-                Err(e) => {
-                    stream_err = Some(Error::process(format!("stream read error for {url}: {e}")));
-                    break;
+        loop {
+            tokio::select! {
+                // Biased: check cancellation first so a pre-signalled token
+                // is detected before blocking on the next chunk.
+                biased;
+
+                _ = cancel.cancelled() => {
+                    return Err(Error::cancelled("download cancelled"));
                 }
-            };
 
-            if let Err(e) = file.write_all(&chunk) {
-                stream_err = Some(Error::Io(io::Error::new(
-                    e.kind(),
-                    format!("write to {part_path:?}: {e}"),
-                )));
-                break;
+                chunk_result = stream.next() => {
+                    match chunk_result {
+                        Some(Ok(chunk)) => {
+                            if let Err(e) = file.write_all(&chunk) {
+                                stream_err = Some(Error::Io(io::Error::new(
+                                    e.kind(),
+                                    format!("write to {part_path:?}: {e}"),
+                                )));
+                                break;
+                            }
+                            received += chunk.len() as u64;
+                            on_progress(DownloadProgress { received, total });
+                        }
+                        Some(Err(e)) => {
+                            stream_err = Some(Error::process(format!(
+                                "stream read error for {url}: {e}"
+                            )));
+                            break;
+                        }
+                        None => {
+                            // Stream exhausted — download complete.
+                            break;
+                        }
+                    }
+                }
             }
-
-            received += chunk.len() as u64;
-            on_progress(DownloadProgress { received, total });
         }
 
         if let Some(err) = stream_err {
@@ -272,9 +398,15 @@ where
             continue;
         }
 
+        // Disarm the guard *before* the rename so it does not attempt to
+        // remove a file that is being atomically moved to its final location.
+        part_guard.disarm();
+
         // Success: rename .part → dest.
         if let Err(e) = std::fs::rename(&part_path, dest) {
-            cleanup_part_file(&part_path);
+            // Re-arm the guard would be unsafe here since the file was not
+            // renamed. Remove it manually and propagate the rename error.
+            let _ = std::fs::remove_file(&part_path);
             return Err(Error::Io(io::Error::new(
                 e.kind(),
                 format!("rename {part_path:?} → {dest:?}: {e}"),
@@ -284,19 +416,12 @@ where
         return Ok(());
     }
 
-    cleanup_part_file(&part_path);
+    // All attempts failed — the Drop guard removes the .part file.
     Err(last_err.unwrap_or_else(|| {
         Error::process(format!(
             "download failed after {MAX_DOWNLOAD_ATTEMPTS} attempts: {url}"
         ))
     }))
-}
-
-/// Remove `path` on a best-effort basis, logging but not propagating errors.
-fn cleanup_part_file(path: &Path) {
-    if let Err(e) = std::fs::remove_file(path) {
-        debug!(?path, error = %e, "failed to clean up .part file (best-effort)");
-    }
 }
 
 // ── SHA-256 Verification ──────────────────────────────────────────────────────
@@ -1188,9 +1313,11 @@ mod tests {
         let url = format!("{}/flutter.zip", mock_server.uri());
 
         let mut progress_events: Vec<DownloadProgress> = Vec::new();
-        download_to_file(&url, &dest, |p| progress_events.push(p))
-            .await
-            .expect("download must succeed");
+        download_to_file(&url, &dest, CancellationToken::new(), |p| {
+            progress_events.push(p)
+        })
+        .await
+        .expect("download must succeed");
 
         // File contents match
         let downloaded = std::fs::read(&dest).unwrap();
@@ -1243,9 +1370,11 @@ mod tests {
         let url = format!("{}/noheader.bin", mock_server.uri());
 
         let mut progress_events: Vec<DownloadProgress> = Vec::new();
-        download_to_file(&url, &dest, |p| progress_events.push(p))
-            .await
-            .expect("download must succeed");
+        download_to_file(&url, &dest, CancellationToken::new(), |p| {
+            progress_events.push(p)
+        })
+        .await
+        .expect("download must succeed");
 
         // File contents match
         let downloaded = std::fs::read(&dest).unwrap();
@@ -1285,7 +1414,7 @@ mod tests {
         let dest = tmp.path().join("notfound.bin");
         let url = format!("{}/notfound.bin", mock_server.uri());
 
-        let err = download_to_file(&url, &dest, |_| {})
+        let err = download_to_file(&url, &dest, CancellationToken::new(), |_| {})
             .await
             .expect_err("HTTP 404 must return error");
         assert!(
@@ -1312,7 +1441,7 @@ mod tests {
         let dest = tmp.path().join("staged.bin");
         let url = format!("{}/staged.bin", mock_server.uri());
 
-        download_to_file(&url, &dest, |_| {})
+        download_to_file(&url, &dest, CancellationToken::new(), |_| {})
             .await
             .expect("download must succeed");
 
@@ -1372,7 +1501,7 @@ mod tests {
         let dest = tmp.path().join("retry.bin");
         let url = format!("{}/retry.bin", mock_server.uri());
 
-        download_to_file(&url, &dest, |_| {})
+        download_to_file(&url, &dest, CancellationToken::new(), |_| {})
             .await
             .expect("download must succeed after retries");
 
@@ -1462,5 +1591,164 @@ mod tests {
             err.to_string().contains("no network connectivity"),
             "error must mention 'no network connectivity': {err}"
         );
+    }
+
+    // ── Cancellation tests ────────────────────────────────────────────────────
+
+    /// A pre-cancelled token must cause `download_to_file` to return
+    /// `Error::Cancelled` immediately without creating any `.part` file.
+    #[tokio::test]
+    async fn precancelled_token_does_no_io() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("never.bin");
+        let part = dest.with_extension("bin.part");
+
+        // Cancel the token before calling download_to_file.
+        let token = CancellationToken::new();
+        token.cancel();
+
+        // Use a URL that is guaranteed to refuse connections quickly so the
+        // test is not sensitive to network availability.  The pre-cancel check
+        // fires before any HTTP request is issued, so the URL is never reached.
+        let err = download_to_file("http://127.0.0.1:1/never.bin", &dest, token, |_| {})
+            .await
+            .expect_err("pre-cancelled token must return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
+
+        // Neither the dest file nor the .part file should have been created.
+        assert!(
+            !dest.exists(),
+            "dest must not exist when cancelled before any I/O"
+        );
+        assert!(
+            !part.exists(),
+            ".part file must not exist when cancelled before any I/O"
+        );
+    }
+
+    /// A token cancelled after the download starts must cause the streaming loop
+    /// to exit with `Error::Cancelled` and must not leave a `.part` file behind.
+    ///
+    /// This test uses a mock server that streams a chunked response; we cancel
+    /// the token after the first chunk is received.
+    #[tokio::test]
+    async fn cancel_mid_stream_returns_cancelled_and_cleans_part() {
+        use std::sync::Arc;
+        use tokio::sync::Notify;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        /// A responder that sends a large body so there are multiple chunk
+        /// iterations and cancellation has time to fire.
+        struct LargeBodyResponder;
+
+        impl Respond for LargeBodyResponder {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                // 200 KiB of zeros — large enough that the streaming loop runs
+                // multiple iterations before the token is cancelled.
+                ResponseTemplate::new(200).set_body_bytes(vec![0u8; 200 * 1024])
+            }
+        }
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/large.bin"))
+            .respond_with(LargeBodyResponder)
+            .mount(&mock_server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("large.bin");
+        let part = dest.with_extension("bin.part");
+        let url = format!("{}/large.bin", mock_server.uri());
+
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        // A notifier so the progress callback can signal that at least one
+        // chunk has been received before we cancel.
+        let first_chunk = Arc::new(Notify::new());
+        let first_chunk_clone = first_chunk.clone();
+
+        // Spawn the download on a task so we can cancel it from the test body.
+        let download_task = tokio::spawn(async move {
+            let mut received_any = false;
+            download_to_file(&url, &dest, token_clone, |_p| {
+                if !received_any {
+                    received_any = true;
+                    first_chunk_clone.notify_one();
+                }
+            })
+            .await
+        });
+
+        // Wait for the first progress callback, then cancel.
+        first_chunk.notified().await;
+        token.cancel();
+
+        let result = download_task.await.expect("task must not panic");
+
+        let err = result.expect_err("cancelled download must return Err");
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
+
+        // The .part file must have been removed by the PartFileGuard.
+        assert!(
+            !part.exists(),
+            ".part file must not exist after cancellation: {part:?}"
+        );
+    }
+
+    // ── PartFileGuard ─────────────────────────────────────────────────────────
+
+    /// An armed `PartFileGuard` removes the file on drop.
+    #[test]
+    fn part_file_guard_removes_file_on_drop() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.part");
+        std::fs::write(&path, b"test").unwrap();
+        assert!(path.exists(), "file must exist before drop");
+
+        {
+            let guard = PartFileGuard::new(path.clone());
+            // Guard is armed; drop triggers removal.
+            drop(guard);
+        }
+
+        assert!(
+            !path.exists(),
+            ".part file must be removed by armed guard on drop"
+        );
+    }
+
+    /// A disarmed `PartFileGuard` does NOT remove the file on drop.
+    #[test]
+    fn part_file_guard_disarmed_does_not_remove_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("keep.part");
+        std::fs::write(&path, b"keep").unwrap();
+
+        {
+            let mut guard = PartFileGuard::new(path.clone());
+            guard.disarm();
+            // Drop should not remove the file.
+            drop(guard);
+        }
+
+        assert!(
+            path.exists(),
+            ".part file must remain when guard is disarmed"
+        );
+    }
+
+    /// A `PartFileGuard` pointing to a non-existent file must not panic on drop.
+    #[test]
+    fn part_file_guard_missing_file_no_panic() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("nonexistent.part");
+        // Do not create the file; dropping the guard must not panic.
+        let guard = PartFileGuard::new(path);
+        drop(guard);
     }
 }

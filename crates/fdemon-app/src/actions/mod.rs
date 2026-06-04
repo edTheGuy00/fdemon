@@ -832,6 +832,7 @@ pub fn handle_action(
                 resolve_install_dir, AndroidInstallTarget, FlutterInstallTarget, HostPlatform,
                 HostShell, InstallEvent, DEFAULT_CMDLINE_TOOLS_BUILD,
             };
+            use tokio_util::sync::CancellationToken;
 
             let msg_tx = msg_tx.clone();
 
@@ -887,30 +888,38 @@ pub fn handle_action(
                         // Clone a sender for the synchronous on_event callback.
                         let tx_for_events = msg_tx.clone();
 
-                        let result = install_flutter(&target, move |ev| match ev {
-                            InstallEvent::Log(line) => {
-                                let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardStepLog { kind, line },
-                                );
-                            }
-                            InstallEvent::Download(p) => {
-                                let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardDownloadProgress {
-                                        kind,
-                                        received: p.received,
-                                        total: p.total,
-                                    },
-                                );
-                            }
-                            InstallEvent::Phase(label) => {
-                                let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardStepPhase {
-                                        kind,
-                                        label: label.to_string(),
-                                    },
-                                );
-                            }
-                        })
+                        // Task 03 will wire a real CancellationToken here when
+                        // app-side cancel support is added (the Esc key /
+                        // cancel message).  For now we use a never-cancelled
+                        // token so the API is forwards-compatible.
+                        let result = install_flutter(
+                            &target,
+                            CancellationToken::new(),
+                            move |ev| match ev {
+                                InstallEvent::Log(line) => {
+                                    let _ = tx_for_events.try_send(
+                                        crate::message::Message::WizardStepLog { kind, line },
+                                    );
+                                }
+                                InstallEvent::Download(p) => {
+                                    let _ = tx_for_events.try_send(
+                                        crate::message::Message::WizardDownloadProgress {
+                                            kind,
+                                            received: p.received,
+                                            total: p.total,
+                                        },
+                                    );
+                                }
+                                InstallEvent::Phase(label) => {
+                                    let _ = tx_for_events.try_send(
+                                        crate::message::Message::WizardStepPhase {
+                                            kind,
+                                            label: label.to_string(),
+                                        },
+                                    );
+                                }
+                            },
+                        )
                         .await;
 
                         match result {
@@ -973,31 +982,37 @@ pub fn handle_action(
                         // Clone a sender for the synchronous on_event callback.
                         let tx_for_events = msg_tx.clone();
 
-                        let result = install_android_tools(&target, move |ev| match ev {
-                            InstallEvent::Log(line) => {
-                                let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardStepLog { kind, line },
-                                );
-                            }
-                            InstallEvent::Download(p) => {
-                                let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardDownloadProgress {
-                                        kind,
-                                        received: p.received,
-                                        total: p.total,
-                                    },
-                                );
-                            }
-                            InstallEvent::Phase(label) => {
-                                let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardStepPhase {
-                                        kind,
-                                        label: label.to_string(),
-                                    },
-                                );
-                            }
-                        })
-                        .await;
+                        // Task 03 will wire a real CancellationToken here when
+                        // app-side cancel support is added.  For now we use a
+                        // never-cancelled token so the API is forwards-compatible.
+                        let result =
+                            install_android_tools(&target, CancellationToken::new(), move |ev| {
+                                match ev {
+                                    InstallEvent::Log(line) => {
+                                        let _ = tx_for_events.try_send(
+                                            crate::message::Message::WizardStepLog { kind, line },
+                                        );
+                                    }
+                                    InstallEvent::Download(p) => {
+                                        let _ = tx_for_events.try_send(
+                                            crate::message::Message::WizardDownloadProgress {
+                                                kind,
+                                                received: p.received,
+                                                total: p.total,
+                                            },
+                                        );
+                                    }
+                                    InstallEvent::Phase(label) => {
+                                        let _ = tx_for_events.try_send(
+                                            crate::message::Message::WizardStepPhase {
+                                                kind,
+                                                label: label.to_string(),
+                                            },
+                                        );
+                                    }
+                                }
+                            })
+                            .await;
 
                         match result {
                             Ok(outcome) => {

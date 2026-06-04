@@ -96,6 +96,16 @@ pub enum Error {
     #[error("Discovery error: {message}")]
     Discovery { message: String },
 
+    // ─────────────────────────────────────────────────────────────
+    // Cancellation
+    // ─────────────────────────────────────────────────────────────
+    /// Returned when an operation was explicitly cancelled by the user.
+    ///
+    /// Classified as **recoverable** so the app layer can show a benign
+    /// "cancelled" status instead of a scary failure message.
+    #[error("Cancelled: {message}")]
+    Cancelled { message: String },
+
     #[error("Directory is a Flutter plugin, not a runnable app: {path}")]
     IsPlugin { path: PathBuf },
 
@@ -183,6 +193,17 @@ impl Error {
         Self::NoPlatformDirectories { path: path.into() }
     }
 
+    /// Create a [`Error::Cancelled`] error with a message.
+    ///
+    /// Use this to signal that an in-progress operation was deliberately
+    /// stopped by the user (e.g. via the Esc key or a cancel button), as
+    /// opposed to failing due to a network or I/O error.
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self::Cancelled {
+            message: message.into(),
+        }
+    }
+
     /// Check if this is a recoverable error
     pub fn is_recoverable(&self) -> bool {
         matches!(
@@ -192,7 +213,16 @@ impl Error {
                 | Error::ChannelSend { .. }
                 | Error::VmService(_)
                 | Error::SelectionCancelled // User chose to cancel
+                | Error::Cancelled { .. } // User-initiated cancellation of an in-flight operation
         )
+    }
+
+    /// Returns `true` when this error represents a user-initiated cancellation.
+    ///
+    /// Callers can use this to distinguish "user cancelled" from "install
+    /// failed" and avoid showing a scary failure message in the UI.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Error::Cancelled { .. })
     }
 
     /// Check if this error should trigger application exit
@@ -323,6 +353,25 @@ mod tests {
         let err = Error::SelectionCancelled;
         assert!(!err.is_fatal()); // Not fatal, just user choice
         assert!(err.is_recoverable());
+    }
+
+    #[test]
+    fn test_cancelled_error_is_recoverable_and_not_fatal() {
+        let err = Error::cancelled("download cancelled");
+        assert!(err.is_recoverable(), "Cancelled must be recoverable");
+        assert!(!err.is_fatal(), "Cancelled must not be fatal");
+        assert!(err.is_cancelled(), "is_cancelled() must return true");
+        assert!(
+            err.to_string().contains("download cancelled"),
+            "error message must include the reason"
+        );
+    }
+
+    #[test]
+    fn test_non_cancelled_errors_are_not_cancelled() {
+        assert!(!Error::FlutterNotFound.is_cancelled());
+        assert!(!Error::daemon("test").is_cancelled());
+        assert!(!Error::process("test").is_cancelled());
     }
 
     #[test]
