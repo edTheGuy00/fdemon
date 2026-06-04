@@ -14,6 +14,7 @@
 //! plain byte counter is shown with an animated spinner.  The log tail is
 //! clipped to whatever height remains after the header rows.
 
+use fdemon_core::strip_ansi_codes;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -41,6 +42,11 @@ const PROGRESS_ROW_HEIGHT: u16 = 1;
 ///
 /// Derived from: 1 blank row provides visual breathing room.
 const SEPARATOR_HEIGHT: u16 = 1;
+
+/// Height of the result-summary row shown in terminal states (Succeeded/Failed).
+///
+/// Derived from: 1 row for the success/failure summary text.
+const RESULT_SUMMARY_HEIGHT: u16 = 1;
 
 /// Glyph shown when a step succeeded.
 const SUCCESS_GLYPH: &str = "\u{2713}"; // ✓
@@ -180,6 +186,9 @@ impl<'a> StepProgress<'a> {
     ///
     /// Shows the most-recent lines (tail of `exec.log_tail`); never computes
     /// manual out-of-bounds offsets — all positioning is via `Layout`.
+    ///
+    /// Each line is ANSI-sanitized before rendering to prevent raw escape sequences
+    /// (from git or flutter output) from corrupting the terminal cursor/color state.
     fn render_log_tail(&self, area: Rect, buf: &mut Buffer) {
         if area.height < 1 || self.exec.log_tail.is_empty() {
             return;
@@ -188,16 +197,19 @@ impl<'a> StepProgress<'a> {
         let visible_height = area.height as usize;
         let total = self.exec.log_tail.len();
         // Show the last `visible_height` lines (most recent)
-        let start = total.saturating_sub(visible_height);
-        let tail_slice = &self.exec.log_tail[start..];
+        let skip = total.saturating_sub(visible_height);
 
-        for (i, line_text) in tail_slice.iter().enumerate() {
+        for (i, line_text) in self.exec.log_tail.iter().skip(skip).enumerate() {
             let y = area.y + i as u16;
             if y >= area.y + area.height {
                 break;
             }
+            // Strip ANSI escape sequences before pushing into the Ratatui buffer.
+            // git progress output and flutter logs may contain color/cursor codes that
+            // would corrupt cursor state if rendered as raw bytes.
+            let clean = strip_ansi_codes(line_text);
             let line = Line::from(Span::styled(
-                format!("  > {line_text}"),
+                format!("  > {clean}"),
                 Style::default().fg(palette::TEXT_MUTED),
             ));
             Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
@@ -248,8 +260,8 @@ impl Widget for StepProgress<'_> {
             let chunks = Layout::vertical([
                 Constraint::Length(PHASE_ROW_HEIGHT),
                 Constraint::Length(SEPARATOR_HEIGHT),
-                Constraint::Length(1), // result summary
-                Constraint::Min(0),    // log tail absorber
+                Constraint::Length(RESULT_SUMMARY_HEIGHT),
+                Constraint::Min(0), // log tail absorber
             ])
             .split(area);
 
@@ -303,10 +315,10 @@ mod tests {
             phase_label: Some("Downloading".to_string()),
             received: 42 * 1_048_576,     // 42 MB
             total: Some(100 * 1_048_576), // 100 MB
-            log_tail: vec![
+            log_tail: std::collections::VecDeque::from(vec![
                 "Fetching objects...".to_string(),
                 "Resolving...".to_string(),
-            ],
+            ]),
             result_summary: None,
         }
     }
@@ -318,7 +330,7 @@ mod tests {
             phase_label: Some("Cloning".to_string()),
             received: 10 * 1_048_576, // 10 MB
             total: None,
-            log_tail: vec!["Cloning repository...".to_string()],
+            log_tail: std::collections::VecDeque::from(vec!["Cloning repository...".to_string()]),
             result_summary: None,
         }
     }
@@ -330,7 +342,7 @@ mod tests {
             phase_label: Some("Complete".to_string()),
             received: 100 * 1_048_576,
             total: Some(100 * 1_048_576),
-            log_tail: vec!["Installation complete.".to_string()],
+            log_tail: std::collections::VecDeque::from(vec!["Installation complete.".to_string()]),
             result_summary: Some("Flutter SDK installed successfully.".to_string()),
         }
     }
@@ -342,7 +354,7 @@ mod tests {
             phase_label: Some("Failed".to_string()),
             received: 0,
             total: None,
-            log_tail: vec!["error: network timeout".to_string()],
+            log_tail: std::collections::VecDeque::from(vec!["error: network timeout".to_string()]),
             result_summary: Some("Installation failed: network timeout".to_string()),
         }
     }
@@ -406,10 +418,8 @@ mod tests {
     #[test]
     fn test_progress_log_tail_clips_to_height() {
         // Create an exec with more log lines than the render area can fit
-        let mut log_lines = Vec::new();
-        for i in 0..50 {
-            log_lines.push(format!("log line {i}"));
-        }
+        let log_lines: std::collections::VecDeque<String> =
+            (0..50).map(|i| format!("log line {i}")).collect();
         let exec = StepExecution {
             status: StepExecStatus::Running,
             phase_label: Some("Running".to_string()),
@@ -516,12 +526,44 @@ mod tests {
         let exec = StepExecution {
             status: StepExecStatus::Running,
             phase_label: Some("Checking".to_string()),
-            log_tail: vec![],
+            log_tail: std::collections::VecDeque::new(),
             ..StepExecution::default()
         };
         let widget = StepProgress::new(&exec, 0);
         let area = large_area();
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
+    }
+
+    #[test]
+    fn test_log_tail_ansi_stripped_before_render() {
+        // Lines containing ANSI escape sequences must not appear as raw bytes
+        // in the rendered Ratatui buffer — they must be stripped first.
+        let exec = StepExecution {
+            status: StepExecStatus::Running,
+            phase_label: Some("Cloning".to_string()),
+            log_tail: std::collections::VecDeque::from(vec![
+                "\x1b[31mred error text\x1b[0m".to_string()
+            ]),
+            ..StepExecution::default()
+        };
+        let widget = StepProgress::new(&exec, 0);
+        let area = large_area();
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let content = collect_content(&buf, area);
+
+        // The visible text should be present
+        assert!(
+            content.contains("red error text"),
+            "stripped text should appear in buffer: '{content}'"
+        );
+
+        // Raw ESC byte (0x1B) must not be present
+        assert!(
+            !content.contains('\x1b'),
+            "raw ESC byte must not appear in buffer: '{content}'"
+        );
     }
 }

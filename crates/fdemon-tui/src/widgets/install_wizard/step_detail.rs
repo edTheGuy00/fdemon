@@ -565,7 +565,7 @@ mod tests {
             phase_label: Some("Downloading".to_string()),
             received: 50 * 1_048_576,
             total: Some(100 * 1_048_576),
-            log_tail: vec!["Fetching...".to_string()],
+            log_tail: std::collections::VecDeque::from(vec!["Fetching...".to_string()]),
             result_summary: None,
         };
 
@@ -597,7 +597,7 @@ mod tests {
             phase_label: Some("Complete".to_string()),
             received: 100 * 1_048_576,
             total: Some(100 * 1_048_576),
-            log_tail: vec![],
+            log_tail: std::collections::VecDeque::new(),
             result_summary: Some("Flutter SDK installed successfully.".to_string()),
         };
 
@@ -622,7 +622,7 @@ mod tests {
             phase_label: Some("Failed".to_string()),
             received: 0,
             total: None,
-            log_tail: vec!["Error: network timeout".to_string()],
+            log_tail: std::collections::VecDeque::from(vec!["Error: network timeout".to_string()]),
             result_summary: Some("Installation failed: network timeout".to_string()),
         };
 

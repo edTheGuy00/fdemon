@@ -117,20 +117,21 @@ impl InstallWizardState {
             phase_label: None,
             received: 0,
             total: None,
-            log_tail: Vec::new(),
+            log_tail: std::collections::VecDeque::new(),
             result_summary: None,
         };
     }
 
     /// Record a streamed log line, bounded to [`MAX_LOG_TAIL`] lines.
     ///
-    /// When the tail is already at capacity, the oldest line is dropped
-    /// (index 0) before the new line is appended.
+    /// When the tail is already at capacity, the oldest line is dropped via
+    /// [`VecDeque::pop_front`] (O(1)) before the new line is appended via
+    /// [`VecDeque::push_back`] (O(1)).
     pub fn push_step_log(&mut self, line: String) {
         if self.execution.log_tail.len() >= MAX_LOG_TAIL {
-            self.execution.log_tail.remove(0);
+            self.execution.log_tail.pop_front();
         }
-        self.execution.log_tail.push(line);
+        self.execution.log_tail.push_back(line);
     }
 
     /// Update the download progress counters without disturbing the log tail.
@@ -584,7 +585,7 @@ mod tests {
     fn test_begin_step_sets_running_and_clears() {
         let mut s = InstallWizardState::default();
         // Simulate leftover state from a previous run.
-        s.execution.log_tail.push("old line".to_string());
+        s.execution.log_tail.push_back("old line".to_string());
         s.execution.received = 42;
         s.execution.result_summary = Some("old summary".to_string());
         s.execution.phase_label = Some("old phase".to_string());
@@ -618,7 +619,7 @@ mod tests {
             "log tail must not exceed MAX_LOG_TAIL"
         );
         assert!(
-            s.execution.log_tail.first().unwrap().contains("line 50"),
+            s.execution.log_tail.front().unwrap().contains("line 50"),
             "oldest lines must be dropped: first line should be 'line 50'"
         );
     }

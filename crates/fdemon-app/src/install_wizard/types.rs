@@ -1,5 +1,7 @@
 //! Core types for the Install Wizard panel.
 
+use std::collections::VecDeque;
+
 /// Which pane has keyboard focus in the Install Wizard panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WizardPane {
@@ -81,7 +83,10 @@ pub struct StepExecution {
     /// Total expected bytes (or units); `None` when the total is unknown.
     pub total: Option<u64>,
     /// Bounded tail of streamed log lines (newest appended, oldest dropped at cap).
-    pub log_tail: Vec<String>,
+    ///
+    /// Uses [`VecDeque`] to allow O(1) front-eviction when at capacity
+    /// (via [`VecDeque::pop_front`]) instead of the O(n) `Vec::remove(0)`.
+    pub log_tail: VecDeque<String>,
     /// Human-readable success summary or error message after the run finishes.
     pub result_summary: Option<String>,
 }
