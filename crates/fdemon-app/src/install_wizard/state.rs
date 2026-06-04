@@ -1135,18 +1135,56 @@ mod tests {
         assert!(android.guided_commands[0].command.contains("adoptium.net"));
     }
 
+    /// The `report_with_jdk` fixture only contains a Jdk component — no
+    /// Prerequisites/Git entries — so `prerequisites_guided_commands`
+    /// short-circuits to an empty vec.  This test asserts the invariant
+    /// *for that fixture* (JDK missing, no prereq components).
     #[test]
-    fn test_non_android_steps_have_no_guided_commands() {
+    fn test_non_android_non_prereq_steps_have_no_guided_commands_when_prereqs_absent() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
         let steps = build_steps(&report);
         for step in &steps {
             if step.kind != WizardStepKind::AndroidTools {
                 assert!(
                     step.guided_commands.is_empty(),
-                    "Step {:?} should have no guided commands",
+                    "Step {:?} should have no guided commands (prereqs absent fixture)",
                     step.kind
                 );
             }
+        }
+    }
+
+    /// `PathConfig`, `FlutterSdk`, and `Doctor` must never carry guided
+    /// commands regardless of which other components are present.
+    #[test]
+    fn test_path_config_flutter_sdk_doctor_never_have_guided_commands() {
+        // Build a report that exercises all component kinds (all Ok so that
+        // prerequisites_guided_commands and jdk guidance are both silent).
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
+            make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report);
+        for kind in [
+            WizardStepKind::PathConfig,
+            WizardStepKind::FlutterSdk,
+            WizardStepKind::Doctor,
+        ] {
+            let step = steps
+                .iter()
+                .find(|s| s.kind == kind)
+                .unwrap_or_else(|| panic!("{kind:?} step must be present in build_steps output"));
+            assert!(
+                step.guided_commands.is_empty(),
+                "{kind:?} must never have guided commands"
+            );
         }
     }
 

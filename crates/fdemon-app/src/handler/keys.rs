@@ -3674,4 +3674,24 @@ mod install_wizard_key_tests {
             "'c' in InstallWizard should emit InstallWizardCopyCommand, got: {msg:?}"
         );
     }
+
+    #[test]
+    fn test_bracket_open_in_install_wizard_emits_prev_command() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Char('['));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardPrevCommand)),
+            "'[' in InstallWizard should emit InstallWizardPrevCommand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_bracket_close_in_install_wizard_emits_next_command() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Char(']'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardNextCommand)),
+            "']' in InstallWizard should emit InstallWizardNextCommand, got: {msg:?}"
+        );
+    }
 }

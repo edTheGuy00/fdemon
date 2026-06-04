@@ -107,6 +107,32 @@ pub enum LinuxPackageManager {
     Unknown,
 }
 
+/// Pure dispatch: given the set of package manager binary names that are
+/// **known to be present** on PATH (in any order), return the highest-priority
+/// `LinuxPackageManager` according to the canonical precedence order
+/// **apt-get → dnf → yum → pacman → zypper**.
+///
+/// Returns [`LinuxPackageManager::Unknown`] when `present` is empty or
+/// contains none of the known names.
+///
+/// Extracted so that precedence logic can be unit-tested without requiring
+/// a live filesystem (`which::which` cannot be mocked in unit tests).
+fn detect_from_candidates(present: &[&str]) -> LinuxPackageManager {
+    const ORDER: &[(&str, LinuxPackageManager)] = &[
+        ("apt-get", LinuxPackageManager::Apt),
+        ("dnf", LinuxPackageManager::Dnf),
+        ("yum", LinuxPackageManager::Yum),
+        ("pacman", LinuxPackageManager::Pacman),
+        ("zypper", LinuxPackageManager::Zypper),
+    ];
+    for (name, variant) in ORDER {
+        if present.contains(name) {
+            return *variant;
+        }
+    }
+    LinuxPackageManager::Unknown
+}
+
 /// Detect the Linux package manager by probing `which::which` in preference
 /// order: **apt-get → dnf → yum → pacman → zypper**.
 ///
@@ -114,19 +140,12 @@ pub enum LinuxPackageManager {
 /// This is a pure, synchronous probe — it reads PATH only, never invokes
 /// the package manager.
 pub fn detect_linux_package_manager() -> LinuxPackageManager {
-    if which::which("apt-get").is_ok() {
-        LinuxPackageManager::Apt
-    } else if which::which("dnf").is_ok() {
-        LinuxPackageManager::Dnf
-    } else if which::which("yum").is_ok() {
-        LinuxPackageManager::Yum
-    } else if which::which("pacman").is_ok() {
-        LinuxPackageManager::Pacman
-    } else if which::which("zypper").is_ok() {
-        LinuxPackageManager::Zypper
-    } else {
-        LinuxPackageManager::Unknown
-    }
+    let candidates: Vec<&str> = ["apt-get", "dnf", "yum", "pacman", "zypper"]
+        .iter()
+        .copied()
+        .filter(|name| which::which(name).is_ok())
+        .collect();
+    detect_from_candidates(&candidates)
 }
 
 /// Check OS-level prerequisites for Flutter development.
@@ -562,29 +581,68 @@ mod tests {
     use super::*;
 
     // ── Package-manager detection ─────────────────────────────────────────────
-    // These tests exercise the precedence ordering and the Unknown fallback
-    // using the pure helper; the live detect_linux_package_manager() is
-    // covered by a smoke test that just ensures it doesn't panic.
+    // Precedence ordering is tested via the pure `detect_from_candidates`
+    // helper which accepts a pre-resolved slice of binary names.  The live
+    // `detect_linux_package_manager()` is covered by a no-panic smoke test
+    // (`test_detect_linux_package_manager_never_panics` below).
 
     #[test]
-    fn test_package_manager_precedence_apt_before_dnf() {
-        // Simulate: apt-get present → Apt wins, even if dnf were also present
-        // We verify this by checking the enum order used in the function.
-        // Since we can't mock `which`, test the conceptual precedence by
-        // verifying the function returns the *first* manager found on this
-        // machine and that Apt is checked before Dnf (order is documented).
-        //
-        // On CI / dev machines, at most one manager is installed, so just
-        // ensure the function returns a value and doesn't panic.
-        let _pm = detect_linux_package_manager();
-        // No assertion on the value — it depends on the host OS.
+    fn test_detect_from_candidates_apt_wins_over_dnf() {
+        // apt-get has higher precedence than dnf; when both are "present" apt wins.
+        let pm = detect_from_candidates(&["dnf", "apt-get"]);
+        assert_eq!(
+            pm,
+            LinuxPackageManager::Apt,
+            "apt-get must win over dnf regardless of slice order"
+        );
     }
 
     #[test]
-    fn test_package_manager_unknown_when_none_found() {
-        // Confirm the Unknown variant is reachable (compile-time correctness).
-        let pm = LinuxPackageManager::Unknown;
+    fn test_detect_from_candidates_dnf_wins_over_yum() {
+        let pm = detect_from_candidates(&["yum", "dnf"]);
+        assert_eq!(
+            pm,
+            LinuxPackageManager::Dnf,
+            "dnf must win over yum regardless of slice order"
+        );
+    }
+
+    #[test]
+    fn test_detect_from_candidates_yum_wins_over_pacman() {
+        let pm = detect_from_candidates(&["pacman", "yum"]);
+        assert_eq!(pm, LinuxPackageManager::Yum, "yum must win over pacman");
+    }
+
+    #[test]
+    fn test_detect_from_candidates_pacman_wins_over_zypper() {
+        let pm = detect_from_candidates(&["zypper", "pacman"]);
+        assert_eq!(
+            pm,
+            LinuxPackageManager::Pacman,
+            "pacman must win over zypper"
+        );
+    }
+
+    #[test]
+    fn test_detect_from_candidates_zypper_alone_returns_zypper() {
+        let pm = detect_from_candidates(&["zypper"]);
+        assert_eq!(pm, LinuxPackageManager::Zypper);
+    }
+
+    #[test]
+    fn test_detect_from_candidates_empty_returns_unknown() {
+        let pm = detect_from_candidates(&[]);
         assert_eq!(pm, LinuxPackageManager::Unknown);
+    }
+
+    #[test]
+    fn test_detect_from_candidates_unrecognised_names_return_unknown() {
+        let pm = detect_from_candidates(&["emerge", "nix"]);
+        assert_eq!(
+            pm,
+            LinuxPackageManager::Unknown,
+            "unrecognised manager names must yield Unknown"
+        );
     }
 
     #[test]
