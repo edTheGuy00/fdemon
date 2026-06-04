@@ -64,3 +64,27 @@ the label and add the `navigation.rs` row.
 - This is the only sequential task; it runs after all implementation tasks merge so the
   doc matches the final code.
 - Commit only the documentation change.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added `WizardStepPhase` to Message inventory (two locations: Module Reference and Key Types sections); updated `download.rs`, `flutter_install.rs`, `path_config.rs` module descriptions to reflect hardening; corrected `handler/install_wizard/mod.rs` label (re-export shim) and added `navigation.rs` row; updated `install_wizard/` UI State table entry to note `log_tail` is a bounded `VecDeque` with ANSI stripping; updated `handler/install_wizard/` table entry to list `navigation.rs`; updated Install Wizard Step Execution Flow with `WizardStepPhase` signal path and `installed_sdk_path` clearing; updated `StepProgress` widget description with `RESULT_SUMMARY_HEIGHT`. |
+| `workflow/plans/features/toolchain-bootstrap/phase-2-hardening/tasks/06-update-architecture-doc.md` | Appended completion summary |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: NO/N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **`log_tail` VecDeque note placement**: Placed in the UI State table row (where `StepExecution` is introduced) and in the Install Wizard Step Execution Flow section and `StepProgress` description — all three sites where `log_tail` is architecturally relevant. CODE_STANDARDS would be the right home for a code-sample showing the eviction pattern; only the architectural fact (bounded VecDeque, ANSI-stripped) is noted here.
+2. **`WizardStepPhase` two-location update**: Added to both the Module Reference "Message Categories" list and the Key Types "Message" list for consistency with how other Phase 2 message variants are documented.
