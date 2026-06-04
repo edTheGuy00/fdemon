@@ -39,7 +39,7 @@ pub use flutter_install::{
     InstallEvent,
 };
 pub use jdk::{configure_flutter_jdk_dir, resolve_jdk_home};
-pub use path_config::{add_to_path, rc_file_for_shell, PathConfigOutcome};
+pub use path_config::{add_android_env, add_to_path, rc_file_for_shell, PathConfigOutcome};
 pub use process_stream::{run_streaming, run_streaming_with_input};
 pub use types::{
     cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,

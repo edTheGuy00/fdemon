@@ -1,7 +1,7 @@
 //! # PATH Configuration Writer
 //!
-//! Writes an idempotent, marker-fenced `PATH` export for a Flutter SDK `bin`
-//! directory to the correct shell rc file for the detected shell.
+//! Writes idempotent, marker-fenced environment exports for Flutter and Android
+//! SDK toolchain components to the correct shell rc file for the detected shell.
 //!
 //! ## Supported shells
 //!
@@ -17,17 +17,26 @@
 //! Every written block is wrapped with a unique marker so subsequent calls can
 //! detect and replace — rather than duplicate — an existing fence block.
 //!
+//! Flutter PATH block:
 //! ```text
 //! # >>> fdemon flutter path >>>
 //! export PATH="$PATH:/home/u/fvm/versions/stable/bin"
 //! # <<< fdemon flutter path <<<
 //! ```
 //!
+//! Android env block:
+//! ```text
+//! # >>> fdemon android env >>>
+//! export ANDROID_HOME="/home/u/.android/sdk"
+//! export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+//! # <<< fdemon android env <<<
+//! ```
+//!
 //! Algorithm:
-//! 1. Validate `bin_dir` via [`validate_bin_dir`] (rejects injection characters).
+//! 1. Validate the SDK root dir via [`validate_bin_dir`] (rejects injection characters).
 //! 2. Resolve the rc file via [`rc_file_for_shell`].
 //! 3. Read existing contents (empty string if the file is absent).
-//! 4. If a fence block already exists and already contains `bin_dir`, return
+//! 4. If a fence block already exists and already contains the SDK root, return
 //!    [`PathConfigOutcome::AlreadyPresent`].
 //! 5. If a fence block exists but points elsewhere, replace just that block.
 //! 6. Otherwise append a new block.
@@ -42,10 +51,15 @@ use super::types::{HostPlatform, HostShell};
 
 // ── Marker constants ──────────────────────────────────────────────────────────
 
-/// Opening fence line that marks the start of a managed PATH block.
+/// Opening fence line that marks the start of a managed Flutter PATH block.
 const FENCE_OPEN: &str = "# >>> fdemon flutter path >>>";
-/// Closing fence line that marks the end of a managed PATH block.
+/// Closing fence line that marks the end of a managed Flutter PATH block.
 const FENCE_CLOSE: &str = "# <<< fdemon flutter path <<<";
+
+/// Opening fence line that marks the start of a managed Android env block.
+const ANDROID_FENCE_OPEN: &str = "# >>> fdemon android env >>>";
+/// Closing fence line that marks the end of a managed Android env block.
+const ANDROID_FENCE_CLOSE: &str = "# <<< fdemon android env <<<";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -187,6 +201,69 @@ pub fn add_to_path(
     add_to_rc_file(&rc_file, bin_dir)
 }
 
+/// Add Android environment variables (`ANDROID_HOME` and two `PATH` entries) to
+/// the detected shell rc file. Idempotent and marker-fenced with a **distinct**
+/// Android fence marker that never collides with the Flutter PATH block.
+///
+/// # Shell output
+///
+/// bash/zsh:
+/// ```text
+/// # >>> fdemon android env >>>
+/// export ANDROID_HOME="/home/user/.android/sdk"
+/// export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+/// # <<< fdemon android env <<<
+/// ```
+///
+/// fish:
+/// ```text
+/// # >>> fdemon android env >>>
+/// set -Ux ANDROID_HOME "/home/user/.android/sdk"
+/// fish_add_path "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools"
+/// # <<< fdemon android env <<<
+/// ```
+///
+/// Windows: sets `ANDROID_HOME` in the user registry and prepends the two bin
+/// dirs to the user `PATH`, both via PowerShell
+/// `[Environment]::SetEnvironmentVariable`. Values are passed out-of-band
+/// through environment variables (`FDEMON_NEW_ANDROID_HOME` / `FDEMON_NEW_PATH`)
+/// to prevent shell injection.
+///
+/// # Returns
+///
+/// [`PathConfigOutcome::Written`] on the first call and
+/// [`PathConfigOutcome::AlreadyPresent`] on subsequent calls when `sdk_root` is
+/// unchanged — the rc file is byte-identical after re-runs.
+///
+/// # Notes
+///
+/// This function never modifies the *running* process environment. Callers
+/// should surface a "restart your terminal" hint after a successful
+/// [`PathConfigOutcome::Written`].
+pub fn add_android_env(
+    shell: HostShell,
+    platform: HostPlatform,
+    sdk_root: &Path,
+) -> Result<PathConfigOutcome> {
+    // Single validation chokepoint — covers both POSIX and Windows paths.
+    validate_bin_dir(sdk_root)?;
+
+    if platform == HostPlatform::Windows {
+        return add_android_env_windows(sdk_root);
+    }
+
+    let home = home_dir().ok_or_else(|| Error::config("Could not determine home directory"))?;
+
+    let rc_file = rc_file_for_shell(shell, &home).ok_or_else(|| {
+        Error::config(
+            "Could not determine rc file for shell — Android env configuration is not supported \
+             for this shell. Add ANDROID_HOME to your environment manually.",
+        )
+    })?;
+
+    add_android_env_to_rc_file(&rc_file, sdk_root)
+}
+
 // ── Pure string helpers (unit-testable without I/O) ───────────────────────────
 
 /// Build the export line appropriate for bash/zsh.
@@ -236,18 +313,67 @@ fn fence_block(rc_file: &Path, bin_dir: &Path) -> String {
     format!("{}\n{}\n{}\n", FENCE_OPEN, export_line, FENCE_CLOSE)
 }
 
-/// Parse an existing fence block out of `contents`.
+/// Build the Android env fence block for bash/zsh.
+///
+/// ```text
+/// # >>> fdemon android env >>>
+/// export ANDROID_HOME="/home/user/.android/sdk"
+/// export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+/// # <<< fdemon android env <<<
+/// ```
+fn android_posix_block(sdk_root: &Path) -> String {
+    let sdk_str = sdk_root.display();
+    format!(
+        "{fence_open}\nexport ANDROID_HOME=\"{sdk_str}\"\nexport PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\"\n{fence_close}\n",
+        fence_open = ANDROID_FENCE_OPEN,
+        sdk_str = sdk_str,
+        fence_close = ANDROID_FENCE_CLOSE,
+    )
+}
+
+/// Build the Android env fence block for fish.
+///
+/// ```text
+/// # >>> fdemon android env >>>
+/// set -Ux ANDROID_HOME "/home/user/.android/sdk"
+/// fish_add_path "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools"
+/// # <<< fdemon android env <<<
+/// ```
+fn android_fish_block(sdk_root: &Path) -> String {
+    let sdk_str = sdk_root.display();
+    format!(
+        "{fence_open}\nset -Ux ANDROID_HOME \"{sdk_str}\"\nfish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\"\n{fence_close}\n",
+        fence_open = ANDROID_FENCE_OPEN,
+        sdk_str = sdk_str,
+        fence_close = ANDROID_FENCE_CLOSE,
+    )
+}
+
+/// Build the full Android env fence block appropriate for the given rc file.
+fn android_fence_block(rc_file: &Path, sdk_root: &Path) -> String {
+    if is_fish_rc(rc_file) {
+        android_fish_block(sdk_root)
+    } else {
+        android_posix_block(sdk_root)
+    }
+}
+
+/// Parse an existing fence block out of `contents` using the given marker pair.
 ///
 /// Returns the byte range `(open_start, close_end)` of the entire fence block
 /// (inclusive of trailing newline after the close marker), or `None` if no
 /// fence block is present.
-fn find_fence_range(contents: &str) -> Option<(usize, usize)> {
-    let open_pos = contents.find(FENCE_OPEN)?;
-    let close_search_start = open_pos + FENCE_OPEN.len();
-    let close_pos = contents[close_search_start..].find(FENCE_CLOSE)?;
+fn find_fence_range_for(
+    contents: &str,
+    open_marker: &str,
+    close_marker: &str,
+) -> Option<(usize, usize)> {
+    let open_pos = contents.find(open_marker)?;
+    let close_search_start = open_pos + open_marker.len();
+    let close_pos = contents[close_search_start..].find(close_marker)?;
     let close_abs = close_search_start + close_pos;
     // Include everything up through the newline that follows the close marker.
-    let close_end = close_abs + FENCE_CLOSE.len();
+    let close_end = close_abs + close_marker.len();
     // Consume a trailing newline character if present.
     let close_end = if contents.as_bytes().get(close_end) == Some(&b'\n') {
         close_end + 1
@@ -257,14 +383,56 @@ fn find_fence_range(contents: &str) -> Option<(usize, usize)> {
     Some((open_pos, close_end))
 }
 
-/// Return `true` if `contents` contains a fence block that already includes
-/// a reference to `bin_dir`.
+/// Return `true` if `contents` contains a Flutter PATH fence block that already
+/// includes a reference to `bin_dir`.
 #[cfg(test)]
 fn fence_already_has_dir(contents: &str, bin_dir: &Path) -> bool {
     let bin_str = bin_dir.to_string_lossy();
-    match find_fence_range(contents) {
+    match find_fence_range_for(contents, FENCE_OPEN, FENCE_CLOSE) {
         Some((start, end)) => contents[start..end].contains(bin_str.as_ref()),
         None => false,
+    }
+}
+
+/// Apply fence block logic to `contents` using the given fence block string and
+/// marker pair, returning the updated string.
+///
+/// - If no fence exists: append the block.
+/// - If a fence exists but does not contain `anchor`: replace it.
+/// - If a fence exists and already contains `anchor`: return `None` (no change).
+fn apply_fence_with_markers(
+    contents: &str,
+    block: &str,
+    anchor: &str,
+    open_marker: &str,
+    close_marker: &str,
+) -> Option<String> {
+    match find_fence_range_for(contents, open_marker, close_marker) {
+        None => {
+            // No fence yet — append.
+            let mut result = contents.to_string();
+            // Ensure we start on a fresh line.
+            if !result.is_empty() && !result.ends_with('\n') {
+                result.push('\n');
+            }
+            result.push('\n');
+            result.push_str(block);
+            Some(result)
+        }
+        Some((start, end)) => {
+            let existing_block = &contents[start..end];
+            if existing_block.contains(anchor) {
+                // Already present with the same value — no change needed.
+                None
+            } else {
+                // Replace existing block in-place.
+                let mut result = String::with_capacity(contents.len());
+                result.push_str(&contents[..start]);
+                result.push_str(block);
+                result.push_str(&contents[end..]);
+                Some(result)
+            }
+        }
     }
 }
 
@@ -275,35 +443,21 @@ fn fence_already_has_dir(contents: &str, bin_dir: &Path) -> bool {
 /// - If a fence exists and already contains `bin_dir`: return `None` (no change).
 fn apply_fence(contents: &str, rc_file: &Path, bin_dir: &Path) -> Option<String> {
     let block = fence_block(rc_file, bin_dir);
+    let anchor = bin_dir.to_string_lossy().into_owned();
+    apply_fence_with_markers(contents, &block, &anchor, FENCE_OPEN, FENCE_CLOSE)
+}
 
-    match find_fence_range(contents) {
-        None => {
-            // No fence yet — append.
-            let mut result = contents.to_string();
-            // Ensure we start on a fresh line.
-            if !result.is_empty() && !result.ends_with('\n') {
-                result.push('\n');
-            }
-            result.push('\n');
-            result.push_str(&block);
-            Some(result)
-        }
-        Some((start, end)) => {
-            let existing_block = &contents[start..end];
-            let bin_str = bin_dir.to_string_lossy();
-            if existing_block.contains(bin_str.as_ref()) {
-                // Already present with the same bin_dir — no change needed.
-                None
-            } else {
-                // Replace existing block in-place.
-                let mut result = String::with_capacity(contents.len());
-                result.push_str(&contents[..start]);
-                result.push_str(&block);
-                result.push_str(&contents[end..]);
-                Some(result)
-            }
-        }
-    }
+/// Apply Android env fence block logic to `contents`, returning the updated string.
+fn apply_android_fence(contents: &str, rc_file: &Path, sdk_root: &Path) -> Option<String> {
+    let block = android_fence_block(rc_file, sdk_root);
+    let anchor = sdk_root.to_string_lossy().into_owned();
+    apply_fence_with_markers(
+        contents,
+        &block,
+        &anchor,
+        ANDROID_FENCE_OPEN,
+        ANDROID_FENCE_CLOSE,
+    )
 }
 
 // ── File I/O ──────────────────────────────────────────────────────────────────
@@ -363,6 +517,23 @@ fn add_to_rc_file(rc_file: &Path, bin_dir: &Path) -> Result<PathConfigOutcome> {
     let contents = read_rc_contents(rc_file)?;
 
     match apply_fence(&contents, rc_file, bin_dir) {
+        None => Ok(PathConfigOutcome::AlreadyPresent {
+            rc_file: rc_file.to_path_buf(),
+        }),
+        Some(new_contents) => {
+            write_rc_atomically(rc_file, &new_contents)?;
+            Ok(PathConfigOutcome::Written {
+                rc_file: rc_file.to_path_buf(),
+            })
+        }
+    }
+}
+
+/// Core Unix/macOS rc-file update for Android env: read → apply Android fence → (maybe) write.
+fn add_android_env_to_rc_file(rc_file: &Path, sdk_root: &Path) -> Result<PathConfigOutcome> {
+    let contents = read_rc_contents(rc_file)?;
+
+    match apply_android_fence(&contents, rc_file, sdk_root) {
         None => Ok(PathConfigOutcome::AlreadyPresent {
             rc_file: rc_file.to_path_buf(),
         }),
@@ -455,6 +626,142 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
 
     Ok(PathConfigOutcome::Written {
         rc_file: PathBuf::from("HKCU:\\Environment\\PATH"),
+    })
+}
+
+/// Update the Windows user `ANDROID_HOME` and `PATH` via PowerShell.
+///
+/// Sets `ANDROID_HOME` to `sdk_root` and prepends
+/// `%ANDROID_HOME%\cmdline-tools\latest\bin` and
+/// `%ANDROID_HOME%\platform-tools` to the user `PATH` if they are not already
+/// present (idempotent).
+///
+/// **Injection safety:** `sdk_root` is passed out-of-band via
+/// `FDEMON_NEW_ANDROID_HOME`; the new PATH value via `FDEMON_NEW_PATH`. Neither
+/// value is ever interpolated into the PowerShell script string.
+fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
+    let sdk_str = sdk_root.to_string_lossy().into_owned();
+
+    // Read the current user ANDROID_HOME.
+    let read_home_output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User')",
+        ])
+        .output()
+        .map_err(|e| {
+            Error::config(format!(
+                "Failed to run PowerShell to read ANDROID_HOME: {}",
+                e
+            ))
+        })?;
+
+    let current_home = String::from_utf8_lossy(&read_home_output.stdout)
+        .trim()
+        .to_string();
+
+    // Read the current user PATH.
+    let read_path_output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('PATH', 'User')",
+        ])
+        .output()
+        .map_err(|e| Error::config(format!("Failed to run PowerShell to read PATH: {}", e)))?;
+
+    let current_path = String::from_utf8_lossy(&read_path_output.stdout)
+        .trim()
+        .to_string();
+
+    // Compute the two Android bin dirs to add.
+    let cmdline_bin = format!("{}\\cmdline-tools\\latest\\bin", sdk_str);
+    let platform_tools = format!("{}\\platform-tools", sdk_str);
+
+    // Check whether ANDROID_HOME already equals sdk_root and both bin dirs are
+    // already in PATH — if so, the configuration is already complete.
+    let home_matches = current_home.eq_ignore_ascii_case(&sdk_str);
+    let path_segments: Vec<&str> = current_path.split(';').map(str::trim).collect();
+    let cmdline_present = path_segments
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(&cmdline_bin));
+    let platform_present = path_segments
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(&platform_tools));
+
+    if home_matches && cmdline_present && platform_present {
+        return Ok(PathConfigOutcome::AlreadyPresent {
+            rc_file: PathBuf::from("HKCU:\\Environment"),
+        });
+    }
+
+    // Set ANDROID_HOME — passed out-of-band to avoid injection.
+    let set_home_output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::SetEnvironmentVariable('ANDROID_HOME', $env:FDEMON_NEW_ANDROID_HOME, 'User')",
+        ])
+        .env("FDEMON_NEW_ANDROID_HOME", &sdk_str)
+        .output()
+        .map_err(|e| {
+            Error::config(format!(
+                "Failed to run PowerShell to set ANDROID_HOME: {}",
+                e
+            ))
+        })?;
+
+    if !set_home_output.status.success() {
+        let stderr = String::from_utf8_lossy(&set_home_output.stderr);
+        return Err(Error::config(format!(
+            "PowerShell SetEnvironmentVariable(ANDROID_HOME) failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    // Prepend the two bin dirs to PATH (only if not already present).
+    let mut path_parts: Vec<String> = current_path
+        .split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Prepend in reverse order so cmdline_bin ends up before platform_tools.
+    if !platform_present {
+        path_parts.insert(0, platform_tools);
+    }
+    if !cmdline_present {
+        path_parts.insert(0, cmdline_bin);
+    }
+
+    let new_path = path_parts.join(";");
+
+    // Pass the new PATH value out-of-band via an environment variable.
+    let set_path_output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')",
+        ])
+        .env("FDEMON_NEW_PATH", &new_path)
+        .output()
+        .map_err(|e| Error::config(format!("Failed to run PowerShell to set PATH: {}", e)))?;
+
+    if !set_path_output.status.success() {
+        let stderr = String::from_utf8_lossy(&set_path_output.stderr);
+        return Err(Error::config(format!(
+            "PowerShell SetEnvironmentVariable(PATH) failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    Ok(PathConfigOutcome::Written {
+        rc_file: PathBuf::from("HKCU:\\Environment"),
     })
 }
 
@@ -627,7 +934,7 @@ mod tests {
     #[test]
     fn test_find_fence_range_none_when_absent() {
         let contents = "# some shell config\nexport FOO=bar\n";
-        assert!(find_fence_range(contents).is_none());
+        assert!(find_fence_range_for(contents, FENCE_OPEN, FENCE_CLOSE).is_none());
     }
 
     #[test]
@@ -636,7 +943,7 @@ mod tests {
             "# preamble\n{}\nexport PATH=\"$PATH:/a/bin\"\n{}\n# postamble\n",
             FENCE_OPEN, FENCE_CLOSE
         );
-        let range = find_fence_range(&contents);
+        let range = find_fence_range_for(&contents, FENCE_OPEN, FENCE_CLOSE);
         assert!(range.is_some());
         let (start, end) = range.unwrap();
         let block = &contents[start..end];
@@ -1013,5 +1320,317 @@ mod tests {
         };
 
         assert_eq!(new_path, "C:\\Windows\\System32;C:\\tools\\flutter\\bin");
+    }
+
+    // ── add_android_env tests ─────────────────────────────────────────────────
+
+    /// Golden-file idempotency for bash: write the Android env block, capture
+    /// contents, write again — second call must return `AlreadyPresent` and the
+    /// file must be byte-identical.
+    #[test]
+    fn test_add_android_env_idempotent_bash() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_root = PathBuf::from("/home/user/.android/sdk");
+
+        let rc_file = rc_file_for_shell(HostShell::Bash, home).unwrap();
+
+        // First write.
+        let first = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(
+            matches!(first, PathConfigOutcome::Written { .. }),
+            "first call should be Written"
+        );
+
+        let golden = std::fs::read_to_string(&rc_file).unwrap();
+
+        // Second write — must be a no-op.
+        let second = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert_eq!(
+            second,
+            PathConfigOutcome::AlreadyPresent {
+                rc_file: rc_file.clone()
+            },
+            "second call should be AlreadyPresent"
+        );
+
+        let after_second = std::fs::read_to_string(&rc_file).unwrap();
+        assert_eq!(
+            golden, after_second,
+            "rc file must be byte-identical after second call"
+        );
+    }
+
+    /// Golden-file idempotency for zsh.
+    #[test]
+    fn test_add_android_env_idempotent_zsh() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_root = PathBuf::from("/home/user/.android/sdk");
+
+        let rc_file = rc_file_for_shell(HostShell::Zsh, home).unwrap();
+
+        let first = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(matches!(first, PathConfigOutcome::Written { .. }));
+
+        let golden = std::fs::read_to_string(&rc_file).unwrap();
+
+        let second = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(matches!(second, PathConfigOutcome::AlreadyPresent { .. }));
+
+        let after_second = std::fs::read_to_string(&rc_file).unwrap();
+        assert_eq!(golden, after_second);
+    }
+
+    /// Golden-file idempotency for fish.
+    #[test]
+    fn test_add_android_env_idempotent_fish() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_root = PathBuf::from("/home/user/.android/sdk");
+
+        let rc_file = rc_file_for_shell(HostShell::Fish, home).unwrap();
+
+        let first = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(matches!(first, PathConfigOutcome::Written { .. }));
+
+        let golden = std::fs::read_to_string(&rc_file).unwrap();
+
+        let second = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(matches!(second, PathConfigOutcome::AlreadyPresent { .. }));
+
+        let after_second = std::fs::read_to_string(&rc_file).unwrap();
+        assert_eq!(golden, after_second);
+    }
+
+    /// The written block must contain ANDROID_HOME, cmdline-tools/latest/bin,
+    /// and platform-tools for bash/zsh.
+    #[test]
+    fn test_android_env_block_has_both_bins_bash() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_root = PathBuf::from("/home/user/.android/sdk");
+
+        let rc_file = rc_file_for_shell(HostShell::Bash, home).unwrap();
+        add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+
+        let contents = std::fs::read_to_string(&rc_file).unwrap();
+
+        assert!(
+            contents.contains("ANDROID_HOME"),
+            "block must contain ANDROID_HOME"
+        );
+        assert!(
+            contents.contains("cmdline-tools/latest/bin"),
+            "block must contain cmdline-tools/latest/bin"
+        );
+        assert!(
+            contents.contains("platform-tools"),
+            "block must contain platform-tools"
+        );
+        assert!(
+            contents.contains(ANDROID_FENCE_OPEN),
+            "block must have Android fence open marker"
+        );
+        assert!(
+            contents.contains(ANDROID_FENCE_CLOSE),
+            "block must have Android fence close marker"
+        );
+        // Flutter PATH fence must NOT appear.
+        assert!(
+            !contents.contains(FENCE_OPEN),
+            "Flutter PATH fence must not appear in Android block"
+        );
+    }
+
+    /// The fish block must contain ANDROID_HOME, cmdline-tools/latest/bin,
+    /// and platform-tools using fish syntax.
+    #[test]
+    fn test_android_env_block_has_both_bins_fish() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_root = PathBuf::from("/home/user/.android/sdk");
+
+        let rc_file = rc_file_for_shell(HostShell::Fish, home).unwrap();
+        add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+
+        let contents = std::fs::read_to_string(&rc_file).unwrap();
+
+        assert!(contents.contains("ANDROID_HOME"));
+        assert!(contents.contains("cmdline-tools/latest/bin"));
+        assert!(contents.contains("platform-tools"));
+        assert!(contents.contains("set -Ux ANDROID_HOME"));
+        assert!(contents.contains("fish_add_path"));
+        // fish block should NOT use posix `export` syntax.
+        assert!(!contents.contains("export ANDROID_HOME"));
+    }
+
+    /// Both the Flutter PATH block and the Android env block can coexist in the
+    /// same rc file — each is independently idempotent.
+    #[test]
+    fn test_distinct_fence_flutter_and_android_coexist() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let bin_dir = PathBuf::from("/opt/flutter/bin");
+        let sdk_root = PathBuf::from("/home/user/.android/sdk");
+
+        let rc_file = rc_file_for_shell(HostShell::Bash, home).unwrap();
+
+        // Write Flutter PATH block.
+        let r1 = add_to_rc_file(&rc_file, &bin_dir).unwrap();
+        assert!(matches!(r1, PathConfigOutcome::Written { .. }));
+
+        // Write Android env block.
+        let r2 = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(matches!(r2, PathConfigOutcome::Written { .. }));
+
+        let contents = std::fs::read_to_string(&rc_file).unwrap();
+
+        // Both blocks must be present.
+        assert_eq!(
+            contents.matches(FENCE_OPEN).count(),
+            1,
+            "exactly one Flutter fence"
+        );
+        assert_eq!(
+            contents.matches(FENCE_CLOSE).count(),
+            1,
+            "exactly one Flutter fence close"
+        );
+        assert_eq!(
+            contents.matches(ANDROID_FENCE_OPEN).count(),
+            1,
+            "exactly one Android fence"
+        );
+        assert_eq!(
+            contents.matches(ANDROID_FENCE_CLOSE).count(),
+            1,
+            "exactly one Android fence close"
+        );
+        assert!(contents.contains("/opt/flutter/bin"));
+        assert!(contents.contains("/home/user/.android/sdk"));
+
+        // Re-running both must be idempotent — no duplicates.
+        let r3 = add_to_rc_file(&rc_file, &bin_dir).unwrap();
+        assert!(matches!(r3, PathConfigOutcome::AlreadyPresent { .. }));
+
+        let r4 = add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+        assert!(matches!(r4, PathConfigOutcome::AlreadyPresent { .. }));
+
+        let final_contents = std::fs::read_to_string(&rc_file).unwrap();
+        assert_eq!(
+            final_contents.matches(FENCE_OPEN).count(),
+            1,
+            "still exactly one Flutter fence after re-run"
+        );
+        assert_eq!(
+            final_contents.matches(ANDROID_FENCE_OPEN).count(),
+            1,
+            "still exactly one Android fence after re-run"
+        );
+    }
+
+    /// A SDK root with spaces must be written correctly (double-quoted in the
+    /// export line, not causing parse errors).
+    #[test]
+    fn test_android_env_sdk_root_with_spaces_bash() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_root = PathBuf::from("/home/user/android sdk/root");
+
+        let rc_file = rc_file_for_shell(HostShell::Bash, home).unwrap();
+        add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
+
+        let contents = std::fs::read_to_string(&rc_file).unwrap();
+        // The path must appear double-quoted inside the ANDROID_HOME export.
+        assert!(
+            contents.contains("export ANDROID_HOME=\"/home/user/android sdk/root\""),
+            "SDK root with spaces must be double-quoted in export"
+        );
+    }
+
+    /// Android env block content assertions — pure string builder (no I/O).
+    #[test]
+    fn test_android_posix_block_content() {
+        let sdk_root = Path::new("/home/user/.android/sdk");
+        let block = android_posix_block(sdk_root);
+
+        assert!(block.starts_with(ANDROID_FENCE_OPEN));
+        assert!(block.contains("export ANDROID_HOME=\"/home/user/.android/sdk\""));
+        assert!(block.contains(
+            "export PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\""
+        ));
+        assert!(block.contains(ANDROID_FENCE_CLOSE));
+        // Must not collide with Flutter PATH marker.
+        assert!(!block.contains(FENCE_OPEN));
+    }
+
+    #[test]
+    fn test_android_fish_block_content() {
+        let sdk_root = Path::new("/home/user/.android/sdk");
+        let block = android_fish_block(sdk_root);
+
+        assert!(block.starts_with(ANDROID_FENCE_OPEN));
+        assert!(block.contains("set -Ux ANDROID_HOME \"/home/user/.android/sdk\""));
+        assert!(block.contains(
+            "fish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\""
+        ));
+        assert!(block.contains(ANDROID_FENCE_CLOSE));
+        assert!(!block.contains("export ANDROID_HOME"));
+    }
+
+    /// The injection validator rejects metacharacters in sdk_root paths when
+    /// calling `add_android_env`.
+    #[test]
+    fn test_add_android_env_rejects_injection_path() {
+        let dangerous = PathBuf::from("/opt/android\nevil command");
+        let result = add_android_env(HostShell::Bash, HostPlatform::Linux, &dangerous);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("newline") || err_msg.contains("injection"));
+    }
+
+    /// Verify that the Windows PowerShell script for setting ANDROID_HOME uses
+    /// the env-var out-of-band form and never interpolates the SDK root.
+    #[test]
+    fn test_windows_android_home_script_uses_env_var() {
+        let expected_script =
+            "[Environment]::SetEnvironmentVariable('ANDROID_HOME', $env:FDEMON_NEW_ANDROID_HOME, 'User')";
+
+        let tricky_sdk = "C:\\Users\\O'Brien\\android sdk";
+
+        assert!(
+            !expected_script.contains(tricky_sdk),
+            "Script must not interpolate the SDK root value"
+        );
+        assert!(
+            expected_script.contains("$env:FDEMON_NEW_ANDROID_HOME"),
+            "Script must reference FDEMON_NEW_ANDROID_HOME env var"
+        );
+    }
+
+    /// Replacing an Android env block when the SDK root changes leaves exactly
+    /// one Android fence block (old entry gone, new entry present).
+    #[test]
+    fn test_android_env_changed_sdk_root_replaces_block() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let sdk_a = PathBuf::from("/home/user/.android/sdk_a");
+        let sdk_b = PathBuf::from("/home/user/.android/sdk_b");
+
+        let rc_file = rc_file_for_shell(HostShell::Bash, home).unwrap();
+
+        add_android_env_to_rc_file(&rc_file, &sdk_a).unwrap();
+        let outcome = add_android_env_to_rc_file(&rc_file, &sdk_b).unwrap();
+        assert!(matches!(outcome, PathConfigOutcome::Written { .. }));
+
+        let contents = std::fs::read_to_string(&rc_file).unwrap();
+        assert!(!contents.contains("sdk_a"), "old SDK root must be gone");
+        assert!(contents.contains("sdk_b"), "new SDK root must be present");
+        assert_eq!(
+            contents.matches(ANDROID_FENCE_OPEN).count(),
+            1,
+            "exactly one Android fence block"
+        );
     }
 }
