@@ -5,10 +5,11 @@
 //! 1. Resolve the install root (`~/fvm/versions` by default, `$FVM_CACHE_PATH`
 //!    if set, or an explicit caller override).
 //! 2. Fetch the Flutter releases manifest from the Google CDN and select the
-//!    best stable release for the current OS + CPU architecture.
+//!    best release for the current OS + CPU architecture for the configured channel.
 //! 3. Install via `git clone` (default) or archive download+verify+extract
 //!    (fallback when `git` is absent or the caller forces `Archive` mode).
-//! 4. Atomically rename the temp dir into the final install location.
+//! 4. Atomically rename the temp dir into the final install location, reclaiming
+//!    any incomplete prior install in `final_dir`.
 //! 5. Run `flutter precache` (non-fatal on failure — the SDK is usable; the
 //!    caller may retry precache separately).
 //!
@@ -16,6 +17,13 @@
 //!
 //! - **Atomic install**: all work happens inside `.fdemon-install-tmp-<pid>`;
 //!   the final rename is atomic on POSIX. On failure the temp dir is removed.
+//! - **Concurrent-install guard**: an advisory lockfile (`.fdemon-install.lock`)
+//!   in the install root prevents two processes from colliding on the same
+//!   `final_dir`. A RAII `LockGuard` releases the lock on drop (including panics
+//!   and early returns).
+//! - **Partial-dir reclamation**: if `final_dir` exists but `bin/flutter` is
+//!   absent (incomplete prior install), the partial dir is removed before the
+//!   rename so the install can proceed cleanly.
 //! - **Precache non-fatal**: `flutter precache` may fail on network-restricted
 //!   hosts or in CI. The installed SDK is still functional for most workflows.
 //!   The caller receives a `Log` event describing the failure.
@@ -29,6 +37,7 @@
 //! - [`fetch_release_manifest`] — download and parse the releases JSON.
 //! - [`install_flutter`] — orchestrate the full install flow.
 
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 use fdemon_core::{Error, Result};
@@ -40,6 +49,14 @@ use super::types::{
     DownloadProgress, FlutterInstallOutcome, FlutterInstallTarget, FlutterRelease,
     FlutterReleaseManifest, HostArch, HostPlatform, InstallMethod,
 };
+
+// ── Timeout constants ─────────────────────────────────────────────────────────
+
+/// TCP connection timeout for manifest HTTP requests.
+const MANIFEST_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Total request timeout for manifest HTTP requests (includes body transfer).
+const MANIFEST_REQUEST_TIMEOUT_SECS: u64 = 60;
 
 // ── InstallEvent ──────────────────────────────────────────────────────────────
 
@@ -59,6 +76,95 @@ pub enum InstallEvent {
     Phase(&'static str),
 }
 
+// ── Advisory lock guard ───────────────────────────────────────────────────────
+
+/// RAII guard that holds an advisory install lockfile.
+///
+/// The lock is acquired by creating `<install_root>/.fdemon-install.lock` with
+/// `O_CREAT | O_EXCL`. The file is removed when this guard is dropped —
+/// including on panics and early returns — so the lock is always released.
+#[derive(Debug)]
+struct LockGuard {
+    lock_path: PathBuf,
+}
+
+impl LockGuard {
+    /// Acquire the lock. Returns `Err` if the lock already exists (another
+    /// install is in progress or a stale lock was not cleaned up).
+    fn acquire(install_root: &Path) -> Result<Self> {
+        let lock_path = install_root.join(".fdemon-install.lock");
+
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    Error::process(format!(
+                        "another install is in progress (or a stale lock exists at {}); \
+                         retry shortly — if no install is running, remove the lock file manually",
+                        lock_path.display()
+                    ))
+                } else {
+                    Error::Io(std::io::Error::new(
+                        e.kind(),
+                        format!("create install lock {}: {e}", lock_path.display()),
+                    ))
+                }
+            })?;
+
+        Ok(Self { lock_path })
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.lock_path) {
+            tracing::warn!(
+                "Failed to remove install lockfile {}: {e}",
+                self.lock_path.display()
+            );
+        }
+    }
+}
+
+// ── Channel validation ────────────────────────────────────────────────────────
+
+/// Validate a Flutter channel name for use in git and archive operations.
+///
+/// Accepted characters: `[A-Za-z0-9._-]`. A leading `-` is rejected because
+/// it would be interpreted as a command-line flag by git. Empty strings are
+/// also rejected.
+///
+/// This guard prevents argument-injection attacks when the channel value comes
+/// from user-controlled config (e.g. `.fdemon/config.toml`'s `[toolchain]`
+/// block). A value like `--upload-pack=…` or `--config core.askpass=…` would
+/// otherwise be passed directly to `git clone -b <channel>` and interpreted as
+/// a git option, enabling remote code execution.
+fn validate_channel(channel: &str) -> Result<()> {
+    if channel.is_empty() {
+        return Err(Error::process(
+            "toolchain channel must not be empty; valid values are e.g. 'stable', 'beta'",
+        ));
+    }
+    if channel.starts_with('-') {
+        return Err(Error::process(format!(
+            "toolchain channel '{channel}' starts with '-', which is not a valid channel name \
+             (would be interpreted as a git option)"
+        )));
+    }
+    if !channel
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(Error::process(format!(
+            "toolchain channel '{channel}' contains invalid characters; \
+             only [A-Za-z0-9._-] are allowed"
+        )));
+    }
+    Ok(())
+}
+
 // ── resolve_install_dir ───────────────────────────────────────────────────────
 
 /// Determine the directory under which the Flutter SDK will be installed.
@@ -66,6 +172,7 @@ pub enum InstallEvent {
 /// Resolution order:
 /// 1. `explicit_root` — caller-supplied override (e.g. from `.fdemon/config.toml`).
 /// 2. `$FVM_CACHE_PATH` — environment variable honoured by fvm.
+///    Must be an absolute path; relative values are ignored with a warning.
 /// 3. `~/fvm/versions` — fvm default; created if absent.
 ///
 /// The resolved directory is created with `create_dir_all` when it does not
@@ -90,14 +197,21 @@ pub fn resolve_install_dir(explicit_root: Option<&Path>) -> Result<PathBuf> {
 
     // 2. $FVM_CACHE_PATH env var (must be an absolute path).
     if let Ok(env_path) = std::env::var("FVM_CACHE_PATH") {
-        let path = PathBuf::from(env_path);
-        std::fs::create_dir_all(&path).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                e.kind(),
-                format!("create $FVM_CACHE_PATH directory {path:?}: {e}"),
-            ))
-        })?;
-        return Ok(path);
+        let path = PathBuf::from(&env_path);
+        if path.is_absolute() {
+            std::fs::create_dir_all(&path).map_err(|e| {
+                Error::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("create $FVM_CACHE_PATH directory {path:?}: {e}"),
+                ))
+            })?;
+            return Ok(path);
+        } else {
+            tracing::warn!(
+                "$FVM_CACHE_PATH is a relative path ({env_path:?}); \
+                 ignoring it and falling back to ~/fvm/versions"
+            );
+        }
     }
 
     // 3. ~/fvm/versions default.
@@ -140,6 +254,35 @@ fn archive_extension(platform: &HostPlatform) -> &'static str {
     }
 }
 
+/// Resolve the best release for `channel` + `arch` from a manifest.
+///
+/// Selection order:
+/// 1. First release whose `channel` matches and whose `dart_sdk_arch` matches `arch`.
+/// 2. First release whose `channel` matches (any arch — covers older manifests).
+///
+/// Returns `None` when no release for the requested channel exists.
+fn resolve_channel_release<'m>(
+    manifest: &'m FlutterReleaseManifest,
+    channel: &str,
+    arch: HostArch,
+) -> Option<&'m FlutterRelease> {
+    let arch_str = arch.as_manifest_str();
+
+    // Pass 1: prefer exact arch match within the channel.
+    if let Some(label) = arch_str {
+        if let Some(r) = manifest
+            .releases
+            .iter()
+            .find(|r| r.channel == channel && r.dart_sdk_arch.as_deref() == Some(label))
+        {
+            return Some(r);
+        }
+    }
+
+    // Pass 2: fall back to any release in the channel.
+    manifest.releases.iter().find(|r| r.channel == channel)
+}
+
 // ── Wire JSON types (serde deserialization) ───────────────────────────────────
 
 /// Internal JSON shape for a single releases manifest entry.
@@ -172,6 +315,9 @@ struct RawManifest {
 /// The manifest is downloaded from the Google Flutter infrastructure CDN.
 /// URL format: `https://storage.googleapis.com/flutter_infra_release/releases/releases_<os>.json`
 ///
+/// The HTTP client applies a [`MANIFEST_CONNECT_TIMEOUT_SECS`] TCP connect
+/// timeout and a [`MANIFEST_REQUEST_TIMEOUT_SECS`] total request timeout.
+///
 /// # Errors
 ///
 /// Returns an error on network failure, non-2xx HTTP status, or JSON parse
@@ -182,6 +328,12 @@ pub async fn fetch_release_manifest(platform: HostPlatform) -> Result<FlutterRel
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("fdemon/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(
+            MANIFEST_CONNECT_TIMEOUT_SECS,
+        ))
+        .timeout(std::time::Duration::from_secs(
+            MANIFEST_REQUEST_TIMEOUT_SECS,
+        ))
         .build()
         .map_err(|e| Error::process(format!("failed to build HTTP client: {e}")))?;
 
@@ -263,6 +415,19 @@ fn read_installed_version(sdk_root: &Path, fallback: &str) -> String {
 
 /// Install a managed Flutter SDK.
 ///
+/// ## Channel Validation
+///
+/// The `target.channel` field is validated before any I/O: only `[A-Za-z0-9._-]`
+/// characters are permitted and a leading `-` is rejected to prevent git
+/// argument injection.
+///
+/// ## Concurrent-Install Guard
+///
+/// An advisory lockfile (`.fdemon-install.lock` in `target.install_root`) is
+/// held for the duration of the install. If the file already exists a clear
+/// error is returned. The lock is released by a RAII `LockGuard` on both
+/// success and error paths (including panics).
+///
 /// ## Install Method Selection
 ///
 /// - Uses `git clone` when `git` is available on `PATH` and
@@ -274,9 +439,10 @@ fn read_installed_version(sdk_root: &Path, fallback: &str) -> String {
 ///
 /// All work is performed inside a sibling temp directory
 /// `.fdemon-install-tmp-<pid>` under `target.install_root`. On success the
-/// temp dir is atomically renamed to `final_dir`. On any failure the temp dir
-/// is removed and the error is propagated; `final_dir` is never left in a
-/// partial state.
+/// temp dir is atomically renamed to `final_dir`. A pre-existing `final_dir`
+/// that lacks `bin/flutter` (incomplete prior install) is removed before the
+/// rename so it does not block. On any failure the temp dir is removed and the
+/// error is propagated.
 ///
 /// ## Precache
 ///
@@ -289,6 +455,8 @@ fn read_installed_version(sdk_root: &Path, fallback: &str) -> String {
 /// # Errors
 ///
 /// Returns an error when:
+/// - The channel name fails validation.
+/// - The lockfile cannot be acquired.
 /// - The temp directory cannot be created.
 /// - The git clone fails (git path) or the download/verify/extract fails
 ///   (archive path).
@@ -300,6 +468,9 @@ pub async fn install_flutter<F>(
 where
     F: FnMut(InstallEvent) + Send,
 {
+    // ── Channel validation (M2: prevent git argument injection) ──────────────
+    validate_channel(&target.channel)?;
+
     let final_dir = target.install_root.join(&target.version_dir_name);
 
     // ── Short-circuit: already installed ────────────────────────────────────
@@ -322,6 +493,9 @@ where
             method,
         });
     }
+
+    // ── Concurrent-install guard (M9) ────────────────────────────────────────
+    let _lock = LockGuard::acquire(&target.install_root)?;
 
     // ── Temp directory ───────────────────────────────────────────────────────
     let pid = std::process::id();
@@ -367,7 +541,10 @@ where
 
 /// Inner install logic, called from [`install_flutter`].
 ///
-/// On success `tmp_dir` has been renamed to `final_dir`.
+/// On success `tmp_dir` has been renamed to `final_dir`. If `final_dir` exists
+/// but is an incomplete install (directory exists, `bin/flutter` absent), it is
+/// removed before the rename so the install can proceed without an `ENOTEMPTY`
+/// error.
 async fn install_inner<F>(
     target: &FlutterInstallTarget,
     tmp_dir: &Path,
@@ -386,8 +563,37 @@ where
     let sdk_root_in_tmp: PathBuf = if use_git {
         git_install(target, tmp_dir, on_event).await?
     } else {
-        archive_install(tmp_dir, on_event).await?
+        archive_install(target, tmp_dir, on_event).await?
     };
+
+    // ── Reclaim incomplete final_dir (M5) ────────────────────────────────────
+    // If a prior install was interrupted after the directory was created but
+    // before it was fully populated (bin/flutter absent), remove it so the
+    // rename below succeeds instead of failing with ENOTEMPTY.
+    #[cfg(not(windows))]
+    let flutter_bin_in_final = final_dir.join("bin").join("flutter");
+    #[cfg(windows)]
+    let flutter_bin_in_final = final_dir.join("bin").join("flutter.bat");
+
+    if final_dir.exists() && !flutter_bin_in_final.exists() {
+        tracing::warn!(
+            "Removing incomplete Flutter install at {} (bin/flutter absent) before rename",
+            final_dir.display()
+        );
+        on_event(InstallEvent::Log(format!(
+            "Removing incomplete prior Flutter install at {} …",
+            final_dir.display()
+        )));
+        std::fs::remove_dir_all(final_dir).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "remove incomplete Flutter install at {}: {e}",
+                    final_dir.display()
+                ),
+            ))
+        })?;
+    }
 
     // ── Atomic rename ────────────────────────────────────────────────────────
     tracing::debug!(
@@ -427,6 +633,10 @@ where
 
 /// Install via `git clone -b <channel> --depth 1`.
 ///
+/// The git invocation uses a `--` option terminator before the URL and target
+/// directory so they are always treated as positional operands and never
+/// interpreted as flags, regardless of their content.
+///
 /// Returns the path of the SDK root inside `tmp_dir` (i.e. `tmp_dir` itself,
 /// since git clones directly into the target directory).
 async fn git_install<F>(
@@ -446,12 +656,18 @@ where
 
     let channel = &target.channel;
     let tmp_str = tmp_dir.to_string_lossy();
+
+    // The `--` terminator ensures the URL and directory path are always
+    // treated as positional arguments and never as git options, regardless
+    // of their content. `channel` has already been validated by
+    // `validate_channel` before reaching this point.
     let args = &[
         "clone",
         "-b",
         channel.as_str(),
         "--depth",
         "1",
+        "--",
         "https://github.com/flutter/flutter.git",
         tmp_str.as_ref(),
     ];
@@ -473,21 +689,55 @@ where
 
 /// Install via archive download → SHA-256 verify → extract.
 ///
+/// The release is resolved for `target.channel` and the detected host
+/// architecture. If the manifest does not contain an archive for the requested
+/// channel, the function falls back to `stable` and emits a visible warning
+/// via [`InstallEvent::Log`].
+///
+/// ## SHA-256 note
+///
+/// The hash and archive both originate from the same HTTPS Google CDN server.
+/// The digest therefore guards against **corruption** (bit-rot, truncated
+/// download) rather than a CDN-level MITM — the CA chain provides transport
+/// integrity.
+///
 /// Returns the path of the SDK root inside `tmp_dir` (the `flutter/` subdir
 /// that Flutter archives extract to).
-async fn archive_install<F>(tmp_dir: &Path, on_event: &mut F) -> Result<PathBuf>
+async fn archive_install<F>(
+    target: &FlutterInstallTarget,
+    tmp_dir: &Path,
+    on_event: &mut F,
+) -> Result<PathBuf>
 where
     F: FnMut(InstallEvent) + Send,
 {
     let platform = HostPlatform::detect();
+
+    // Capture arch once and reuse (m4: avoid calling detect() twice).
+    let arch = HostArch::detect();
+
     let manifest = fetch_release_manifest(platform.clone()).await?;
 
-    let release = manifest.resolve_stable(HostArch::detect()).ok_or_else(|| {
-        Error::process(format!(
-            "no stable Flutter release found for arch {:?} in manifest",
-            HostArch::detect()
-        ))
-    })?;
+    // M4: resolve the configured channel first; fall back to stable with warning.
+    let release = if let Some(r) = resolve_channel_release(&manifest, &target.channel, arch) {
+        r
+    } else {
+        // The configured channel is not available as an archive for this arch.
+        let warning = format!(
+            "channel '{}' unavailable as archive for arch {:?}; installing stable instead",
+            target.channel, arch
+        );
+        tracing::warn!("{warning}");
+        on_event(InstallEvent::Log(format!("[warning] {warning}")));
+
+        manifest.resolve_stable(arch).ok_or_else(|| {
+            Error::process(format!(
+                "no stable Flutter release found for arch {:?} in manifest \
+                     (configured channel '{}' was also unavailable)",
+                arch, target.channel
+            ))
+        })?
+    };
 
     let archive_url = archive_download_url(&manifest.base_url, &release.archive);
     let ext = archive_extension(&platform);
@@ -503,6 +753,8 @@ where
     .await?;
 
     // Verify SHA-256 (run blocking I/O in a thread pool).
+    // Note: hash and archive originate from the same HTTPS server; the digest
+    // guards against corruption, not a CDN-level MITM.
     on_event(InstallEvent::Phase("Verifying"));
     on_event(InstallEvent::Log("Verifying SHA-256 checksum …".to_owned()));
 
@@ -601,6 +853,196 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // ── validate_channel ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_channel_accepts_stable() {
+        assert!(validate_channel("stable").is_ok());
+    }
+
+    #[test]
+    fn test_validate_channel_accepts_beta() {
+        assert!(validate_channel("beta").is_ok());
+    }
+
+    #[test]
+    fn test_validate_channel_accepts_version_like() {
+        assert!(validate_channel("3.24.0").is_ok());
+    }
+
+    #[test]
+    fn test_validate_channel_accepts_underscore_and_dash() {
+        assert!(validate_channel("my_channel-1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_empty() {
+        let err = validate_channel("").unwrap_err();
+        assert!(err.to_string().contains("empty"), "error: {err}");
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_leading_dash() {
+        let err = validate_channel("--upload-pack=evil").unwrap_err();
+        assert!(err.to_string().contains("starts with '-'"), "error: {err}");
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_leading_dash_single() {
+        let err = validate_channel("-b").unwrap_err();
+        assert!(err.to_string().contains("starts with '-'"), "error: {err}");
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_space() {
+        let err = validate_channel("stable channel").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid characters"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_equals() {
+        let err = validate_channel("--config=x").unwrap_err();
+        // Starts with '-' check fires first.
+        assert!(err.to_string().contains("starts with '-'"), "error: {err}");
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_slash() {
+        let err = validate_channel("stable/linux").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid characters"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_channel_rejects_null_byte() {
+        let err = validate_channel("stable\0evil").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid characters"),
+            "error: {err}"
+        );
+    }
+
+    // ── LockGuard ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_lock_guard_creates_and_releases_lockfile() {
+        let tmp = TempDir::new().unwrap();
+        let lock_path = tmp.path().join(".fdemon-install.lock");
+
+        {
+            let _guard = LockGuard::acquire(tmp.path()).expect("first acquire must succeed");
+            assert!(
+                lock_path.exists(),
+                "lockfile must exist while guard is held"
+            );
+        }
+
+        assert!(
+            !lock_path.exists(),
+            "lockfile must be removed after guard drops"
+        );
+    }
+
+    #[test]
+    fn test_lock_guard_second_acquire_fails() {
+        let tmp = TempDir::new().unwrap();
+
+        let _guard = LockGuard::acquire(tmp.path()).expect("first acquire must succeed");
+
+        let err = LockGuard::acquire(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("another install is in progress"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_lock_guard_released_after_first_guard_drops() {
+        let tmp = TempDir::new().unwrap();
+
+        {
+            let _guard = LockGuard::acquire(tmp.path()).expect("first acquire must succeed");
+        }
+
+        // After the first guard drops, acquiring again must succeed.
+        let _guard2 =
+            LockGuard::acquire(tmp.path()).expect("second acquire must succeed after drop");
+    }
+
+    // ── resolve_channel_release ───────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_channel_release_picks_matching_channel_and_arch() {
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![
+                FlutterRelease {
+                    version: "3.24.0".to_string(),
+                    channel: "stable".to_string(),
+                    archive: "stable/linux/flutter_linux_3.24.0-stable.tar.xz".to_string(),
+                    sha256: "aaaa".to_string(),
+                    dart_sdk_arch: Some("x64".to_string()),
+                },
+                FlutterRelease {
+                    version: "3.25.0-0.1.pre".to_string(),
+                    channel: "beta".to_string(),
+                    archive: "beta/linux/flutter_linux_3.25.0-beta.tar.xz".to_string(),
+                    sha256: "bbbb".to_string(),
+                    dart_sdk_arch: Some("x64".to_string()),
+                },
+            ],
+        };
+
+        let r =
+            resolve_channel_release(&manifest, "beta", HostArch::X64).expect("beta must resolve");
+        assert_eq!(r.channel, "beta");
+        assert_eq!(r.sha256, "bbbb");
+    }
+
+    #[test]
+    fn test_resolve_channel_release_returns_none_for_missing_channel() {
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![FlutterRelease {
+                version: "3.24.0".to_string(),
+                channel: "stable".to_string(),
+                archive: "stable/linux/flutter_linux_3.24.0-stable.tar.xz".to_string(),
+                sha256: "aaaa".to_string(),
+                dart_sdk_arch: Some("x64".to_string()),
+            }],
+        };
+
+        // "dev" channel does not exist in this manifest.
+        assert!(resolve_channel_release(&manifest, "dev", HostArch::X64).is_none());
+    }
+
+    #[test]
+    fn test_resolve_channel_release_falls_back_to_any_arch_within_channel() {
+        // A channel with only an untagged-arch entry should still be resolved.
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_string(),
+            current_stable_hash: None,
+            releases: vec![FlutterRelease {
+                version: "3.25.0".to_string(),
+                channel: "beta".to_string(),
+                archive: "beta/linux/flutter_linux_3.25.0-beta.tar.xz".to_string(),
+                sha256: "cccc".to_string(),
+                dart_sdk_arch: None, // no arch field
+            }],
+        };
+
+        let r = resolve_channel_release(&manifest, "beta", HostArch::X64)
+            .expect("should fall back to any beta entry");
+        assert_eq!(r.sha256, "cccc");
+    }
+
     // ── resolve_install_dir ───────────────────────────────────────────────────
 
     #[test]
@@ -640,6 +1082,37 @@ mod tests {
         assert_eq!(result, fvm_path);
 
         // Restore env var.
+        match orig {
+            Some(v) => std::env::set_var("FVM_CACHE_PATH", v),
+            None => std::env::remove_var("FVM_CACHE_PATH"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_install_dir_ignores_relative_fvm_cache_path() {
+        // A relative FVM_CACHE_PATH must be ignored with a warning and fall
+        // through to the default ~/fvm/versions path.
+        let orig = std::env::var("FVM_CACHE_PATH").ok();
+        std::env::set_var("FVM_CACHE_PATH", "relative/path");
+
+        // The function should not use the relative path — it must fall through
+        // to the home-based default. We can't assert the exact value on all
+        // platforms, but we can assert it does NOT start with "relative/".
+        if dirs::home_dir().is_some() {
+            let result = resolve_install_dir(None);
+            if let Ok(path) = result {
+                let path_str = path.to_string_lossy();
+                assert!(
+                    !path_str.starts_with("relative"),
+                    "resolve_install_dir must not use a relative FVM_CACHE_PATH: {path_str}"
+                );
+                assert!(
+                    path_str.contains("fvm"),
+                    "default install dir should contain 'fvm': {path_str}"
+                );
+            }
+        }
+
         match orig {
             Some(v) => std::env::set_var("FVM_CACHE_PATH", v),
             None => std::env::remove_var("FVM_CACHE_PATH"),
@@ -833,6 +1306,40 @@ mod tests {
         assert_eq!(arm64.sha256, "cafebabecafebabe");
     }
 
+    /// Test that resolve_channel_release correctly resolves beta from the fixture.
+    #[test]
+    fn test_resolve_channel_release_from_manifest_fixture() {
+        let raw: RawManifest = serde_json::from_str(MANIFEST_FIXTURE).expect("fixture must parse");
+        let releases: Vec<FlutterRelease> = raw
+            .releases
+            .into_iter()
+            .map(|r| FlutterRelease {
+                version: r.version,
+                channel: r.channel,
+                archive: r.archive,
+                sha256: r.sha256,
+                dart_sdk_arch: r.dart_sdk_arch,
+            })
+            .collect();
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_owned(),
+            current_stable_hash: None,
+            releases,
+        };
+
+        // "beta" with x64 should resolve to the beta entry.
+        let beta = resolve_channel_release(&manifest, "beta", HostArch::X64)
+            .expect("beta must resolve from fixture");
+        assert_eq!(beta.channel, "beta");
+        assert_eq!(beta.sha256, "beefcafe");
+
+        // "dev" does not exist in the fixture — must return None.
+        assert!(
+            resolve_channel_release(&manifest, "dev", HostArch::X64).is_none(),
+            "dev channel must not resolve from fixture"
+        );
+    }
+
     #[tokio::test]
     async fn test_fetch_release_manifest_with_mock_server() {
         use wiremock::matchers::{method, path};
@@ -856,6 +1363,12 @@ mod tests {
 
         let client = reqwest::Client::builder()
             .user_agent("fdemon-test")
+            .connect_timeout(std::time::Duration::from_secs(
+                MANIFEST_CONNECT_TIMEOUT_SECS,
+            ))
+            .timeout(std::time::Duration::from_secs(
+                MANIFEST_REQUEST_TIMEOUT_SECS,
+            ))
             .build()
             .unwrap();
 
@@ -912,6 +1425,76 @@ mod tests {
         assert!(
             !events.is_empty(),
             "should emit at least one event for already-installed"
+        );
+    }
+
+    // ── install_flutter rejects invalid channel ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_install_flutter_rejects_invalid_channel() {
+        let tmp = TempDir::new().unwrap();
+
+        let target = FlutterInstallTarget {
+            method: InstallMethod::Archive,
+            channel: "--upload-pack=evil".to_owned(),
+            install_root: tmp.path().to_owned(),
+            version_dir_name: "bad".to_owned(),
+        };
+
+        let err = install_flutter(&target, |_| {})
+            .await
+            .expect_err("must fail on invalid channel");
+        assert!(err.to_string().contains("starts with '-'"), "error: {err}");
+    }
+
+    // ── partial final_dir reclamation ─────────────────────────────────────────
+
+    #[test]
+    fn test_partial_final_dir_detected() {
+        // Simulate install_inner's partial-dir detection logic directly, since
+        // invoking install_inner requires spawning a real git/archive process.
+        let tmp = TempDir::new().unwrap();
+        let final_dir = tmp.path().join("stable");
+
+        // Create the directory but NOT bin/flutter → "incomplete install".
+        std::fs::create_dir_all(&final_dir).unwrap();
+
+        #[cfg(not(windows))]
+        let flutter_bin_in_final = final_dir.join("bin").join("flutter");
+        #[cfg(windows)]
+        let flutter_bin_in_final = final_dir.join("bin").join("flutter.bat");
+
+        let is_incomplete = final_dir.exists() && !flutter_bin_in_final.exists();
+        assert!(
+            is_incomplete,
+            "should detect directory without bin/flutter as incomplete"
+        );
+
+        // Simulate reclamation.
+        std::fs::remove_dir_all(&final_dir).unwrap();
+        assert!(!final_dir.exists(), "partial dir must be removed");
+    }
+
+    #[test]
+    fn test_complete_final_dir_not_flagged_as_incomplete() {
+        let tmp = TempDir::new().unwrap();
+        let final_dir = tmp.path().join("stable");
+        std::fs::create_dir_all(final_dir.join("bin")).unwrap();
+
+        #[cfg(not(windows))]
+        std::fs::write(final_dir.join("bin").join("flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(windows)]
+        std::fs::write(final_dir.join("bin").join("flutter.bat"), "@echo off\n").unwrap();
+
+        #[cfg(not(windows))]
+        let flutter_bin_in_final = final_dir.join("bin").join("flutter");
+        #[cfg(windows)]
+        let flutter_bin_in_final = final_dir.join("bin").join("flutter.bat");
+
+        let is_incomplete = final_dir.exists() && !flutter_bin_in_final.exists();
+        assert!(
+            !is_incomplete,
+            "directory with bin/flutter must NOT be flagged as incomplete"
         );
     }
 
