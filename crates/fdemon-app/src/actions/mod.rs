@@ -830,7 +830,7 @@ pub fn handle_action(
             use fdemon_daemon::toolchain::{
                 add_android_env, add_to_path, install_android_tools, install_flutter,
                 resolve_install_dir, AndroidInstallTarget, FlutterInstallTarget, HostPlatform,
-                HostShell, InstallEvent, PathConfigOutcome, DEFAULT_CMDLINE_TOOLS_BUILD,
+                HostShell, InstallEvent, DEFAULT_CMDLINE_TOOLS_BUILD,
             };
 
             let msg_tx = msg_tx.clone();
@@ -966,7 +966,7 @@ pub fn handle_action(
                             cmdline_tools_build: params
                                 .cmdline_tools_build
                                 .unwrap_or_else(|| DEFAULT_CMDLINE_TOOLS_BUILD.to_string()),
-                            jdk_path: params.jdk_path,
+                            jdk_path: resolve_effective_jdk_path(params.jdk_path),
                             platform: HostPlatform::detect(),
                         };
 
@@ -1067,39 +1067,8 @@ pub fn handle_action(
 
                         match result {
                             Ok(Ok((flutter_outcome, android_outcome))) => {
-                                // Build the Flutter PATH summary line.
-                                let flutter_summary = match &flutter_outcome {
-                                    PathConfigOutcome::Written { rc_file } => {
-                                        format!("Added Flutter to PATH in {}", rc_file.display())
-                                    }
-                                    PathConfigOutcome::AlreadyPresent { rc_file } => {
-                                        format!("Flutter already in PATH ({})", rc_file.display())
-                                    }
-                                };
-
-                                // Build the Android env summary line (if applicable).
-                                let android_summary = match android_outcome {
-                                    Some(PathConfigOutcome::Written { rc_file }) => {
-                                        format!("Added ANDROID_HOME to {} ", rc_file.display())
-                                    }
-                                    Some(PathConfigOutcome::AlreadyPresent { rc_file }) => {
-                                        format!(
-                                            "ANDROID_HOME already present in {} ",
-                                            rc_file.display()
-                                        )
-                                    }
-                                    None => String::new(),
-                                };
-
-                                let summary = format!(
-                                    "{}{}Restart your terminal for changes to take effect.",
-                                    flutter_summary,
-                                    if android_summary.is_empty() {
-                                        ". ".to_string()
-                                    } else {
-                                        format!(", {}and ", android_summary)
-                                    }
-                                );
+                                let summary =
+                                    build_pathconfig_summary(&flutter_outcome, android_outcome);
 
                                 let _ = msg_tx
                                     .send(crate::message::Message::WizardStepCompleted {
@@ -1610,6 +1579,63 @@ fn switch_flutter_version(
         sdk.source
     );
     Ok(sdk)
+}
+
+// ── JDK path helpers ─────────────────────────────────────────────────────────
+
+/// Return the effective JDK home to pass to the Android installer.
+///
+/// If the user explicitly configured a `[toolchain] jdk_path` that value is
+/// returned as-is.  Otherwise we call [`fdemon_daemon::toolchain::resolve_jdk_home`]
+/// to discover the JDK from `$JAVA_HOME` or the `java` binary on PATH.
+///
+/// This helper is intentionally kept as a tiny pure wrapper so it can be unit-
+/// tested without spawning any async tasks.
+pub(crate) fn resolve_effective_jdk_path(
+    config_jdk: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    config_jdk.or_else(fdemon_daemon::toolchain::resolve_jdk_home)
+}
+
+// ── PathConfig summary helper ─────────────────────────────────────────────────
+
+/// Build the completion summary string for a `PathConfig` wizard step.
+///
+/// Collects the Flutter clause and (optionally) the Android clause, joins them
+/// with `". "`, and appends the restart reminder.  This produces a clean sentence
+/// without comma-splices or double spaces regardless of which outcomes are present.
+pub(crate) fn build_pathconfig_summary(
+    flutter_outcome: &fdemon_daemon::toolchain::PathConfigOutcome,
+    android_outcome: Option<fdemon_daemon::toolchain::PathConfigOutcome>,
+) -> String {
+    use fdemon_daemon::toolchain::PathConfigOutcome;
+
+    let flutter_clause = match flutter_outcome {
+        PathConfigOutcome::Written { rc_file } => {
+            format!("Added Flutter to PATH in {}", rc_file.display())
+        }
+        PathConfigOutcome::AlreadyPresent { rc_file } => {
+            format!("Flutter already in PATH ({})", rc_file.display())
+        }
+    };
+
+    let mut clauses: Vec<String> = vec![flutter_clause];
+
+    match android_outcome {
+        Some(PathConfigOutcome::Written { rc_file }) => {
+            clauses.push(format!("Added ANDROID_HOME to {}", rc_file.display()));
+        }
+        Some(PathConfigOutcome::AlreadyPresent { rc_file }) => {
+            clauses.push(format!(
+                "ANDROID_HOME already present in {}",
+                rc_file.display()
+            ));
+        }
+        None => {}
+    }
+
+    clauses.push("Restart your terminal for changes to take effect".to_string());
+    clauses.join(". ") + "."
 }
 
 #[cfg(test)]
@@ -2249,5 +2275,129 @@ mod tests {
     fn test_resolve_android_sdk_root_never_panics() {
         // We cannot easily remove HOME/USERPROFILE but the function must not panic.
         let _result = fdemon_daemon::resolve_android_sdk_root_path(None);
+    }
+
+    // ── resolve_effective_jdk_path (M1) tests ───────────────────────────────────
+
+    /// When an explicit `config_jdk` path is provided it should be returned
+    /// without calling `resolve_jdk_home`.
+    #[test]
+    fn test_resolve_effective_jdk_path_prefers_config_value() {
+        let explicit = std::path::PathBuf::from("/my/configured/jdk");
+        let result = resolve_effective_jdk_path(Some(explicit.clone()));
+        assert_eq!(
+            result,
+            Some(explicit),
+            "configured path must be returned as-is"
+        );
+    }
+
+    /// When `config_jdk` is `None` and `JAVA_HOME` points to a valid directory,
+    /// `resolve_effective_jdk_path` must return that directory.
+    ///
+    /// `JAVA_HOME` is a process-global env var, so this test is marked `#[serial]`
+    /// to avoid races with other tests that manipulate the same variable.
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_effective_jdk_path_falls_back_to_java_home() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        std::env::set_var("JAVA_HOME", tmp.path());
+        let result = resolve_effective_jdk_path(None);
+        std::env::remove_var("JAVA_HOME");
+
+        assert_eq!(
+            result.as_deref(),
+            Some(tmp.path()),
+            "should fall back to JAVA_HOME when config_jdk is None"
+        );
+    }
+
+    /// When `config_jdk` is `None` and no JDK is discoverable, the result is
+    /// `None` (not a panic or an error).
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_effective_jdk_path_returns_none_when_no_jdk() {
+        // Point JAVA_HOME at a non-existent directory so resolve_jdk_home skips it.
+        std::env::set_var("JAVA_HOME", "/this/path/does/not/exist/fdemon_m1_test");
+        let result = resolve_effective_jdk_path(None);
+        std::env::remove_var("JAVA_HOME");
+
+        // We cannot guarantee `which java` also fails on every CI machine, so we
+        // simply assert the call does not panic and returns an Option (may be Some
+        // if `java` is on PATH via the which fallback).
+        let _ = result; // type-checks: Option<PathBuf>
+    }
+
+    // ── PathConfig summary string (M4) tests ────────────────────────────────────
+
+    /// Flutter-only summary must not contain a comma-splice and must end with a
+    /// single trailing period.
+    #[test]
+    fn test_pathconfig_summary_flutter_only() {
+        use fdemon_daemon::toolchain::PathConfigOutcome;
+
+        let flutter_outcome = PathConfigOutcome::Written {
+            rc_file: std::path::PathBuf::from("/home/user/.zshrc"),
+        };
+        let android_outcome: Option<PathConfigOutcome> = None;
+
+        let summary = build_pathconfig_summary(&flutter_outcome, android_outcome);
+
+        assert!(
+            !summary.contains(", "),
+            "flutter-only summary must not have a comma-splice; got: {summary:?}"
+        );
+        assert!(
+            summary.ends_with('.'),
+            "summary must end with a single period; got: {summary:?}"
+        );
+        assert!(
+            summary.contains("Restart your terminal"),
+            "summary must include restart hint; got: {summary:?}"
+        );
+    }
+
+    /// Flutter+Android summary must use ". " between clauses (not ", … and ").
+    #[test]
+    fn test_pathconfig_summary_flutter_and_android() {
+        use fdemon_daemon::toolchain::PathConfigOutcome;
+
+        let flutter_outcome = PathConfigOutcome::Written {
+            rc_file: std::path::PathBuf::from("/home/user/.zshrc"),
+        };
+        let android_outcome = Some(PathConfigOutcome::Written {
+            rc_file: std::path::PathBuf::from("/home/user/.zshrc"),
+        });
+
+        let summary = build_pathconfig_summary(&flutter_outcome, android_outcome);
+
+        // Must NOT have the old comma-splice pattern.
+        assert!(
+            !summary.contains(", "),
+            "combined summary must not have a comma-splice; got: {summary:?}"
+        );
+        // Must NOT have trailing spaces in the android clause.
+        assert!(
+            !summary.contains("  "),
+            "combined summary must not have double spaces; got: {summary:?}"
+        );
+        // Must contain all three logical pieces.
+        assert!(
+            summary.contains("Flutter"),
+            "must mention Flutter; got: {summary:?}"
+        );
+        assert!(
+            summary.contains("ANDROID_HOME"),
+            "must mention ANDROID_HOME; got: {summary:?}"
+        );
+        assert!(
+            summary.contains("Restart your terminal"),
+            "must include restart hint; got: {summary:?}"
+        );
+        assert!(
+            summary.ends_with('.'),
+            "summary must end with a single period; got: {summary:?}"
+        );
     }
 }
