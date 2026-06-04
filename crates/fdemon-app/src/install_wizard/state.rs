@@ -6,10 +6,13 @@
 
 use std::cell::Cell;
 
-use fdemon_daemon::toolchain::{ComponentCheck, ComponentKind, ComponentStatus, ToolchainReport};
+use fdemon_daemon::toolchain::{
+    ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, ToolchainReport,
+};
 
 use super::types::{
-    StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind, MAX_LOG_TAIL,
+    GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind,
+    MAX_LOG_TAIL,
 };
 
 /// A single UI step in the install wizard, grouping one or more component checks.
@@ -23,6 +26,12 @@ pub struct WizardStep {
     pub status: StepStatus,
     /// Component checks rolled into this step (rendered in the detail pane).
     pub components: Vec<ComponentCheck>,
+    /// Guided (copy-paste) commands for this step.
+    ///
+    /// Empty for steps that have no privileged/GUI actions. Populated by
+    /// `build_steps()` when a required component is not `Ok`. Phase 3 uses
+    /// this for the JDK install command on the `AndroidTools` step.
+    pub guided_commands: Vec<GuidedCommand>,
 }
 
 /// Top-level state for the Install Wizard panel.
@@ -95,6 +104,16 @@ impl InstallWizardState {
     /// Return the currently selected step, or `None` if the list is empty.
     pub fn selected_step(&self) -> Option<&WizardStep> {
         self.steps.get(self.selected_index)
+    }
+
+    /// The guided command the `c` key should copy: the first guided command of the
+    /// currently selected step, if any.
+    ///
+    /// Returns `None` when the step list is empty or the selected step has no
+    /// guided commands. Intended for use by the key handler that copies to the
+    /// system clipboard.
+    pub fn selected_guided_command(&self) -> Option<&GuidedCommand> {
+        self.steps.get(self.selected_index)?.guided_commands.first()
     }
 
     /// Whether a step is currently executing.
@@ -209,6 +228,29 @@ fn rollup_status(components: &[ComponentCheck]) -> StepStatus {
     }
 }
 
+/// Per-OS guided command to install a JDK 17.
+///
+/// Privileged/GUI step — the wizard never auto-runs this command. It is shown
+/// to the user to copy/paste. Lives in app-land (display concern) rather than
+/// in the daemon's `jdk.rs` (which only handles `resolve_jdk_home` /
+/// `configure_flutter_jdk_dir`).
+fn jdk_guided_command(platform: HostPlatform) -> GuidedCommand {
+    let (command, note) = match platform {
+        HostPlatform::Linux => (
+            "sudo apt install openjdk-17-jdk",
+            Some("or: sudo dnf install java-17-openjdk-devel"),
+        ),
+        HostPlatform::MacOs => ("brew install openjdk@17", None),
+        HostPlatform::Windows => ("winget install --id EclipseAdoptium.Temurin.17.JDK", None),
+        HostPlatform::Unknown => ("Install a JDK 17 from https://adoptium.net", None),
+    };
+    GuidedCommand {
+        label: "Install JDK 17".into(),
+        command: command.into(),
+        note: note.map(Into::into),
+    }
+}
+
 /// Map a [`ToolchainReport`]'s components into the five ordered UI steps.
 ///
 /// Step order: Prerequisites → AndroidTools → PathConfig → FlutterSdk → Doctor
@@ -274,36 +316,53 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
         StepStatus::Pending
     };
 
+    // Derive guided commands for the AndroidTools step: show the JDK install
+    // command whenever the JDK component is not Ok (i.e. Missing/Partial/Error).
+    // Derivation is pure — no I/O, no process spawning.
+    let jdk_not_ok = android_tools
+        .iter()
+        .any(|c| c.kind == ComponentKind::Jdk && c.status != ComponentStatus::Ok);
+    let android_guided: Vec<GuidedCommand> = if jdk_not_ok {
+        vec![jdk_guided_command(report.platform.clone())]
+    } else {
+        Vec::new()
+    };
+
     vec![
         WizardStep {
             kind: WizardStepKind::Prerequisites,
             title: "Prerequisites".to_string(),
             status: prerequisites_status,
             components: prerequisites,
+            guided_commands: Vec::new(),
         },
         WizardStep {
             kind: WizardStepKind::AndroidTools,
             title: "Android Tools".to_string(),
             status: android_status,
             components: android_tools,
+            guided_commands: android_guided,
         },
         WizardStep {
             kind: WizardStepKind::PathConfig,
             title: "PATH Configuration".to_string(),
             status: path_config_status,
             components: Vec::new(),
+            guided_commands: Vec::new(),
         },
         WizardStep {
             kind: WizardStepKind::FlutterSdk,
             title: "Flutter SDK".to_string(),
             status: flutter_status,
             components: flutter_sdk,
+            guided_commands: Vec::new(),
         },
         WizardStep {
             kind: WizardStepKind::Doctor,
             title: "Flutter Doctor".to_string(),
             status: doctor_status,
             components: Vec::new(),
+            guided_commands: Vec::new(),
         },
     ]
 }
@@ -694,5 +753,158 @@ mod tests {
         assert_eq!(s.execution.log_tail.len(), 10);
         assert_eq!(s.execution.log_tail[0], "line 0");
         assert_eq!(s.execution.log_tail[9], "line 9");
+    }
+
+    // --- Guided command tests ---
+
+    fn report_with_jdk(status: ComponentStatus, platform: HostPlatform) -> ToolchainReport {
+        ToolchainReport {
+            platform,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Jdk,
+                status,
+                detail: String::new(),
+            }],
+            doctor: None,
+        }
+    }
+
+    #[test]
+    fn test_android_step_has_jdk_guided_command_when_jdk_missing() {
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        assert_eq!(android.guided_commands.len(), 1);
+        assert!(android.guided_commands[0].command.contains("17"));
+    }
+
+    #[test]
+    fn test_no_guided_command_when_jdk_ok() {
+        let report = report_with_jdk(ComponentStatus::Ok, HostPlatform::Linux);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        assert!(android.guided_commands.is_empty());
+    }
+
+    #[test]
+    fn test_android_step_has_jdk_guided_command_when_jdk_partial() {
+        let report = report_with_jdk(ComponentStatus::Partial, HostPlatform::MacOs);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        assert_eq!(android.guided_commands.len(), 1);
+        assert!(android.guided_commands[0].command.contains("brew"));
+    }
+
+    #[test]
+    fn test_android_step_has_jdk_guided_command_when_jdk_error() {
+        let report = report_with_jdk(ComponentStatus::Error, HostPlatform::Linux);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        assert_eq!(android.guided_commands.len(), 1);
+    }
+
+    #[test]
+    fn test_jdk_command_linux_contains_apt() {
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert_eq!(cmd.label, "Install JDK 17");
+        assert!(cmd.command.contains("apt"));
+        assert!(cmd.note.is_some(), "Linux should have an alternative note");
+    }
+
+    #[test]
+    fn test_jdk_command_macos_uses_brew() {
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::MacOs);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert!(cmd.command.contains("brew"));
+        assert!(cmd.note.is_none(), "macOS should have no alternative note");
+    }
+
+    #[test]
+    fn test_jdk_command_windows_uses_winget() {
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Windows);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        assert!(android.guided_commands[0].command.contains("winget"));
+    }
+
+    #[test]
+    fn test_jdk_command_unknown_platform_uses_adoptium() {
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Unknown);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        assert!(android.guided_commands[0].command.contains("adoptium.net"));
+    }
+
+    #[test]
+    fn test_non_android_steps_have_no_guided_commands() {
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        let steps = build_steps(&report);
+        for step in &steps {
+            if step.kind != WizardStepKind::AndroidTools {
+                assert!(
+                    step.guided_commands.is_empty(),
+                    "Step {:?} should have no guided commands",
+                    step.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_selected_guided_command_returns_none_when_no_steps() {
+        let state = InstallWizardState::default();
+        assert!(state.selected_guided_command().is_none());
+    }
+
+    #[test]
+    fn test_selected_guided_command_returns_none_when_step_has_none() {
+        let mut state = InstallWizardState::default();
+        // Select Prerequisites step (index 0) — no guided commands
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        state.apply_report(report);
+        state.selected_index = 0; // Prerequisites
+        assert!(state.selected_guided_command().is_none());
+    }
+
+    #[test]
+    fn test_selected_guided_command_returns_first_when_android_selected() {
+        let mut state = InstallWizardState::default();
+        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        state.apply_report(report);
+        // AndroidTools is index 1
+        state.selected_index = 1;
+        let cmd = state.selected_guided_command();
+        assert!(cmd.is_some());
+        assert_eq!(cmd.unwrap().label, "Install JDK 17");
     }
 }

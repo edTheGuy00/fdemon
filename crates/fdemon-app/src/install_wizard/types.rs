@@ -2,6 +2,22 @@
 
 use std::collections::VecDeque;
 
+/// A copy-paste command shown for a guided (privileged/GUI) step the wizard cannot
+/// auto-run. Rendered in the detail pane and copyable with `c`.
+///
+/// Designed to be reusable across wizard steps: Phase 3 uses it for the JDK
+/// install command on the `AndroidTools` step; Phase 4 will reuse it for
+/// prerequisites (apt/brew/xcode-select/Rosetta/CocoaPods) on the `Prerequisites` step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuidedCommand {
+    /// Short human-readable label shown as the command header (e.g. "Install JDK 17").
+    pub label: String,
+    /// The command the user should copy/paste into their terminal.
+    pub command: String,
+    /// Optional alternative command or clarification note (e.g. "or: sudo dnf install …").
+    pub note: Option<String>,
+}
+
 /// Which pane has keyboard focus in the Install Wizard panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WizardPane {
@@ -144,5 +160,38 @@ mod tests {
     #[test]
     fn test_max_log_tail_constant_is_200() {
         assert_eq!(MAX_LOG_TAIL, 200);
+    }
+
+    #[test]
+    fn test_guided_command_fields() {
+        let cmd = GuidedCommand {
+            label: "Install JDK 17".to_string(),
+            command: "sudo apt install openjdk-17-jdk".to_string(),
+            note: Some("or: sudo dnf install java-17-openjdk-devel".to_string()),
+        };
+        assert_eq!(cmd.label, "Install JDK 17");
+        assert!(cmd.command.contains("17"));
+        assert!(cmd.note.is_some());
+    }
+
+    #[test]
+    fn test_guided_command_no_note() {
+        let cmd = GuidedCommand {
+            label: "Install JDK 17".to_string(),
+            command: "brew install openjdk@17".to_string(),
+            note: None,
+        };
+        assert!(cmd.note.is_none());
+    }
+
+    #[test]
+    fn test_guided_command_equality() {
+        let a = GuidedCommand {
+            label: "A".to_string(),
+            command: "cmd".to_string(),
+            note: None,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
     }
 }

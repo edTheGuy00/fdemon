@@ -12,7 +12,8 @@ mod types;
 
 pub use state::*;
 pub use types::{
-    StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind, MAX_LOG_TAIL,
+    GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind,
+    MAX_LOG_TAIL,
 };
 
 // Re-export the daemon toolchain *display* types so presentation-layer widgets can
