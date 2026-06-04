@@ -814,21 +814,23 @@ pub fn handle_action(
             });
         }
 
-        // ── Install Wizard Step Executor (Phase 2, Task 08) ──────────────────────
-        // Dispatches to the Flutter SDK installer or PATH config writer and streams
-        // progress back via the TEA message channel.  All I/O runs inside the
-        // spawned task; handlers in `handler/install_wizard/actions.rs` remain pure.
+        // ── Install Wizard Step Executor (Phase 2+3, Tasks 08+06) ───────────────
+        // Dispatches to the Flutter SDK installer, Android tools installer, or
+        // PATH config writer, streaming progress back via the TEA message channel.
+        // All I/O runs inside the spawned task; handlers in
+        // `handler/install_wizard/actions.rs` remain pure.
         UpdateAction::RunWizardStep {
             kind,
             install,
             path_bin_dir,
-            android_sdk_root: _android_sdk_root, // consumed by task 06
-            android: _android,                   // consumed by task 06
+            android_sdk_root,
+            android,
         } => {
             use crate::install_wizard::WizardStepKind;
             use fdemon_daemon::toolchain::{
-                add_to_path, install_flutter, resolve_install_dir, FlutterInstallTarget,
-                HostPlatform, HostShell, InstallEvent, PathConfigOutcome,
+                add_android_env, add_to_path, install_android_tools, install_flutter,
+                resolve_install_dir, AndroidInstallTarget, FlutterInstallTarget, HostPlatform,
+                HostShell, InstallEvent, PathConfigOutcome, DEFAULT_CMDLINE_TOOLS_BUILD,
             };
 
             let msg_tx = msg_tx.clone();
@@ -937,6 +939,93 @@ pub fn handle_action(
                         }
                     }
 
+                    WizardStepKind::AndroidTools => {
+                        // Guard: Android install params are required.
+                        let params = match android {
+                            Some(p) => p,
+                            None => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: "Missing Android install parameters".to_string(),
+                                    })
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        // Resolve the SDK root: use the provided path, or fall back to
+                        // environment variables and the platform default.
+                        let resolved_sdk_root =
+                            resolve_android_sdk_root(params.sdk_root.as_deref());
+
+                        let target = AndroidInstallTarget {
+                            sdk_root: resolved_sdk_root,
+                            api_level: params.api_level,
+                            cmdline_tools_build: params
+                                .cmdline_tools_build
+                                .unwrap_or_else(|| DEFAULT_CMDLINE_TOOLS_BUILD.to_string()),
+                            jdk_path: params.jdk_path,
+                            platform: HostPlatform::detect(),
+                        };
+
+                        // Clone a sender for the synchronous on_event callback.
+                        let tx_for_events = msg_tx.clone();
+
+                        let result = install_android_tools(&target, move |ev| match ev {
+                            InstallEvent::Log(line) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardStepLog { kind, line },
+                                );
+                            }
+                            InstallEvent::Download(p) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardDownloadProgress {
+                                        kind,
+                                        received: p.received,
+                                        total: p.total,
+                                    },
+                                );
+                            }
+                            InstallEvent::Phase(label) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardStepPhase {
+                                        kind,
+                                        label: label.to_string(),
+                                    },
+                                );
+                            }
+                        })
+                        .await;
+
+                        match result {
+                            Ok(outcome) => {
+                                let summary = format!(
+                                    "Installed Android tools at {} ({} packages)",
+                                    outcome.sdk_root.display(),
+                                    outcome.packages_installed.len()
+                                );
+                                // Pass `sdk_path: Some(outcome.sdk_root)` so the
+                                // handler (task 07) can persist [toolchain] android_sdk_root.
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepCompleted {
+                                        kind,
+                                        summary,
+                                        sdk_path: Some(outcome.sdk_root),
+                                    })
+                                    .await;
+                            }
+                            Err(e) => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("{e}"),
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+
                     WizardStepKind::PathConfig => {
                         // Guard: bin_dir is required for the PathConfig step.
                         let bin_dir = match path_bin_dir {
@@ -956,34 +1045,61 @@ pub fn handle_action(
                         let shell = HostShell::detect();
                         let platform = HostPlatform::detect();
 
-                        // `add_to_path` performs file I/O — run it on the blocking
-                        // thread pool so we do not stall the async executor.
+                        // `add_to_path` and `add_android_env` perform file I/O — run
+                        // them on the blocking thread pool so we do not stall the
+                        // async executor.
                         let result = tokio::task::spawn_blocking(move || {
-                            add_to_path(shell, platform, &bin_dir)
+                            // 1) Write the Flutter bin dir to PATH.
+                            let flutter_outcome =
+                                add_to_path(shell.clone(), platform.clone(), &bin_dir)?;
+
+                            // 2) Optionally write ANDROID_HOME / Android PATH entries.
+                            let android_outcome = if let Some(sdk_root) = android_sdk_root {
+                                Some(add_android_env(shell, platform, &sdk_root)?)
+                            } else {
+                                None
+                            };
+
+                            Ok::<_, fdemon_core::Error>((flutter_outcome, android_outcome))
                         })
                         .await;
 
                         match result {
-                            Ok(Ok(PathConfigOutcome::Written { rc_file })) => {
+                            Ok(Ok((flutter_outcome, android_outcome))) => {
+                                // Build the Flutter PATH summary line.
+                                let flutter_summary = match &flutter_outcome {
+                                    PathConfigOutcome::Written { rc_file } => {
+                                        format!("Added Flutter to PATH in {}", rc_file.display())
+                                    }
+                                    PathConfigOutcome::AlreadyPresent { rc_file } => {
+                                        format!("Flutter already in PATH ({})", rc_file.display())
+                                    }
+                                };
+
+                                // Build the Android env summary line (if applicable).
+                                let android_summary = match android_outcome {
+                                    Some(PathConfigOutcome::Written { rc_file }) => {
+                                        format!("Added ANDROID_HOME to {} ", rc_file.display())
+                                    }
+                                    Some(PathConfigOutcome::AlreadyPresent { rc_file }) => {
+                                        format!(
+                                            "ANDROID_HOME already present in {} ",
+                                            rc_file.display()
+                                        )
+                                    }
+                                    None => String::new(),
+                                };
+
                                 let summary = format!(
-                                    "Added Flutter to PATH in {}. \
-                                     Restart your terminal for the change to take effect.",
-                                    rc_file.display()
+                                    "{}{}Restart your terminal for changes to take effect.",
+                                    flutter_summary,
+                                    if android_summary.is_empty() {
+                                        ". ".to_string()
+                                    } else {
+                                        format!(", {}and ", android_summary)
+                                    }
                                 );
-                                let _ = msg_tx
-                                    .send(crate::message::Message::WizardStepCompleted {
-                                        kind,
-                                        summary,
-                                        sdk_path: None,
-                                    })
-                                    .await;
-                            }
-                            Ok(Ok(PathConfigOutcome::AlreadyPresent { rc_file })) => {
-                                let summary = format!(
-                                    "Flutter is already in PATH ({}). \
-                                     No changes were made.",
-                                    rc_file.display()
-                                );
+
                                 let _ = msg_tx
                                     .send(crate::message::Message::WizardStepCompleted {
                                         kind,
@@ -1014,9 +1130,7 @@ pub fn handle_action(
                     // Non-executable kinds in this phase: report a clear failure so
                     // the user knows the step is not yet actionable rather than
                     // seeing a stale Running spinner.
-                    WizardStepKind::Prerequisites
-                    | WizardStepKind::AndroidTools
-                    | WizardStepKind::Doctor => {
+                    WizardStepKind::Prerequisites | WizardStepKind::Doctor => {
                         let _ = msg_tx
                             .send(crate::message::Message::WizardStepFailed {
                                 kind,
@@ -1434,6 +1548,63 @@ fn remove_flutter_version_path(path: &std::path::Path) -> fdemon_core::Result<()
     std::fs::remove_dir_all(path).map_err(|e| {
         fdemon_core::Error::config(format!("Failed to remove {}: {e}", path.display()))
     })
+}
+
+/// Resolve the Android SDK root directory for the install executor.
+///
+/// Resolution order:
+/// 1. The `sdk_root` provided by the caller (e.g. from `[toolchain] android_sdk_root`
+///    in `.fdemon/config.toml` or from a previous install step).
+/// 2. `$ANDROID_HOME` environment variable (if set and non-empty).
+/// 3. `$ANDROID_SDK_ROOT` environment variable (if set and non-empty).
+/// 4. Platform-specific default:
+///    - Linux:   `~/Android/Sdk`
+///    - macOS:   `~/Library/Android/sdk`
+///    - Windows: `%LOCALAPPDATA%\Android\Sdk`
+///
+/// Always returns a `PathBuf` — even when none of the above are set, returns the
+/// platform default so the installer can create the directory.
+fn resolve_android_sdk_root(sdk_root: Option<&std::path::Path>) -> std::path::PathBuf {
+    // 1. Caller-provided path.
+    if let Some(p) = sdk_root {
+        return p.to_path_buf();
+    }
+
+    // 2. ANDROID_HOME
+    if let Ok(home) = std::env::var("ANDROID_HOME") {
+        let p = std::path::PathBuf::from(&home);
+        if !home.is_empty() {
+            return p;
+        }
+    }
+
+    // 3. ANDROID_SDK_ROOT
+    if let Ok(sdk) = std::env::var("ANDROID_SDK_ROOT") {
+        let p = std::path::PathBuf::from(&sdk);
+        if !sdk.is_empty() {
+            return p;
+        }
+    }
+
+    // 4. Platform default.
+    #[cfg(target_os = "macos")]
+    if let Some(home) = dirs::home_dir() {
+        return home.join("Library").join("Android").join("sdk");
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local_app_data) = dirs::data_local_dir() {
+        return local_app_data.join("Android").join("Sdk");
+    }
+
+    // Linux and all other platforms.
+    if let Some(home) = dirs::home_dir() {
+        return home.join("Android").join("Sdk");
+    }
+
+    // Last resort: relative path in the current directory (should never be reached
+    // on a well-configured system, but is preferable to panicking).
+    std::path::PathBuf::from("Android/Sdk")
 }
 
 /// Write `.fvmrc` in the project root and re-resolve the Flutter SDK.
@@ -1886,17 +2057,16 @@ mod tests {
         );
     }
 
-    /// Non-executable step kinds (Prerequisites, AndroidTools, Doctor) always
-    /// produce a `WizardStepFailed` with a clear reason message.
+    /// Non-executable step kinds (Prerequisites, Doctor) always produce a
+    /// `WizardStepFailed` with a clear reason message.
+    ///
+    /// `AndroidTools` is now handled by the real executor (task 06) and is no
+    /// longer in this list.
     #[tokio::test]
     async fn test_run_wizard_step_non_executable_kinds_fail() {
         use crate::install_wizard::WizardStepKind;
 
-        for kind in [
-            WizardStepKind::Prerequisites,
-            WizardStepKind::AndroidTools,
-            WizardStepKind::Doctor,
-        ] {
+        for kind in [WizardStepKind::Prerequisites, WizardStepKind::Doctor] {
             let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
                 kind,
                 install: None,
@@ -1969,5 +2139,171 @@ mod tests {
             ),
             "PathConfig executor must always terminate with Completed or Failed; got: {outcome:?}"
         );
+    }
+
+    // ── AndroidTools executor dispatch tests ────────────────────────────────────
+
+    /// `RunWizardStep { kind: AndroidTools, android: None }` must emit
+    /// `WizardStepStarted` followed by `WizardStepFailed` — never a panic.
+    #[tokio::test]
+    async fn test_android_tools_missing_params_fails() {
+        use crate::install_wizard::WizardStepKind;
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::AndroidTools,
+            install: None,
+            path_bin_dir: None,
+            android_sdk_root: None,
+            android: None, // Missing params — must fail cleanly.
+        });
+
+        // First message: WizardStepStarted.
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for WizardStepStarted")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                first,
+                crate::message::Message::WizardStepStarted {
+                    kind: WizardStepKind::AndroidTools
+                }
+            ),
+            "first message must be WizardStepStarted; got: {first:?}"
+        );
+
+        // Second message: WizardStepFailed (missing params guard).
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for WizardStepFailed")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                second,
+                crate::message::Message::WizardStepFailed {
+                    kind: WizardStepKind::AndroidTools,
+                    ..
+                }
+            ),
+            "missing android params must produce WizardStepFailed; got: {second:?}"
+        );
+    }
+
+    /// `RunWizardStep { kind: AndroidTools, android: Some(..) }` emits
+    /// `WizardStepStarted` as its first message (the install attempt itself is not
+    /// unit-tested because it requires network I/O, mirroring Phase 2 `FlutterSdk`).
+    #[tokio::test]
+    async fn test_android_tools_emits_started() {
+        use crate::handler::AndroidStepParams;
+        use crate::install_wizard::WizardStepKind;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sdk_root = tmp.path().join("android-sdk");
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::AndroidTools,
+            install: None,
+            path_bin_dir: None,
+            android_sdk_root: None,
+            android: Some(AndroidStepParams {
+                sdk_root: Some(sdk_root),
+                api_level: 36,
+                cmdline_tools_build: None,
+                jdk_path: None,
+            }),
+        });
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for first message")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                first,
+                crate::message::Message::WizardStepStarted {
+                    kind: WizardStepKind::AndroidTools
+                }
+            ),
+            "first message must be WizardStepStarted; got: {first:?}"
+        );
+    }
+
+    /// `PathConfig` step without `android_sdk_root` still writes the Flutter
+    /// PATH entry and produces `WizardStepCompleted` or `WizardStepFailed` — it
+    /// must never hang or attempt to write `ANDROID_HOME`.
+    #[tokio::test]
+    async fn test_pathconfig_without_android_root_still_writes_flutter() {
+        use crate::install_wizard::WizardStepKind;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+
+        let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
+            kind: WizardStepKind::PathConfig,
+            install: None,
+            path_bin_dir: Some(bin_dir),
+            android_sdk_root: None, // No android root — must not fail because of this.
+            android: None,
+        });
+
+        // Consume WizardStepStarted.
+        let _started = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out waiting for WizardStepStarted")
+            .expect("channel closed");
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
+            .await
+            .expect("timed out: PathConfig step did not terminate without android_sdk_root")
+            .expect("channel closed");
+
+        assert!(
+            matches!(
+                outcome,
+                crate::message::Message::WizardStepCompleted {
+                    kind: WizardStepKind::PathConfig,
+                    ..
+                } | crate::message::Message::WizardStepFailed {
+                    kind: WizardStepKind::PathConfig,
+                    ..
+                }
+            ),
+            "PathConfig with no android root must terminate with Completed or Failed; got: {outcome:?}"
+        );
+    }
+
+    // ── resolve_android_sdk_root unit tests ─────────────────────────────────────
+
+    /// When a caller-provided path is given, it must be returned as-is.
+    #[test]
+    fn test_resolve_android_sdk_root_uses_provided_path() {
+        let path = std::path::Path::new("/opt/android/sdk");
+        let result = resolve_android_sdk_root(Some(path));
+        assert_eq!(result, std::path::PathBuf::from("/opt/android/sdk"));
+    }
+
+    /// When no path is provided and ANDROID_HOME is set, that value is returned.
+    #[test]
+    fn test_resolve_android_sdk_root_falls_back_to_android_home() {
+        // Guard: remove both env vars first, then set ANDROID_HOME.
+        std::env::remove_var("ANDROID_SDK_ROOT");
+        std::env::set_var("ANDROID_HOME", "/custom/android/home");
+
+        let result = resolve_android_sdk_root(None);
+        std::env::remove_var("ANDROID_HOME");
+
+        assert_eq!(result, std::path::PathBuf::from("/custom/android/home"));
+    }
+
+    /// `resolve_android_sdk_root` never panics even when no env vars are set and
+    /// the home dir is unavailable (returns the platform fallback or last-resort).
+    #[test]
+    fn test_resolve_android_sdk_root_never_panics() {
+        // We cannot easily remove HOME/USERPROFILE but the function must not panic.
+        let _result = resolve_android_sdk_root(None);
     }
 }
