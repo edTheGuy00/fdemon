@@ -1814,6 +1814,35 @@ pub enum Message {
         reason: String,
     },
 
+    /// The install task for a wizard step is ready — carries the cancel token
+    /// and join handle so the TEA can store them for later cancellation.
+    ///
+    /// Sent by `handle_action(RunWizardStep)` immediately before the install
+    /// work begins (so state has the handle before any event arrives).
+    /// The TEA update handler stores this on `InstallWizardState::install_task`.
+    WizardInstallTaskReady {
+        /// Token used to signal the running task to stop.
+        ///
+        /// Wrapped in `Arc` to satisfy the `Clone` bound on `Message`.
+        cancel: std::sync::Arc<tokio_util::sync::CancellationToken>,
+        /// JoinHandle for the install task.
+        ///
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out when storing it.
+        handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    },
+
+    /// Cancel the currently running wizard step (Esc while a step is running).
+    ///
+    /// The update handler calls `install_task.cancel.cancel()`, resets the
+    /// step to `Idle`, and sets a neutral "Cancelled" `status_message`.
+    /// A subsequent `Enter` retries the step.
+    ///
+    /// This message is dispatched by `Esc` only when `is_step_running()` is
+    /// `true`; when no step is running `Esc` dispatches `InstallWizardEscape`
+    /// (close the wizard).
+    InstallWizardCancelStep,
+
     // ── Mouse Click Messages (Phase 5) ────────────────────────────────────────
     /// Click on a device row inside the NewSessionDialog Connected/Bootable list.
     ///

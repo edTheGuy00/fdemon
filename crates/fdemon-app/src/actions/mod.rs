@@ -834,13 +834,31 @@ pub fn handle_action(
             };
             use tokio_util::sync::CancellationToken;
 
-            let msg_tx = msg_tx.clone();
+            // Clone msg_tx: one for the spawned task, one for the ready message.
+            let msg_tx_task = msg_tx.clone();
+            let msg_tx_ready = msg_tx.clone();
 
-            tokio::spawn(async move {
+            // Create the cancellation token before spawning so the task handle
+            // and token can be sent back to state before any install I/O begins.
+            let cancel_token = CancellationToken::new();
+            let cancel_for_task = cancel_token.clone();
+            let cancel_for_msg = std::sync::Arc::new(cancel_token);
+
+            // Shared slot to deposit the JoinHandle after spawn so that
+            // `WizardInstallTaskReady` can carry it to state.
+            let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(None));
+            let handle_slot_for_task = handle_slot.clone();
+
+            let join = tokio::spawn(async move {
+                let msg_tx = msg_tx_task;
                 // ── Announce start ────────────────────────────────────────────
                 let _ = msg_tx
                     .send(crate::message::Message::WizardStepStarted { kind })
                     .await;
+
+                // Capture cancel token for use in install calls.
+                let cancel = cancel_for_task;
 
                 match kind {
                     WizardStepKind::FlutterSdk => {
@@ -888,38 +906,30 @@ pub fn handle_action(
                         // Clone a sender for the synchronous on_event callback.
                         let tx_for_events = msg_tx.clone();
 
-                        // Task 03 will wire a real CancellationToken here when
-                        // app-side cancel support is added (the Esc key /
-                        // cancel message).  For now we use a never-cancelled
-                        // token so the API is forwards-compatible.
-                        let result = install_flutter(
-                            &target,
-                            CancellationToken::new(),
-                            move |ev| match ev {
-                                InstallEvent::Log(line) => {
-                                    let _ = tx_for_events.try_send(
-                                        crate::message::Message::WizardStepLog { kind, line },
-                                    );
-                                }
-                                InstallEvent::Download(p) => {
-                                    let _ = tx_for_events.try_send(
-                                        crate::message::Message::WizardDownloadProgress {
-                                            kind,
-                                            received: p.received,
-                                            total: p.total,
-                                        },
-                                    );
-                                }
-                                InstallEvent::Phase(label) => {
-                                    let _ = tx_for_events.try_send(
-                                        crate::message::Message::WizardStepPhase {
-                                            kind,
-                                            label: label.to_string(),
-                                        },
-                                    );
-                                }
-                            },
-                        )
+                        let result = install_flutter(&target, cancel.clone(), move |ev| match ev {
+                            InstallEvent::Log(line) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardStepLog { kind, line },
+                                );
+                            }
+                            InstallEvent::Download(p) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardDownloadProgress {
+                                        kind,
+                                        received: p.received,
+                                        total: p.total,
+                                    },
+                                );
+                            }
+                            InstallEvent::Phase(label) => {
+                                let _ = tx_for_events.try_send(
+                                    crate::message::Message::WizardStepPhase {
+                                        kind,
+                                        label: label.to_string(),
+                                    },
+                                );
+                            }
+                        })
                         .await;
 
                         match result {
@@ -934,6 +944,17 @@ pub fn handle_action(
                                         kind,
                                         summary,
                                         sdk_path: Some(outcome.sdk_path),
+                                    })
+                                    .await;
+                            }
+                            Err(ref e) if e.is_cancelled() => {
+                                // Cancelled by the user (Esc) — use the reserved
+                                // "Cancelled" prefix so the handler can distinguish
+                                // this from a genuine failure.
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("Cancelled: {e}"),
                                     })
                                     .await;
                             }
@@ -982,34 +1003,29 @@ pub fn handle_action(
                         // Clone a sender for the synchronous on_event callback.
                         let tx_for_events = msg_tx.clone();
 
-                        // Task 03 will wire a real CancellationToken here when
-                        // app-side cancel support is added.  For now we use a
-                        // never-cancelled token so the API is forwards-compatible.
                         let result =
-                            install_android_tools(&target, CancellationToken::new(), move |ev| {
-                                match ev {
-                                    InstallEvent::Log(line) => {
-                                        let _ = tx_for_events.try_send(
-                                            crate::message::Message::WizardStepLog { kind, line },
-                                        );
-                                    }
-                                    InstallEvent::Download(p) => {
-                                        let _ = tx_for_events.try_send(
-                                            crate::message::Message::WizardDownloadProgress {
-                                                kind,
-                                                received: p.received,
-                                                total: p.total,
-                                            },
-                                        );
-                                    }
-                                    InstallEvent::Phase(label) => {
-                                        let _ = tx_for_events.try_send(
-                                            crate::message::Message::WizardStepPhase {
-                                                kind,
-                                                label: label.to_string(),
-                                            },
-                                        );
-                                    }
+                            install_android_tools(&target, cancel.clone(), move |ev| match ev {
+                                InstallEvent::Log(line) => {
+                                    let _ = tx_for_events.try_send(
+                                        crate::message::Message::WizardStepLog { kind, line },
+                                    );
+                                }
+                                InstallEvent::Download(p) => {
+                                    let _ = tx_for_events.try_send(
+                                        crate::message::Message::WizardDownloadProgress {
+                                            kind,
+                                            received: p.received,
+                                            total: p.total,
+                                        },
+                                    );
+                                }
+                                InstallEvent::Phase(label) => {
+                                    let _ = tx_for_events.try_send(
+                                        crate::message::Message::WizardStepPhase {
+                                            kind,
+                                            label: label.to_string(),
+                                        },
+                                    );
                                 }
                             })
                             .await;
@@ -1028,6 +1044,14 @@ pub fn handle_action(
                                         kind,
                                         summary,
                                         sdk_path: Some(outcome.sdk_root),
+                                    })
+                                    .await;
+                            }
+                            Err(ref e) if e.is_cancelled() => {
+                                let _ = msg_tx
+                                    .send(crate::message::Message::WizardStepFailed {
+                                        kind,
+                                        reason: format!("Cancelled: {e}"),
                                     })
                                     .await;
                             }
@@ -1125,6 +1149,25 @@ pub fn handle_action(
                             .await;
                     }
                 }
+            });
+
+            // Deposit the JoinHandle into the shared slot so the
+            // WizardInstallTaskReady message can carry it to state.
+            // This must happen after `tokio::spawn` returns the handle.
+            if let Ok(mut guard) = handle_slot_for_task.lock() {
+                *guard = Some(join);
+            }
+
+            // Eagerly enqueue the task handle + cancel token to state so it
+            // can cancel on Esc. Spawn a tiny task so we can `.await` the send
+            // without blocking `handle_action` (which is called synchronously).
+            tokio::spawn(async move {
+                let _ = msg_tx_ready
+                    .send(crate::message::Message::WizardInstallTaskReady {
+                        cancel: cancel_for_msg,
+                        handle: handle_slot,
+                    })
+                    .await;
             });
         }
 
@@ -1906,6 +1949,28 @@ mod tests {
 
     // ── RunWizardStep dispatch tests ────────────────────────────────────────────
 
+    /// Receive the next message, skipping any `WizardInstallTaskReady` messages.
+    ///
+    /// `RunWizardStep` now sends a `WizardInstallTaskReady` message immediately
+    /// after spawning the task (to hand the cancel token + handle to state).
+    /// Tests that check for `WizardStepStarted → WizardStepFailed/Completed`
+    /// must skip this intermediate message.
+    async fn recv_skip_task_ready(
+        rx: &mut tokio::sync::mpsc::Receiver<crate::message::Message>,
+        timeout_secs: u64,
+    ) -> crate::message::Message {
+        loop {
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx.recv())
+                .await
+                .expect("timed out waiting for message")
+                .expect("channel closed");
+            if matches!(msg, crate::message::Message::WizardInstallTaskReady { .. }) {
+                continue;
+            }
+            return msg;
+        }
+    }
+
     /// Shared helper: invoke `handle_action` with `RunWizardStep` and return the
     /// message receiver so callers can assert on which messages arrive.
     fn dispatch_run_wizard_step(
@@ -2099,17 +2164,11 @@ mod tests {
             android: None,
         });
 
-        // Consume WizardStepStarted.
-        let _started = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
-            .await
-            .expect("timed out waiting for WizardStepStarted")
-            .expect("channel closed");
+        // Consume WizardStepStarted (skip WizardInstallTaskReady if it arrives first).
+        let _started = recv_skip_task_ready(&mut msg_rx, 5).await;
 
-        // The second message must be Completed or Failed — never absent.
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
-            .await
-            .expect("timed out: PathConfig step did not terminate")
-            .expect("channel closed");
+        // The next non-ready message must be Completed or Failed — never absent.
+        let outcome = recv_skip_task_ready(&mut msg_rx, 5).await;
 
         assert!(
             matches!(
@@ -2235,16 +2294,10 @@ mod tests {
             android: None,
         });
 
-        // Consume WizardStepStarted.
-        let _started = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
-            .await
-            .expect("timed out waiting for WizardStepStarted")
-            .expect("channel closed");
+        // Consume WizardStepStarted (skip WizardInstallTaskReady if it arrives first).
+        let _started = recv_skip_task_ready(&mut msg_rx, 5).await;
 
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
-            .await
-            .expect("timed out: PathConfig step did not terminate without android_sdk_root")
-            .expect("channel closed");
+        let outcome = recv_skip_task_ready(&mut msg_rx, 5).await;
 
         assert!(
             matches!(

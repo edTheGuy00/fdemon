@@ -357,11 +357,92 @@ pub fn handle_step_completed(
 ///
 /// After this call `is_step_running()` returns `false`, and the next `Enter`
 /// will dispatch a new `RunWizardStep` action for the same step.
+///
+/// When `reason` starts with the reserved prefix `"Cancelled:"` (written by
+/// the executor when `Error::Cancelled` is observed), the step was stopped
+/// by the user and the `status_message` reflects that; otherwise a "failed"
+/// retry prompt is shown.
 pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult {
     use crate::install_wizard::StepExecStatus;
-    state
-        .install_wizard_state
-        .finish_step(StepExecStatus::Failed, reason);
+
+    // Always clear the task handle on any terminal path.
+    let _ = state.install_wizard_state.install_task.take();
+
+    if reason.starts_with("Cancelled:") {
+        // User-initiated cancellation: keep a neutral message; the step is
+        // reset to Idle so the next Enter retries cleanly.
+        state
+            .install_wizard_state
+            .finish_step(StepExecStatus::Failed, reason);
+        // Overwrite the summary with a neutral cancelled message (it was set
+        // above by finish_step but we want a neutral display, not "Failed").
+        state.install_wizard_state.status_message =
+            Some("Cancelled. Press Enter to retry.".to_string());
+    } else {
+        state
+            .install_wizard_state
+            .finish_step(StepExecStatus::Failed, reason);
+        state.install_wizard_state.status_message =
+            Some("Failed \u{2014} press Enter to retry or r to re-check".to_string());
+    }
+    UpdateResult::none()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5, Task 03 — Cancel step handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Handle `WizardInstallTaskReady` — store the cancel token and join handle.
+///
+/// Called immediately after `RunWizardStep` spawns its background task, so
+/// the TEA layer has access to the handle before any subsequent `Esc` press.
+/// Idempotent: if no step is currently running, the handle is stored anyway
+/// (it will be cleared when the terminal `WizardStepCompleted/Failed` arrives).
+pub fn handle_install_task_ready(
+    state: &mut AppState,
+    cancel: std::sync::Arc<tokio_util::sync::CancellationToken>,
+    handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+) -> UpdateResult {
+    use crate::install_wizard::InstallTaskHandle;
+    use tokio_util::sync::CancellationToken;
+
+    // Extract the JoinHandle from the Arc<Mutex<Option<>>>.
+    let join = handle
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+        .unwrap_or_else(|| {
+            // Handle not yet deposited — create a no-op handle as a fallback.
+            tokio::spawn(std::future::ready(()))
+        });
+
+    // Unwrap the Arc to get the underlying token (or clone if Arc is shared).
+    let cancel_token: CancellationToken = (*cancel).clone();
+
+    state.install_wizard_state.install_task = Some(InstallTaskHandle {
+        join,
+        cancel: cancel_token,
+    });
+    UpdateResult::none()
+}
+
+/// Handle `InstallWizardCancelStep` — signal the running install to stop.
+///
+/// Cancels the token, optionally aborts the task as a backstop, resets
+/// the step to idle, and sets a neutral "Cancelled" status message.
+///
+/// Idempotent — a second cancel with no running task is a no-op.
+pub fn handle_cancel_step(state: &mut AppState) -> UpdateResult {
+    if let Some(task) = state.install_wizard_state.install_task.take() {
+        // Signal the install loop to stop at the next cancellation checkpoint.
+        task.cancel.cancel();
+        // Abort the task as a backstop in case the install loop doesn't check
+        // the token frequently enough (e.g., during a blocking git-clone).
+        task.join.abort();
+    }
+    state.install_wizard_state.reset_running_step_to_idle();
+    state.install_wizard_state.status_message =
+        Some("Cancelled. Press Enter to retry.".to_string());
     UpdateResult::none()
 }
 
@@ -1443,6 +1524,119 @@ mod tests {
         assert!(
             msg.contains("later phase"),
             "Doctor must still show 'later phase' message; got: {msg}"
+        );
+    }
+
+    // ── Task 03: cancel step + retry-failure affordance ──────────────────────
+
+    /// `handle_cancel_step` must clear the handle slot and reset step to Idle.
+    #[tokio::test]
+    async fn cancel_step_clears_handle_and_resets_status() {
+        let mut state = state_with_preflight();
+        // Simulate a running step with a task handle.
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+        assert!(state.install_wizard_state.is_step_running());
+
+        // Populate install_task with a trivial no-op handle.
+        let token = tokio_util::sync::CancellationToken::new();
+        state.install_wizard_state.install_task = Some(crate::install_wizard::InstallTaskHandle {
+            join: tokio::spawn(std::future::ready(())),
+            cancel: token,
+        });
+        assert!(state.install_wizard_state.install_task.is_some());
+
+        handle_cancel_step(&mut state);
+
+        // After cancel: task handle must be gone.
+        assert!(
+            state.install_wizard_state.install_task.is_none(),
+            "install_task must be None after cancel"
+        );
+        // Step must be Idle so the next Enter retries.
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "step must not be running after cancel"
+        );
+        // Status message must be set.
+        let status = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            status.contains("Cancelled") || status.contains("retry"),
+            "status_message must mention 'Cancelled' or 'retry'; got: {status}"
+        );
+    }
+
+    /// Cancelling with no running task must be a no-op (idempotent).
+    #[test]
+    fn cancel_step_is_idempotent_when_no_task() {
+        let mut state = state_with_preflight();
+        assert!(!state.install_wizard_state.is_step_running());
+        assert!(state.install_wizard_state.install_task.is_none());
+
+        // Must not panic and must return UpdateResult::none().
+        let result = handle_cancel_step(&mut state);
+
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
+    }
+
+    /// A genuine failure (non-Cancelled reason) must set the retry prompt.
+    #[test]
+    fn step_failed_sets_retry_prompt() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+
+        handle_step_failed(&mut state, "network timeout".to_string());
+
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("press Enter to retry") || msg.contains("r to re-check"),
+            "status_message must contain retry prompt; got: {msg}"
+        );
+        // Must not say "Cancelled".
+        assert!(
+            !msg.to_lowercase().contains("cancelled"),
+            "genuine failure must not say Cancelled; got: {msg}"
+        );
+    }
+
+    /// A Cancelled reason must set a neutral message, not the "Failed" prompt.
+    #[test]
+    fn step_failed_with_cancelled_prefix_sets_neutral_message() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+
+        handle_step_failed(
+            &mut state,
+            "Cancelled: Flutter install cancelled before start".to_string(),
+        );
+
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("Cancelled") || msg.contains("retry"),
+            "cancelled failure must set a neutral or retry message; got: {msg}"
+        );
+        // Must not say "Failed —" (the genuine failure prompt).
+        assert!(
+            !msg.starts_with("Failed"),
+            "cancelled path must not start with 'Failed'; got: {msg}"
         );
     }
 }

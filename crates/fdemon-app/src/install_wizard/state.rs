@@ -11,11 +11,27 @@ use fdemon_daemon::toolchain::{
     LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA,
     PREREQ_KEY_XCODE_CLT,
 };
+use tokio_util::sync::CancellationToken;
 
 use super::types::{
     GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind,
     MAX_LOG_TAIL,
 };
+
+/// A running install task: a `JoinHandle` paired with a `CancellationToken`.
+///
+/// Held on [`InstallWizardState::install_task`] while a wizard step is in
+/// flight. Cleared (via `take()`) on completion, failure, or cancellation so
+/// a stale handle never lingers.
+pub struct InstallTaskHandle {
+    /// The async task running the install operation.
+    pub join: tokio::task::JoinHandle<()>,
+    /// Token used to signal the install operation to stop.
+    ///
+    /// Call `cancel.cancel()` to set the token, which causes the running
+    /// installer to return `Err(Error::Cancelled)` at the next poll point.
+    pub cancel: CancellationToken,
+}
 
 /// A single UI step in the install wizard, grouping one or more component checks.
 #[derive(Debug, Clone)]
@@ -81,6 +97,13 @@ pub struct InstallWizardState {
     /// so that the subsequent `PathConfig` step can resolve the Flutter `bin/` directory
     /// without re-running a preflight. Cleared when the wizard is closed.
     pub installed_sdk_path: Option<std::path::PathBuf>,
+
+    /// Handle for the currently running install task (Phase 5, Task 03).
+    ///
+    /// Set by `WizardInstallTaskReady` immediately before the install task begins
+    /// running. Cleared (`take()`d) on completion, failure, or cancellation to
+    /// prevent stale handles from lingering. `None` when no step is in flight.
+    pub install_task: Option<InstallTaskHandle>,
 }
 
 impl InstallWizardState {
@@ -220,6 +243,23 @@ impl InstallWizardState {
     pub fn finish_step(&mut self, status: StepExecStatus, summary: String) {
         self.execution.status = status;
         self.execution.result_summary = Some(summary);
+        // Clear the task handle on any terminal transition so it never lingers.
+        let _ = self.install_task.take();
+    }
+
+    /// Reset a running step back to `Idle` without recording a terminal status.
+    ///
+    /// Used by [`handle_cancel_step`] after the cancellation token has been
+    /// signalled, so that the user can press `Enter` to retry immediately.
+    ///
+    /// Also clears `install_task`; the caller should have already called
+    /// `task.cancel.cancel()` before this.
+    pub fn reset_running_step_to_idle(&mut self) {
+        self.execution.status = StepExecStatus::Idle;
+        self.execution.result_summary = None;
+        self.execution.phase_label = None;
+        // install_task already taken by the caller, but clear defensively.
+        let _ = self.install_task.take();
     }
 }
 
@@ -243,6 +283,10 @@ impl std::fmt::Debug for InstallWizardState {
             )
             .field("execution", &self.execution)
             .field("installed_sdk_path", &self.installed_sdk_path)
+            .field(
+                "install_task",
+                &self.install_task.as_ref().map(|_| "<running>"),
+            )
             .finish()
     }
 }

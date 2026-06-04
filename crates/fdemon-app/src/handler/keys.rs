@@ -410,7 +410,8 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 ///
 /// Key bindings:
 /// - `Ctrl+C` — force quit (always active)
-/// - `Esc` — close the panel (`InstallWizardEscape`)
+/// - `Esc` — cancel the running step if one is in flight (`InstallWizardCancelStep`),
+///   or close the panel when idle (`InstallWizardEscape`).
 /// - `Tab` — switch between panes (`InstallWizardSwitchPane`)
 /// - `k`/`Up` — navigate up in the step list or scroll detail up
 /// - `j`/`Down` — navigate down in the step list or scroll detail down
@@ -419,13 +420,21 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `c` — copy the selected guided command to the clipboard (`InstallWizardCopyCommand`)
 /// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
 /// - `]` — select the next guided command (`InstallWizardNextCommand`)
-fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message> {
+fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message> {
     match key {
         // ── Global keys ───────────────────────────────────────────────────────
         InputKey::CharCtrl('c') => Some(Message::Quit),
 
         // ── Panel lifecycle ───────────────────────────────────────────────────
-        InputKey::Esc => Some(Message::InstallWizardEscape),
+        // Esc is overloaded: cancel the running step if one is in flight,
+        // otherwise close the wizard (existing behaviour).
+        InputKey::Esc => {
+            if state.install_wizard_state.is_step_running() {
+                Some(Message::InstallWizardCancelStep)
+            } else {
+                Some(Message::InstallWizardEscape)
+            }
+        }
 
         // ── Pane switching ────────────────────────────────────────────────────
         InputKey::Tab => Some(Message::InstallWizardSwitchPane),
@@ -3619,13 +3628,45 @@ mod install_wizard_key_tests {
         );
     }
 
+    /// Esc while idle (no step running) must close the wizard.
     #[test]
-    fn test_esc_in_install_wizard_emits_escape() {
+    fn test_esc_while_idle_closes_wizard() {
         let state = make_install_wizard_state();
+        // No step started → is_step_running() == false → InstallWizardEscape.
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "precondition: no step running"
+        );
         let msg = handle_key(&state, InputKey::Esc);
         assert!(
             matches!(msg, Some(Message::InstallWizardEscape)),
-            "Esc in InstallWizard should emit InstallWizardEscape, got: {msg:?}"
+            "Esc while idle must emit InstallWizardEscape, got: {msg:?}"
+        );
+    }
+
+    /// Esc while a step is running must cancel, not close.
+    #[test]
+    fn esc_while_running_cancels_not_closes() {
+        let mut state = make_install_wizard_state();
+        // Simulate a running step.
+        state
+            .install_wizard_state
+            .begin_step(crate::install_wizard::WizardStepKind::FlutterSdk);
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "precondition: step must be running"
+        );
+        let msg = handle_key(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardCancelStep)),
+            "Esc while running must emit InstallWizardCancelStep, got: {msg:?}"
+        );
+        // Wizard must remain open (the message closes nothing — cancel handler
+        // resets execution to Idle without changing UiMode).
+        assert_eq!(
+            state.ui_mode,
+            crate::state::UiMode::InstallWizard,
+            "ui_mode must still be InstallWizard after Esc-cancel"
         );
     }
 
