@@ -106,8 +106,9 @@ pub use simulators::{
 pub use tool_availability::IosLogTool;
 pub use tool_availability::ToolAvailability;
 pub use toolchain::{
-    resolve_android_sdk_root_path, run_preflight, ComponentCheck, ComponentKind, ComponentStatus,
-    DoctorLine, DoctorMarker, HostPlatform, HostShell, ToolchainReport,
+    detect_linux_package_manager, resolve_android_sdk_root_path, run_preflight, ComponentCheck,
+    ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform, HostShell,
+    LinuxPackageManager, ToolchainReport,
 };
 
 use fdemon_core::prelude::*;

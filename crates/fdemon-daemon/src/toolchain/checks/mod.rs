@@ -22,7 +22,7 @@ pub use android::{
     check_android_licenses, check_android_platform, check_android_platform_tools,
     resolve_android_sdk_root_path, sdkmanager_bin_name,
 };
-pub use prerequisites::check_prerequisites;
+pub use prerequisites::{check_prerequisites, detect_linux_package_manager, LinuxPackageManager};
 
 use std::path::Path;
 use std::process::Stdio;
