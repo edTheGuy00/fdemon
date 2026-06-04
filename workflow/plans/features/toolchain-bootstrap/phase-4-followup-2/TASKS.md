@@ -50,13 +50,19 @@ Wave 1 (parallel, disjoint files)        Wave 2        Wave 3        Wave 4
 
 | # | Task | Status | Depends On | Est. Hours | Required? | Modules |
 |---|------|--------|------------|------------|-----------|---------|
-| 01 | [01-extract-step-caption-helper](tasks/01-extract-step-caption-helper.md) | Not Started | - | 1h | Yes | `widgets/install_wizard/step_detail.rs` |
-| 02 | [02-scroll-window-selected-command](tasks/02-scroll-window-selected-command.md) | Not Started | 01 | 3-4h | Yes | `widgets/install_wizard/step_detail.rs` |
-| 03 | [03-reexport-linux-package-manager](tasks/03-reexport-linux-package-manager.md) | Not Started | 02 | 1-2h | Yes | `install_wizard/mod.rs`, `widgets/install_wizard/step_detail.rs` (tests), `widgets/install_wizard/mod.rs` (tests) |
-| 04 | [04-prereq-clone-to-move](tasks/04-prereq-clone-to-move.md) | Not Started | - | 0.5h | Optional | `toolchain/checks/prerequisites.rs` |
-| 05 | [05-pm-caveat-symmetry](tasks/05-pm-caveat-symmetry.md) | Not Started | - | 0.5-1h | Optional | `install_wizard/state.rs` |
-| 06 | [06-winget-available-option](tasks/06-winget-available-option.md) | Not Started | 02, 03, 05 | 2-3h | Optional (deferrable) | `toolchain/types.rs`, `toolchain/mod.rs`, `install_wizard/state.rs`, app+tui fixtures |
-| 07 | [07-update-architecture-note](tasks/07-update-architecture-note.md) | Not Started | 03 | 0.5h | Yes | `docs/ARCHITECTURE.md` |
+| 01 | [01-extract-step-caption-helper](tasks/01-extract-step-caption-helper.md) | Done ✅ | - | 1h | Yes | `widgets/install_wizard/step_detail.rs` |
+| 02 | [02-scroll-window-selected-command](tasks/02-scroll-window-selected-command.md) | Done ✅ | 01 | 3-4h | Yes | `widgets/install_wizard/step_detail.rs` |
+| 03 | [03-reexport-linux-package-manager](tasks/03-reexport-linux-package-manager.md) | Done ✅ | 02 | 1-2h | Yes | `install_wizard/mod.rs`, `widgets/install_wizard/step_detail.rs` (tests), `widgets/install_wizard/mod.rs` (tests) |
+| 04 | [04-prereq-clone-to-move](tasks/04-prereq-clone-to-move.md) | Done ✅ | - | 0.5h | Optional | `toolchain/checks/prerequisites.rs` |
+| 05 | [05-pm-caveat-symmetry](tasks/05-pm-caveat-symmetry.md) | Done ✅ | - | 0.5-1h | Optional | `install_wizard/state.rs` |
+| 06 | [06-winget-available-option](tasks/06-winget-available-option.md) | Deferred ⏸️ | 02, 03, 05 | 2-3h | Optional (deferrable) | `toolchain/types.rs`, `toolchain/mod.rs`, `install_wizard/state.rs`, app+tui fixtures |
+| 07 | [07-update-architecture-note](tasks/07-update-architecture-note.md) | Done ✅ | 03 | 0.5h | Yes | `docs/ARCHITECTURE.md` |
+
+> **06 deferred (not dropped):** N3 (`winget_available: bool` → `Option<bool>`) is the
+> explicitly-deferrable cross-cutting NITPICK. It touches every `ToolchainReport`
+> construction site for a documentation-grade asymmetry the risks reviewer rated
+> "acceptable" as-is. Deferred by orchestrator scope decision; tracked here for a future
+> followup. The `false`-conflation is already documented on the field.
 
 ## File Overlap Analysis
 

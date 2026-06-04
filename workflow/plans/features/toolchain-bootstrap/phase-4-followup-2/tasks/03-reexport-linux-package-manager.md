@@ -80,3 +80,35 @@ re-exported type. No new tests required (import-path/visibility change only).
 - Touches `step_detail.rs` only in its `#[cfg(test)]` module — but it is the same file as
   tasks 01/02, hence the sequential dependency.
 - Test-fixture + re-export change; no logic change.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Added `LinuxPackageManager` to `pub use fdemon_daemon::toolchain::{...}` re-export block (alphabetical order between `HostShell` and `ToolchainReport`) |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `LinuxPackageManager` to the test module `use fdemon_app::install_wizard::{...}` import; replaced 2 `fdemon_daemon::toolchain::LinuxPackageManager::Unknown` references with `LinuxPackageManager::Unknown` |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Added `LinuxPackageManager` to the test module `use fdemon_app::install_wizard::{...}` import; replaced 1 `fdemon_daemon::toolchain::LinuxPackageManager::Unknown` reference with `LinuxPackageManager::Unknown` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Alphabetical ordering**: `LinuxPackageManager` is inserted between `HostShell` and `ToolchainReport` in the re-export list, matching the convention already in place for all other exported types in that block.
+2. **grep-based location**: Line numbers in the task description had shifted due to tasks 01/02 landing earlier; used `grep -rn` to locate the exact sites as instructed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (6,878 tests across all crates, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `grep -rn "fdemon_daemon::toolchain::LinuxPackageManager" crates/fdemon-tui/` - Returns nothing (confirmed)
+
+### Risks/Limitations
+
+1. **None**: Pure import-path and re-export change with no logic alteration. All three acceptance criteria met.

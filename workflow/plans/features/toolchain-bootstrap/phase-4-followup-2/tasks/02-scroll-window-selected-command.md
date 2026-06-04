@@ -101,3 +101,53 @@ mod tests {
   block fits.
 - Reuse task 01's `step_caption` helper for caption rows; do not re-derive `has_caption`.
 - This task only touches `step_detail.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `command_block_height`, `compute_guided_window` helpers; updated `render_guided_commands` to use windowing; added 10 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`command_block_height` factored as an associated function**: Both `guided_section_full_height` (total height) and `compute_guided_window` (window math) now share a single source for per-command block height. This eliminates the risk of the two diverging in their understanding of how tall a block is.
+
+2. **Window algorithm: greedy backwards fill**: Starting from `selected_idx`, walk backwards accumulating block heights until the budget is exhausted. This maximises the number of commands visible above the selected one, while guaranteeing the selected block always fits. When everything fits the window start is 0 and rendering is byte-for-byte unchanged (tall-terminal preservation).
+
+3. **`window_start` applied via `if i < window_start { continue }` in the existing loop**: The existing rendering loop structure is preserved — bounds guards (`y < area.y + area.height`) remain as the final safety net. Only the starting index changes; all existing styling, blank-row logic, and copy-hint placement are untouched.
+
+4. **Saturating clamp / `bottom_area` math preserved**: The `full_height.min(content_area.height)` clamp at line ~539 and the `bottom_area` height computation are both preserved as explicitly required by the task.
+
+5. **`step_caption` reused**: `has_caption` is derived from `step_caption(step_kind).is_some()` in both the render loop and `compute_guided_window` — no re-derivation.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-tui widgets::install_wizard::step_detail::tests` — 51 passed, 0 failed
+
+### New Tests Added
+
+| Test | Purpose |
+|------|---------|
+| `test_short_terminal_selected_command_index_2_visible` | F1 regression: height-10, index=2, Rosetta + copy hint visible |
+| `test_short_terminal_selected_command_index_0_visible` | F1 regression: height-10, index=0, CLT + copy hint visible |
+| `test_tall_terminal_selected_command_index_2_unchanged` | Tall-terminal (height-30) all 3 commands visible, no regression |
+| `test_compute_guided_window_all_fit_returns_zero` | Window=0 when all blocks fit |
+| `test_compute_guided_window_selected_last_short_budget` | Tight budget: window starts at selected_idx |
+| `test_compute_guided_window_greedy_fill_backwards` | Greedy fill: window goes back to 0 when budget allows |
+| `test_compute_guided_window_empty_commands` | Empty input returns 0 |
+| `test_compute_guided_window_zero_available` | Zero available rows returns 0 |
+
+### Risks/Limitations
+
+1. **Per-line scroll not implemented**: The window is per-command-block, not per-line. On a very narrow terminal height (e.g., 3–4 rows) where a single command block with a note (4 rows) does not fit, the bounds guards clip gracefully rather than scrolling within the block. The task spec explicitly accepts this: "A simple 'ensure selected is in [start, end) and its block fits' windowing is sufficient — there is no per-line scroll, only per-command-block."

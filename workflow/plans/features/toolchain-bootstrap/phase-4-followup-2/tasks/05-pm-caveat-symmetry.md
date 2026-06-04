@@ -61,3 +61,33 @@ mod tests {
   parallel-safe with tasks 01 and 04.
 - If you instead prefer a single Prerequisites caption hint over per-arm notes, that is
   acceptable as long as the best-effort message reaches the user for every non-apt manager.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a258de703313fb533
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Updated `Dnf`, `Pacman`, and `Zypper` arm notes in `prerequisites_guided_commands` to include the best-effort caveat; updated tests to assert `note.contains("best-effort")` for those three arms |
+
+### Notable Decisions/Tradeoffs
+
+1. **Combined caveat + "or:" note**: Rather than replacing the existing `"or: sudo apt-get..."` alternative note, the best-effort caveat was prepended to it for `Dnf`, `Pacman`, and `Zypper` arms. This preserves the useful fallback alternative while adding the required caveat. The `Yum` arm keeps its standalone caveat (yum-only systems don't have `dnf` so the `apt` fallback isn't useful there).
+2. **Consistent caveat wording**: Used `"Package names are best-effort; consult your distro docs if a package is not found."` matching the spirit of the `Yum` arm wording, generalised without the RHEL7/CentOS7 specificity since that's only relevant for yum.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app --lib -- install_wizard::state::tests` - Passed (74 tests)
+- `cargo test --workspace` - Passed (all tests; pre-existing flaky env-var test unrelated to our changes)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing flaky test**: `toolchain::flutter_install::tests::test_resolve_install_dir_fvm_cache_path_env` can fail when run in parallel with other tests due to environment variable pollution — not caused by this change.

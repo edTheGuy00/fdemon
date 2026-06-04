@@ -67,3 +67,31 @@ to confirm no regression.
   parallel-safe with tasks 01 and 05.
 - Do **not** also "collapse" the `else { if *tool == "pkg-config" }` block at `:227-231`:
   the reviewer claim that it fails `collapsible_else_if` was verified FALSE (clippy-clean).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | Replaced `missing_binaries.clone()` with move at line 261 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Move vs clone**: Confirmed `missing_binaries` is not referenced after the move point — all three `if/else if/else` branches are terminal (each constructs and returns a `ComponentCheck`). The borrow checker accepts the move without issue.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all 6,875+ tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. None — single-character idiom change with no behavior impact.

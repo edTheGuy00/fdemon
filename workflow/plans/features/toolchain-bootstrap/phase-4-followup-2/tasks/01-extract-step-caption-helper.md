@@ -96,3 +96,33 @@ mod tests {
 - Pure refactor; no production behavior should change. This is the clean base that task
   02 (F1 scroll window) builds on.
 - This task only touches `step_detail.rs`; it is parallel-safe with tasks 04 and 05.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a6c47bd9542b28e78
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `step_caption()` helper; replaced `matches!()` in `guided_section_full_height` and inline `match` in `render_guided_commands` with calls to it; added 5 direct unit tests for `step_caption`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of `step_caption`**: Placed as a module-level private free function between the constants block and the `StepDetailPane` struct, making it easy to locate and not tied to any particular `impl` block.
+2. **`has_caption` retained in `render_guided_commands`**: The local `let has_caption = caption_text.is_some();` binding was preserved as-is (just after the `step_caption` call), since the code downstream reads it to conditionally suppress blank rows. This is a zero-cost local bool.
+3. **Caption strings byte-for-byte identical**: Both caption strings were transferred unchanged; behavior is identical.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui -- install_wizard` - Passed (83 tests, includes 5 new `step_caption` tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing JDK test flakiness**: `toolchain::jdk::tests::test_resolve_jdk_home_honors_java_home` in `fdemon-daemon` fails intermittently under parallel workspace test runs (temp dir contention); passes in isolation. This is unrelated to this change and pre-dates it.
