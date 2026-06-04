@@ -662,7 +662,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 **Dependencies**: `fdemon-core`, `fdemon-app`
 **Purpose**: Presentation layer using `ratatui`. The TUI runner creates an Engine and uses it for all state management.
 
-**Note on daemon display types**: `fdemon-tui` has no runtime dependency on `fdemon-daemon`. The four toolchain display types needed by the install-wizard widgets (`ComponentCheck`, `ComponentStatus`, `DoctorLine`, `DoctorMarker`) are re-exported through `fdemon-app::install_wizard`, so presentation widgets consume them via `fdemon-app` rather than reaching into `fdemon-daemon` directly. `fdemon-daemon` appears only in `fdemon-tui`'s `[dev-dependencies]` for test helpers.
+**Note on daemon display types**: `fdemon-tui` has no runtime dependency on `fdemon-daemon`. Toolchain display types needed by the install-wizard widgets (`ComponentCheck`, `ComponentKind`, `ComponentStatus`, `DoctorLine`, `DoctorMarker`, `HostPlatform`, `HostShell`, `LinuxPackageManager`, `ToolchainReport`) are re-exported through `fdemon-app::install_wizard`, so presentation widgets consume them via `fdemon-app` rather than reaching into `fdemon-daemon` directly. `fdemon-daemon` appears only in `fdemon-tui`'s `[dev-dependencies]` for test helpers.
 
 **Key Architecture:**
 - **Runner** (`runner.rs`): Main entry point, creates Engine, runs event loop
