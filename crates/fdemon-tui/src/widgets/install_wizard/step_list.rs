@@ -232,24 +232,28 @@ mod tests {
                 title: "Prerequisites".to_string(),
                 status: StepStatus::Ok,
                 components: vec![],
+                guided_commands: vec![],
             },
             WizardStep {
                 kind: WizardStepKind::AndroidTools,
                 title: "Android Tools".to_string(),
                 status: StepStatus::Partial,
                 components: vec![],
+                guided_commands: vec![],
             },
             WizardStep {
                 kind: WizardStepKind::FlutterSdk,
                 title: "Flutter SDK".to_string(),
                 status: StepStatus::Missing,
                 components: vec![],
+                guided_commands: vec![],
             },
             WizardStep {
                 kind: WizardStepKind::Doctor,
                 title: "Flutter Doctor".to_string(),
                 status: StepStatus::Pending,
                 components: vec![],
+                guided_commands: vec![],
             },
         ]
     }

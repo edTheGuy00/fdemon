@@ -741,6 +741,7 @@ mod tests {
                 status: ComponentStatus::Missing,
                 detail: "not found".to_string(),
             }],
+            guided_commands: vec![],
         }];
         state.selected_index = 0;
 
