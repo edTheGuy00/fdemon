@@ -822,6 +822,8 @@ pub fn handle_action(
             kind,
             install,
             path_bin_dir,
+            android_sdk_root: _android_sdk_root, // consumed by task 06
+            android: _android,                   // consumed by task 06
         } => {
             use crate::install_wizard::WizardStepKind;
             use fdemon_daemon::toolchain::{
@@ -1792,6 +1794,8 @@ mod tests {
             kind: WizardStepKind::FlutterSdk,
             install: None, // Missing params → WizardStepFailed will follow, but Started comes first.
             path_bin_dir: None,
+            android_sdk_root: None,
+            android: None,
         });
 
         let first = tokio::time::timeout(std::time::Duration::from_secs(5), msg_rx.recv())
@@ -1819,6 +1823,8 @@ mod tests {
             kind: WizardStepKind::FlutterSdk,
             install: None,
             path_bin_dir: None,
+            android_sdk_root: None,
+            android: None,
         });
 
         // Consume WizardStepStarted.
@@ -1853,6 +1859,8 @@ mod tests {
             kind: WizardStepKind::PathConfig,
             install: None,
             path_bin_dir: None, // Missing — executor must fail cleanly.
+            android_sdk_root: None,
+            android: None,
         });
 
         // Consume WizardStepStarted.
@@ -1893,6 +1901,8 @@ mod tests {
                 kind,
                 install: None,
                 path_bin_dir: None,
+                android_sdk_root: None,
+                android: None,
             });
 
             // Consume WizardStepStarted.
@@ -1930,6 +1940,8 @@ mod tests {
             kind: WizardStepKind::PathConfig,
             install: None,
             path_bin_dir: Some(bin_dir),
+            android_sdk_root: None,
+            android: None,
         });
 
         // Consume WizardStepStarted.

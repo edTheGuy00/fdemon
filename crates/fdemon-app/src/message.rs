@@ -1728,6 +1728,14 @@ pub enum Message {
     /// Re-run the toolchain preflight check (r key)
     InstallWizardRerunPreflight,
 
+    /// Copy the selected step's guided command to the clipboard (c key).
+    ///
+    /// No-op when the currently selected step has no guided command to copy
+    /// (e.g. FlutterSdk and PathConfig steps, which are fully automated).
+    /// Used for steps like `AndroidTools` that may surface a JDK install
+    /// command the user should run manually.
+    InstallWizardCopyCommand,
+
     /// Preflight task completed — populate the wizard with the report
     ToolchainPreflightCompleted {
         report: fdemon_daemon::toolchain::ToolchainReport,

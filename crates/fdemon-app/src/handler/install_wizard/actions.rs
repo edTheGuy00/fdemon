@@ -115,6 +115,8 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                 kind,
                 install: Some(params),
                 path_bin_dir: None,
+                android_sdk_root: None,
+                android: None,
             })
         }
 
@@ -145,6 +147,8 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                         kind,
                         install: None,
                         path_bin_dir: Some(bin),
+                        android_sdk_root: None,
+                        android: None,
                     })
                 }
                 None => {
@@ -461,6 +465,7 @@ mod tests {
                     kind: WizardStepKind::FlutterSdk,
                     install: Some(_),
                     path_bin_dir: None,
+                    ..
                 })
             ),
             "FlutterSdk step must dispatch RunWizardStep with install params; got {:?}",
@@ -543,6 +548,7 @@ mod tests {
                     kind: WizardStepKind::PathConfig,
                     install: None,
                     path_bin_dir: Some(_),
+                    ..
                 })
             ),
             "PathConfig step with known SDK must dispatch RunWizardStep; got {:?}",

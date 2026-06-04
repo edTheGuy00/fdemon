@@ -416,6 +416,7 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `j`/`Down` — navigate down in the step list or scroll detail down
 /// - `Enter` — run (or retry) the selected wizard step (`InstallWizardRunSelectedStep`)
 /// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
+/// - `c` — copy the selected step's guided command to the clipboard (`InstallWizardCopyCommand`)
 fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message> {
     match key {
         // ── Global keys ───────────────────────────────────────────────────────
@@ -435,6 +436,8 @@ fn handle_key_install_wizard(key: InputKey, _state: &AppState) -> Option<Message
         // Run (or retry) the currently selected wizard step (Phase 2, Task 05).
         InputKey::Enter => Some(Message::InstallWizardRunSelectedStep),
         InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
+        // Copy the selected step's guided command to the clipboard (Phase 3, Task 04).
+        InputKey::Char('c') => Some(Message::InstallWizardCopyCommand),
 
         _ => None,
     }
@@ -3648,6 +3651,22 @@ mod install_wizard_key_tests {
         assert!(
             matches!(msg, Some(Message::Quit)),
             "Ctrl+C in InstallWizard should emit Quit, got: {msg:?}"
+        );
+    }
+
+    /// Acceptance criterion (Task 04): `c` in `UiMode::InstallWizard`
+    /// produces `Message::InstallWizardCopyCommand`.
+    #[test]
+    fn test_c_in_install_wizard_emits_copy_command() {
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.ui_mode = UiMode::InstallWizard;
+        let msg = handle_key(&state, InputKey::Char('c'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardCopyCommand)),
+            "'c' in InstallWizard should emit InstallWizardCopyCommand, got: {msg:?}"
         );
     }
 }

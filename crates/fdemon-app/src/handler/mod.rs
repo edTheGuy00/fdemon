@@ -680,7 +680,10 @@ pub enum UpdateAction {
     ///
     /// `install` is `Some` for the `FlutterSdk` step and `None` for the
     /// `PathConfig` step.  `path_bin_dir` is `Some` for the `PathConfig` step
-    /// and `None` for all other steps.
+    /// and `None` for all other steps.  `android_sdk_root` is `Some` for the
+    /// `PathConfig` step when an Android SDK root is known (so the executor can
+    /// also write `ANDROID_HOME`), and `None` otherwise.  `android` is `Some`
+    /// for the `AndroidTools` step and `None` for all other steps.
     RunWizardStep {
         /// Which wizard step to execute.
         kind: WizardStepKind,
@@ -692,6 +695,15 @@ pub enum UpdateAction {
         ///
         /// `Some` for the `PathConfig` step, `None` for all others.
         path_bin_dir: Option<std::path::PathBuf>,
+        /// Android SDK root to write as `ANDROID_HOME` during the `PathConfig` step.
+        ///
+        /// `Some` when the PathConfig step should also export `ANDROID_HOME`.
+        /// `None` for all other steps and when no Android SDK root is known.
+        android_sdk_root: Option<std::path::PathBuf>,
+        /// Resolved Android tools install parameters.
+        ///
+        /// `Some` for the `AndroidTools` step, `None` for all other steps.
+        android: Option<AndroidStepParams>,
     },
 
     /// Fire-and-forget a daemon command on the session's Flutter process stdin.
@@ -807,6 +819,30 @@ pub struct FlutterStepParams {
     /// `None` → the executor resolves a platform-appropriate default
     /// (e.g. `~/.local/share/fdemon/flutter` on Linux).
     pub install_root: Option<std::path::PathBuf>,
+}
+
+/// Parameters for a managed Android tools installation step.
+///
+/// Carried by [`UpdateAction::RunWizardStep`] to the Phase 3 executor (task 06).
+/// The executor uses these to install the Android SDK command-line tools, the
+/// required platform API level, and optionally a JDK.
+#[derive(Debug, Clone)]
+pub struct AndroidStepParams {
+    /// Root directory where the Android SDK should be installed.
+    ///
+    /// `None` → the executor resolves a platform-appropriate default
+    /// (e.g. `~/.local/share/fdemon/android` on Linux).
+    pub sdk_root: Option<std::path::PathBuf>,
+    /// Android platform API level to install (e.g. `34`).
+    pub api_level: u32,
+    /// Specific cmdline-tools build version to download (e.g. `"11076708"`).
+    ///
+    /// `None` → the executor resolves the latest stable build.
+    pub cmdline_tools_build: Option<String>,
+    /// Path to the JDK to use during installation.
+    ///
+    /// `None` → the executor uses the system JDK or installs one if missing.
+    pub jdk_path: Option<std::path::PathBuf>,
 }
 
 /// Background tasks to spawn
