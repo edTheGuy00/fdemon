@@ -98,3 +98,34 @@ mod tests {
   `bottom_area` height expression should be simplified to `bottom_section_height` —
   that expression intentionally computes `min(B, H)` to clamp to the content region.
   Do **not** apply that "simplification"; preserve the saturating clamp.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `guided_section_full_height()` helper; replaced fixed `bottom_section_height` with dynamic computation; updated `GUIDED_COMMAND_MIN_HEIGHT` doc comment; updated `render_guided_commands` doc comment; added 8 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fix approach — Option 1 (size section to command count):** Added `guided_section_full_height()` as an `impl StepDetailPane` associated function that computes the exact row budget for the complete guided section (header + caption + Σ per-command blocks accounting for conditional blank rows and optional notes). The `bottom_section_height` computation now calls this helper and clamps to `content_area.height` via `.min()` — preserving the existing saturating clamp behavior per the task's explicit note.
+
+2. **GUIDED_COMMAND_MIN_HEIGHT constant updated:** Changed value from 4 to 2 and updated the doc-comment to accurately reflect that `[c] copy` is inline on the command row (not a separate row), and that the leading blank is conditional (skipped for command 0 under a caption). The constant itself is no longer used in layout (replaced by `guided_section_full_height`), but it is kept as a documented minimum for any future guards.
+
+3. **Existing test helpers unchanged:** The original `make_state_prerequisites_macos_three_commands()` (with `components: vec![]`) is preserved to cover the no-component branch. The new `make_state_prerequisites_macos_three_commands_with_component()` covers the previously buggy path.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib -- widgets::install_wizard::step_detail::tests` — PASS (38 tests, was 20)
+- `cargo test --workspace --lib` — PASS (1436 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` — PASS (no warnings)
+
+### Risks/Limitations
+
+1. **No scroll window for very tight terminals:** The fix sizes the bottom section to exactly fit all commands, but does not implement a scroll window within the guided section. On extremely small terminals (< ~14 rows), the bottom section will be clamped to `content_area.height` and some commands may still clip. The task's acceptance criteria only required "reasonably-sized terminal" and the `test_no_panic_small_terminal_with_component_and_multiple_commands` test confirms no panic on 8-row terminals.

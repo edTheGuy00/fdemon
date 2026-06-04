@@ -81,3 +81,31 @@ mod tests {
   dynamic input (the security review confirmed the current static-literal design is
   injection-safe; preserve it).
 - This task only touches `state.rs`; it is parallel-safe with tasks 01 and 03.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | (1) Added `PREREQ_KEY_GIT` to `use` import block; (2) Fixed `LinuxPackageManager::Yum` arm to emit real `yum install` command instead of `dnf`; (3) Added best-effort caveat note for the Yum arm; (4) Split `Dnf | Yum` test arm into separate `Dnf` and `Yum` arms with correct per-manager assertions |
+
+### Notable Decisions/Tradeoffs
+
+1. **Yum note content (n2)**: Rather than keeping the apt alternative note in the Yum arm (which is irrelevant to a yum-only RHEL7/CentOS7 user), replaced it with a best-effort caveat note explaining that package names are community-sourced and to consult distro docs if a package is not found. This is more actionable on the systems that actually reach this arm.
+2. **Static literals preserved**: All command strings remain static literals chosen by enum arm — no dynamic interpolation, consistent with the security-review requirement.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib -- install_wizard` — Passed (153 tests)
+- `cargo check -p fdemon-app` — Passed (no errors)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Yum package names**: The yum arm uses the same package names as the dnf arm (e.g. `pkgconf`, `gtk3-devel`, `ninja-build`), which are correct for RHEL8+/CentOS8+ but on RHEL7/CentOS7 some names may differ (e.g. `cmake3`, `devtoolset`). The best-effort caveat note addresses this; providing exact RHEL7 package names is out of scope for this task.

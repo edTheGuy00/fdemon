@@ -99,3 +99,36 @@ mod tests {
 - Task 04 will later move package-manager/winget detection into the daemon report;
   keep this task's changes confined to the existing check functions so 04 can build
   on top.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a5808401b0d6a7af0
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | m2: Linux detail now uses `MISSING_PREFIX` (lowercase) via `format!("{}{}", MISSING_PREFIX, ...)`. m3: absent required binaries → `ComponentStatus::Missing`; GTK-only absence → `ComponentStatus::Partial` (reserved for degraded/present state). m4: Windows `Ok` detail now appends `WINDOWS_MSVC_CAVEAT` string flagging unverified VS C++ workload. n1: `pkg_config_found` flag tracked in binary loop; GTK probe only runs when pkg-config/pkgconf is available, preventing GTK double-report. Test helper `build_linux_check_from_missing` updated to mirror new semantics. 8 new tests added; 5 existing test assertions updated. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A for m2 (use `MISSING_PREFIX`)**: Chose uniformity over a comment-only opt-out. Linux details now use the same parseable format as macOS/Windows, which unblocks future use of `parse_missing_prereq_keys` for Linux if needed.
+2. **m3 semantics**: `Missing` for any absent required binary (git, cmake, etc.); `Partial` reserved strictly for GTK-only degradation. This matches `types.rs` doc ("present but degraded") and is consistent with macOS/Windows.
+3. **n1 implemented (not deferred)**: The GTK double-report fix was straightforward — tracking `pkg_config_found` in the existing binary loop adds zero overhead and avoids misleading output.
+4. **`check_linux_prerequisites` refactored**: Split into `missing_binaries` + `pkg_config_found` tracking to support the n1 fix cleanly. The `pkg-config` alias branch now uses `continue` to skip the outer `alias_found` path, preventing double-push.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon toolchain::checks::prerequisites` — 42 passed, 0 failed
+- `cargo test -p fdemon-daemon` — 1033 passed, 0 failed
+- `cargo test --workspace --lib` — 1429 passed, 0 failed
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Clean
+- `cargo fmt -p fdemon-daemon` — Applied (no logic changes)
+
+### Risks/Limitations
+
+1. **Live `check_linux_prerequisites` not unit-tested for n1**: The n1 fix in the live async function cannot be exercised without process-spawning. The test helper `build_linux_check_from_missing` demonstrates the contract by passing `pkg-config` as a missing binary with `gtk_present = true`. A comment in the test explains the correspondence.
+2. **`WINDOWS_MSVC_CAVEAT` is informational only**: No `vswhere.exe` probe is performed (explicitly deferred per task scope). The caveat text guides users but does not change the `Ok` status.

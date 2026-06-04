@@ -109,3 +109,36 @@ behavior (not vacuous truth).
 - Test-only changes — no production logic should change in this task.
 - Sequenced after task 04 so the new tests assert against the final
   `prerequisites_guided_commands` / report signatures.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Added `test_bracket_open_in_install_wizard_emits_prev_command` and `test_bracket_close_in_install_wizard_emits_next_command` tests (m7) |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Renamed `test_non_android_steps_have_no_guided_commands` → `test_non_android_non_prereq_steps_have_no_guided_commands_when_prereqs_absent`; added `test_path_config_flutter_sdk_doctor_never_have_guided_commands` (m8) |
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | Extracted `detect_from_candidates(present: &[&str])` pure helper; refactored `detect_linux_package_manager` to call it; replaced no-assertion precedence test with 7 real precedence/edge-case tests; updated module comment (m9) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`detect_from_candidates` uses a `const ORDER` slice**: The ordering table `&[(&str, LinuxPackageManager)]` is the single source of truth for precedence, making the logic readable and the tests trivially verifiable against it.
+2. **m8 new test uses all-Ok components**: The `test_path_config_flutter_sdk_doctor_never_have_guided_commands` test builds a complete all-Ok report so both `prerequisites_guided_commands` and JDK guidance short-circuit, giving clean isolation of the "never" claim.
+3. **Pre-existing fdemon-tui clippy issue**: `step_detail.rs` has two `doc-lazy-continuation` warnings unrelated to this task — confirmed pre-existing before these changes.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (2813 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (1040 tests)
+- `cargo clippy -p fdemon-app -p fdemon-daemon --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing clippy failure in fdemon-tui**: `doc-lazy-continuation` errors in `step_detail.rs` were present before this task and are not introduced by these changes.

@@ -111,3 +111,45 @@ mod tests {
   running 04 last on those files avoids merge churn.
 - Keeps the daemon as the single home for environment detection I/O, consistent with
   `docs/ARCHITECTURE.md` layer assignments.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `linux_package_manager: Option<LinuxPackageManager>` and `winget_available: bool` fields to `ToolchainReport` |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Populate new fields in `run_preflight`; added 2 integration tests for the new fields |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Changed `prerequisites_guided_commands` signature from `(platform, components)` to `(report, components)`; removed `which::which` calls; added `TODO(n3)` notes; updated all tests to new signature; added pure-dispatch tests for each PM arm and both Windows winget branches |
+| `crates/fdemon-app/Cargo.toml` | Removed `which.workspace = true` |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Updated all `ToolchainReport { ... }` constructions to include new fields |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Updated all `ToolchainReport { ... }` constructions to include new fields |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Updated all `ToolchainReport { ... }` constructions to include new fields |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Updated `ToolchainReport { ... }` construction to include new fields |
+| `Cargo.lock` | Removed `which` from `fdemon-app` dependency graph |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pure refactor approach chosen over lightweight alternative**: The full TEA-purity refactor was implemented (vs. the `// EXCEPTION:` annotation approach). This is the preferred path as it also resolves n4 (drops the dependency) and makes `build_steps` a pure function of the report.
+2. **`linux_package_manager` uses `Option<LinuxPackageManager>`**: `Some(pm)` on Linux (always set, even when `pm == Unknown`), `None` on non-Linux. The `unwrap_or(Unknown)` at the call site handles the None case defensively.
+3. **`winget_available` always `false` on non-Windows**: Detection gated by `cfg!(target_os = "windows")` in `run_preflight`, keeping the field meaningful on cross-platform report consumers.
+4. **TODO(n3) notes placed in both macOS and Windows arms**: Both arms use the stringly-typed `parse_missing_prereq_keys` cross-crate contract.
+5. **New pure-dispatch test added** (`test_prereq_guided_linux_pm_dispatch_pure`): Injects each `LinuxPackageManager` variant into the report and asserts exact command strings — host-environment independent, deterministic.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-daemon toolchain` — 268 passed (includes 2 new run_preflight field tests)
+- `cargo test -p fdemon-app install_wizard` — 156 passed
+- `cargo test -p fdemon-tui install_wizard` — 78 passed
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy -p fdemon-daemon -p fdemon-app --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Pre-existing clippy warnings in `step_detail.rs`**: Two `doc_lazy_continuation` warnings exist in that file before and after this task — not introduced by this change, documented for completeness.

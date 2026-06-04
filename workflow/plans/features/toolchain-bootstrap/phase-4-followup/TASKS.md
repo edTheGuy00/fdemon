@@ -55,12 +55,12 @@ Wave 1 (parallel, disjoint files)      Wave 2        Wave 3        Wave 4
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-fix-multicommand-guided-clipping](tasks/01-fix-multicommand-guided-clipping.md) | Not Started | - | 3-5h | `widgets/install_wizard/step_detail.rs` |
-| 02 | [02-polish-prerequisites-guided-commands](tasks/02-polish-prerequisites-guided-commands.md) | Not Started | - | 2-3h | `install_wizard/state.rs` |
-| 03 | [03-refine-prereq-detection-status](tasks/03-refine-prereq-detection-status.md) | Not Started | - | 2-3h | `toolchain/checks/prerequisites.rs` |
-| 04 | [04-pure-guided-commands-tea](tasks/04-pure-guided-commands-tea.md) | Not Started | 02, 03 | 3-4h | `toolchain/types.rs`, `toolchain/mod.rs`, `toolchain/checks/prerequisites.rs`, `install_wizard/state.rs`, `fdemon-app/Cargo.toml` |
-| 05 | [05-test-quality-fixes](tasks/05-test-quality-fixes.md) | Not Started | 04 | 1-2h | `handler/keys.rs`, `install_wizard/state.rs`, `toolchain/checks/prerequisites.rs` |
-| 06 | [06-update-architecture-docs](tasks/06-update-architecture-docs.md) | Not Started | 04, 05 | 1h | `docs/ARCHITECTURE.md` |
+| 01 | [01-fix-multicommand-guided-clipping](tasks/01-fix-multicommand-guided-clipping.md) | Done ✅ Validated → Merged | - | 3-5h | `widgets/install_wizard/step_detail.rs` |
+| 02 | [02-polish-prerequisites-guided-commands](tasks/02-polish-prerequisites-guided-commands.md) | Done ✅ Validated → Merged | - | 2-3h | `install_wizard/state.rs` |
+| 03 | [03-refine-prereq-detection-status](tasks/03-refine-prereq-detection-status.md) | Done ✅ Validated → Merged | - | 2-3h | `toolchain/checks/prerequisites.rs` |
+| 04 | [04-pure-guided-commands-tea](tasks/04-pure-guided-commands-tea.md) | Done ✅ Validated (same-branch) | 02, 03 | 3-4h | `toolchain/types.rs`, `toolchain/mod.rs`, `toolchain/checks/prerequisites.rs`, `install_wizard/state.rs`, `fdemon-app/Cargo.toml` |
+| 05 | [05-test-quality-fixes](tasks/05-test-quality-fixes.md) | Done ✅ Validated (same-branch) | 04 | 1-2h | `handler/keys.rs`, `install_wizard/state.rs`, `toolchain/checks/prerequisites.rs` |
+| 06 | [06-update-architecture-docs](tasks/06-update-architecture-docs.md) | Done ✅ Validated (doc_maintainer) | 04, 05 | 1h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 
