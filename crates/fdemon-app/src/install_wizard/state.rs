@@ -356,7 +356,7 @@ fn prerequisites_guided_commands(
                 LinuxPackageManager::Dnf => (
                     "Install Linux prerequisites (dnf)",
                     "sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
-                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                    Some("Package names are best-effort; consult your distro docs if a package is not found. or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
                 ),
                 LinuxPackageManager::Yum => (
                     "Install Linux prerequisites (yum)",
@@ -366,12 +366,12 @@ fn prerequisites_guided_commands(
                 LinuxPackageManager::Pacman => (
                     "Install Linux prerequisites (pacman)",
                     "sudo pacman -S --needed curl git unzip xz zip glu clang cmake ninja pkgconf gtk3",
-                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                    Some("Package names are best-effort; consult your distro docs if a package is not found. or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
                 ),
                 LinuxPackageManager::Zypper => (
                     "Install Linux prerequisites (zypper)",
                     "sudo zypper in curl git unzip xz zip Mesa-libGLU1 clang gcc cmake ninja pkg-config gtk3-devel",
-                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                    Some("Package names are best-effort; consult your distro docs if a package is not found. or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
                 ),
                 LinuxPackageManager::Unknown => (
                     "Install Linux prerequisites",
@@ -1611,9 +1611,10 @@ mod tests {
                     "dnf system should use dnf; got: {}",
                     cmds[0].command
                 );
+                let note = cmds[0].note.as_deref().unwrap_or("");
                 assert!(
-                    cmds[0].note.is_some(),
-                    "dnf command must have an alternative note"
+                    note.contains("best-effort"),
+                    "dnf note must contain best-effort caveat; got: {note}"
                 );
             }
             LinuxPackageManager::Yum => {
@@ -1635,11 +1636,19 @@ mod tests {
             LinuxPackageManager::Pacman => {
                 assert!(cmds[0].command.contains("pacman"));
                 assert!(cmds[0].command.contains("--needed"));
-                assert!(cmds[0].note.is_some());
+                let note = cmds[0].note.as_deref().unwrap_or("");
+                assert!(
+                    note.contains("best-effort"),
+                    "pacman note must contain best-effort caveat; got: {note}"
+                );
             }
             LinuxPackageManager::Zypper => {
                 assert!(cmds[0].command.contains("zypper"));
-                assert!(cmds[0].note.is_some());
+                let note = cmds[0].note.as_deref().unwrap_or("");
+                assert!(
+                    note.contains("best-effort"),
+                    "zypper note must contain best-effort caveat; got: {note}"
+                );
             }
             LinuxPackageManager::Unknown => {
                 assert!(
@@ -1693,10 +1702,13 @@ mod tests {
         let cmds = prerequisites_guided_commands(&report_dnf, &components);
         assert_eq!(cmds.len(), 1);
         assert!(cmds[0].command.contains("dnf"), "Dnf arm must use dnf");
-        assert!(
-            cmds[0].note.is_some(),
-            "Dnf arm must have an alternative note"
-        );
+        {
+            let note = cmds[0].note.as_deref().unwrap_or("");
+            assert!(
+                note.contains("best-effort"),
+                "Dnf arm note must contain best-effort caveat; got: {note}"
+            );
+        }
 
         // Test Yum arm
         let report_yum = ToolchainReport {
@@ -1735,7 +1747,13 @@ mod tests {
             cmds[0].command.contains("--needed"),
             "Pacman arm must use --needed"
         );
-        assert!(cmds[0].note.is_some(), "Pacman arm must have a note");
+        {
+            let note = cmds[0].note.as_deref().unwrap_or("");
+            assert!(
+                note.contains("best-effort"),
+                "Pacman arm note must contain best-effort caveat; got: {note}"
+            );
+        }
 
         // Test Zypper arm
         let report_zypper = ToolchainReport {
@@ -1752,7 +1770,13 @@ mod tests {
             cmds[0].command.contains("zypper"),
             "Zypper arm must use zypper"
         );
-        assert!(cmds[0].note.is_some(), "Zypper arm must have a note");
+        {
+            let note = cmds[0].note.as_deref().unwrap_or("");
+            assert!(
+                note.contains("best-effort"),
+                "Zypper arm note must contain best-effort caveat; got: {note}"
+            );
+        }
 
         // Test Unknown arm
         let report_unknown = ToolchainReport {
