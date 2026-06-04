@@ -27,7 +27,7 @@
 //! Android env block:
 //! ```text
 //! # >>> fdemon android env >>>
-//! export ANDROID_HOME="/home/u/.android/sdk"
+//! export ANDROID_HOME='/home/u/.android/sdk'
 //! export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 //! # <<< fdemon android env <<<
 //! ```
@@ -210,7 +210,7 @@ pub fn add_to_path(
 /// bash/zsh:
 /// ```text
 /// # >>> fdemon android env >>>
-/// export ANDROID_HOME="/home/user/.android/sdk"
+/// export ANDROID_HOME='/home/user/.android/sdk'
 /// export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 /// # <<< fdemon android env <<<
 /// ```
@@ -218,7 +218,7 @@ pub fn add_to_path(
 /// fish:
 /// ```text
 /// # >>> fdemon android env >>>
-/// set -Ux ANDROID_HOME "/home/user/.android/sdk"
+/// set -Ux ANDROID_HOME '/home/user/.android/sdk'
 /// fish_add_path "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools"
 /// # <<< fdemon android env <<<
 /// ```
@@ -268,11 +268,15 @@ pub fn add_android_env(
 
 /// Build the export line appropriate for bash/zsh.
 ///
-/// The path is placed inside double quotes. The metacharacter validator in
-/// [`validate_bin_dir`] ensures that `"`, `` ` ``, `$`, and `\` are absent,
-/// which keeps the double-quoted segment safe.
+/// The bin directory is single-quoted using [`single_quote_escape`] to prevent
+/// any shell interpretation of the literal path value (guards against `$`, `"`,
+/// `` ` ``, and `\` in the path). The `$PATH` expansion is intentional — it is
+/// kept in a separate double-quoted segment so the shell expands the existing
+/// PATH at login time. The two segments are adjacent string literals that POSIX
+/// shells concatenate: `"$PATH:"'/safe/bin'`.
 fn posix_export_line(bin_dir: &Path) -> String {
-    format!("export PATH=\"$PATH:{}\"", bin_dir.display())
+    let escaped = single_quote_escape(&bin_dir.to_string_lossy());
+    format!("export PATH=\"$PATH:\"{}", escaped)
 }
 
 /// Single-quote escape a path for use in POSIX/fish shell arguments.
@@ -315,36 +319,44 @@ fn fence_block(rc_file: &Path, bin_dir: &Path) -> String {
 
 /// Build the Android env fence block for bash/zsh.
 ///
+/// The SDK root value is single-quoted to prevent shell expansion of any `$`,
+/// `` ` ``, or `"` characters in the path. The `$ANDROID_HOME` references in the
+/// PATH line are intentional expansions and remain unquoted.
+///
 /// ```text
 /// # >>> fdemon android env >>>
-/// export ANDROID_HOME="/home/user/.android/sdk"
+/// export ANDROID_HOME='/home/user/.android/sdk'
 /// export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 /// # <<< fdemon android env <<<
 /// ```
 fn android_posix_block(sdk_root: &Path) -> String {
-    let sdk_str = sdk_root.display();
+    let sdk_escaped = single_quote_escape(&sdk_root.to_string_lossy());
     format!(
-        "{fence_open}\nexport ANDROID_HOME=\"{sdk_str}\"\nexport PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\"\n{fence_close}\n",
+        "{fence_open}\nexport ANDROID_HOME={sdk_escaped}\nexport PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\"\n{fence_close}\n",
         fence_open = ANDROID_FENCE_OPEN,
-        sdk_str = sdk_str,
+        sdk_escaped = sdk_escaped,
         fence_close = ANDROID_FENCE_CLOSE,
     )
 }
 
 /// Build the Android env fence block for fish.
 ///
+/// The SDK root value is single-quoted to prevent fish from expanding any `$`,
+/// `` ` ``, or `"` characters in the path. The `$ANDROID_HOME` references in the
+/// `fish_add_path` line are intentional expansions and remain double-quoted.
+///
 /// ```text
 /// # >>> fdemon android env >>>
-/// set -Ux ANDROID_HOME "/home/user/.android/sdk"
+/// set -Ux ANDROID_HOME '/home/user/.android/sdk'
 /// fish_add_path "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools"
 /// # <<< fdemon android env <<<
 /// ```
 fn android_fish_block(sdk_root: &Path) -> String {
-    let sdk_str = sdk_root.display();
+    let sdk_escaped = single_quote_escape(&sdk_root.to_string_lossy());
     format!(
-        "{fence_open}\nset -Ux ANDROID_HOME \"{sdk_str}\"\nfish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\"\n{fence_close}\n",
+        "{fence_open}\nset -Ux ANDROID_HOME {sdk_escaped}\nfish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\"\n{fence_close}\n",
         fence_open = ANDROID_FENCE_OPEN,
-        sdk_str = sdk_str,
+        sdk_escaped = sdk_escaped,
         fence_close = ANDROID_FENCE_CLOSE,
     )
 }
@@ -871,8 +883,24 @@ mod tests {
 
     #[test]
     fn test_posix_export_line() {
+        // The bin dir is single-quoted; $PATH is in a separate double-quoted segment.
         let line = posix_export_line(Path::new("/home/user/flutter/bin"));
-        assert_eq!(line, r#"export PATH="$PATH:/home/user/flutter/bin""#);
+        assert_eq!(line, r#"export PATH="$PATH:"'/home/user/flutter/bin'"#);
+    }
+
+    #[test]
+    fn test_posix_export_line_single_quote_in_path() {
+        // A path with a single quote must be safely escaped.
+        let line = posix_export_line(Path::new("/home/user's/flutter/bin"));
+        assert_eq!(line, r#"export PATH="$PATH:"'/home/user'\''s/flutter/bin'"#);
+    }
+
+    #[test]
+    fn test_posix_export_line_dollar_in_path() {
+        // A path containing a bare $ must not expand at login time.
+        // Single-quoting prevents variable expansion inside '...'.
+        let line = posix_export_line(Path::new("/opt/$HOME/flutter/bin"));
+        assert_eq!(line, r#"export PATH="$PATH:"'/opt/$HOME/flutter/bin'"#);
     }
 
     #[test]
@@ -1041,7 +1069,7 @@ mod tests {
         let written = std::fs::read_to_string(&rc_file).unwrap();
         assert!(written.contains(FENCE_OPEN));
         assert!(written.contains(FENCE_CLOSE));
-        assert!(written.contains("export PATH=\"$PATH:/opt/flutter/bin\""));
+        assert!(written.contains("export PATH=\"$PATH:\"'/opt/flutter/bin'"));
         assert_eq!(written.matches(FENCE_OPEN).count(), 1);
     }
 
@@ -1530,7 +1558,7 @@ mod tests {
         );
     }
 
-    /// A SDK root with spaces must be written correctly (double-quoted in the
+    /// A SDK root with spaces must be written correctly (single-quoted in the
     /// export line, not causing parse errors).
     #[test]
     fn test_android_env_sdk_root_with_spaces_bash() {
@@ -1542,10 +1570,10 @@ mod tests {
         add_android_env_to_rc_file(&rc_file, &sdk_root).unwrap();
 
         let contents = std::fs::read_to_string(&rc_file).unwrap();
-        // The path must appear double-quoted inside the ANDROID_HOME export.
+        // The path must appear single-quoted inside the ANDROID_HOME export.
         assert!(
-            contents.contains("export ANDROID_HOME=\"/home/user/android sdk/root\""),
-            "SDK root with spaces must be double-quoted in export"
+            contents.contains("export ANDROID_HOME='/home/user/android sdk/root'"),
+            "SDK root with spaces must be single-quoted in export"
         );
     }
 
@@ -1556,7 +1584,8 @@ mod tests {
         let block = android_posix_block(sdk_root);
 
         assert!(block.starts_with(ANDROID_FENCE_OPEN));
-        assert!(block.contains("export ANDROID_HOME=\"/home/user/.android/sdk\""));
+        // SDK root is single-quoted to prevent shell expansion of $, ", `.
+        assert!(block.contains("export ANDROID_HOME='/home/user/.android/sdk'"));
         assert!(block.contains(
             "export PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\""
         ));
@@ -1571,12 +1600,87 @@ mod tests {
         let block = android_fish_block(sdk_root);
 
         assert!(block.starts_with(ANDROID_FENCE_OPEN));
-        assert!(block.contains("set -Ux ANDROID_HOME \"/home/user/.android/sdk\""));
+        // SDK root is single-quoted to prevent fish expansion of $, ", `.
+        assert!(block.contains("set -Ux ANDROID_HOME '/home/user/.android/sdk'"));
         assert!(block.contains(
             "fish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\""
         ));
         assert!(block.contains(ANDROID_FENCE_CLOSE));
         assert!(!block.contains("export ANDROID_HOME"));
+    }
+
+    /// Injection-bearing SDK root (contains `"`) must be safely single-quoted
+    /// in the bash/zsh Android env block — no shell breakout possible.
+    #[test]
+    fn test_android_posix_block_injection_double_quote() {
+        // A path containing a double-quote — would break out of double-quoted
+        // assignment in the old format: `export ANDROID_HOME="/evil"path`.
+        let sdk_root = Path::new("/home/user/android\"sdk");
+        let block = android_posix_block(sdk_root);
+
+        // The block must not contain an unquoted double-quote that breaks assignment.
+        // Single-quoting means the " is literal inside '...'; the line must be:
+        //   export ANDROID_HOME='/home/user/android"sdk'
+        assert!(
+            block.contains("export ANDROID_HOME='/home/user/android\"sdk'"),
+            "double-quote in path must be safely enclosed in single quotes: {block}"
+        );
+        // No stray unquoted double-quote after ANDROID_HOME= outside single-quoted span.
+        let assignment_line = block
+            .lines()
+            .find(|l| l.starts_with("export ANDROID_HOME="))
+            .expect("assignment line must exist");
+        // The line must start with export ANDROID_HOME=', not export ANDROID_HOME=".
+        assert!(
+            assignment_line.starts_with("export ANDROID_HOME='"),
+            "assignment must use single-quote quoting: {assignment_line}"
+        );
+    }
+
+    /// Injection-bearing SDK root (contains `$`) must not expand in bash/zsh.
+    #[test]
+    fn test_android_posix_block_injection_dollar() {
+        let sdk_root = Path::new("/home/user/$HOME/.android/sdk");
+        let block = android_posix_block(sdk_root);
+
+        // Single-quoting prevents $ expansion. The literal string must appear.
+        assert!(
+            block.contains("export ANDROID_HOME='/home/user/$HOME/.android/sdk'"),
+            "dollar in path must be single-quoted to prevent expansion: {block}"
+        );
+    }
+
+    /// Injection-bearing SDK root (contains `"`) must be safely single-quoted
+    /// in the fish Android env block — no fish breakout possible.
+    #[test]
+    fn test_android_fish_block_injection_double_quote() {
+        let sdk_root = Path::new("/home/user/android\"sdk");
+        let block = android_fish_block(sdk_root);
+
+        assert!(
+            block.contains("set -Ux ANDROID_HOME '/home/user/android\"sdk'"),
+            "double-quote in path must be safely single-quoted in fish block: {block}"
+        );
+        let set_line = block
+            .lines()
+            .find(|l| l.starts_with("set -Ux ANDROID_HOME"))
+            .expect("set line must exist");
+        assert!(
+            set_line.starts_with("set -Ux ANDROID_HOME '"),
+            "fish set must use single-quote quoting: {set_line}"
+        );
+    }
+
+    /// Injection-bearing SDK root (contains `$`) must not expand in fish.
+    #[test]
+    fn test_android_fish_block_injection_dollar() {
+        let sdk_root = Path::new("/home/user/$EVILVAR/.android/sdk");
+        let block = android_fish_block(sdk_root);
+
+        assert!(
+            block.contains("set -Ux ANDROID_HOME '/home/user/$EVILVAR/.android/sdk'"),
+            "dollar in path must be single-quoted to prevent fish expansion: {block}"
+        );
     }
 
     /// The injection validator rejects metacharacters in sdk_root paths when

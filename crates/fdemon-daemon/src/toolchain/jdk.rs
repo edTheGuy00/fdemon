@@ -49,9 +49,9 @@ pub fn resolve_jdk_home() -> Option<PathBuf> {
 /// Run `flutter config --jdk-dir=<jdk_dir>` so the Flutter CLI uses the
 /// specified JDK when building Android targets.
 ///
-/// Progress output from the `flutter config` command is forwarded to the caller
-/// via the `on_line` callback. The function is considered successful when
-/// `flutter config` exits with status 0.
+/// Output from the `flutter config` command is forwarded to the `tracing` debug
+/// log. The function is considered successful when `flutter config` exits with
+/// status 0.
 ///
 /// # Arguments
 ///
@@ -60,9 +60,19 @@ pub fn resolve_jdk_home() -> Option<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an error when `flutter config` cannot be spawned or exits non-zero.
-/// The call site (task 06) decides whether to surface the failure.
+/// Returns an error when `jdk_dir` contains newline or control characters, when
+/// `flutter config` cannot be spawned, or when it exits non-zero.
+/// The `--jdk-dir` value is passed as a single `argv` element to `Command::args`
+/// (exec-style, no shell), so there is no shell-injection vector here; the
+/// validation is defense-in-depth to catch malformed paths early.
+/// The call site decides whether to surface the failure.
 pub async fn configure_flutter_jdk_dir(flutter: &Path, jdk_dir: &Path) -> Result<()> {
+    // Defense-in-depth: reject newlines and control characters in the JDK path.
+    // The path is passed via argv (exec-style), not a shell, so this is not a
+    // shell-injection mitigation — it guards against garbled paths reaching the
+    // Flutter CLI.
+    validate_jdk_dir(jdk_dir)?;
+
     let flutter_str = flutter.to_string_lossy().to_string();
     let jdk_arg = format!("--jdk-dir={}", jdk_dir.display());
 
@@ -78,6 +88,25 @@ pub async fn configure_flutter_jdk_dir(flutter: &Path, jdk_dir: &Path) -> Result
         )));
     }
 
+    Ok(())
+}
+
+// ── Validation helpers ────────────────────────────────────────────────────────
+
+/// Validate that `jdk_dir` does not contain newline or control characters.
+///
+/// This is a defense-in-depth guard: `configure_flutter_jdk_dir` passes the
+/// path via argv (exec-style `Command::args`, no shell), so there is no
+/// shell-injection vector. The check exists to catch malformed or truncated
+/// paths before they reach the Flutter CLI.
+fn validate_jdk_dir(jdk_dir: &Path) -> Result<()> {
+    let s = jdk_dir.to_string_lossy();
+    if s.chars().any(|c| c == '\n' || c == '\r' || c.is_control()) {
+        return Err(Error::config(
+            "JDK directory path contains a newline or control character. \
+             Refusing to pass a malformed path to `flutter config --jdk-dir`.",
+        ));
+    }
     Ok(())
 }
 
@@ -155,5 +184,53 @@ mod tests {
         // Remove JAVA_HOME if set; if `which java` also fails, we get None.
         std::env::remove_var("JAVA_HOME");
         let _ = resolve_jdk_home(); // must not panic
+    }
+
+    // ── validate_jdk_dir tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_jdk_dir_accepts_normal_path() {
+        assert!(validate_jdk_dir(Path::new("/usr/lib/jvm/java-21-openjdk")).is_ok());
+        assert!(validate_jdk_dir(Path::new("/home/user/.jdks/corretto-21")).is_ok());
+        assert!(validate_jdk_dir(Path::new(
+            "/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home"
+        ))
+        .is_ok());
+    }
+
+    #[test]
+    fn test_validate_jdk_dir_rejects_newline() {
+        let path = PathBuf::from("/usr/lib/jvm/java-21\n/etc/evil");
+        assert!(validate_jdk_dir(&path).is_err(), "newline must be rejected");
+        let err = validate_jdk_dir(&path).unwrap_err();
+        assert!(
+            err.to_string().contains("newline") || err.to_string().contains("control"),
+            "error message must mention newline or control character"
+        );
+    }
+
+    #[test]
+    fn test_validate_jdk_dir_rejects_carriage_return() {
+        let path = PathBuf::from("/usr/lib/jvm/java-21\r/etc/evil");
+        assert!(
+            validate_jdk_dir(&path).is_err(),
+            "carriage return must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_jdk_dir_rejects_control_char() {
+        // ASCII 0x01 (SOH) — a control character that should never appear in a path.
+        let path = PathBuf::from("/usr/lib/jvm/java\x01-21");
+        assert!(
+            validate_jdk_dir(&path).is_err(),
+            "control character must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_jdk_dir_accepts_path_with_spaces() {
+        // Spaces are valid in JDK paths.
+        assert!(validate_jdk_dir(Path::new("/Program Files/Java/jdk-21")).is_ok());
     }
 }
