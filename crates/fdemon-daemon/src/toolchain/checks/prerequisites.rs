@@ -258,7 +258,7 @@ async fn check_linux_prerequisites() -> ComponentCheck {
     } else if !missing_binaries.is_empty() {
         // One or more required binaries absent — treat as Missing, matching
         // the macOS/Windows contract where definitive absence → Missing.
-        let mut all_missing = missing_binaries.clone();
+        let mut all_missing = missing_binaries;
         if gtk_missing {
             all_missing.push(GTK_ITEM_LABEL.to_string());
         }
