@@ -66,6 +66,18 @@ pub enum ComponentStatus {
     Unknown,
 }
 
+impl std::fmt::Display for ComponentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ok => write!(f, "OK"),
+            Self::Partial => write!(f, "!"),
+            Self::Missing => write!(f, "MISS"),
+            Self::Error => write!(f, "ERR"),
+            Self::Unknown => write!(f, "?"),
+        }
+    }
+}
+
 /// Identifies which toolchain component a [`ComponentCheck`] refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComponentKind {
@@ -553,6 +565,15 @@ mod tests {
         assert_ne!(ComponentStatus::Partial, ComponentStatus::Ok);
     }
 
+    #[test]
+    fn component_status_display_labels() {
+        assert_eq!(ComponentStatus::Ok.to_string(), "OK");
+        assert_eq!(ComponentStatus::Partial.to_string(), "!");
+        assert_eq!(ComponentStatus::Missing.to_string(), "MISS");
+        assert_eq!(ComponentStatus::Error.to_string(), "ERR");
+        assert_eq!(ComponentStatus::Unknown.to_string(), "?");
+    }
+
     // ── Phase 2 install type tests ────────────────────────────────────────────
 
     #[test]
@@ -652,6 +673,20 @@ mod tests {
             releases: vec![],
         };
         assert!(manifest.resolve_stable(HostArch::X64).is_none());
+    }
+
+    /// Acceptance-criterion test: empty manifest always resolves to `None`
+    /// regardless of architecture argument.
+    #[test]
+    fn resolve_stable_empty_manifest_is_none() {
+        let m = FlutterReleaseManifest {
+            base_url: String::new(),
+            current_stable_hash: None,
+            releases: vec![],
+        };
+        assert!(m.resolve_stable(HostArch::X64).is_none());
+        assert!(m.resolve_stable(HostArch::Arm64).is_none());
+        assert!(m.resolve_stable(HostArch::Unknown).is_none());
     }
 
     #[test]
