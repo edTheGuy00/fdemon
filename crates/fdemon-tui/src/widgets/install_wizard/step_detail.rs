@@ -708,8 +708,8 @@ mod tests {
     use super::*;
     use fdemon_app::install_wizard::{
         ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, GuidedCommand,
-        HostPlatform, HostShell, InstallWizardState, StepExecStatus, StepExecution,
-        ToolchainReport, WizardStep, WizardStepKind,
+        HostPlatform, HostShell, InstallWizardState, LinuxPackageManager, StepExecStatus,
+        StepExecution, ToolchainReport, WizardStep, WizardStepKind,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 
@@ -738,7 +738,7 @@ mod tests {
                     indent: 0,
                 },
             ]),
-            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
             winget_available: false,
         }
     }
@@ -753,7 +753,7 @@ mod tests {
                 detail: String::new(),
             }],
             doctor: None,
-            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
             winget_available: false,
         }
     }

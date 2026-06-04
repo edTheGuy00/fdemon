@@ -330,7 +330,7 @@ mod tests {
     use super::*;
     use fdemon_app::install_wizard::{
         ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
-        HostShell, InstallWizardState, ToolchainReport,
+        HostShell, InstallWizardState, LinuxPackageManager, ToolchainReport,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 
@@ -367,7 +367,7 @@ mod tests {
                     indent: 0,
                 },
             ]),
-            linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
             winget_available: false,
         }
     }

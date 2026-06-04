@@ -23,5 +23,5 @@ pub use types::{
 // so no module in fdemon-tui needs to import directly from fdemon_daemon::toolchain.
 pub use fdemon_daemon::toolchain::{
     ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
-    HostShell, ToolchainReport,
+    HostShell, LinuxPackageManager, ToolchainReport,
 };
