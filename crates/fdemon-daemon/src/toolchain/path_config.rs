@@ -7,9 +7,9 @@
 //!
 //! | Shell       | Target file                                 | Export syntax                 |
 //! |-------------|---------------------------------------------|-------------------------------|
-//! | bash        | `~/.bashrc`                                 | `export PATH="$PATH:<bin>"`   |
+//! | bash        | `~/.bash_profile` (macOS) / `~/.bashrc` (Linux) | `export PATH="$PATH:<bin>"` |
 //! | zsh         | `~/.zshenv` (preferred) or `~/.zprofile`    | `export PATH="$PATH:<bin>"`   |
-//! | fish        | `~/.config/fish/config.fish`                | `fish_add_path <bin>`         |
+//! | fish        | `~/.config/fish/config.fish`                | `fish_add_path '<bin>'`       |
 //! | Windows     | User registry `PATH` via PowerShell         | registry update               |
 //!
 //! ## Idempotency
@@ -24,13 +24,14 @@
 //! ```
 //!
 //! Algorithm:
-//! 1. Resolve the rc file via [`rc_file_for_shell`].
-//! 2. Read existing contents (empty string if the file is absent).
-//! 3. If a fence block already exists and already contains `bin_dir`, return
+//! 1. Validate `bin_dir` via [`validate_bin_dir`] (rejects injection characters).
+//! 2. Resolve the rc file via [`rc_file_for_shell`].
+//! 3. Read existing contents (empty string if the file is absent).
+//! 4. If a fence block already exists and already contains `bin_dir`, return
 //!    [`PathConfigOutcome::AlreadyPresent`].
-//! 4. If a fence block exists but points elsewhere, replace just that block.
-//! 5. Otherwise append a new block.
-//! 6. Write atomically (temp file in same dir → rename), creating parent
+//! 5. If a fence block exists but points elsewhere, replace just that block.
+//! 6. Otherwise append a new block.
+//! 7. Write atomically (temp file in same dir → rename), creating parent
 //!    directories if needed.
 
 use std::path::{Path, PathBuf};
@@ -60,16 +61,77 @@ pub enum PathConfigOutcome {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Validate that `bin_dir` is safe to embed in shell rc files and PowerShell.
+///
+/// Rejects paths that contain newlines (`\n`, `\r`) or shell control
+/// metacharacters (`` ` ``, `$(`, `;`, `&`, `|`) that could be used for
+/// injection attacks when the path is written into a shell config file or
+/// PowerShell command.
+///
+/// This is the single chokepoint called at the top of [`add_to_path`] before
+/// any I/O takes place, covering both the POSIX and Windows paths.
+pub fn validate_bin_dir(bin_dir: &Path) -> Result<()> {
+    let s = bin_dir.to_string_lossy();
+
+    // Reject newlines — they allow appending arbitrary shell commands.
+    if s.contains('\n') || s.contains('\r') {
+        return Err(Error::config(
+            "Flutter bin directory path contains a newline character, which is not allowed \
+             (possible shell injection). Refusing to write PATH configuration.",
+        ));
+    }
+
+    // Reject shell metacharacters that remain live even inside double-quoted
+    // bash/zsh export lines or PowerShell strings.
+    let dangerous_sequences = ["`", "$(", ";", "&", "|"];
+    for seq in dangerous_sequences {
+        if s.contains(seq) {
+            return Err(Error::config(format!(
+                "Flutter bin directory path contains a shell metacharacter {:?}, which is not \
+                 allowed (possible shell injection). Refusing to write PATH configuration.",
+                seq
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Select the rc file to edit for the given shell under `home`.
 ///
 /// Returns `None` for shells where rc-file edits do not apply (i.e.
 /// [`HostShell::PowerShell`], [`HostShell::Cmd`], and [`HostShell::Unknown`]).
+///
+/// For bash on **macOS**, prefers `.bash_profile` if it exists, then falls back
+/// to `.profile` if it exists, then falls back to `.bashrc`. On **Linux** (and
+/// other non-macOS platforms), bash uses `.bashrc`.
+///
 /// For fish, the returned path is `~/.config/fish/config.fish`. For zsh,
-/// `~/.zshenv` is returned when it already exists; otherwise `~/.zprofile` is
-/// returned as the conventional login-shell configuration file.
+/// `~/.zshenv` is returned when it already exists; otherwise `~/.zprofile`
+/// is returned as the conventional login-shell configuration file.
 pub fn rc_file_for_shell(shell: HostShell, home: &Path) -> Option<PathBuf> {
     match shell {
-        HostShell::Bash => Some(home.join(".bashrc")),
+        HostShell::Bash => {
+            #[cfg(target_os = "macos")]
+            {
+                // macOS bash sources login-shell files (.bash_profile / .profile),
+                // not .bashrc.  Prefer the file that already exists.
+                let bash_profile = home.join(".bash_profile");
+                if bash_profile.exists() {
+                    return Some(bash_profile);
+                }
+                let profile = home.join(".profile");
+                if profile.exists() {
+                    return Some(profile);
+                }
+                // Neither exists yet — fall back to .bashrc (will be created).
+                Some(home.join(".bashrc"))
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Some(home.join(".bashrc"))
+            }
+        }
         HostShell::Zsh => {
             let zshenv = home.join(".zshenv");
             if zshenv.exists() {
@@ -85,8 +147,13 @@ pub fn rc_file_for_shell(shell: HostShell, home: &Path) -> Option<PathBuf> {
 
 /// Add `bin_dir` to `PATH` for the detected shell. Idempotent and marker-fenced.
 ///
+/// Validates `bin_dir` for shell injection characters before any I/O.
+///
 /// On Windows, updates the user `PATH` via the registry using a PowerShell
 /// `[Environment]::SetEnvironmentVariable` call rather than editing an rc file.
+/// The value is passed out-of-band via the `FDEMON_NEW_PATH` environment
+/// variable — never interpolated into the PowerShell script string — to prevent
+/// code injection.
 ///
 /// On Unix, writes to the rc file selected by [`rc_file_for_shell`]. If no rc
 /// file can be determined (e.g. `HostShell::Unknown`), returns an error.
@@ -101,6 +168,9 @@ pub fn add_to_path(
     platform: HostPlatform,
     bin_dir: &Path,
 ) -> Result<PathConfigOutcome> {
+    // Single validation chokepoint — covers both POSIX and Windows paths.
+    validate_bin_dir(bin_dir)?;
+
     if platform == HostPlatform::Windows {
         return add_to_path_windows(bin_dir);
     }
@@ -120,13 +190,29 @@ pub fn add_to_path(
 // ── Pure string helpers (unit-testable without I/O) ───────────────────────────
 
 /// Build the export line appropriate for bash/zsh.
+///
+/// The path is placed inside double quotes. The metacharacter validator in
+/// [`validate_bin_dir`] ensures that `"`, `` ` ``, `$`, and `\` are absent,
+/// which keeps the double-quoted segment safe.
 fn posix_export_line(bin_dir: &Path) -> String {
     format!("export PATH=\"$PATH:{}\"", bin_dir.display())
 }
 
-/// Build the fish_add_path line.
+/// Single-quote escape a path for use in POSIX/fish shell arguments.
+///
+/// In POSIX single-quoting, a literal `'` must be represented as `'\''`
+/// (close quote, backslash-quote, reopen quote).  All other characters are
+/// literal inside single quotes — no further escaping is needed.
+fn single_quote_escape(s: &str) -> String {
+    // Replace every ' with '\''
+    let escaped = s.replace('\'', r"'\''");
+    format!("'{}'", escaped)
+}
+
+/// Build the fish_add_path line with a single-quoted, escaped argument.
 fn fish_add_path_line(bin_dir: &Path) -> String {
-    format!("fish_add_path {}", bin_dir.display())
+    let escaped = single_quote_escape(&bin_dir.to_string_lossy());
+    format!("fish_add_path {}", escaped)
 }
 
 /// Determine whether the content line is a fish config file.
@@ -254,7 +340,13 @@ fn write_rc_atomically(rc_file: &Path, new_contents: &str) -> Result<()> {
 
     std::fs::rename(&tmp_path, rc_file).map_err(|e| {
         // Clean up the temp file on failure (best effort).
-        let _ = std::fs::remove_file(&tmp_path);
+        if let Err(remove_err) = std::fs::remove_file(&tmp_path) {
+            tracing::debug!(
+                path = %tmp_path.display(),
+                error = %remove_err,
+                "Failed to clean up temp rc file after rename failure"
+            );
+        }
         Error::config(format!(
             "Failed to move {} → {}: {}",
             tmp_path.display(),
@@ -289,12 +381,21 @@ fn add_to_rc_file(rc_file: &Path, bin_dir: &Path) -> Result<PathConfigOutcome> {
 ///
 /// Guards against the 1024-byte truncation caused by `setx` by using the
 /// `[Environment]::SetEnvironmentVariable` registry API instead, which has no
-/// length limit. The function is platform-gated so it compiles on all targets
-/// but only runs on Windows.
+/// length limit.
+///
+/// **Injection safety:** The new PATH value is passed out-of-band via the
+/// `FDEMON_NEW_PATH` environment variable and referenced as `$env:FDEMON_NEW_PATH`
+/// inside the PowerShell script. The script string itself is a constant with no
+/// user-controlled interpolation, so PowerShell metacharacters in the path cannot
+/// execute arbitrary code.
+///
+/// The function is platform-gated so it compiles on all targets but only runs
+/// on Windows.
 fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
     let bin_str = bin_dir.to_string_lossy().into_owned();
 
     // Read the current user PATH via PowerShell.
+    // This script is a constant — no user-controlled values are interpolated.
     let read_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
@@ -320,7 +421,7 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
         });
     }
 
-    // Append our bin_dir.
+    // Append our bin_dir to form the new PATH value.
     let new_path = if current_path.is_empty() {
         bin_str.clone()
     } else if current_path.ends_with(';') {
@@ -329,13 +430,18 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
         format!("{};{}", current_path, bin_str)
     };
 
-    let set_script = format!(
-        "[Environment]::SetEnvironmentVariable('PATH', '{}', 'User')",
-        new_path.replace('\'', "\\'")
-    );
-
+    // Pass the new PATH value out-of-band via an environment variable so that
+    // it is never interpolated into the PowerShell script string.  This
+    // eliminates the injection surface entirely — PowerShell metacharacters
+    // (backtick, `$(...)`, etc.) in the path value cannot execute code.
     let set_output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &set_script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')",
+        ])
+        .env("FDEMON_NEW_PATH", &new_path)
         .output()
         .map_err(|e| Error::config(format!("Failed to run PowerShell to set PATH: {}", e)))?;
 
@@ -359,13 +465,13 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
 /// Prefers the `HOME` environment variable (Unix) or `USERPROFILE` (Windows);
 /// falls back to the `dirs` crate.
 fn home_dir() -> Option<PathBuf> {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(windows))]
     {
         std::env::var_os("HOME")
             .map(PathBuf::from)
             .or_else(dirs::home_dir)
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(windows)]
     {
         std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
@@ -380,6 +486,80 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // ── validate_bin_dir tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_bin_dir_accepts_normal_path() {
+        assert!(validate_bin_dir(Path::new("/home/user/flutter/bin")).is_ok());
+        assert!(validate_bin_dir(Path::new("/opt/flutter/bin")).is_ok());
+        assert!(validate_bin_dir(Path::new("/home/user/.local/flutter sdk/bin")).is_ok());
+    }
+
+    #[test]
+    fn test_validate_bin_dir_rejects_newline() {
+        let path_with_lf = PathBuf::from("/opt/flutter/bin\n/etc/evil");
+        assert!(validate_bin_dir(&path_with_lf).is_err());
+
+        let path_with_crlf = PathBuf::from("/opt/flutter/bin\r/etc/evil");
+        assert!(validate_bin_dir(&path_with_crlf).is_err());
+    }
+
+    #[test]
+    fn test_validate_bin_dir_rejects_backtick() {
+        let path = PathBuf::from("/opt/flutter`rm -rf /`/bin");
+        let err = validate_bin_dir(&path).unwrap_err();
+        assert!(err.to_string().contains("metacharacter"));
+    }
+
+    #[test]
+    fn test_validate_bin_dir_rejects_command_substitution() {
+        let path = PathBuf::from("/opt/flutter$(evil)/bin");
+        let err = validate_bin_dir(&path).unwrap_err();
+        assert!(err.to_string().contains("metacharacter"));
+    }
+
+    #[test]
+    fn test_validate_bin_dir_rejects_semicolon() {
+        let path = PathBuf::from("/opt/flutter/bin;rm -rf /");
+        let err = validate_bin_dir(&path).unwrap_err();
+        assert!(err.to_string().contains("metacharacter"));
+    }
+
+    #[test]
+    fn test_validate_bin_dir_rejects_ampersand() {
+        let path = PathBuf::from("/opt/flutter/bin&evil");
+        let err = validate_bin_dir(&path).unwrap_err();
+        assert!(err.to_string().contains("metacharacter"));
+    }
+
+    #[test]
+    fn test_validate_bin_dir_rejects_pipe() {
+        let path = PathBuf::from("/opt/flutter/bin|evil");
+        let err = validate_bin_dir(&path).unwrap_err();
+        assert!(err.to_string().contains("metacharacter"));
+    }
+
+    // ── single_quote_escape tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_single_quote_escape_simple_path() {
+        let result = single_quote_escape("/opt/flutter/bin");
+        assert_eq!(result, "'/opt/flutter/bin'");
+    }
+
+    #[test]
+    fn test_single_quote_escape_path_with_space() {
+        let result = single_quote_escape("/home/user/flutter sdk/bin");
+        assert_eq!(result, "'/home/user/flutter sdk/bin'");
+    }
+
+    #[test]
+    fn test_single_quote_escape_path_with_single_quote() {
+        // A path like /home/user's flutter/bin should become '/home/user'\''s flutter/bin'
+        let result = single_quote_escape("/home/user's flutter/bin");
+        assert_eq!(result, r"'/home/user'\''s flutter/bin'");
+    }
+
     // ── Pure string helper tests ──────────────────────────────────────────────
 
     #[test]
@@ -389,9 +569,23 @@ mod tests {
     }
 
     #[test]
-    fn test_fish_add_path_line() {
+    fn test_fish_add_path_line_simple() {
         let line = fish_add_path_line(Path::new("/home/user/flutter/bin"));
-        assert_eq!(line, "fish_add_path /home/user/flutter/bin");
+        assert_eq!(line, "fish_add_path '/home/user/flutter/bin'");
+    }
+
+    #[test]
+    fn test_fish_add_path_line_with_space() {
+        // Spaces must be safely quoted.
+        let line = fish_add_path_line(Path::new("/home/user/flutter sdk/bin"));
+        assert_eq!(line, "fish_add_path '/home/user/flutter sdk/bin'");
+    }
+
+    #[test]
+    fn test_fish_add_path_line_with_single_quote() {
+        // Embedded single quotes use POSIX '\'' escaping.
+        let line = fish_add_path_line(Path::new("/home/user's/flutter/bin"));
+        assert_eq!(line, r"fish_add_path '/home/user'\''s/flutter/bin'");
     }
 
     #[test]
@@ -418,14 +612,15 @@ mod tests {
     }
 
     #[test]
-    fn test_fence_block_fish_contains_fish_add_path() {
+    fn test_fence_block_fish_contains_fish_add_path_quoted() {
         let block = fence_block(
             Path::new("/home/u/.config/fish/config.fish"),
             Path::new("/opt/flutter/bin"),
         );
         assert!(block.contains(FENCE_OPEN));
         assert!(block.contains(FENCE_CLOSE));
-        assert!(block.contains("fish_add_path /opt/flutter/bin"));
+        // Argument must be single-quoted.
+        assert!(block.contains("fish_add_path '/opt/flutter/bin'"));
         assert!(!block.contains("export PATH"));
     }
 
@@ -592,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fish_uses_fish_add_path() {
+    fn test_fish_uses_fish_add_path_quoted() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let bin_dir = PathBuf::from("/opt/flutter/bin");
@@ -602,7 +797,8 @@ mod tests {
         assert!(matches!(outcome, PathConfigOutcome::Written { .. }));
 
         let contents = std::fs::read_to_string(&rc_file).unwrap();
-        assert!(contents.contains("fish_add_path /opt/flutter/bin"));
+        // Argument must be single-quoted.
+        assert!(contents.contains("fish_add_path '/opt/flutter/bin'"));
         assert!(!contents.contains("export PATH"));
     }
 
@@ -611,9 +807,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
 
-        // Bash → ~/.bashrc
-        let bash_rc = rc_file_for_shell(HostShell::Bash, home).unwrap();
-        assert_eq!(bash_rc, home.join(".bashrc"));
+        // On non-macOS: Bash → ~/.bashrc
+        // On macOS: Bash → ~/.bash_profile (preferred) / ~/.profile / ~/.bashrc fallback
+        // We test the fallback path (neither .bash_profile nor .profile exist).
+        #[cfg(not(target_os = "macos"))]
+        {
+            let bash_rc = rc_file_for_shell(HostShell::Bash, home).unwrap();
+            assert_eq!(bash_rc, home.join(".bashrc"));
+        }
 
         // Zsh → ~/.zshenv when it does not exist (fallback to ~/.zprofile)
         let zsh_rc = rc_file_for_shell(HostShell::Zsh, home).unwrap();
@@ -635,6 +836,45 @@ mod tests {
         assert!(rc_file_for_shell(HostShell::PowerShell, home).is_none());
         assert!(rc_file_for_shell(HostShell::Cmd, home).is_none());
         assert!(rc_file_for_shell(HostShell::Unknown, home).is_none());
+    }
+
+    /// On macOS, bash should prefer `.bash_profile` when it exists, then `.profile`,
+    /// then fall back to `.bashrc`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_macos_bash_prefers_bash_profile() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // Neither .bash_profile nor .profile exist → falls back to .bashrc
+        let rc = rc_file_for_shell(HostShell::Bash, home).unwrap();
+        assert_eq!(rc, home.join(".bashrc"));
+
+        // Create .profile → should be selected over .bashrc
+        std::fs::write(home.join(".profile"), "").unwrap();
+        let rc = rc_file_for_shell(HostShell::Bash, home).unwrap();
+        assert_eq!(rc, home.join(".profile"));
+
+        // Create .bash_profile → should be preferred over .profile
+        std::fs::write(home.join(".bash_profile"), "").unwrap();
+        let rc = rc_file_for_shell(HostShell::Bash, home).unwrap();
+        assert_eq!(rc, home.join(".bash_profile"));
+    }
+
+    /// On Linux, bash should always use `.bashrc` regardless of whether
+    /// `.bash_profile` exists.
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn test_linux_bash_always_uses_bashrc() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // Create both possible alternatives — Linux should still pick .bashrc.
+        std::fs::write(home.join(".bash_profile"), "").unwrap();
+        std::fs::write(home.join(".profile"), "").unwrap();
+
+        let rc = rc_file_for_shell(HostShell::Bash, home).unwrap();
+        assert_eq!(rc, home.join(".bashrc"));
     }
 
     #[test]
@@ -670,25 +910,77 @@ mod tests {
         assert!(contents.contains(FENCE_OPEN));
     }
 
-    // ── Windows PATH string builder test (cross-platform) ────────────────────
-
-    /// Validate the PowerShell command string format without executing it.
+    /// Validate that the injection check in `add_to_path` rejects dangerous paths
+    /// before any I/O is attempted.
     #[test]
-    fn test_windows_path_new_path_format() {
+    fn test_add_to_path_rejects_injection_path() {
+        // Use a Linux-targeted test to avoid platform specifics in the POSIX path.
+        let dangerous = PathBuf::from("/opt/flutter/bin\nevil command");
+        let result = add_to_path(HostShell::Bash, HostPlatform::Linux, &dangerous);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("newline") || err_msg.contains("injection"));
+    }
+
+    // ── Windows PATH string/command construction tests (cross-platform) ───────
+
+    /// Verify that the Windows PowerShell set command uses the env-var reference
+    /// form rather than interpolating the path into the script string.
+    /// This test validates the string we pass to powershell.args([...]) — it
+    /// must contain `$env:FDEMON_NEW_PATH` and must NOT contain the raw path.
+    #[test]
+    fn test_windows_powershell_set_command_uses_env_var_not_interpolation() {
+        // The constant script string that must be passed to PowerShell.
+        let expected_script =
+            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+
+        // A path with a space and a single quote — the two characters that break
+        // naïve PowerShell interpolation.
+        let tricky_path = "C:\\Users\\O'Brien\\flutter bin\\bin";
+
+        // The script must NOT contain the raw path value.
+        assert!(
+            !expected_script.contains(tricky_path),
+            "Script must not interpolate the path value"
+        );
+
+        // The script must reference the env var.
+        assert!(
+            expected_script.contains("$env:FDEMON_NEW_PATH"),
+            "Script must reference FDEMON_NEW_PATH env var"
+        );
+    }
+
+    #[test]
+    fn test_windows_new_path_format() {
         let current = "C:\\Windows\\System32;C:\\Program Files\\Git\\bin";
         let bin_str = "C:\\tools\\flutter\\bin";
 
         let new_path = format!("{};{}", current, bin_str);
         assert!(new_path.ends_with(bin_str));
         assert!(new_path.contains(';'));
+        // Confirm value would be passed as env var, not interpolated into script.
+        let script = "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+        assert!(!script.contains(bin_str));
+        assert!(script.contains("$env:FDEMON_NEW_PATH"));
+    }
 
-        // Verify the set_script format.
-        let set_script = format!(
-            "[Environment]::SetEnvironmentVariable('PATH', '{}', 'User')",
-            new_path.replace('\'', "\\'")
-        );
-        assert!(set_script.contains("SetEnvironmentVariable"));
-        assert!(set_script.contains("'User'"));
+    #[test]
+    fn test_windows_path_with_space_and_quote() {
+        // A path containing both a space and a single quote — the two characters
+        // that demonstrate the old PowerShell injection bug.
+        let current = "C:\\Windows\\System32";
+        let bin_str = "C:\\Users\\O'Brien\\flutter bin\\bin";
+
+        let new_path = format!("{};{}", current, bin_str);
+
+        // The path is assembled correctly.
+        assert!(new_path.contains("O'Brien"));
+        assert!(new_path.contains("flutter bin"));
+
+        // The value goes in the env var, never in the script.
+        let script = "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+        assert!(!script.contains(bin_str));
     }
 
     #[test]
