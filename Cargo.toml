@@ -45,6 +45,9 @@ crossterm = "0.29"
 toml = "0.8"
 dirs = "5"
 fs2 = "0.4"
+# fs4: cross-platform free-disk-space probe (statvfs/GetDiskFreeSpaceExW).
+# v1.x has only 2 direct deps (rustix, windows-sys); no libc, pure-Rust.
+fs4 = "1"
 
 # Async
 trait-variant = "0.1"

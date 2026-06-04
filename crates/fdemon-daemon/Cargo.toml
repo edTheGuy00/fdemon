@@ -27,6 +27,7 @@ zip.workspace = true
 tar.workspace = true
 lzma-rs.workspace = true
 sha2.workspace = true
+fs4.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

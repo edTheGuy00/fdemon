@@ -2,6 +2,10 @@
 //!
 //! Low-level helpers for the Flutter SDK installer:
 //!
+//! - [`ensure_disk_space`] — preflight check that a filesystem has sufficient
+//!   free bytes before a large download/extract.
+//! - [`check_network_connectivity`] — fast HEAD probe to verify network reach
+//!   before starting a download, bounding the offline stall to ≤5 s.
 //! - [`download_to_file`] — streaming HTTP download with connect/idle timeouts,
 //!   bounded retry, `.part`-file staging, and progress reporting.
 //! - [`verify_sha256`] — synchronous SHA-256 checksum verification.
@@ -20,6 +24,9 @@
 //! - No UI types; progress is reported via a plain `FnMut(DownloadProgress)`
 //!   callback.
 //! - All errors use the workspace `Error` / `Result` types.
+//! - Both preflight helpers are **best-effort and fail-clear**: a probe API
+//!   failure (e.g. `fs4` error on an exotic FS) surfaces a readable error
+//!   rather than silently continuing or panicking.
 //!
 //! ## Streaming XZ Decompression
 //!
@@ -62,6 +69,80 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum number of download attempts before giving up.
 const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
 
+/// Conservative minimum free-disk-space budget for a single archive download.
+///
+/// Flutter SDK archives are ~300 MiB compressed; the extracted SDK plus
+/// precache artifacts can exceed 1 GiB. This constant budgets 1.5 GiB —
+/// generous enough for both the compressed download and the extraction working
+/// space. Callers that have a more precise `Content-Length` may pass that value
+/// directly to [`ensure_disk_space`] instead.
+pub(crate) const ARCHIVE_DISK_BUDGET_BYTES: u64 = 1_572_864_000; // 1.5 GiB
+
+/// Fast HEAD probe timeout for the network-connectivity check.
+///
+/// 5 seconds bounds the stall when the host is offline, far below the
+/// 90-second worst-case of `IDLE_TIMEOUT × MAX_DOWNLOAD_ATTEMPTS`.
+const CONNECTIVITY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ── Preflight helpers ─────────────────────────────────────────────────────────
+
+/// Assert that the filesystem holding `dir` has at least `required` free bytes.
+///
+/// Uses `fs4::available_space` which delegates to `statvfs(2)` on POSIX and
+/// `GetDiskFreeSpaceExW` on Windows — no libc, pure-Rust implementation.
+///
+/// The `dir` path is used as the filesystem probe point. The directory must
+/// already exist (or the parent must exist); otherwise the probe itself will
+/// fail and the error is surfaced as an `Error::Process`.
+///
+/// # Errors
+///
+/// Returns `Error::Process` when:
+/// - `fs4::available_space` fails (exotic FS, permission error, …).
+/// - The available space is less than `required`.
+pub(crate) fn ensure_disk_space(dir: &Path, required: u64) -> Result<()> {
+    let avail = fs4::available_space(dir).map_err(|e| {
+        Error::process(format!(
+            "disk-space probe failed for {}: {e}",
+            dir.display()
+        ))
+    })?;
+    if avail < required {
+        return Err(Error::process(format!(
+            "insufficient disk space in {}: need ~{} MiB, have {} MiB",
+            dir.display(),
+            required / 1_048_576,
+            avail / 1_048_576,
+        )));
+    }
+    Ok(())
+}
+
+/// Send a ≤5s HEAD request to `url` to verify network reachability.
+///
+/// A successful response (any HTTP status code) is treated as "reachable" —
+/// the goal is to detect a completely unreachable host quickly rather than to
+/// validate the URL. Any transport error (DNS, TCP, TLS) within the 5-second
+/// budget returns a "no network connectivity" error.
+///
+/// Call this once before the first download attempt to bound the offline
+/// stall. Skip the probe if a previous request to the same origin already
+/// succeeded in the same install session (connectivity is implicitly proven).
+///
+/// # Errors
+///
+/// Returns `Error::Process` when the request fails to complete (timeout,
+/// DNS resolution failure, TCP refused, TLS error, etc.).
+pub(crate) async fn check_network_connectivity(client: &reqwest::Client, url: &str) -> Result<()> {
+    client
+        .head(url)
+        .timeout(CONNECTIVITY_PROBE_TIMEOUT)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| Error::process(format!("no network connectivity: cannot reach {url} ({e})")))
+}
+
 // ── Download ─────────────────────────────────────────────────────────────────
 
 /// Stream a URL to `dest`, invoking `on_progress` after each chunk arrives.
@@ -97,6 +178,13 @@ where
             .map(|ext| format!("{}.part", ext.to_string_lossy()))
             .unwrap_or_else(|| "part".to_string()),
     );
+
+    // Preflight: verify that the filesystem holding `dest` has enough free space
+    // for the archive download. Use the parent directory as the probe point (it
+    // must exist; `dest` itself may not yet). Fall back to the current directory
+    // when `dest` has no parent (pathological case).
+    let probe_dir = dest.parent().unwrap_or_else(|| Path::new("."));
+    ensure_disk_space(probe_dir, ARCHIVE_DISK_BUDGET_BYTES)?;
 
     let mut last_err: Option<Error> = None;
 
@@ -1294,5 +1382,85 @@ mod tests {
 
         // Server was called exactly 3 times.
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    // ── ensure_disk_space ─────────────────────────────────────────────────────
+
+    /// `ensure_disk_space` must succeed when `required` is 1 byte (any real
+    /// temporary directory has at least 1 byte free).
+    #[test]
+    fn ensure_disk_space_passes_for_tempdir() {
+        let dir = TempDir::new().unwrap();
+        ensure_disk_space(dir.path(), 1).expect("a tempdir must have > 1 byte free");
+    }
+
+    /// `ensure_disk_space` must return an `Error::Process` whose message
+    /// contains "insufficient disk space" when the required budget exceeds any
+    /// real filesystem's available capacity.
+    #[test]
+    fn ensure_disk_space_errors_when_required_exceeds_available() {
+        let dir = TempDir::new().unwrap();
+        let err = ensure_disk_space(dir.path(), u64::MAX)
+            .expect_err("u64::MAX bytes required must be rejected");
+        assert!(
+            err.to_string().contains("insufficient disk space"),
+            "error message must mention 'insufficient disk space': {err}"
+        );
+    }
+
+    /// `ensure_disk_space` error message must name the required and available
+    /// MiB counts so the user understands the shortfall.
+    #[test]
+    fn ensure_disk_space_error_mentions_mib_counts() {
+        let dir = TempDir::new().unwrap();
+        // Request a budget larger than any filesystem could have so the check
+        // always fails, regardless of the CI host's available space.
+        let err = ensure_disk_space(dir.path(), u64::MAX).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MiB"),
+            "error message must include 'MiB' for human-readable counts: {msg}"
+        );
+    }
+
+    // ── check_network_connectivity ────────────────────────────────────────────
+
+    /// `check_network_connectivity` must succeed when the server is reachable.
+    #[tokio::test]
+    async fn check_network_connectivity_succeeds_when_reachable() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("HEAD"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/probe", mock_server.uri());
+
+        check_network_connectivity(&client, &url)
+            .await
+            .expect("HEAD to reachable server must succeed");
+    }
+
+    /// `check_network_connectivity` must return a "no network connectivity"
+    /// error when the URL is unreachable (e.g. connection refused).
+    #[tokio::test]
+    async fn check_network_connectivity_errors_when_unreachable() {
+        // Use a port that is very unlikely to have a listener.
+        let unreachable_url = "http://127.0.0.1:1/probe";
+        let client = reqwest::Client::new();
+
+        let err = check_network_connectivity(&client, unreachable_url)
+            .await
+            .expect_err("unreachable host must return error");
+        assert!(
+            err.to_string().contains("no network connectivity"),
+            "error must mention 'no network connectivity': {err}"
+        );
     }
 }

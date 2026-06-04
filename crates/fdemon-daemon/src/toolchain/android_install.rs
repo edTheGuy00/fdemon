@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use fdemon_core::{Error, Result};
 
 use super::checks::sdkmanager_bin_name;
-use super::download::{download_to_file, extract_zip};
+use super::download::{download_to_file, ensure_disk_space, extract_zip};
 use super::flutter_install::InstallEvent;
 use super::process_stream::run_streaming_with_input;
 use super::types::{
@@ -61,6 +61,14 @@ const LICENSE_YES_COUNT: usize = 20;
 /// a future `cmdline-tools` release.  A grep for `LICENSES_ACCEPTED_MARKER` is
 /// sufficient to locate all affected call sites.
 const LICENSES_ACCEPTED_MARKER: &str = "All SDK package licenses accepted";
+
+/// Conservative free-disk-space budget for the Android SDK install.
+///
+/// Android command-line tools zip is ~130 MiB compressed; after extraction
+/// plus the subsequent `sdkmanager` package downloads (build-tools, platform,
+/// platform-tools) the total on-disk footprint typically exceeds 1.5 GiB.
+/// A 2 GiB budget provides a safe margin for the initial install.
+const ANDROID_DISK_BUDGET_BYTES: u64 = 2_147_483_648; // 2 GiB
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -193,6 +201,11 @@ where
             format!("create extract dir {}: {e}", tmp_extract.display()),
         ))
     })?;
+
+    // Preflight: check disk space in the SDK root before extraction.
+    // Android cmdline-tools + installed packages can consume several GiB;
+    // use a conservative 2 GiB budget to cover the full initial setup.
+    ensure_disk_space(&target.sdk_root, ANDROID_DISK_BUDGET_BYTES)?;
 
     // extract_zip is synchronous — wrap in spawn_blocking.
     let zip_path = tmp_zip.clone();

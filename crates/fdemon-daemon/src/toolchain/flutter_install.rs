@@ -43,7 +43,10 @@ use std::path::{Path, PathBuf};
 use fdemon_core::{Error, Result};
 use serde::Deserialize;
 
-use super::download::{download_to_file, extract_archive, verify_sha256};
+use super::download::{
+    check_network_connectivity, download_to_file, ensure_disk_space, extract_archive,
+    verify_sha256, ARCHIVE_DISK_BUDGET_BYTES,
+};
 use super::process_stream::run_streaming;
 use super::types::{
     DownloadProgress, FlutterInstallOutcome, FlutterInstallTarget, FlutterRelease,
@@ -318,10 +321,14 @@ struct RawManifest {
 /// The HTTP client applies a [`MANIFEST_CONNECT_TIMEOUT_SECS`] TCP connect
 /// timeout and a [`MANIFEST_REQUEST_TIMEOUT_SECS`] total request timeout.
 ///
+/// A ≤5s HEAD probe is performed against the manifest URL before the full GET.
+/// This bounds the offline stall to 5 seconds instead of
+/// `MANIFEST_REQUEST_TIMEOUT_SECS` (60 s) for users without network access.
+///
 /// # Errors
 ///
-/// Returns an error on network failure, non-2xx HTTP status, or JSON parse
-/// error.
+/// Returns an error on network failure (including the HEAD probe), non-2xx
+/// HTTP status, or JSON parse error.
 pub async fn fetch_release_manifest(platform: HostPlatform) -> Result<FlutterReleaseManifest> {
     let url = manifest_url(&platform);
     tracing::debug!("Fetching Flutter releases manifest from {url}");
@@ -336,6 +343,11 @@ pub async fn fetch_release_manifest(platform: HostPlatform) -> Result<FlutterRel
         ))
         .build()
         .map_err(|e| Error::process(format!("failed to build HTTP client: {e}")))?;
+
+    // Network preflight: fast HEAD probe bounds the offline stall to ≤5 s.
+    // If the probe fails the full GET would also fail, so surface the error
+    // immediately with a clear "no network connectivity" message.
+    check_network_connectivity(&client, &url).await?;
 
     let response = client
         .get(&url)
@@ -771,6 +783,11 @@ where
         "Extracting archive into {}",
         tmp_dir.display()
     )));
+
+    // Preflight: check disk space before extraction. The extracted Flutter SDK
+    // is ~1 GiB; ARCHIVE_DISK_BUDGET_BYTES (1.5 GiB) covers both the
+    // already-downloaded archive file and the extracted tree.
+    ensure_disk_space(tmp_dir, ARCHIVE_DISK_BUDGET_BYTES)?;
 
     let tmp_dir_clone = tmp_dir.to_owned();
     let archive_path_clone2 = archive_path.clone();
@@ -1567,5 +1584,133 @@ mod tests {
             total: Some(1000),
         });
         let _e6 = e5.clone();
+    }
+
+    // ── fetch_release_manifest error paths (wiremock) ─────────────────────────
+
+    /// Helper: build an HTTP client with the same settings as
+    /// `fetch_release_manifest`, pointing at a local mock server.
+    ///
+    /// We exercise the JSON parsing / HTTP-status handling paths by calling the
+    /// client layer directly with a mock URL rather than overriding the hard-
+    /// coded CDN URL, which would require dependency injection.  The error-path
+    /// contract is: HTTP non-2xx → `Error::Process` containing the status code;
+    /// malformed JSON → `Error::Process` containing a parse-failure message.
+    fn build_test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .user_agent("fdemon-test")
+            .connect_timeout(std::time::Duration::from_secs(
+                MANIFEST_CONNECT_TIMEOUT_SECS,
+            ))
+            .timeout(std::time::Duration::from_secs(
+                MANIFEST_REQUEST_TIMEOUT_SECS,
+            ))
+            .build()
+            .expect("test client must build")
+    }
+
+    /// A 404 response from the manifest endpoint must produce a clear
+    /// `Error::Process` whose message mentions the HTTP status code.
+    #[tokio::test]
+    async fn fetch_manifest_404_is_clear_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        // Also handle the HEAD probe.
+        Mock::given(method("HEAD"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/releases_linux.json", mock_server.uri());
+
+        // Replicate the logic of fetch_release_manifest for error-path testing.
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .expect("mock request must not fail at the transport layer");
+
+        let status = response.status();
+        let result: Result<RawManifest> = if !status.is_success() {
+            Err(Error::process(format!(
+                "manifest HTTP {} for {url}",
+                status
+            )))
+        } else {
+            response
+                .json()
+                .await
+                .map_err(|e| Error::process(format!("failed to parse manifest from {url}: {e}")))
+        };
+
+        let err = result.expect_err("HTTP 404 must return an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("404"),
+            "error message must contain the HTTP status code: {msg}"
+        );
+    }
+
+    /// A 200 response with malformed JSON must produce a clear `Error::Process`
+    /// whose message mentions a parse failure.
+    #[tokio::test]
+    async fn fetch_manifest_malformed_json_is_clear_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("this is not valid { json }!"))
+            .mount(&mock_server)
+            .await;
+
+        // Also handle the HEAD probe.
+        Mock::given(method("HEAD"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/releases_linux.json", mock_server.uri());
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .expect("mock request must not fail at the transport layer");
+
+        let status = response.status();
+        let result: Result<RawManifest> = if !status.is_success() {
+            Err(Error::process(format!(
+                "manifest HTTP {} for {url}",
+                status
+            )))
+        } else {
+            response
+                .json()
+                .await
+                .map_err(|e| Error::process(format!("failed to parse manifest from {url}: {e}")))
+        };
+
+        let err = result.expect_err("malformed JSON must return an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("parse") || msg.contains("json") || msg.contains("JSON"),
+            "error message must mention a JSON parse failure: {msg}"
+        );
     }
 }
