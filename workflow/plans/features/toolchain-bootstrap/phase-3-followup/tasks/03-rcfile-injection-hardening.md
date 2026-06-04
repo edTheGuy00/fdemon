@@ -69,16 +69,35 @@ root inside a double-quoted shell assignment — and fix the false guarantee in 
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** worktree-agent-a4cd256c311fa1326
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Single-quote SDK root in `android_posix_block` and `android_fish_block`; rewrite `posix_export_line` to single-quote the bin dir; correct doc comments for the module header, `add_android_env`, and `posix_export_line`; update golden-file tests to match new output; add 9 new injection-bearing path tests |
+| `crates/fdemon-daemon/src/toolchain/jdk.rs` | Rewrite `configure_flutter_jdk_dir` doc comment (remove stale `on_line` reference, document that output goes to `tracing` debug log); add `validate_jdk_dir` helper (defensive newline/control-char check); add 5 unit tests for `validate_jdk_dir` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`posix_export_line` output format**: Changed from `export PATH="$PATH:/path"` to `export PATH="$PATH:"'/path'` (adjacent POSIX string segments). This is valid in bash/zsh/dash: the double-quoted `"$PATH:"` expands `$PATH`, then the single-quoted `'/path'` segment is concatenated literally. Unusual-looking but correct and safe.
+
+2. **Single-quoting vs. blocklist expansion**: The task notes explicitly prefer single-quoting over adding `$` and `"` to the `validate_bin_dir` blocklist to avoid rejecting legitimate (if unusual) POSIX paths. The existing `single_quote_escape` helper was reused as directed.
+
+3. **`validate_jdk_dir` placement**: The function is private and called at the top of `configure_flutter_jdk_dir`. Doc comment explicitly states this is defense-in-depth, not shell-injection mitigation (since `Command::args` is exec-style, not a shell).
+
+4. **$ANDROID_HOME references preserved**: The `$ANDROID_HOME/cmdline-tools/latest/bin` and `$ANDROID_HOME/platform-tools` references in the PATH line remain double-quoted (intentional shell expansions, not user data).
+
 ### Testing Performed
 
+- `cargo test -p fdemon-daemon --lib toolchain::path_config` — 57 tests passed
+- `cargo test -p fdemon-daemon --lib toolchain::jdk` — 8 tests passed
+- `cargo fmt --all -- --check` — passed
+- `cargo check --workspace --all-targets` — passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed
+- `cargo test --workspace` — 6,757 tests passed, 0 failed
+
 ### Risks/Limitations
+
+1. **Format change in posix_export_line**: Existing `.bashrc`/`.zshenv` files written by older versions of fdemon will contain `export PATH="$PATH:/path"` (double-quoted) while new writes use the split-quote form. The idempotency check works via substring match on the bin path string — the existing block will still match correctly and return `AlreadyPresent`, so no double-write occurs. Only fresh writes or path changes will use the new format.

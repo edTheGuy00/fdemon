@@ -55,16 +55,26 @@
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/CONFIGURATION.md` | Added "Android install assumptions" subsection inside `[toolchain]` section with remediation guidance for both the `build-tools;<api>.0.0` patch-version assumption and the `cmdline_tools_build` 404 scenario |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Subsection placement**: Added as an `####` subsection after the property reference table, before `### Editor Settings`. This keeps it inside the `[toolchain]` section without duplicating the one-liner descriptions already in the table.
+2. **Values verified against source**: Default build number `11076708` from `DEFAULT_CMDLINE_TOOLS_BUILD` in `types.rs` (line 377); `build-tools;36.0.0` pattern from `sdkmanager_packages()` (line 459); URL structure from `cmdline_tools_url()` (lines 435-437). All match exactly.
+3. **No duplication**: The table already has brief mentions of both fields; the new subsection extends them with failure scenarios and remediation steps rather than restating the same content.
+
 ### Testing Performed
 
+- Manual review of `crates/fdemon-daemon/src/toolchain/types.rs` to confirm all quoted values match the source constants and functions.
+- Documentation-only task — no build or test commands applicable.
+
 ### Risks/Limitations
+
+1. **Default build number goes stale**: The `11076708` value in the doc will itself become stale when Google rotates the build. The doc now instructs users where to find the current value, which mitigates this.

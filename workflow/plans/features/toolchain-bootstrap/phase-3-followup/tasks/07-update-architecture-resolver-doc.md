@@ -51,16 +51,24 @@ the shared resolver as the single source of truth for SDK-root resolution.
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/ARCHITECTURE.md` | Four targeted edits: (1) project-structure tree `checks/` comment now names `resolve_android_sdk_root_path` and `android_sdk_root()` wrapper; (2) tree `mod.rs` comment notes `resolve_android_sdk_root_path` in re-export list; (3) module-reference `toolchain/checks/` row now fully describes the shared resolver, its signature, and the `android_sdk_root()` wrapper relationship; (4) module-reference `toolchain/mod.rs` row notes the new re-export; (5) Public API section for `fdemon-daemon` adds `resolve_android_sdk_root_path` bullet and removes stale internal-only claim for `toolchain/checks/`. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **No Phase 3 bulk-update**: Phase 3 public API items (`install_android_tools`, `add_android_env`, etc.) were already addressed by task 09's doc update. This task added only `resolve_android_sdk_root_path`, which was introduced as a follow-up consolidation in task 01 (M2). Kept edits surgical.
+2. **Internal note updated**: The "Toolchain check and doctor implementation details" internal bullet was narrowed to clarify that `resolve_android_sdk_root_path` is now public (re-exported), while the individual check functions in `android.rs` remain internal.
+
 ### Testing Performed
 
+Verified exact symbol name and signature against merged code in `crates/fdemon-daemon/src/toolchain/checks/android.rs` (line 43) and confirmed re-export chain: `checks/mod.rs` → `toolchain/mod.rs` → `lib.rs`. Confirmed the private app-side resolver was removed and replaced by calls to `fdemon_daemon::resolve_android_sdk_root_path` in `crates/fdemon-app/src/actions/mod.rs`.
+
 ### Risks/Limitations
+
+None. All edits are additive descriptions of already-merged code.

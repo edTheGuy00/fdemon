@@ -72,16 +72,32 @@ returned `None` for the `home_dir() == None` case on non-Windows/macOS).
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** worktree-agent-a75b49d45fa5ab949
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/android.rs` | Added `pub fn resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf` — the unconditional shared resolver with env-var order + platform default + last-resort fallback. Rewrote `android_sdk_root()` as a thin wrapper calling `resolve_android_sdk_root_path(None)` then applying `is_dir()` filter. Adopted the app version's last-resort `PathBuf::from("Android/Sdk")` fallback. Added `platform_default_android_sdk()` docstring. Added 4 new unit tests for `resolve_android_sdk_root_path`. |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Added `resolve_android_sdk_root_path` to the `pub use android::{...}` re-export list. |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `pub use checks::resolve_android_sdk_root_path;` next to existing Phase 3 re-exports. |
+| `crates/fdemon-daemon/src/lib.rs` | Added `resolve_android_sdk_root_path` to the `pub use toolchain::{...}` top-level re-export. |
+| `crates/fdemon-app/src/actions/mod.rs` | Deleted private `fn resolve_android_sdk_root` (56 lines). Updated its sole production call site to `fdemon_daemon::resolve_android_sdk_root_path(params.sdk_root.as_deref())`. Updated 3 existing unit tests in the `tests` module to call the daemon re-export instead of the deleted private function. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`pub(super)` visibility for the helper**: The task specified `pub(super) fn resolve_android_sdk_root_path` but the re-export chain `checks/mod.rs → toolchain/mod.rs → lib.rs` requires the function to be at least `pub` within the `android` module so `mod.rs` can re-export it. Used `pub fn` in `android.rs` as the standard Rust pattern for module-internal functions that are re-exported through a controlled API surface. `AndroidSdkRoot` remains `pub(super)` as required.
+2. **Non-Windows/macOS `platform_default_android_sdk` fallback**: The original daemon version returned `None` for non-Linux/macOS/Windows platforms. The new shared implementation falls back to `~/Android/Sdk` (like Linux) for unknown platforms, matching the install-time robustness of the former app version. This is consistent with the `#[cfg(not(...))]` block now using `dirs::home_dir()` instead of returning `None`.
+3. **Agreement test approach**: The two resolvers (`resolve_android_sdk_root_path` and `android_sdk_root`) can only be shown to agree when the path *exists* (since `android_sdk_root` filters by `is_dir()`). The primary agreement test uses a tempdir so both can be compared. The platform-default test compares `resolve_android_sdk_root_path(None)` to `platform_default_android_sdk()` directly (the internal helper is available since we're in the same module's tests).
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (0 failures; new tests in `checks/android.rs` and updated tests in `actions/mod.rs` all pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Serial test annotation**: The new resolver tests use `#[serial_test::serial]` to prevent env-var mutation races, consistent with existing tests in the file. Tests that don't mutate env vars do not need the annotation.

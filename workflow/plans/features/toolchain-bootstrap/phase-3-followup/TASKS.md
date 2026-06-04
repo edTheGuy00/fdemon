@@ -52,13 +52,17 @@ two small doc tasks.
 
 | # | Task | Status | Depends On | Est. | Agent | Modules |
 |---|------|--------|------------|------|-------|---------|
-| 01 | [01-consolidate-android-sdk-root-resolver](tasks/01-consolidate-android-sdk-root-resolver.md) | Not Started | - | 2-3h | implementor | daemon `checks/android.rs`, `checks/mod.rs`, `toolchain/mod.rs`, `lib.rs`; app `actions/mod.rs` |
-| 02 | [02-executor-jdk-fallback-and-summary](tasks/02-executor-jdk-fallback-and-summary.md) | Not Started | 01 | 1-2h | implementor | app `actions/mod.rs` |
-| 03 | [03-rcfile-injection-hardening](tasks/03-rcfile-injection-hardening.md) | Not Started | - | 2-3h | implementor | daemon `path_config.rs`, `jdk.rs` |
-| 04 | [04-android-install-license-verify-cleanup](tasks/04-android-install-license-verify-cleanup.md) | Not Started | - | 2-3h | implementor | daemon `android_install.rs` |
-| 05 | [05-wizard-ux-polish](tasks/05-wizard-ux-polish.md) | Not Started | - | 1-2h | implementor | app `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `install_wizard/mod.rs`; tui `step_detail.rs`, `widgets/install_wizard/mod.rs` |
-| 06 | [06-document-android-config-assumptions](tasks/06-document-android-config-assumptions.md) | Not Started | - | 0.5h | implementor | `docs/CONFIGURATION.md` |
-| 07 | [07-update-architecture-resolver-doc](tasks/07-update-architecture-resolver-doc.md) | Not Started | 01 | 0.5h | doc_maintainer | `docs/ARCHITECTURE.md` |
+| 01 | [01-consolidate-android-sdk-root-resolver](tasks/01-consolidate-android-sdk-root-resolver.md) | ✅ Done (PASS) | - | 2-3h | implementor | daemon `checks/android.rs`, `checks/mod.rs`, `toolchain/mod.rs`, `lib.rs`; app `actions/mod.rs` |
+| 02 | [02-executor-jdk-fallback-and-summary](tasks/02-executor-jdk-fallback-and-summary.md) | ✅ Done (PASS) | 01 | 1-2h | implementor | app `actions/mod.rs` |
+| 03 | [03-rcfile-injection-hardening](tasks/03-rcfile-injection-hardening.md) | ✅ Done (PASS) | - | 2-3h | implementor | daemon `path_config.rs`, `jdk.rs` |
+| 04 | [04-android-install-license-verify-cleanup](tasks/04-android-install-license-verify-cleanup.md) | ✅ Done (PASS) | - | 2-3h | implementor | daemon `android_install.rs` |
+| 05 | [05-wizard-ux-polish](tasks/05-wizard-ux-polish.md) | ✅ Done (PASS) | - | 1-2h | implementor | app `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `install_wizard/mod.rs`; tui `step_detail.rs`, `widgets/install_wizard/mod.rs` |
+| 06 | [06-document-android-config-assumptions](tasks/06-document-android-config-assumptions.md) | ✅ Done (PASS) | - | 0.5h | implementor | `docs/CONFIGURATION.md` |
+| 07 | [07-update-architecture-resolver-doc](tasks/07-update-architecture-resolver-doc.md) | ✅ Done (PASS*) | 01 | 0.5h | doc_maintainer | `docs/ARCHITECTURE.md` |
+
+\* Validator returned CONCERN re: an apparent `actions/mod.rs` reversion — confirmed a false
+alarm caused by the worktree forking before task 02 landed. The actual squash merge staged
+only `docs/ARCHITECTURE.md` + the task file; no code reversion occurred.
 
 ## File Overlap Analysis
 

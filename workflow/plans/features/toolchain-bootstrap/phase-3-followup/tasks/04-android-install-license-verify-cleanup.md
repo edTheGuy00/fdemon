@@ -74,16 +74,31 @@ All in `crates/fdemon-daemon/src/toolchain/android_install.rs`:
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | m1: added `LICENSES_ACCEPTED_MARKER` const + `licenses_confirmed()` pure fn + scan+warn block after `sdkmanager --licenses`; m5: removed `pkg_refs`/`pkg_refs.clone()`, build `install_args` directly from `packages.iter()`; n1: remove pre-existing stale temp dir before `create_dir_all`; n3: replaced `format!("{}/bin", java_home)` with `Path::new(java_home).join("bin")`; added 4 unit tests for `licenses_confirmed` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`licenses_confirmed` visibility**: Marked `pub(crate)` rather than private so it is accessible to any future sibling test modules without moving it to a separate test helper file. The pure-function factoring is the task-specified approach.
+2. **Warn + surface as `InstallEvent::Log`**: When the marker is absent, a `tracing::warn!` is emitted AND an `InstallEvent::Log("[fdemon warn] ...")` line is forwarded so the TUI log tail shows it to the user without requiring a separate event variant.
+3. **`log_lines` retained**: As specified in m1, `log_lines` is wired into `licenses_confirmed` rather than deleted — it was clearly intended for this scan.
+4. **Path::join for jdk_bin (n3)**: Used `std::path::Path::new(java_home.as_str()).join("bin").to_string_lossy().into_owned()` to correctly handle trailing-slash paths. The `to_string_lossy` step is necessary because the result must be serialized into an environment variable string.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-daemon --lib toolchain::android_install` — 11 passed (includes 4 new `licenses_confirmed` tests)
+- `cargo test --workspace --lib` — 1422 passed, 0 failed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Marker string fragility**: `LICENSES_ACCEPTED_MARKER = "All SDK package licenses accepted"` is matched against sdkmanager output which can vary between releases or when licenses are already accepted. The const has a doc comment noting the format dependency and greppability. A missing marker only logs a warning — the exit code remains the primary failure signal.
+2. **Already-licensed SDKs**: When all licenses are already accepted, sdkmanager may print a different message ("Reuse the existing license accepted response") and the marker may not appear; this will trigger a harmless warning. Future refinement could also accept the "already accepted" pattern.

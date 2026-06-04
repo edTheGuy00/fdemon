@@ -78,16 +78,31 @@ message variant).
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | M1: removed `resolve_jdk_home`/`PathConfigOutcome` from the inner `use` block (no longer referenced directly in executor); extracted `resolve_effective_jdk_path` free function; wired it into `AndroidInstallTarget` construction. M4: extracted `build_pathconfig_summary` free function; replaced 20-line inline summary logic with a single call; fixed trailing spaces and comma-splice. Added 5 unit tests (3 for M1, 2 for M4). |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Extract helpers rather than inline**: Both `resolve_effective_jdk_path` and `build_pathconfig_summary` are small pure wrappers extracted into module-level `pub(crate)` functions. This makes them directly unit-testable without going through the async executor machinery, which mirrors the existing test pattern in this file.
+
+2. **`#[serial]` for JAVA_HOME tests**: Tests that set `JAVA_HOME` are gated with `#[serial_test::serial]` to avoid races with other tests in the suite that also touch env vars (consistent with `jdk.rs` convention).
+
+3. **M4 separator is `. ` (period-space)**: The clauses are logical sentences, so joining with `. ` and appending a final `.` produces the cleanest prose. A `Vec<String>` + `join` approach is both readable and easy to extend if more clauses are added later.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed (0 warnings)
+- `cargo test --workspace` - Passed (6,557 total tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-app -- resolve_effective_jdk pathconfig_summary` - 5/5 new tests passed
+
 ### Risks/Limitations
+
+1. **`resolve_jdk_home` is synchronous I/O in async context**: The call is inside a `tokio::spawn` task but is not explicitly wrapped in `spawn_blocking`. The function only calls `std::env::var`, `Path::is_dir`, `which::which`, and `std::fs::canonicalize` — lightweight blocking calls. This matches how the existing `HostPlatform::detect()` and `HostShell::detect()` calls are handled in the same spawn block and is acceptable for this usage pattern.

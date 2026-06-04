@@ -80,16 +80,36 @@ files and are all low-risk.
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** worktree-agent-a13224a230bb2bb10
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `pub(crate) fn is_jdk_actionable(components)` shared helper; updated `build_steps()` to use it instead of inline `jdk_not_ok`; fixed `begin_step` doc to name functions not task numbers; added 7 new tests for `is_jdk_actionable` and m2 edge case |
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Added `pub(crate) use state::is_jdk_actionable`; extended daemon re-export to include `ComponentKind`, `HostPlatform`, `HostShell`, `ToolchainReport` (n6) |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Replaced `jdk_status()` with `is_jdk_actionable_from_state()` delegating to shared helper (m2); added PathConfig ordering hint when `android_sdk_root == None` (m3); added Phase 3 Task 07 section banner (n4); added 4 new tests for m2 and m3 |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `bottom_area` height derivation comment (n5); switched `#[cfg(test)]` imports to `fdemon_app::install_wizard` gateway (n6); updated `test_step_detail_shows_enter_hint_for_android_step_when_jdk_present` to use explicit JDK-Ok state |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Switched test imports to `fdemon_app::install_wizard` gateway (n6) |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Shared helper placement**: `is_jdk_actionable` is `pub(crate)` in `state.rs` and explicitly re-exported via `pub(crate) use` in `mod.rs`. This keeps it internal to `fdemon-app` (not visible to the TUI crate) while avoiding name conflicts with `pub use state::*` (which only re-exports `pub` items).
+
+2. **m2 behavioral change**: With `is_jdk_actionable` returning `true` for an absent Jdk entry, the AndroidTools step now also shows a guided command when the preflight report has no Jdk entry at all (not just when the entry is non-Ok). The existing TUI test `test_step_detail_shows_enter_hint_for_android_step_when_jdk_present` was updated to use an explicit JDK-Ok state instead of a report without any Jdk entry.
+
+3. **m3 is non-blocking**: The PathConfig ordering hint is set as `status_message` before calling `begin_step`, so it is visible in the footer momentarily. The step still executes — it is not gated. This matches the task spec ("not a gate").
+
+4. **n6 additive**: No name clashes exist — `ComponentKind`, `HostPlatform`, `HostShell`, `ToolchainReport` were not previously exported from `install_wizard`.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (all 6,543 tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
 ### Risks/Limitations
+
+1. **m3 hint lifetime**: The `status_message` set by the PathConfig hint is overwritten by `begin_step` → `WizardStepStarted` handling. The hint appears briefly in the footer during the round-trip. This is consistent with how other status messages work in the wizard.
