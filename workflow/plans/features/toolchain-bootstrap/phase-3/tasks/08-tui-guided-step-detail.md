@@ -106,16 +106,33 @@ fn test_detail_android_enter_hint_when_jdk_present() {
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** worktree-agent-ab3140efe5f9d6740
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added guided-command rendering: `render_guided_commands()`, new layout constants (`GUIDED_SECTION_HEADER_HEIGHT`, `GUIDED_COMMAND_MIN_HEIGHT`, `JDK_CAPTION_HEIGHT`), updated `is_executable()` to handle `AndroidTools` based on `has_guided_commands`, added `AndroidTools` to `action_hint_text()`, updated `render_action_hint()` signature to accept `has_guided_commands`, updated `Widget::render` to use guided-command section instead of hint when step has guided commands, added 4 new tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **AndroidTools executability**: `is_executable(AndroidTools, false)` = true (JDK present, run directly); `is_executable(AndroidTools, true)` = false (JDK missing, guided path). This matches task 07's JDK gate — the TUI mirrors the handler's gate decision by reading `has_guided_commands` rather than duplicating the JDK-check logic.
+
+2. **Bottom-section space reservation**: When guided commands exist, the layout reserves `GUIDED_SECTION_HEADER_HEIGHT + JDK_CAPTION_HEIGHT (AndroidTools only) + GUIDED_COMMAND_MIN_HEIGHT` rows at the bottom of the content area. This keeps the component check rows in the upper portion without overlapping the guided command block.
+
+3. **Updated existing test**: `test_step_detail_shows_phase_for_non_executable_step` was renamed and updated to `test_step_detail_shows_enter_hint_for_android_step_when_jdk_present`. The test previously verified "later phase" for AndroidTools; Phase 3 makes AndroidTools executable when JDK is present (no guided commands), so the expectation changed to "Press Enter".
+
+4. **Generic rendering**: `render_guided_commands()` is driven purely by `step.guided_commands` and `step.kind` (for the AndroidTools-specific caption). Phase 4 prerequisites steps will render through the same path with no TUI changes needed.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (6571 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- New tests added: `test_detail_renders_jdk_guided_command`, `test_detail_android_enter_hint_when_jdk_present`, `test_guided_command_with_note_renders_note`, `test_no_panic_guided_command_tiny_area`
+
 ### Risks/Limitations
+
+1. **Task 07 not yet implemented**: The `handle_run_selected_step` AndroidTools arm and `InstallWizardCopyCommand` handler are not yet wired (task 07). The TUI renders the guided command and `[c] copy` affordance correctly, but pressing Enter on AndroidTools when JDK is present (no guided commands) will fall through to the existing "not handled" path until task 07 lands.

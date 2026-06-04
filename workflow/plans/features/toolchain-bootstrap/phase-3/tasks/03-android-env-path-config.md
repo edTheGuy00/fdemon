@@ -124,16 +124,35 @@ fn test_android_env_block_has_both_bins() { /* assert substrings */ }
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Added `ANDROID_FENCE_OPEN`/`ANDROID_FENCE_CLOSE` marker constants; generalized `find_fence_range_for` (replaces removed `find_fence_range` + `find_android_fence_range` wrappers); `apply_fence_with_markers` private helper shared by both writers; `android_posix_block`, `android_fish_block`, `android_fence_block` pure string builders; `apply_android_fence`; `add_android_env_to_rc_file`; `add_android_env_windows`; public `add_android_env`; 15 new tests |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `add_android_env` to the `path_config` re-export line |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Generalized fence helper instead of duplication**: Extracted `find_fence_range_for(contents, open, close)` as the single implementation; `apply_fence_with_markers` drives both the Flutter PATH and Android env fence logic. This means `apply_fence` for the Flutter case is now a thin wrapper — no behavior change.
+
+2. **Removed `find_fence_range` and `find_android_fence_range` thin wrappers**: Both were dead code after the generalization (only the `#[cfg(test)]` `fence_already_has_dir` helper and two test functions used `find_fence_range`; updated them to call `find_fence_range_for` directly). This keeps the dead-code lint clean without `#[allow]`.
+
+3. **Fish uses double-quotes for `$ANDROID_HOME` expansion**: Fish `set -Ux ANDROID_HOME "..."` + `fish_add_path "$ANDROID_HOME/..."` correctly expands the variable. The Flutter PATH writer single-quotes the literal path; Android env needs expansion so double-quotes are correct here.
+
+4. **Windows `HKCU:\\Environment` as synthetic `rc_file` path**: The existing Flutter PATH Windows writer uses `HKCU:\\Environment\\PATH`; the Android writer uses `HKCU:\\Environment` (no trailing variable name) since it modifies two variables. This is consistent with the out-of-band env-var injection-safe pattern.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (no warnings)
+- `cargo test --workspace` — Passed (all test suites: 972 fdemon-daemon tests including 15 new Android env tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Windows branch untested at runtime**: The `add_android_env_windows` function is pure-string-builder tested (no PowerShell invoked) via `test_windows_android_home_script_uses_env_var`. Actual registry writes require a Windows host. Logic mirrors the proven `add_to_path_windows` pattern.
+
+2. **Fish double-quote escaping**: If `sdk_root` contains a `"` character, it would break the fish block. However, `validate_bin_dir` rejects the metacharacters most likely to cause issues (newline, backtick, `$(`, `;`, `&`, `|`), and double-quote in a filesystem path is extraordinarily rare. The task spec does not require rejecting `"` explicitly; this matches the existing flutter writer's risk profile.

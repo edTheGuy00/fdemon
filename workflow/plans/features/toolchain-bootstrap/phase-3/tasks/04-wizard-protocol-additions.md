@@ -111,16 +111,34 @@ fn test_c_in_install_wizard_emits_copy_command() {
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `AndroidStepParams` struct; extended `UpdateAction::RunWizardStep` with `android_sdk_root: Option<PathBuf>` and `android: Option<AndroidStepParams>` fields |
+| `crates/fdemon-app/src/message.rs` | Added `Message::InstallWizardCopyCommand` variant with doc comment |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `c` → `Message::InstallWizardCopyCommand` arm in `handle_key_install_wizard`; updated doc comment to list `c`; added `test_c_in_install_wizard_emits_copy_command` test |
+| `crates/fdemon-app/src/handler/update.rs` | Added no-op stub dispatch arm for `Message::InstallWizardCopyCommand` to keep match exhaustive |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated `RunWizardStep` pattern match to destructure new fields (as `_android_sdk_root`, `_android`); updated all 5 test construction sites to pass `android_sdk_root: None, android: None` |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Updated 2 `RunWizardStep` construction sites to pass `android_sdk_root: None, android: None`; updated 2 pattern matches to use `..` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **No-op stub for `InstallWizardCopyCommand` in `update.rs`**: Task 07 will implement the full handler. The stub was necessary to satisfy Rust's exhaustive match requirement.
+2. **`..` in existing pattern matches**: The two `matches!` assertions in `handler/install_wizard/actions.rs` that checked `RunWizardStep` fields used explicit field bindings. Added `..` to ignore the new fields rather than repeating `android_sdk_root: None, android: None` — this keeps the test assertions focused on the fields they are testing.
+3. **`_android_sdk_root` / `_android` prefixed bindings in executor**: The Phase 2 executor in `actions/mod.rs` destructures the new fields with underscore prefixes to suppress unused-variable warnings while signaling clearly that task 06 will consume them.
+
 ### Testing Performed
 
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (2,723 tests, 0 failed)
+- `cargo check --workspace --all-targets` — Passed
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **No executor logic**: The new `android_sdk_root` and `android` fields are wired into the protocol but not yet consumed by the executor. Task 06 owns that implementation.

@@ -93,16 +93,16 @@ Wave 1 (parallel, no deps)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-android-install-types](tasks/01-android-install-types.md) | Not Started | - | 3-4h | `toolchain/types.rs`, `toolchain/mod.rs` |
-| 02 | [02-android-installer-and-jdk](tasks/02-android-installer-and-jdk.md) | Not Started | 01 | 7-9h | `toolchain/android_install.rs`, `toolchain/jdk.rs`, `toolchain/process_stream.rs`, `toolchain/mod.rs` |
-| 03 | [03-android-env-path-config](tasks/03-android-env-path-config.md) | Not Started | 01 | 4-5h | `toolchain/path_config.rs`, `toolchain/mod.rs` |
-| 04 | [04-wizard-protocol-additions](tasks/04-wizard-protocol-additions.md) | Not Started | - | 3-4h | `message.rs`, `handler/mod.rs`, `handler/keys.rs` |
-| 05 | [05-guided-command-state](tasks/05-guided-command-state.md) | Not Started | - | 3-4h | `install_wizard/types.rs`, `install_wizard/state.rs`, `install_wizard/mod.rs` |
-| 06 | [06-run-android-step-executor](tasks/06-run-android-step-executor.md) | Not Started | 01, 02, 03, 04 | 4-5h | `actions/mod.rs` |
-| 07 | [07-wizard-handlers-android-and-copy](tasks/07-wizard-handlers-android-and-copy.md) | Not Started | 04, 05 | 4-5h | `handler/install_wizard/actions.rs`, `handler/update.rs` |
-| 08 | [08-tui-guided-step-detail](tasks/08-tui-guided-step-detail.md) | Not Started | 05 | 3-4h | `widgets/install_wizard/step_detail.rs`, `widgets/install_wizard/mod.rs` |
-| 09 | [09-update-architecture-doc](tasks/09-update-architecture-doc.md) | Not Started | 02, 03, 06, 07, 08 | 1-2h | `docs/ARCHITECTURE.md` |
-| 10 | [10-update-config-keybindings-docs](tasks/10-update-config-keybindings-docs.md) | Not Started | 04 | 1h | `docs/CONFIGURATION.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-android-install-types](tasks/01-android-install-types.md) | ✅ Done | - | 3-4h | `toolchain/types.rs`, `toolchain/mod.rs` |
+| 02 | [02-android-installer-and-jdk](tasks/02-android-installer-and-jdk.md) | ✅ Done (CONCERN: stale `on_line` doc comment in jdk.rs — non-blocking) | 01 | 7-9h | `toolchain/android_install.rs`, `toolchain/jdk.rs`, `toolchain/process_stream.rs`, `toolchain/mod.rs` |
+| 03 | [03-android-env-path-config](tasks/03-android-env-path-config.md) | ✅ Done | 01 | 4-5h | `toolchain/path_config.rs`, `toolchain/mod.rs` |
+| 04 | [04-wizard-protocol-additions](tasks/04-wizard-protocol-additions.md) | ✅ Done | - | 3-4h | `message.rs`, `handler/mod.rs`, `handler/keys.rs` |
+| 05 | [05-guided-command-state](tasks/05-guided-command-state.md) | ✅ Done | - | 3-4h | `install_wizard/types.rs`, `install_wizard/state.rs`, `install_wizard/mod.rs` |
+| 06 | [06-run-android-step-executor](tasks/06-run-android-step-executor.md) | ✅ Done | 01, 02, 03, 04 | 4-5h | `actions/mod.rs` |
+| 07 | [07-wizard-handlers-android-and-copy](tasks/07-wizard-handlers-android-and-copy.md) | ✅ Done | 04, 05 | 4-5h | `handler/install_wizard/actions.rs`, `handler/update.rs` |
+| 08 | [08-tui-guided-step-detail](tasks/08-tui-guided-step-detail.md) | ✅ Done | 05 | 3-4h | `widgets/install_wizard/step_detail.rs`, `widgets/install_wizard/mod.rs` |
+| 09 | [09-update-architecture-doc](tasks/09-update-architecture-doc.md) | ✅ Done (CONCERN: add_android_env signature — fixed in follow-up) | 02, 03, 06, 07, 08 | 1-2h | `docs/ARCHITECTURE.md` |
+| 10 | [10-update-config-keybindings-docs](tasks/10-update-config-keybindings-docs.md) | ✅ Done | 04 | 1h | `docs/CONFIGURATION.md`, `docs/KEYBINDINGS.md` |
 
 ## File Overlap Analysis
 

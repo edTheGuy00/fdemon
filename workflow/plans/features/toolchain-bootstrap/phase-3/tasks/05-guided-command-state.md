@@ -130,16 +130,45 @@ fn test_no_guided_command_when_jdk_ok() {
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/install_wizard/types.rs` | Added `GuidedCommand` struct with `label`, `command`, `note` fields; added 3 unit tests |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `guided_commands: Vec<GuidedCommand>` to `WizardStep`; added `jdk_guided_command(platform)` helper; updated `build_steps()` to populate guided commands when JDK status is not Ok; added `selected_guided_command()` to `InstallWizardState`; added `HostPlatform` import; added 14 unit tests covering all acceptance criteria |
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Re-exported `GuidedCommand` from public API |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Pure derivation**: `jdk_guided_command()` is a free function taking `HostPlatform` by value (cloned from `report.platform`). No I/O, no process spawning — the guided command appears as soon as preflight completes.
+2. **JDK Unknown status not triggering guided command**: Only `Missing`, `Partial`, and `Error` statuses trigger the guided command (all non-`Ok` values that actually include a `Jdk` component). `Unknown` is treated as "skip was skipped" (prerequisite missing), which doesn't warrant a JDK install suggestion since Android SDK root is not even known.
+3. **`guided_commands` default is empty `Vec`**: All five wizard steps get the field; non-Android steps default to `Vec::new()`. This keeps `WizardStep` struct-update syntax and `Default` derivation straightforward.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (2737 tests, 0 failed)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+
+New tests added:
+- `test_android_step_has_jdk_guided_command_when_jdk_missing` — matches task spec exactly
+- `test_no_guided_command_when_jdk_ok` — matches task spec exactly
+- `test_android_step_has_jdk_guided_command_when_jdk_partial` — edge case
+- `test_android_step_has_jdk_guided_command_when_jdk_error` — edge case
+- `test_jdk_command_linux_contains_apt` — platform-specific command verification
+- `test_jdk_command_macos_uses_brew` — platform-specific command verification
+- `test_jdk_command_windows_uses_winget` — platform-specific command verification
+- `test_jdk_command_unknown_platform_uses_adoptium` — platform-specific command verification
+- `test_non_android_steps_have_no_guided_commands` — all other steps clean
+- `test_selected_guided_command_returns_none_when_no_steps` — accessor edge case
+- `test_selected_guided_command_returns_none_when_step_has_none` — accessor with empty step
+- `test_selected_guided_command_returns_first_when_android_selected` — accessor happy path
+- 3 tests for `GuidedCommand` struct in `types.rs`
+
 ### Risks/Limitations
+
+1. **Phase 4 prerequisites**: When Phase 4 adds guided commands for the `Prerequisites` step, `build_steps()` will need a parallel derivation block. The `GuidedCommand` struct is intentionally minimal and generic — no JDK-specific fields — to facilitate reuse.

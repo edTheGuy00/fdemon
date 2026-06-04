@@ -150,16 +150,34 @@ dispatch + guard paths only.
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | Added `AndroidTools` arm (real install executor), extended `PathConfig` arm to call `add_android_env`, added `resolve_android_sdk_root` helper, updated non-executable test list, added 6 new tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`resolve_android_sdk_root` in actions/mod.rs (not daemon)**: The task notes it can be in either place. Since `checks::android_sdk_root()` returns `Option<AndroidSdkRoot>` where `AndroidSdkRoot` is `pub(super)` (not exported from toolchain), the resolution logic was placed in the executor itself. This keeps the executor self-contained and avoids creating a new daemon export for a simple env-var + dirs lookup.
+
+2. **PathConfig summary string**: Combined as `"<flutter summary>, <android summary> and Restart your terminal..."` when both are written. The `and ` separator makes the sentence flow naturally. Trailing space in android_summary part is trimmed by the sentence construction.
+
+3. **`configure_flutter_jdk_dir` not called**: As specified in the task notes, the JDK gate lives in the handler (task 07). The executor does not call `configure_flutter_jdk_dir` because `flutter` binary is not guaranteed to be available at this point and any failure would surface as a `WizardStepFailed` rather than best-effort. The task says "only call it if a JDK dir is known and flutter resolves" — this logic is deferred to task 07 as directed.
+
+4. **`HostShell::clone()` requirement**: The `PathConfig` spawn_blocking closure takes `shell` by value. Since `HostShell::detect()` is called before the closure, `shell.clone()` is passed to `add_to_path` to satisfy ownership when `android_sdk_root` is also Some (same shell ref needed twice). `HostShell` derives `Clone` so this is trivial.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo test --workspace` — PASS (2755 fdemon-app tests, 0 failed; all new tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+
 ### Risks/Limitations
+
+1. **Network install not unit-tested**: `test_android_tools_emits_started` only verifies the `WizardStepStarted` message is emitted before the install attempt begins. The actual download + sdkmanager execution is not tested (mirrors Phase 2 FlutterSdk pattern). Integration test requires a real Android build environment.
+
+2. **`test_resolve_android_sdk_root_falls_back_to_android_home` env mutation**: The test mutates `ANDROID_HOME` env var globally. Could be flaky if tests run in parallel and another test reads `ANDROID_HOME` at the same time. In practice the fdemon test suite does not use `serial_test` for env-var-mutating tests (same pattern used in jdk.rs and path_config.rs), so this is consistent with existing practice.

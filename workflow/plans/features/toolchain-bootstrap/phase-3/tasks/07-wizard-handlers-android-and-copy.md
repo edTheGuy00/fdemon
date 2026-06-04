@@ -184,16 +184,32 @@ fn test_copy_command_no_command_sets_status() { /* no guided command → status 
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** worktree-agent-afec499e5b7af5010
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added `AndroidTools` arm to `handle_run_selected_step` (JDK gate + param sourcing); extended `PathConfig` arm to pass `android_sdk_root`; added `AndroidTools` arm to `handle_step_completed` (persist + preflight re-run); added `handle_copy_command`; added `jdk_status` helper; added 12 new unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced the no-op stub for `InstallWizardCopyCommand` with a call to `install_wizard::handle_copy_command(state)` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`WriteClipboard` via `UpdateResult::action` not `pending_runner_actions`**: The task description suggested pushing directly to `pending_runner_actions`, but the established pattern in the codebase (e.g. `CopyLogEntryToClipboard`) returns `UpdateResult::action(UpdateAction::WriteClipboard { .. })`. The `process.rs` interceptor already moves `WriteClipboard` actions into `pending_runner_actions` automatically — using the same pattern avoids a special case and keeps the handler pure.
+
+2. **JDK gate leaves step status unchanged (not `Failed`)**: Per the task's recommendation, when JDK is not Ok the step stays in its current status with only a `status_message` set. This keeps the guided command visible in the detail pane (a `Failed` status would visually suggest something went wrong with the install itself, not just a precondition).
+
+3. **`android_sdk_root` passed via reused `sdk_path` slot in `handle_step_completed`**: The `WizardStepCompleted` message's `sdk_path: Option<PathBuf>` field is reused to carry the Android SDK root back from the executor. The field name matches its semantic use for `FlutterSdk`, and the Android use is documented in the handler comment.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (2749 fdemon-app tests; all workspace tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- 12 new unit tests added covering: JDK-gate blocking (Missing, Partial, no entry), JDK-gate pass-through (Ok), params sourced from settings, completed AndroidTools persists sdk_root + reruns preflight, completed without sdk_root still reruns preflight, PathConfig includes android_sdk_root, copy command pushes WriteClipboard, copy command with no command sets status, copy command text matches guided command
+
 ### Risks/Limitations
+
+1. **Executor (task 06) not yet merged**: The `RunWizardStep { android: Some(..) }` action will reach `handle_action` which must have an `AndroidTools` arm. Until task 06 is wired, pressing Enter on AndroidTools (with JDK Ok) will produce an unhandled action in `actions/mod.rs`. This is a known deferred dependency — the gate is correct and will work end-to-end once task 06 lands.

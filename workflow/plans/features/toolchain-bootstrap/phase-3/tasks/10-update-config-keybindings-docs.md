@@ -76,16 +76,27 @@ present JDK 17), and that `r` re-runs preflight (used after a guided JDK install
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/CONFIGURATION.md` | Updated `[toolchain]` section: replaced Phase 3 (reserved) TOML comments and table with active documentation; added auto-write note for `android_sdk_root`; added `cmdline_tools_build` override guidance with link to developer.android.com; removed "Phase" column from table; descriptions match `ToolchainSettings` defaults exactly (api_level=36, None defaults for optional fields). |
+| `docs/KEYBINDINGS.md` | Added `c` (Copy Guided Command) row to Step List Controls; updated `Enter` description to mention Android Tools step gated on JDK 17; extended `r` description to note use after guided JDK install. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`cmdline_tools_build` default label**: Used "(current)" rather than "(latest)" in the table to reflect the task note that the default may drift — the override key is the escape hatch. The TOML comment example uses a concrete build number (`11076708`) as a realistic placeholder.
+2. **`android_sdk_root` platform defaults**: The table Default column lists all three per-OS paths for clarity, matching the TOML block comment which also lists all three.
+3. **Removed "Phase" column**: The Phase column was removed from the table since all fields are now active in Phase 3; the section header prose provides sufficient context.
+
 ### Testing Performed
 
+- Visual review of both edited sections confirms values match `ToolchainSettings::default()` in `config/types.rs` (api_level=36, None for optional fields).
+- No source code changes — documentation-only task.
+
 ### Risks/Limitations
+
+1. **`cmdline_tools_build` example value**: The example build number `11076708` in the TOML comment block is illustrative and will drift over time. The text directs users to check the official URL for the current value.

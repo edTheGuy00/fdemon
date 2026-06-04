@@ -159,16 +159,58 @@ fn test_resolve_jdk_home_honors_java_home() { /* set JAVA_HOME → assert return
 
 ## Completion Summary
 
-**Status:**
-**Branch:**
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | **NEW** — `install_android_tools`, `resolve_cmdline_tools_url`, `relocate_cmdline_tools`, `sdkmanager_path` with full install flow + 7 unit tests |
+| `crates/fdemon-daemon/src/toolchain/jdk.rs` | **NEW** — `resolve_jdk_home`, `configure_flutter_jdk_dir`, `java_home_from_which` with 3 unit tests |
+| `crates/fdemon-daemon/src/toolchain/process_stream.rs` | Added `run_streaming_with_input` (stdin piping + env support) with 3 unit tests |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `mod android_install; mod jdk; pub mod jdk;` + re-exports for all new public symbols |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Re-exported `sdkmanager_bin_name` from `checks::android` to make it accessible within `toolchain/` |
+| `crates/fdemon-daemon/src/toolchain/checks/android.rs` | Changed `sdkmanager_bin_name` from `pub(super)` to `pub` to allow re-export |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`sdkmanager_bin_name` visibility**: The function was `pub(super)` in `checks/android.rs`. Changed it to `pub` and re-exported through `checks/mod.rs` so `android_install.rs` can access it via `super::checks::sdkmanager_bin_name`. This avoids duplicating the Windows `.bat` vs Unix distinction.
+
+2. **`run_streaming_with_input` stdin write ordering**: The stdin write task is spawned concurrently with the output draining loop to prevent deadlock if the child fills its stdout/stderr pipe before consuming all stdin. This mirrors the design rationale in `run_streaming` (two reader tasks to avoid pipe deadlock).
+
+3. **Temp dir inside `sdk_root`**: The temp directory is placed inside `sdk_root` (not `std::env::temp_dir()`) so that the `relocate_cmdline_tools` rename is on the same filesystem, enabling an atomic `rename(2)` on Linux/macOS. Cross-filesystem renames would fall back to copy+delete.
+
+4. **PATH prepending for JDK**: When `target.jdk_path` is `Some`, the JDK's `bin/` is prepended to `PATH` in addition to setting `JAVA_HOME`. Some `sdkmanager` versions invoke `java` directly via PATH rather than reading `JAVA_HOME`.
+
+5. **`resolve_cmdline_tools_url` as public helper**: Factored URL resolution into a public, synchronous, no-I/O function so callers (tests and task 06) can verify URL construction without a download.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (0 failures, ~6,700+ tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+Unit tests added:
+- `test_resolve_cmdline_tools_url_linux` — verifies Linux URL slug
+- `test_resolve_cmdline_tools_url_unknown_platform_is_err` — Unknown platform returns Err
+- `test_resolve_cmdline_tools_url_custom_build` — custom build number is used
+- `test_relocate_cmdline_tools_to_latest` — synthetic dir tree relocated correctly
+- `test_relocate_replaces_existing_latest` — stale `latest/` is replaced
+- `test_relocate_missing_source_is_err` — missing source returns Err
+- `test_sdkmanager_path_correct_layout` — path includes all expected segments
+- `test_run_streaming_with_input_echoes_stdin` — `cat` echoes piped input
+- `test_run_streaming_with_input_env_forwarded` — env var reaches child
+- `test_run_streaming_with_input_nonzero_exit_returned` — non-zero exit returned
+- `test_resolve_jdk_home_honors_java_home` — JAVA_HOME env var honored
+- `test_resolve_jdk_home_ignores_nonexistent_java_home` — non-existent dir ignored
+- `test_resolve_jdk_home_does_not_panic_when_absent` — no panic when JDK absent
+
 ### Risks/Limitations
+
+1. **No SHA verification for cmdline-tools**: Per task spec, omitted. Relies on HTTPS/TLS; a future `cmdline_tools_sha256` config override is a separate enhancement.
+
+2. **`sdkmanager_bin_name` visibility change**: The change from `pub(super)` to `pub` widens visibility but the function is still private to the crate (not re-exported at the crate root). Acceptable scope change.
+
+3. **JAVA_HOME test isolation**: The JDK tests that temporarily set/unset `JAVA_HOME` could interfere with parallel tests modifying the same env var. They do not use `serial_test` — acceptable for now since the tests make conservative assertions (no assert on `None`, only assert when `Some` from a known temp dir).
