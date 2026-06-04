@@ -34,7 +34,9 @@ pub use android_install::{
     install_android_tools, relocate_cmdline_tools, resolve_cmdline_tools_url,
 };
 pub use checks::{
-    detect_linux_package_manager, resolve_android_sdk_root_path, LinuxPackageManager,
+    detect_linux_package_manager, parse_missing_prereq_keys, resolve_android_sdk_root_path,
+    LinuxPackageManager, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA,
+    PREREQ_KEY_XCODE_CLT,
 };
 pub use download::{download_to_file, extract_archive, extract_tar_xz, extract_zip, verify_sha256};
 pub use flutter_install::{

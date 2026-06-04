@@ -5,6 +5,21 @@
 //! `which::which` and `pkg-config --exists` for library headers, and never
 //! installs anything. Command generation for missing items lives in
 //! app-land `state.rs`, not here.
+//!
+//! ## Missing-key contract
+//!
+//! macOS and Windows prerequisite `ComponentCheck.detail` strings encode
+//! missing items using a stable, parseable format:
+//!
+//! ```text
+//! "missing: xcode-clt, cocoapods, rosetta"
+//! ```
+//!
+//! When all items are present the detail is a human-readable OK message (no
+//! `"missing:"` prefix). Use [`parse_missing_prereq_keys`] to extract the keys
+//! from a detail string without brittle prose parsing.  The canonical key
+//! constants are [`PREREQ_KEY_XCODE_CLT`], [`PREREQ_KEY_COCOAPODS`],
+//! [`PREREQ_KEY_ROSETTA`], and [`PREREQ_KEY_GIT`].
 
 use std::process::Stdio;
 
@@ -12,6 +27,64 @@ use tokio::process::Command;
 
 use super::super::types::{ComponentCheck, ComponentKind, ComponentStatus, HostPlatform};
 use super::PROBE_TIMEOUT;
+
+// ─── Canonical missing-item keys ─────────────────────────────────────────────
+//
+// These constants are the single source of truth for the prerequisite key
+// strings embedded in `ComponentCheck.detail` on macOS and Windows.  Task 03
+// (guided-command helper in `fdemon-app`) reads them via `parse_missing_prereq_keys`
+// to decide which install commands to emit.
+
+/// Key for Xcode Command Line Tools presence (macOS).
+pub const PREREQ_KEY_XCODE_CLT: &str = "xcode-clt";
+/// Key for CocoaPods presence (macOS).
+pub const PREREQ_KEY_COCOAPODS: &str = "cocoapods";
+/// Key for Rosetta 2 presence (macOS / Apple Silicon only).
+pub const PREREQ_KEY_ROSETTA: &str = "rosetta";
+/// Key for Git presence (Windows).
+pub const PREREQ_KEY_GIT: &str = "git";
+
+/// Prefix used in the `detail` field when one or more prerequisite items are
+/// missing.  The format is: `"missing: <key1>, <key2>, ..."`.
+const MISSING_PREFIX: &str = "missing: ";
+
+/// Parse the stable, comma-joined missing-item keys out of a Prerequisites
+/// `ComponentCheck.detail` string.
+///
+/// # Detail format
+///
+/// When items are missing the detail is:
+/// ```text
+/// "missing: xcode-clt, cocoapods, rosetta"
+/// ```
+/// When all items are present the detail is a human-readable OK message that
+/// does **not** start with `"missing: "`, so this function returns an empty
+/// `Vec` in that case.
+///
+/// # Returns
+///
+/// A `Vec` of `&str` slices into `detail`.  The slices point directly into the
+/// input string, so no allocation is needed for the common (all-present) path.
+///
+/// # Example
+///
+/// ```rust
+/// use fdemon_daemon::toolchain::{parse_missing_prereq_keys, PREREQ_KEY_XCODE_CLT, PREREQ_KEY_COCOAPODS};
+///
+/// let detail = "missing: xcode-clt, cocoapods";
+/// let keys = parse_missing_prereq_keys(detail);
+/// assert!(keys.contains(&PREREQ_KEY_XCODE_CLT));
+/// assert!(keys.contains(&PREREQ_KEY_COCOAPODS));
+/// ```
+pub fn parse_missing_prereq_keys(detail: &str) -> Vec<&str> {
+    let Some(rest) = detail.strip_prefix(MISSING_PREFIX) else {
+        return Vec::new();
+    };
+    rest.split(", ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
 
 /// The detected Linux package manager.
 ///
@@ -170,6 +243,20 @@ async fn probe_pkg_config_exists(package: &str) -> bool {
 }
 
 async fn check_macos_prerequisites() -> ComponentCheck {
+    // ── Probe CLT, CocoaPods, and (aarch64 only) Rosetta concurrently ──────────
+    let (clt_status, cocoapods_status, rosetta_status) = tokio::join!(
+        probe_macos_xcode_clt(),
+        probe_macos_cocoapods(),
+        probe_macos_rosetta(),
+    );
+
+    build_macos_check_from_statuses(clt_status, cocoapods_status, rosetta_status)
+}
+
+/// Probe Xcode Command Line Tools via `xcode-select -p`.
+///
+/// Returns the [`MacOsProbeStatus`] for the CLT gate.
+async fn probe_macos_xcode_clt() -> MacOsProbeStatus {
     let result = tokio::time::timeout(PROBE_TIMEOUT, async {
         Command::new("xcode-select")
             .arg("-p")
@@ -182,43 +269,194 @@ async fn check_macos_prerequisites() -> ComponentCheck {
     .await;
 
     match result {
-        Ok(Ok(status)) if status.success() => ComponentCheck {
-            kind: ComponentKind::Prerequisites,
-            status: ComponentStatus::Ok,
-            detail: "Xcode Command Line Tools installed".to_string(),
-        },
-        Ok(Ok(_)) => ComponentCheck {
+        Ok(Ok(status)) if status.success() => MacOsProbeStatus::Present,
+        Ok(Ok(_)) => MacOsProbeStatus::Missing,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => MacOsProbeStatus::Missing,
+        _ => MacOsProbeStatus::Unknown,
+    }
+}
+
+/// Probe CocoaPods via `pod --version`.
+///
+/// A successful exit (exit code 0) means CocoaPods is installed and functional.
+/// `NotFound` IO error → [`MacOsProbeStatus::Missing`]; timeout/other error
+/// → [`MacOsProbeStatus::Unknown`].
+async fn probe_macos_cocoapods() -> MacOsProbeStatus {
+    let result = tokio::time::timeout(PROBE_TIMEOUT, async {
+        Command::new("pod")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .status()
+            .await
+    })
+    .await;
+
+    match result {
+        Ok(Ok(status)) if status.success() => MacOsProbeStatus::Present,
+        Ok(Ok(_)) => MacOsProbeStatus::Missing,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => MacOsProbeStatus::Missing,
+        _ => MacOsProbeStatus::Unknown,
+    }
+}
+
+/// Probe Rosetta 2 via `pgrep oahd` — **only on Apple Silicon (aarch64)**.
+///
+/// On `x86_64` this returns [`MacOsProbeStatus::NotApplicable`] immediately
+/// so that x86_64 Macs never appear to have Rosetta "missing".
+///
+/// `pgrep` returns exit code 0 when a matching process is found, non-zero
+/// otherwise.  If `pgrep` itself is not found (unlikely on macOS) we return
+/// [`MacOsProbeStatus::Unknown`] rather than [`MacOsProbeStatus::Missing`].
+async fn probe_macos_rosetta() -> MacOsProbeStatus {
+    // Gate: only meaningful on Apple Silicon
+    if std::env::consts::ARCH != "aarch64" {
+        return MacOsProbeStatus::NotApplicable;
+    }
+
+    let result = tokio::time::timeout(PROBE_TIMEOUT, async {
+        Command::new("pgrep")
+            .arg("oahd")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .status()
+            .await
+    })
+    .await;
+
+    match result {
+        Ok(Ok(status)) if status.success() => MacOsProbeStatus::Present,
+        Ok(Ok(_)) => MacOsProbeStatus::Missing,
+        // `pgrep` not found → we cannot confirm missing; report Unknown
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => MacOsProbeStatus::Unknown,
+        _ => MacOsProbeStatus::Unknown,
+    }
+}
+
+/// Status outcome for a single macOS prerequisite probe.
+///
+/// `NotApplicable` is used for arch-gated probes (e.g. Rosetta on x86_64) so
+/// they are silently excluded from the missing-item list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MacOsProbeStatus {
+    /// The item was found / the probe succeeded.
+    Present,
+    /// The item is definitively absent.
+    Missing,
+    /// The probe could not determine presence (timeout, spawn error, etc.).
+    Unknown,
+    /// The probe does not apply on this arch/platform variant.
+    NotApplicable,
+}
+
+/// Build a [`ComponentCheck`] from the three macOS probe outcomes.
+///
+/// This is the pure, testable core of [`check_macos_prerequisites`].
+///
+/// Missing items are collected into the stable `"missing: <key1>, ..."` detail
+/// format. [`MacOsProbeStatus::Unknown`] items are excluded from the
+/// missing-keys list but cause the overall status to be [`ComponentStatus::Unknown`]
+/// when no item is [`MacOsProbeStatus::Missing`]. [`MacOsProbeStatus::NotApplicable`]
+/// items are silently ignored in all outcomes.
+///
+/// Status precedence: `Missing` > `Unknown` > `Ok`.
+pub(crate) fn build_macos_check_from_statuses(
+    clt: MacOsProbeStatus,
+    cocoapods: MacOsProbeStatus,
+    rosetta: MacOsProbeStatus,
+) -> ComponentCheck {
+    let mut missing_keys: Vec<&'static str> = Vec::new();
+    let mut any_unknown = false;
+
+    let probes: &[(&'static str, MacOsProbeStatus)] = &[
+        (PREREQ_KEY_XCODE_CLT, clt),
+        (PREREQ_KEY_COCOAPODS, cocoapods),
+        (PREREQ_KEY_ROSETTA, rosetta),
+    ];
+
+    for (key, status) in probes {
+        match status {
+            MacOsProbeStatus::Missing => missing_keys.push(key),
+            MacOsProbeStatus::Unknown => any_unknown = true,
+            MacOsProbeStatus::Present | MacOsProbeStatus::NotApplicable => {}
+        }
+    }
+
+    if !missing_keys.is_empty() {
+        ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Missing,
-            detail: "Xcode Command Line Tools not installed. Run: xcode-select --install"
-                .to_string(),
-        },
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => ComponentCheck {
-            kind: ComponentKind::Prerequisites,
-            status: ComponentStatus::Missing,
-            detail: "xcode-select not found — install Xcode from the App Store".to_string(),
-        },
-        _ => ComponentCheck {
+            detail: format!("{}{}", MISSING_PREFIX, missing_keys.join(", ")),
+        }
+    } else if any_unknown {
+        ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Unknown,
-            detail: "Could not determine Xcode Command Line Tools status".to_string(),
-        },
+            detail: "Could not determine all macOS prerequisite statuses".to_string(),
+        }
+    } else {
+        // All present (or not applicable)
+        let note = if std::env::consts::ARCH == "aarch64" {
+            "Xcode Command Line Tools, CocoaPods, and Rosetta 2 installed"
+        } else {
+            "Xcode Command Line Tools and CocoaPods installed"
+        };
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status: ComponentStatus::Ok,
+            detail: note.to_string(),
+        }
     }
 }
 
 async fn check_windows_prerequisites() -> ComponentCheck {
-    // On Windows, use git presence as a proxy for developer tools
-    match which::which("git") {
-        Ok(_) => ComponentCheck {
+    let git_present = which::which("git").is_ok();
+    let winget_present = which::which("winget").is_ok();
+    build_windows_check_from_presence(git_present, winget_present)
+}
+
+/// Build a [`ComponentCheck`] from the Windows git/winget presence flags.
+///
+/// This is the pure, testable core of [`check_windows_prerequisites`].
+///
+/// Missing items are collected into the stable `"missing: <key>, ..."` detail
+/// format so that [`parse_missing_prereq_keys`] can extract them.
+///
+/// **Notes:**
+/// - PowerShell is not gated (assumed present on Windows 10 1903+).
+/// - Visual Studio "Desktop development with C++" (`vswhere.exe`) is not probed
+///   here — users should install it via the Visual Studio Installer.
+pub(crate) fn build_windows_check_from_presence(
+    git_present: bool,
+    winget_present: bool,
+) -> ComponentCheck {
+    let mut missing_keys: Vec<&'static str> = Vec::new();
+
+    if !git_present {
+        missing_keys.push(PREREQ_KEY_GIT);
+    }
+
+    if missing_keys.is_empty() {
+        let detail = if winget_present {
+            "Git found; winget available".to_string()
+        } else {
+            // winget absent is informational — it's present on Win10 1903+, but
+            // older systems may lack it.  We still report Ok when git is present.
+            "Git found; winget not found (install Git for Windows manually if needed)".to_string()
+        };
+        ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Ok,
-            detail: "Git found (Windows prerequisites appear satisfied)".to_string(),
-        },
-        Err(_) => ComponentCheck {
+            detail,
+        }
+    } else {
+        ComponentCheck {
             kind: ComponentKind::Prerequisites,
-            status: ComponentStatus::Partial,
-            detail: "Git not found on PATH. Install Git for Windows.".to_string(),
-        },
+            status: ComponentStatus::Missing,
+            detail: format!("{}{}", MISSING_PREFIX, missing_keys.join(", ")),
+        }
     }
 }
 
@@ -435,5 +673,265 @@ mod tests {
                 "LINUX_REQUIRED_TOOLS must include '{tool}'"
             );
         }
+    }
+
+    // ── parse_missing_prereq_keys ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_missing_prereq_keys_single_item() {
+        let detail = "missing: xcode-clt";
+        let keys = parse_missing_prereq_keys(detail);
+        assert_eq!(keys, vec!["xcode-clt"]);
+    }
+
+    #[test]
+    fn test_parse_missing_prereq_keys_multiple_items() {
+        let detail = "missing: xcode-clt, cocoapods, rosetta";
+        let keys = parse_missing_prereq_keys(detail);
+        assert_eq!(keys, vec!["xcode-clt", "cocoapods", "rosetta"]);
+    }
+
+    #[test]
+    fn test_parse_missing_prereq_keys_empty_when_ok() {
+        // A successful detail has no "missing: " prefix — must return empty vec
+        let detail = "Xcode Command Line Tools and CocoaPods installed";
+        let keys = parse_missing_prereq_keys(detail);
+        assert!(
+            keys.is_empty(),
+            "expected no keys for OK detail, got: {keys:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_missing_prereq_keys_empty_detail() {
+        let keys = parse_missing_prereq_keys("");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn test_parse_missing_prereq_keys_windows_git() {
+        let detail = "missing: git";
+        let keys = parse_missing_prereq_keys(detail);
+        assert_eq!(keys, vec!["git"]);
+    }
+
+    #[test]
+    fn test_parse_missing_prereq_keys_constants_round_trip() {
+        // Verify that the detail produced by build_macos_check_from_statuses
+        // round-trips through parse_missing_prereq_keys correctly.
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Missing,
+            MacOsProbeStatus::Missing,
+            MacOsProbeStatus::NotApplicable,
+        );
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(
+            keys.contains(&PREREQ_KEY_XCODE_CLT),
+            "expected xcode-clt in {keys:?}"
+        );
+        assert!(
+            keys.contains(&PREREQ_KEY_COCOAPODS),
+            "expected cocoapods in {keys:?}"
+        );
+        assert!(
+            !keys.contains(&PREREQ_KEY_ROSETTA),
+            "rosetta should not appear (NotApplicable)"
+        );
+    }
+
+    #[test]
+    fn test_parse_missing_prereq_keys_rosetta_round_trip() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Missing,
+        );
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert_eq!(
+            keys,
+            vec![PREREQ_KEY_ROSETTA],
+            "only rosetta should be missing"
+        );
+    }
+
+    // ── macOS: build_macos_check_from_statuses ────────────────────────────────
+
+    #[test]
+    fn test_macos_all_present_yields_ok() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::NotApplicable, // x86_64
+        );
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(
+            check.detail.contains("CocoaPods"),
+            "detail: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_macos_clt_missing_yields_missing_status() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Missing,
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::NotApplicable,
+        );
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must start with '{}', got: {}",
+            MISSING_PREFIX,
+            check.detail
+        );
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(keys.contains(&PREREQ_KEY_XCODE_CLT));
+        assert!(!keys.contains(&PREREQ_KEY_COCOAPODS));
+    }
+
+    #[test]
+    fn test_macos_cocoapods_missing_yields_missing_status() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Missing,
+            MacOsProbeStatus::NotApplicable,
+        );
+        assert_eq!(check.status, ComponentStatus::Missing);
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(keys.contains(&PREREQ_KEY_COCOAPODS));
+        assert!(!keys.contains(&PREREQ_KEY_XCODE_CLT));
+    }
+
+    #[test]
+    fn test_macos_rosetta_missing_yields_missing_status() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Missing, // aarch64: Rosetta absent
+        );
+        assert_eq!(check.status, ComponentStatus::Missing);
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(keys.contains(&PREREQ_KEY_ROSETTA));
+    }
+
+    #[test]
+    fn test_macos_rosetta_not_applicable_does_not_appear_missing() {
+        // On x86_64, Rosetta must never be in the missing keys
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::NotApplicable,
+        );
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(
+            !keys.contains(&PREREQ_KEY_ROSETTA),
+            "Rosetta must not appear when NotApplicable; keys: {keys:?}"
+        );
+    }
+
+    #[test]
+    fn test_macos_unknown_yields_unknown_when_nothing_missing() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Present,
+            MacOsProbeStatus::Unknown, // could not probe cocoapods
+            MacOsProbeStatus::NotApplicable,
+        );
+        assert_eq!(check.status, ComponentStatus::Unknown);
+        // Unknown should NOT embed "missing:" prefix
+        assert!(
+            !check.detail.starts_with(MISSING_PREFIX),
+            "Unknown status should not use missing-prefix; detail: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_macos_missing_takes_precedence_over_unknown() {
+        let check = build_macos_check_from_statuses(
+            MacOsProbeStatus::Missing,
+            MacOsProbeStatus::Unknown,
+            MacOsProbeStatus::NotApplicable,
+        );
+        // Missing > Unknown
+        assert_eq!(check.status, ComponentStatus::Missing);
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(keys.contains(&PREREQ_KEY_XCODE_CLT));
+        // Unknown items are excluded from the missing keys list
+        assert!(!keys.contains(&PREREQ_KEY_COCOAPODS));
+    }
+
+    // ── macOS: arch-gating of Rosetta probe ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_rosetta_probe_not_applicable_on_non_aarch64() {
+        // On the current host: if we're not aarch64, probe returns NotApplicable.
+        // If we are aarch64, we accept any outcome (Present/Missing/Unknown).
+        let result = probe_macos_rosetta().await;
+        if std::env::consts::ARCH != "aarch64" {
+            assert_eq!(
+                result,
+                MacOsProbeStatus::NotApplicable,
+                "Rosetta probe must be NotApplicable on non-aarch64"
+            );
+        }
+        // On aarch64 the probe runs live; any MacOsProbeStatus is acceptable.
+    }
+
+    // ── Windows: build_windows_check_from_presence ───────────────────────────
+
+    #[test]
+    fn test_windows_git_present_winget_present_yields_ok() {
+        let check = build_windows_check_from_presence(true, true);
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(check.detail.contains("winget"), "detail: {}", check.detail);
+    }
+
+    #[test]
+    fn test_windows_git_present_winget_absent_yields_ok() {
+        // winget absent does not fail the gate — git is the critical item
+        let check = build_windows_check_from_presence(true, false);
+        assert_eq!(check.status, ComponentStatus::Ok);
+    }
+
+    #[test]
+    fn test_windows_git_missing_yields_missing() {
+        let check = build_windows_check_from_presence(false, false);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(
+            keys.contains(&PREREQ_KEY_GIT),
+            "expected 'git' key in {keys:?}"
+        );
+    }
+
+    #[test]
+    fn test_windows_git_missing_winget_present_still_missing() {
+        // Even if winget is present, missing git must be reported
+        let check = build_windows_check_from_presence(false, true);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        let keys = parse_missing_prereq_keys(&check.detail);
+        assert!(keys.contains(&PREREQ_KEY_GIT));
+    }
+
+    #[test]
+    fn test_windows_detail_uses_missing_prefix_when_git_absent() {
+        let check = build_windows_check_from_presence(false, false);
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must start with '{}', got: {}",
+            MISSING_PREFIX,
+            check.detail
+        );
+    }
+
+    // ── Key constants are stable strings ─────────────────────────────────────
+
+    #[test]
+    fn test_prereq_key_constants_have_expected_values() {
+        assert_eq!(PREREQ_KEY_XCODE_CLT, "xcode-clt");
+        assert_eq!(PREREQ_KEY_COCOAPODS, "cocoapods");
+        assert_eq!(PREREQ_KEY_ROSETTA, "rosetta");
+        assert_eq!(PREREQ_KEY_GIT, "git");
     }
 }

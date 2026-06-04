@@ -106,9 +106,10 @@ pub use simulators::{
 pub use tool_availability::IosLogTool;
 pub use tool_availability::ToolAvailability;
 pub use toolchain::{
-    detect_linux_package_manager, resolve_android_sdk_root_path, run_preflight, ComponentCheck,
-    ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform, HostShell,
-    LinuxPackageManager, ToolchainReport,
+    detect_linux_package_manager, parse_missing_prereq_keys, resolve_android_sdk_root_path,
+    run_preflight, ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker,
+    HostPlatform, HostShell, LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS,
+    PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 
 use fdemon_core::prelude::*;
