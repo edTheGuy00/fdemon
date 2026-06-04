@@ -275,9 +275,9 @@ flutter-demon/
 │   │       │   ├── macos.rs      # macOS log stream capture
 │   │       │   └── ios.rs        # iOS simulator (xcrun simctl) + physical (idevicesyslog)
 │   │       ├── toolchain/        # Toolchain diagnostics (Phase 1) + install (Phase 2 + 3)
-│   │       │   ├── mod.rs        # run_preflight() — orchestration entry point; re-exports Phase 2/3 install API
+│   │       │   ├── mod.rs        # run_preflight() — orchestration entry point; re-exports Phase 2/3 install API + resolve_android_sdk_root_path
 │   │       │   ├── types.rs      # Phase 1: ToolchainReport, ComponentCheck, etc. Phase 2: InstallMethod, HostArch, FlutterRelease, FlutterInstallTarget, DownloadProgress, FlutterInstallOutcome. Phase 3: AndroidInstallTarget, AndroidInstallOutcome, cmdline_tools_url, sdkmanager_packages, DEFAULT_CMDLINE_TOOLS_BUILD
-│   │       │   ├── checks/       # Per-component probes (mod.rs, android.rs, prerequisites.rs) — no install or network code
+│   │       │   ├── checks/       # Per-component probes (mod.rs, android.rs, prerequisites.rs) — no install or network code; android.rs owns resolve_android_sdk_root_path (shared SDK-root resolver) and android_sdk_root() (is_dir()-filtered wrapper)
 │   │       │   ├── doctor.rs     # flutter doctor -v capture + marker parser
 │   │       │   ├── download.rs   # Streaming archive download, SHA-256 verify, zip + tar.xz extraction (pure-Rust lzma-rs)
 │   │       │   ├── process_stream.rs  # run_streaming — merged stdout/stderr line streaming; run_streaming_with_input — stdin-fed variant for non-interactive license acceptance (Phase 3)
@@ -522,9 +522,9 @@ flutter-demon/
 | `native_logs/ios.rs` | `IosLogCapture` — simulator via `xcrun simctl log stream`, physical via `idevicesyslog` (macOS-only, `#[cfg(target_os = "macos")]`) |
 | `native_logs/custom.rs` | `CustomLogCapture` — spawns user-defined commands, reads stdout through format parsers; `CustomSourceConfig` — config for a single custom source; `create_custom_log_capture()` factory |
 | `native_logs/formats.rs` | `parse_line()` dispatch — routes raw output lines to `parse_raw()`, `parse_json()`, `parse_logcat_threadtime()`, or `parse_syslog()` based on `OutputFormat` |
-| `toolchain/mod.rs` | `run_preflight(project_path, explicit_sdk_path) -> ToolchainReport` — orchestrates all component checks and doctor text capture; never returns `Err`. Reuses `find_flutter_sdk` + `probe_flutter_version`. Re-exports all public Phase 2 and Phase 3 install symbols (including `install_android_tools`, `resolve_jdk_home`, `configure_flutter_jdk_dir`, `add_android_env`, `AndroidInstallTarget`, `AndroidInstallOutcome`). |
+| `toolchain/mod.rs` | `run_preflight(project_path, explicit_sdk_path) -> ToolchainReport` — orchestrates all component checks and doctor text capture; never returns `Err`. Reuses `find_flutter_sdk` + `probe_flutter_version`. Re-exports all public Phase 2 and Phase 3 install symbols (including `install_android_tools`, `resolve_jdk_home`, `configure_flutter_jdk_dir`, `add_android_env`, `AndroidInstallTarget`, `AndroidInstallOutcome`) and the shared SDK-root resolver `resolve_android_sdk_root_path`. |
 | `toolchain/types.rs` | Phase 1 report types: `ToolchainReport`, `ComponentCheck`, `ComponentStatus`, `ComponentKind`, `HostPlatform`, `HostShell`, `DoctorLine`, `DoctorMarker`. Phase 2 install types: `InstallMethod`, `HostArch`, `FlutterRelease`, `FlutterReleaseManifest`, `FlutterInstallTarget`, `DownloadProgress`, `FlutterInstallOutcome`. Phase 3 Android install types: `AndroidInstallTarget` (sdk_root, api_level, cmdline_tools_build, jdk_path), `AndroidInstallOutcome` (sdk_root, installed_packages), `cmdline_tools_url` (URL builder by platform/build), `sdkmanager_packages` (required package list for an API level), `DEFAULT_CMDLINE_TOOLS_BUILD`. |
-| `toolchain/checks/` | Structured per-component probes — Flutter SDK, git, JDK, Android cmdline-tools/sdkmanager, platform-tools/adb, Android platforms, build-tools, licenses, and per-OS prerequisites (`mod.rs`, `android.rs`, `prerequisites.rs`). No install or network code. |
+| `toolchain/checks/` | Structured per-component probes — Flutter SDK, git, JDK, Android cmdline-tools/sdkmanager, platform-tools/adb, Android platforms, build-tools, licenses, and per-OS prerequisites (`mod.rs`, `android.rs`, `prerequisites.rs`). No install or network code. `android.rs` owns `resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf` — the single shared SDK-root resolver (env-var chain + platform default; always returns a `PathBuf` even when the path does not yet exist). `android_sdk_root() -> Option<AndroidSdkRoot>` is a thin check-time wrapper that delegates to `resolve_android_sdk_root_path(None)` and then filters with `is_dir()`. Both are re-exported via `checks/mod.rs` → `toolchain/mod.rs` → `fdemon-daemon` lib, making `resolve_android_sdk_root_path` the single source of truth consumed by both the install executor and post-install checks. |
 | `toolchain/doctor.rs` | `flutter doctor -v` text capture and marker parser; recognises `[✓]`, `[!]`, `[✗]`, `[☠]` markers to produce `Vec<DoctorLine>` |
 | `toolchain/download.rs` | Streaming archive download (`download_to_file` with `DownloadProgress` callback, download timeout, bounded retry, `.part`-file-rename on completion), SHA-256 verification (`verify_sha256`), traversal-safe zip extraction (`extract_zip` — zip-slip path sanitization, symlink guards), traversal-safe tar.xz extraction (`extract_tar_xz` — tar path + symlink guards, streaming xz decode via mpsc channel for bounded RAM usage, pure-Rust `lzma-rs`), and unified dispatch (`extract_archive`). |
 | `toolchain/process_stream.rs` | `run_streaming` — merges stdout and stderr of a long-running child process into a single ordered stream of lines, for streaming git-clone and similar operations. Phase 3 adds `run_streaming_with_input` — identical but pipes `stdin_data` to the child before closing stdin (EOF), enabling non-interactive license acceptance (`sdkmanager --licenses`); accepts extra `env` pairs (e.g. `JAVA_HOME`) injected into the child's environment. |
@@ -2266,12 +2266,13 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `run_streaming` — Phase 2 child-process line streaming (`toolchain/process_stream.rs`)
 - `download_to_file`, `verify_sha256`, `extract_zip`, `extract_tar_xz`, `extract_archive` — Phase 2 download and archive helpers (`toolchain/download.rs`)
 - `add_to_path`, `rc_file_for_shell`, `PathConfigOutcome` — Phase 2 shell rc file PATH writers (`toolchain/path_config.rs`)
+- `resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf` — shared Android SDK root resolver; single source of truth for install-time and check-time SDK path resolution (`toolchain/checks/android.rs`, re-exported via `toolchain/mod.rs`)
 
 **Internal** (`pub(crate)`):
 - JSON-RPC protocol parsing (`protocol.rs`)
 - Request tracking implementation
 - AVD/simulator utilities
-- Toolchain check and doctor implementation details (`toolchain/checks/`, `toolchain/doctor.rs`)
+- Toolchain check implementation details (`toolchain/checks/android.rs` check functions, `toolchain/doctor.rs`)
 
 #### `fdemon-app` — Application State and Orchestration
 
