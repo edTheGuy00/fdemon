@@ -49,3 +49,27 @@ guided (non-executable) step with copyable per-OS install commands re-checked vi
 - The existing `c`/`r` entries in the Install Wizard Mode section already use the
   JDK command as an example — extend them to also mention OS prerequisites.
 - Follow content boundaries strictly; make targeted edits, do not rewrite the doc.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Added `[` / `]` rows to Step List Controls table; updated `c` description to "Copy Selected Guided Command" (index-aware); updated `Enter` description to note no-op on guided-only steps; added callout block explaining guided vs executable steps, per-OS prerequisite commands, and copy-run-recheck workflow |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Callout block placement**: Added the guided-vs-executable explanation as a blockquote directly under the existing "Preflight runs automatically..." sentence so it reads as contextual prose before the tables, following the doc's existing style for similar warnings.
+2. **`Enter` description update**: Appended "No-op on guided-only steps (e.g. Prerequisites)" to the existing `Enter` row rather than splitting into a separate row, keeping the table concise.
+3. **`c` action label**: Changed from "Copy Guided Command" to "Copy Selected Guided Command" to make the index-awareness explicit at a glance.

@@ -106,3 +106,44 @@ Update the existing `actions.rs` test asserting "Available in a later phase" for
   a wrong package name on uncommon distros.
 - Keep all command strings in app-land here (display concern), consistent with
   `jdk_guided_command` — the daemon stays detection-only.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/Cargo.toml` | Added `which.workspace = true` for Windows winget detection |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `prerequisites_guided_commands()` helper; wired `prereq_guided` into `build_steps()`; added imports for `detect_linux_package_manager`, `parse_missing_prereq_keys`, `LinuxPackageManager`, `PREREQ_KEY_*`; added 17 new unit tests |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Split `Prerequisites` from `Doctor` arm; changed Prerequisites `status_message` to guided message; added 2 new tests (`test_prerequisites_enter_returns_guided_message_not_later_phase`, `test_doctor_enter_still_returns_later_phase_message`) |
+| `Cargo.lock` | Updated lock file for new `which` dependency in `fdemon-app` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Windows winget detection at command-generation time**: The `prerequisites_guided_commands` function calls `which::which("winget")` synchronously when building the Windows guided command. This is consistent with how `detect_linux_package_manager()` works in the daemon — pure PATH inspection, never invokes the tool.
+
+2. **Early-out logic for all-Ok**: The helper returns empty for two distinct cases: (a) when all prereq/git components are Ok, and (b) when there are no prereq/git components at all (e.g., the empty slice passed from `report_with_jdk` in existing tests). This preserves backward compatibility with all existing tests.
+
+3. **Linux Unknown PM fallback**: Returns the Flutter Linux setup docs URL in the `command` field (not the `note`) with a clear label, consistent with the task spec. The `note` is `None` in this case since there's no "alternate" manager to suggest.
+
+4. **macOS missing key ordering**: CLT → CocoaPods → Rosetta is the fixed ordering; items only appear when their key is present in `parse_missing_prereq_keys(detail)`. Rosetta only shows on systems where it was actually reported missing (it's excluded via `NotApplicable` on x86_64 at probe time).
+
+5. **Test for `test_non_android_steps_have_no_guided_commands`**: This test still passes unchanged because `report_with_jdk` produces a report with only a `ComponentKind::Jdk` entry; the prerequisites slice is empty, so `prerequisites_guided_commands` returns `Vec::new()` via the `!has_prereq_or_git` early-out.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (0 warnings)
+- `cargo test --workspace` — Passed (6,823+ tests total, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Linux command strings for non-apt managers are community-sourced**: As noted in the task, only apt is officially Flutter-documented. The `note` field is used for an alternate-manager hint to mitigate wrong package names on uncommon distros — consistent with the task spec.
+
+2. **Windows winget path detection**: The winget check runs at `build_steps()` time (when the preflight report is applied), not at probe time. On a Windows machine that gains/loses winget between preflight runs, the guided command may be stale until `r` re-check is pressed. This is acceptable for the intended use case.

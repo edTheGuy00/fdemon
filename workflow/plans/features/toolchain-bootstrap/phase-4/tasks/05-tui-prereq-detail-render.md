@@ -81,3 +81,37 @@ block instead. The `Doctor` step's behavior is unchanged.
   `KEYBINDINGS.md`).
 - Keep the single-command-per-OS rendering for Linux/Windows visually identical to
   the existing JDK command rendering; only macOS gains the multi-line selectable list.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | All four changes + updated and new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`match step_kind` for caption**: Used a `match` expression with an `Option<&str>` return for the caption text instead of separate `if` blocks, making it easy to add future step captions without duplicating the rendering boilerplate.
+
+2. **`has_caption` boolean for blank-row spacing**: Introduced a local `has_caption` bool to skip the leading blank row when a caption is rendered, preserving the existing "no double-blank" behaviour for AndroidTools while extending it to Prerequisites.
+
+3. **Three-command test uses no-component state**: The `make_state_prerequisites_macos_three_commands()` helper uses an empty `components` vec so guided commands fill the full content area. The "Components present" path caps the bottom section at `GUIDED_COMMAND_MIN_HEIGHT` rows (reserved minimum), which would clip command 2 in a 50-row terminal. The no-component path avoids this without requiring a change to the height reservation logic.
+
+4. **"later phase" preserved for no-commands Prerequisites**: The task says to suppress the hint for guided Prerequisites. A step with all-OK prerequisites has no guided commands, so it still shows "later phase" — verified by a dedicated test.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (6,728 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Bottom-section height reservation**: For steps with both component checks AND many guided commands, the reserved bottom section is `GUIDED_SECTION_HEADER_HEIGHT + JDK_CAPTION_HEIGHT + GUIDED_COMMAND_MIN_HEIGHT = 6` rows. On very short terminals, only the first command may be visible. This is the same limitation as the existing AndroidTools behaviour — acceptable for phase 4.

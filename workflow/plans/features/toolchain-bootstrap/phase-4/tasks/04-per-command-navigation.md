@@ -102,3 +102,36 @@ mod tests {
 - Only the macOS Prerequisites step currently carries >1 guided command; the keys
   are harmless no-ops elsewhere (AndroidTools has one JDK command, Linux/Windows
   Prerequisites one command).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `selected_command_index: usize` field; updated `selected_guided_command()` to use index instead of `.first()`; added `select_next_command` / `select_prev_command` mutators; reset index in `apply_report`; updated `Debug` impl; added 15 tests |
+| `crates/fdemon-app/src/message.rs` | Added `InstallWizardPrevCommand` and `InstallWizardNextCommand` variants after `InstallWizardCopyCommand` |
+| `crates/fdemon-app/src/handler/keys.rs` | Routed `[` → `InstallWizardPrevCommand` and `]` → `InstallWizardNextCommand` in `handle_key_install_wizard`; updated doc comment |
+| `crates/fdemon-app/src/handler/update.rs` | Wired `InstallWizardPrevCommand` → `handle_prev_command` and `InstallWizardNextCommand` → `handle_next_command` |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Added `handle_prev_command` / `handle_next_command`; reset `selected_command_index = 0` in `handle_up` / `handle_down` StepList arms; added 11 tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`selected_guided_command()` uses `get()` defensively**: If `selected_command_index` is out of range (e.g. a stale value left from a previous step that had more commands), it returns `None` rather than panicking. The `select_next_command` / `select_prev_command` mutators prevent normal out-of-range situations.
+2. **Reset on step change, not on command count change**: `selected_command_index` resets to 0 whenever the step selection changes (up/down nav, apply_report), but not when the command list length changes within the same step. This is the correct behavior since `apply_report` replaces the entire step list.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (6,843 tests total, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (1 warning fixed: `field_reassign_with_default` in test)
+
+### Risks/Limitations
+
+1. **TUI rendering**: `step_detail.rs` in `fdemon-tui` renders the guided command block — it still reads `selected_guided_command()` which now returns the indexed command. The TUI may need a follow-up task (task 06) to visually indicate which command is selected and show `[`/`]` hints when multiple commands are present.

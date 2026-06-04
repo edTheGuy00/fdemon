@@ -100,12 +100,12 @@ Wave 1        Wave 2        Wave 3        Wave 4         Wave 5 (parallel)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-linux-prereq-detection](tasks/01-linux-prereq-detection.md) | Not Started | - | 4-6h | `toolchain/checks/prerequisites.rs` |
-| 02 | [02-macos-windows-prereq-detection](tasks/02-macos-windows-prereq-detection.md) | Not Started | 01 | 4-6h | `toolchain/checks/prerequisites.rs` |
-| 03 | [03-prerequisites-guided-commands](tasks/03-prerequisites-guided-commands.md) | Not Started | 01, 02 | 4-6h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs` |
-| 04 | [04-per-command-navigation](tasks/04-per-command-navigation.md) | Not Started | 03 | 4-6h | `install_wizard/state.rs`, `message.rs`, `handler/keys.rs`, `handler/update.rs`, `handler/install_wizard/navigation.rs` |
-| 05 | [05-tui-prereq-detail-render](tasks/05-tui-prereq-detail-render.md) | Not Started | 03, 04 | 2-3h | `widgets/install_wizard/step_detail.rs` |
-| 06 | [06-update-keybindings-docs](tasks/06-update-keybindings-docs.md) | Not Started | 04, 05 | 1h | `docs/KEYBINDINGS.md` |
+| 01 | [01-linux-prereq-detection](tasks/01-linux-prereq-detection.md) | ✅ Done | - | 4-6h | `toolchain/checks/prerequisites.rs` |
+| 02 | [02-macos-windows-prereq-detection](tasks/02-macos-windows-prereq-detection.md) | ✅ Done | 01 | 4-6h | `toolchain/checks/prerequisites.rs` |
+| 03 | [03-prerequisites-guided-commands](tasks/03-prerequisites-guided-commands.md) | ✅ Done | 01, 02 | 4-6h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs` |
+| 04 | [04-per-command-navigation](tasks/04-per-command-navigation.md) | ✅ Done | 03 | 4-6h | `install_wizard/state.rs`, `message.rs`, `handler/keys.rs`, `handler/update.rs`, `handler/install_wizard/navigation.rs` |
+| 05 | [05-tui-prereq-detail-render](tasks/05-tui-prereq-detail-render.md) | ✅ Done | 03, 04 | 2-3h | `widgets/install_wizard/step_detail.rs` |
+| 06 | [06-update-keybindings-docs](tasks/06-update-keybindings-docs.md) | ✅ Done | 04, 05 | 1h | `docs/KEYBINDINGS.md` |
 
 ## File Overlap Analysis
 

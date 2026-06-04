@@ -103,3 +103,42 @@ not easily mockable, factor the status-mapping into a pure helper and test that.
   `detail` precision over false alarms (see Phase-4 risks).
 - `libstdc++-dev` has no portable probe (no binary, no reliable `.pc`); do **not**
   attempt to detect it — task 03 includes it in the apt command string only.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | Added `LinuxPackageManager` enum (`pub`), `detect_linux_package_manager()`, extended `LINUX_REQUIRED_TOOLS` with `git`/`zip`, alias fallback for `pkgconf`, GTK dev-headers probe via `pkg-config --exists gtk+-3.0`, pure helper `build_linux_check_from_missing` (test-only), updated module doc comment, 16 unit tests |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Re-export `detect_linux_package_manager` and `LinuxPackageManager` from `prerequisites` module |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Re-export both symbols from `checks` sub-path |
+| `crates/fdemon-daemon/src/lib.rs` | Re-export both symbols in the crate's public API surface |
+
+### Notable Decisions/Tradeoffs
+
+1. **`pub` vs `pub(crate)`**: Changed `LinuxPackageManager` and `detect_linux_package_manager` from `pub(crate)` to `pub` so they can be re-exported through the full module chain (`checks/mod.rs` → `toolchain/mod.rs` → `lib.rs`). This is consistent with task preference (a) — keeping the function in daemon-land and calling it from fdemon-app task 03.
+
+2. **GTK probe uses `Partial` (not `Missing`)**: The task specifies `Missing` or `Partial` status for individual items, and keeps one aggregate `ComponentCheck`. Missing tools/headers all contribute to `ComponentStatus::Partial` in the aggregate (not `Missing`) so that a partially-equipped Linux system reads as degraded, not completely absent. This mirrors the pre-existing behavior.
+
+3. **`build_linux_check_from_missing` helper**: The pure status-mapping helper is `#[cfg(test)]`-gated (not exposed publicly) — all tests that need it are within the same module. This avoids leaking test-only scaffolding into the public API.
+
+4. **Detail format change**: Changed `"Missing tools: X"` → `"Missing: X"` to be consistent with the GTK label (`libgtk-3-dev` is a package name, not a binary name), making the detail string homogeneous.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-daemon --lib toolchain::checks::prerequisites` — Passed (16/16 new tests)
+- `cargo test --workspace` — Passed (all test suites green; pre-existing `jdk::test_resolve_jdk_home_honors_java_home` is a transient race on `JAVA_HOME` env mutation, unrelated to this task)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **JDK test flakiness**: `toolchain::jdk::tests::test_resolve_jdk_home_honors_java_home` uses unsynchronized `std::env::set_var` and races under parallel test execution. This is pre-existing and unrelated to this task.
+2. **GTK probe on Fedora/Arch**: Fedora and Arch provide `pkgconf` rather than `pkg-config`; the probe spawns `pkg-config --exists gtk+-3.0`. If `pkgconf` provides `pkg-config` as a shim (standard on most distros), the probe works. If not, the probe will fail to spawn (not-found error) and return `false` — reporting GTK as missing even if headers exist. This is the conservative bias the task asks for.

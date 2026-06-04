@@ -100,3 +100,49 @@ Where `which`/process outcomes are not mockable, test the pure status-mapping an
   programmatic one); treat a missing `pgrep` as `Unknown`, not `Missing`.
 - Keep the contract minimal: Linux does not strictly need per-item keys (it emits
   the full package list, per the resolved scope decision); macOS/Windows do.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | Complete macOS/Windows rewrite + constants + parser + 28 new unit tests |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Re-export new constants + `parse_missing_prereq_keys` |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Re-export new constants + `parse_missing_prereq_keys` |
+| `crates/fdemon-daemon/src/lib.rs` | Re-export new constants + `parse_missing_prereq_keys` at crate root |
+
+### Notable Decisions/Tradeoffs
+
+1. **`MacOsProbeStatus::NotApplicable` variant**: Added to allow Rosetta to be silently excluded from the missing-key list on x86_64 without any special-casing in the aggregation logic. The `build_macos_check_from_statuses` pure function handles all four states cleanly.
+
+2. **`winget` absent = Ok**: Per spec, winget absence is informational only — Git is the critical Windows prerequisite. The Ok `detail` string distinguishes `"Git found; winget available"` from `"Git found; winget not found"` so task-03 can still prefer the winget install path when it's available, without changing the overall gate status.
+
+3. **Missing > Unknown precedence**: When both Missing and Unknown statuses exist for different probes, Missing wins for the aggregate `ComponentStatus`. Unknown items are excluded from the `missing:` detail so `parse_missing_prereq_keys` only yields definitively-absent keys to task-03.
+
+4. **Doc-test in `parse_missing_prereq_keys`**: The function's doc example uses the `fdemon_daemon::toolchain::` public path, confirming the re-export chain compiles and works end-to-end.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test result lines showed 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added: 28 unit tests covering:
+- `parse_missing_prereq_keys` round-trips (single/multiple items, empty, OK detail, per-constant)
+- `build_macos_check_from_statuses`: all-present, each item missing individually, Rosetta NotApplicable, Unknown precedence, Missing > Unknown precedence
+- `probe_macos_rosetta` arch-gate smoke test (NotApplicable on non-aarch64)
+- `build_windows_check_from_presence`: git+winget present, git present + winget absent, git missing, git missing + winget present, missing-prefix format
+- Key constant value stability
+
+### Risks/Limitations
+
+1. **`pod --version` speed**: CocoaPods' Ruby-based CLI can be slow on first invocation (cold gem load). The existing `PROBE_TIMEOUT` of 10 seconds should be sufficient but could time out on very slow machines, producing `Unknown` rather than a false `Missing`.
+
+2. **`pgrep oahd` on Linux/Windows**: On non-macOS platforms this probe is never reached (guarded by `HostPlatform::MacOs` dispatch), so the aarch64 gate only matters when running macOS. The probe is also guarded inside `probe_macos_rosetta` itself for defense-in-depth.
