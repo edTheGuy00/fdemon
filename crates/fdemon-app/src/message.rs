@@ -1775,6 +1775,14 @@ pub enum Message {
         sdk_path: Option<std::path::PathBuf>,
     },
 
+    /// Phase label update from a running wizard step.
+    ///
+    /// Sent by the executor when `InstallEvent::Phase(label)` is received
+    /// (e.g. `"Cloning"`, `"Downloading"`, `"Verifying"`, `"Extracting"`).
+    /// The handler calls `InstallWizardState::set_step_phase` so the
+    /// `StepProgress` widget can display the current operation name.
+    WizardStepPhase { kind: WizardStepKind, label: String },
+
     /// A wizard step failed.
     ///
     /// `reason` is a human-readable error description shown in the step's

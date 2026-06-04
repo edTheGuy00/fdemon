@@ -190,6 +190,30 @@ pub fn handle_step_progress(
     UpdateResult::none()
 }
 
+/// Handle `WizardStepPhase` — update the phase label shown in the progress widget.
+///
+/// Guards:
+/// - No-op when no step is currently running (prevents stale updates from a
+///   previous run arriving after the executor has finished).
+/// - No-op when the running step's kind does not match `kind` (guards against
+///   out-of-order messages from a superseded run).
+///
+/// Mirrors the guard logic used by `handle_step_log` and `handle_step_progress`.
+pub fn handle_step_phase(
+    state: &mut AppState,
+    kind: WizardStepKind,
+    label: String,
+) -> UpdateResult {
+    // Guard: only update when the reported kind matches the running step.
+    let running_kind = state.install_wizard_state.execution.kind;
+    if running_kind != Some(kind) {
+        return UpdateResult::none();
+    }
+
+    state.install_wizard_state.set_step_phase(label);
+    UpdateResult::none()
+}
+
 /// Handle `WizardStepCompleted` — record success and chain follow-up effects.
 ///
 /// For `FlutterSdk` steps with a resolved `sdk_path`:
@@ -230,6 +254,16 @@ pub fn handle_step_completed(
                 },
             );
         }
+    }
+
+    if kind == WizardStepKind::PathConfig {
+        // Clear the session stash once PathConfig has successfully consumed it.
+        // The stash was set on a successful FlutterSdk completion and is used
+        // to prefer the just-installed SDK root over the settings sdk_path when
+        // resolving the bin dir for this step. Clearing it here prevents a stale
+        // path from winning on a later PathConfig run (e.g. if the user changes
+        // `settings.flutter.sdk_path` and re-runs PathConfig without re-installing).
+        state.install_wizard_state.installed_sdk_path = None;
     }
 
     UpdateResult::none()
@@ -643,5 +677,125 @@ mod tests {
         // No chain for non-FlutterSdk steps.
         assert!(result.action.is_none());
         assert!(result.message.is_none());
+    }
+
+    // ── handle_step_phase tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_step_phase_updates_phase_label_when_running() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+        assert!(state.install_wizard_state.is_step_running());
+
+        let result = handle_step_phase(&mut state, WizardStepKind::FlutterSdk, "Cloning".into());
+
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
+        assert_eq!(
+            state.install_wizard_state.execution.phase_label.as_deref(),
+            Some("Cloning"),
+            "phase_label must be updated when the kind matches the running step"
+        );
+    }
+
+    #[test]
+    fn test_step_phase_ignored_when_no_step_running() {
+        let mut state = state_with_preflight();
+        // No step started — execution.kind is None.
+        assert!(!state.install_wizard_state.is_step_running());
+
+        handle_step_phase(&mut state, WizardStepKind::FlutterSdk, "Cloning".into());
+
+        assert!(
+            state.install_wizard_state.execution.phase_label.is_none(),
+            "phase_label must not be set when no step is running"
+        );
+    }
+
+    #[test]
+    fn test_step_phase_ignored_on_kind_mismatch() {
+        let mut state = state_with_preflight();
+        // Start PathConfig step.
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::PathConfig);
+
+        // A Phase event arrives for FlutterSdk — must be ignored.
+        handle_step_phase(&mut state, WizardStepKind::FlutterSdk, "Cloning".into());
+
+        assert!(
+            state.install_wizard_state.execution.phase_label.is_none(),
+            "phase_label must not be set when the kind does not match the running step"
+        );
+    }
+
+    // ── installed_sdk_path clearing tests ────────────────────────────────────
+
+    #[test]
+    fn test_installed_sdk_path_cleared_after_pathconfig_success() {
+        let mut state = state_with_preflight();
+        // Simulate a stashed path from a previous FlutterSdk completion.
+        state.install_wizard_state.installed_sdk_path =
+            Some(std::path::PathBuf::from("/opt/flutter"));
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::PathConfig);
+
+        handle_step_completed(
+            &mut state,
+            WizardStepKind::PathConfig,
+            "PATH updated".into(),
+            None,
+        );
+
+        assert!(
+            state.install_wizard_state.installed_sdk_path.is_none(),
+            "installed_sdk_path must be cleared after a successful PathConfig completion \
+             to prevent a stale stash from winning on a later PathConfig run"
+        );
+    }
+
+    #[test]
+    fn test_installed_sdk_path_preserved_after_flutter_sdk_success() {
+        let mut state = state_with_preflight();
+        let sdk = std::path::PathBuf::from("/home/user/flutter");
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+
+        handle_step_completed(
+            &mut state,
+            WizardStepKind::FlutterSdk,
+            "Installed".into(),
+            Some(sdk.clone()),
+        );
+
+        // Must be stashed (PathConfig reads it).
+        assert_eq!(
+            state.install_wizard_state.installed_sdk_path.as_ref(),
+            Some(&sdk),
+            "installed_sdk_path must be stashed after FlutterSdk completion"
+        );
+    }
+
+    #[test]
+    fn test_installed_sdk_path_not_cleared_by_failed_pathconfig() {
+        let mut state = state_with_preflight();
+        // Simulate a stashed path.
+        state.install_wizard_state.installed_sdk_path =
+            Some(std::path::PathBuf::from("/opt/flutter"));
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::PathConfig);
+
+        // Failure — stash must survive so a retry can still use it.
+        handle_step_failed(&mut state, "Permission denied".into());
+
+        assert!(
+            state.install_wizard_state.installed_sdk_path.is_some(),
+            "installed_sdk_path must NOT be cleared on a failed PathConfig step"
+        );
     }
 }

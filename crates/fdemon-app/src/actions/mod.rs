@@ -900,9 +900,9 @@ pub fn handle_action(
                             }
                             InstallEvent::Phase(label) => {
                                 let _ = tx_for_events.try_send(
-                                    crate::message::Message::WizardStepLog {
+                                    crate::message::Message::WizardStepPhase {
                                         kind,
-                                        line: format!("[{label}]"),
+                                        label: label.to_string(),
                                     },
                                 );
                             }

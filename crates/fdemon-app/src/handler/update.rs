@@ -3253,6 +3253,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // These lifecycle messages are produced by the RunWizardStep executor (task 08).
         Message::WizardStepStarted { kind } => install_wizard::handle_step_started(state, kind),
         Message::WizardStepLog { line, .. } => install_wizard::handle_step_log(state, line),
+        Message::WizardStepPhase { kind, label } => {
+            install_wizard::handle_step_phase(state, kind, label)
+        }
         Message::WizardDownloadProgress {
             received, total, ..
         } => install_wizard::handle_step_progress(state, received, total),
