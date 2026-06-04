@@ -473,6 +473,8 @@ impl Widget for StepDetailPane<'_> {
         // Bottom section: guided commands or action hint
         let bottom_y = content_area.y + content_area.height.saturating_sub(bottom_section_height);
         if has_guided_commands {
+            // Height derivation: total content height minus the rows already consumed
+            // by the component list above (bottom_y - content_area.y rows used).
             let bottom_area = Rect::new(
                 content_area.x,
                 bottom_y,
@@ -521,12 +523,9 @@ pub fn step_detail_pane(state: &InstallWizardState, animation_frame: u64) -> Ste
 mod tests {
     use super::*;
     use fdemon_app::install_wizard::{
-        GuidedCommand, InstallWizardState, StepExecStatus, StepExecution, WizardStep,
-        WizardStepKind,
-    };
-    use fdemon_daemon::toolchain::{
-        ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
-        HostShell, ToolchainReport,
+        ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, GuidedCommand,
+        HostPlatform, HostShell, InstallWizardState, StepExecStatus, StepExecution,
+        ToolchainReport, WizardStep, WizardStepKind,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 
@@ -701,11 +700,13 @@ mod tests {
 
     #[test]
     fn test_step_detail_shows_enter_hint_for_android_step_when_jdk_present() {
-        // AndroidTools with no guided commands (JDK present / not checked) → executable
-        let mut state = make_state_components();
-        state.selected_index = 1; // AndroidTools step (no guided commands in this report)
+        // AndroidTools with JDK Ok (guided_commands is empty) → executable.
+        // Uses a hand-crafted state to ensure the JDK component is explicitly Ok,
+        // since a report without any Jdk entry now correctly produces a guided command
+        // (m2 fix: is_jdk_actionable returns true when no Jdk entry).
+        let state = make_state_android_jdk_present();
         let pane = StepDetailPane::new(&state, true, 0);
-        let area = make_area();
+        let area = Rect::new(0, 0, 80, 30);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();

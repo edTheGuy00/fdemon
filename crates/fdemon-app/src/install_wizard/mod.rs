@@ -10,6 +10,7 @@
 mod state;
 mod types;
 
+pub(crate) use state::is_jdk_actionable;
 pub use state::*;
 pub use types::{
     GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind,
@@ -18,4 +19,9 @@ pub use types::{
 
 // Re-export the daemon toolchain *display* types so presentation-layer widgets can
 // consume them without a direct fdemon-tui -> fdemon-daemon dependency.
-pub use fdemon_daemon::toolchain::{ComponentCheck, ComponentStatus, DoctorLine, DoctorMarker};
+// n6: extend the gateway to include all types needed by install-wizard TUI tests,
+// so no module in fdemon-tui needs to import directly from fdemon_daemon::toolchain.
+pub use fdemon_daemon::toolchain::{
+    ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
+    HostShell, ToolchainReport,
+};

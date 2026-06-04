@@ -17,10 +17,10 @@
 
 use crate::config::types::InstallMethod;
 use crate::handler::{AndroidStepParams, FlutterStepParams, UpdateAction, UpdateResult};
-use crate::install_wizard::WizardStepKind;
+use crate::install_wizard::{is_jdk_actionable, WizardStepKind};
 use crate::message::Message;
 use crate::state::AppState;
-use fdemon_daemon::toolchain::{ComponentKind, ComponentStatus, ToolchainReport};
+use fdemon_daemon::toolchain::ToolchainReport;
 
 /// Handle `ToolchainPreflightCompleted` — populate the wizard with the report.
 ///
@@ -121,10 +121,12 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
         }
 
         WizardStepKind::AndroidTools => {
-            // JDK gate: sdkmanager requires a JDK 17. If the preflight JDK component
-            // is not Ok, do NOT dispatch a privileged install — point the user at the
-            // guided command (shown in the detail pane) and ask them to re-check.
-            if jdk_status(state) != ComponentStatus::Ok {
+            // JDK gate: sdkmanager requires a JDK 17. Use the shared `is_jdk_actionable`
+            // helper — the same predicate that populates the guided command in
+            // `build_steps()` — so the gate message and the rendered command always agree:
+            // when no Jdk entry is present the guided command IS shown and the executor
+            // IS blocked.
+            if is_jdk_actionable_from_state(state) {
                 state.install_wizard_state.status_message = Some(
                     "Install JDK 17 first (see the command below), then press 'r' to re-check."
                         .into(),
@@ -174,6 +176,18 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                 Some(bin) => {
                     // Include the Android SDK root so the executor can write ANDROID_HOME.
                     let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
+
+                    // Ordering hint (m3): Android Tools should ideally be run before
+                    // PathConfig so that ANDROID_HOME is also written. This is a soft
+                    // hint — PathConfig still executes (it will write the Flutter PATH
+                    // regardless). A user with ANDROID_HOME already set in their profile
+                    // should not be blocked.
+                    if android_sdk_root.is_none() {
+                        state.install_wizard_state.status_message = Some(
+                            "Tip: run Android Tools first so ANDROID_HOME is also configured."
+                                .into(),
+                        );
+                    }
 
                     // Flip UI to Running immediately.
                     state.install_wizard_state.begin_step(kind);
@@ -342,6 +356,10 @@ pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult 
     UpdateResult::none()
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3, Task 07 — Copy-command handler
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Handle `InstallWizardCopyCommand` — copy the selected step's guided command
 /// to the clipboard (`c` key).
 ///
@@ -370,26 +388,17 @@ pub fn handle_copy_command(state: &mut AppState) -> UpdateResult {
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Return the status of the `Jdk` component from the current preflight report.
+/// Return `true` when JDK needs attention, pulling components from the current
+/// preflight report stored on `state`.
 ///
-/// Used by the `AndroidTools` dispatch arm to gate the install action on a
-/// present JDK 17 — `sdkmanager` requires a JDK to run.
-///
-/// Returns `ComponentStatus::Missing` (i.e. "not Ok") when:
-/// - The preflight report has not been populated yet (`report` is `None`).
-/// - The report contains no `Jdk` component entry.
-fn jdk_status(state: &AppState) -> ComponentStatus {
-    state
-        .install_wizard_state
-        .report
-        .as_ref()
-        .and_then(|r| {
-            r.components
-                .iter()
-                .find(|c| c.kind == ComponentKind::Jdk)
-                .map(|c| c.status.clone())
-        })
-        .unwrap_or(ComponentStatus::Missing)
+/// Delegates to `is_jdk_actionable` (from `install_wizard::state`) so that the
+/// gate here and the guided-command population in `build_steps()` agree exactly.
+/// Returns `true` (actionable) when the report is absent — safe default.
+fn is_jdk_actionable_from_state(state: &AppState) -> bool {
+    match state.install_wizard_state.report.as_ref() {
+        None => true, // No report yet → treat as actionable (safe default)
+        Some(r) => is_jdk_actionable(&r.components),
+    }
 }
 
 /// Convert the config-layer `InstallMethod` to the daemon-layer equivalent.
@@ -1228,6 +1237,109 @@ mod tests {
         assert!(
             msg.contains("No command"),
             "status_message must indicate no command available; got: {msg}"
+        );
+    }
+
+    // ── m3: PathConfig ordering hint ─────────────────────────────────────────
+
+    #[test]
+    fn test_pathconfig_hints_when_android_sdk_root_absent() {
+        // PathConfig should still execute when android_sdk_root is None,
+        // but must set a non-blocking status_message hinting to run Android Tools first.
+        let mut state = state_with_preflight();
+        state.settings.toolchain.android_sdk_root = None;
+        state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
+        state.install_wizard_state.selected_index = 2; // PathConfig
+
+        let r = handle_run_selected_step(&mut state);
+
+        // Step must still execute (action must be Some).
+        assert!(
+            matches!(
+                r.action,
+                Some(UpdateAction::RunWizardStep {
+                    kind: WizardStepKind::PathConfig,
+                    ..
+                })
+            ),
+            "PathConfig must dispatch even when android_sdk_root is None; got {:?}",
+            r.action
+        );
+        // A hint must be present.
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            !msg.is_empty(),
+            "status_message must be set when android_sdk_root is None"
+        );
+        assert!(
+            msg.contains("Android"),
+            "hint must mention Android Tools; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_pathconfig_no_hint_when_android_sdk_root_present() {
+        // When android_sdk_root is already set, no ordering hint should be emitted.
+        let mut state = state_with_preflight();
+        state.settings.toolchain.android_sdk_root =
+            Some(std::path::PathBuf::from("/opt/android-sdk"));
+        state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
+        state.install_wizard_state.selected_index = 2; // PathConfig
+
+        handle_run_selected_step(&mut state);
+
+        // No hint expected (status_message should be None).
+        assert!(
+            state.install_wizard_state.status_message.is_none(),
+            "no status_message expected when android_sdk_root is present"
+        );
+    }
+
+    // ── m2: no-JDK-entry gate/guided-command agreement ───────────────────────
+
+    #[test]
+    fn test_android_step_gated_and_guided_command_shown_when_no_jdk_entry() {
+        // When the report has no Jdk component at all, the gate must block the
+        // executor AND the guided command must be shown in the step (both derive
+        // from `is_jdk_actionable`).
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        // Report with android tools but no Jdk entry.
+        state.install_wizard_state.apply_report(ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::AndroidCmdlineTools,
+                status: ComponentStatus::Missing,
+                detail: String::new(),
+            }],
+            doctor: None,
+        });
+        select_step(&mut state, WizardStepKind::AndroidTools);
+
+        // Gate must block.
+        let r = handle_run_selected_step(&mut state);
+        assert!(
+            r.action.is_none(),
+            "must not dispatch when no Jdk entry in report (m2); got {:?}",
+            r.action
+        );
+
+        // Guided command must be visible in the step (build_steps used same helper).
+        let android_step = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .expect("AndroidTools step must exist");
+        assert_eq!(
+            android_step.guided_commands.len(),
+            1,
+            "guided command must be shown when no Jdk entry (m2 fix)"
         );
     }
 

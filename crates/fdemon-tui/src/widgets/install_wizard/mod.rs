@@ -328,10 +328,9 @@ impl Widget for InstallWizardPanel<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_app::install_wizard::InstallWizardState;
-    use fdemon_daemon::toolchain::{
+    use fdemon_app::install_wizard::{
         ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
-        HostShell, ToolchainReport,
+        HostShell, InstallWizardState, ToolchainReport,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 

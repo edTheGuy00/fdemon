@@ -127,8 +127,9 @@ impl InstallWizardState {
     /// Begin a run: set `Running`, clear prior progress/log/summary, and record
     /// the step kind.
     ///
-    /// Called by task 09's handlers when a step execution starts. Resets all
-    /// progress fields so the TUI always shows fresh state.
+    /// Called by [`handle_step_started`] and [`handle_run_selected_step`] when a
+    /// step execution starts. Resets all progress fields so the TUI always shows
+    /// fresh state.
     pub fn begin_step(&mut self, kind: WizardStepKind) {
         self.execution = StepExecution {
             kind: Some(kind),
@@ -251,6 +252,25 @@ fn jdk_guided_command(platform: HostPlatform) -> GuidedCommand {
     }
 }
 
+/// Return `true` when a JDK needs user attention: the component list has no
+/// `Jdk` entry at all, or the entry is not `Ok`.
+///
+/// This is the **single source of truth** for the JDK-actionable predicate,
+/// used by both:
+/// - `build_steps()` — to decide whether to populate guided commands for the
+///   `AndroidTools` step.
+/// - `actions.rs` `handle_run_selected_step()` — to gate the `AndroidTools`
+///   executor (sdkmanager requires a JDK 17).
+///
+/// Both callers now agree: if no `Jdk` entry exists, a guided command is shown
+/// **and** the executor is blocked.
+pub(crate) fn is_jdk_actionable(components: &[ComponentCheck]) -> bool {
+    match components.iter().find(|c| c.kind == ComponentKind::Jdk) {
+        None => true, // No Jdk entry → assume missing
+        Some(c) => c.status != ComponentStatus::Ok,
+    }
+}
+
 /// Map a [`ToolchainReport`]'s components into the five ordered UI steps.
 ///
 /// Step order: Prerequisites → AndroidTools → PathConfig → FlutterSdk → Doctor
@@ -316,13 +336,13 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
         StepStatus::Pending
     };
 
-    // Derive guided commands for the AndroidTools step: show the JDK install
-    // command whenever the JDK component is not Ok (i.e. Missing/Partial/Error).
-    // Derivation is pure — no I/O, no process spawning.
-    let jdk_not_ok = android_tools
-        .iter()
-        .any(|c| c.kind == ComponentKind::Jdk && c.status != ComponentStatus::Ok);
-    let android_guided: Vec<GuidedCommand> = if jdk_not_ok {
+    // Derive guided commands for the AndroidTools step using the shared
+    // `is_jdk_actionable` helper. This ensures the gate in `actions.rs` and the
+    // guided-command population here agree exactly:
+    // - No Jdk entry  → actionable (show command + block executor)
+    // - Jdk non-Ok    → actionable (show command + block executor)
+    // - Jdk Ok        → not actionable (no command, executor allowed)
+    let android_guided: Vec<GuidedCommand> = if is_jdk_actionable(&android_tools) {
         vec![jdk_guided_command(report.platform.clone())]
     } else {
         Vec::new()
@@ -878,6 +898,84 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- is_jdk_actionable edge-case tests (m2) ---
+
+    #[test]
+    fn test_is_jdk_actionable_no_jdk_entry_returns_true() {
+        // When no Jdk component is present in the list, the helper must treat
+        // the JDK as actionable (missing → show guided command, block executor).
+        let components: Vec<ComponentCheck> = vec![
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+        ];
+        assert!(
+            is_jdk_actionable(&components),
+            "no Jdk entry → is_jdk_actionable must return true"
+        );
+    }
+
+    #[test]
+    fn test_is_jdk_actionable_empty_list_returns_true() {
+        // Empty component list → no Jdk entry → actionable.
+        let components: Vec<ComponentCheck> = vec![];
+        assert!(
+            is_jdk_actionable(&components),
+            "empty component list → is_jdk_actionable must return true"
+        );
+    }
+
+    #[test]
+    fn test_is_jdk_actionable_jdk_ok_returns_false() {
+        let components = vec![make_check(ComponentKind::Jdk, ComponentStatus::Ok)];
+        assert!(
+            !is_jdk_actionable(&components),
+            "Jdk Ok → is_jdk_actionable must return false"
+        );
+    }
+
+    #[test]
+    fn test_is_jdk_actionable_jdk_missing_returns_true() {
+        let components = vec![make_check(ComponentKind::Jdk, ComponentStatus::Missing)];
+        assert!(is_jdk_actionable(&components));
+    }
+
+    #[test]
+    fn test_is_jdk_actionable_jdk_partial_returns_true() {
+        let components = vec![make_check(ComponentKind::Jdk, ComponentStatus::Partial)];
+        assert!(is_jdk_actionable(&components));
+    }
+
+    #[test]
+    fn test_is_jdk_actionable_jdk_error_returns_true() {
+        let components = vec![make_check(ComponentKind::Jdk, ComponentStatus::Error)];
+        assert!(is_jdk_actionable(&components));
+    }
+
+    #[test]
+    fn test_build_steps_no_jdk_entry_shows_guided_command() {
+        // A report where android_tools has NO Jdk entry: the guided command must
+        // still appear because is_jdk_actionable returns true for an absent entry.
+        // This ensures the gate ("see the command below") and the rendered command agree.
+        let report = make_report(vec![make_check(
+            ComponentKind::AndroidCmdlineTools,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .expect("AndroidTools step must exist");
+        assert_eq!(
+            android.guided_commands.len(),
+            1,
+            "AndroidTools with no Jdk entry must show a guided command (m2 fix)"
+        );
+        assert!(
+            android.guided_commands[0].command.contains("17"),
+            "guided command must reference JDK 17"
+        );
     }
 
     #[test]
