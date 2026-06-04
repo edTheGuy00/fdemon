@@ -53,6 +53,15 @@ use super::types::{
 /// affirmative responses is more than enough for all current SDK versions.
 const LICENSE_YES_COUNT: usize = 20;
 
+/// Success marker in `sdkmanager --licenses` output indicating all licenses
+/// were accepted.
+///
+/// **Format dependency**: this string is matched against `sdkmanager` stdout/
+/// stderr output and will need updating if Google changes the message format in
+/// a future `cmdline-tools` release.  A grep for `LICENSES_ACCEPTED_MARKER` is
+/// sufficient to locate all affected call sites.
+const LICENSES_ACCEPTED_MARKER: &str = "All SDK package licenses accepted";
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Resolve the `cmdline-tools` download URL for the given install target.
@@ -114,6 +123,23 @@ where
     let tmp_dir = target
         .sdk_root
         .join(format!(".fdemon-android-tmp-{}", std::process::id()));
+
+    // Remove any pre-existing temp dir from a previous (crashed) run with the
+    // same PID before creating a fresh one.  PID recycling means a stale dir
+    // could otherwise contain partial downloads or extracted files, leading to
+    // a corrupted install.
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "remove stale android install temp dir {}: {e}",
+                    tmp_dir.display()
+                ),
+            ))
+        })?;
+    }
+
     std::fs::create_dir_all(&tmp_dir).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
@@ -201,7 +227,12 @@ where
     if let Some(ref java_home) = java_home_str {
         env_pairs.push(("JAVA_HOME".to_string(), java_home.clone()));
         // Prepend the JDK bin dir to PATH so sdkmanager finds `java`.
-        let jdk_bin = format!("{}/bin", java_home);
+        // Use Path::join to avoid producing `//bin` when java_home has a
+        // trailing slash.
+        let jdk_bin = std::path::Path::new(java_home.as_str())
+            .join("bin")
+            .to_string_lossy()
+            .into_owned();
         let existing_path = std::env::var("PATH").unwrap_or_default();
         let new_path = if existing_path.is_empty() {
             jdk_bin
@@ -239,17 +270,29 @@ where
                 "sdkmanager --licenses exited with {status}; see log above for details"
             )));
         }
+
+        // Verify that the license acceptance was actually confirmed by scanning
+        // the output for the known success marker.  The exit code is the primary
+        // signal; a missing marker is a non-fatal warning (sdkmanager wording may
+        // vary across releases or already-licensed SDKs may print a different
+        // message).
+        if !licenses_confirmed(&log_lines) {
+            let warning = "sdkmanager --licenses completed but the expected confirmation \
+                           message was not found in output — licenses may not have been \
+                           accepted; if builds fail, run `sdkmanager --licenses` manually";
+            tracing::warn!("{warning}");
+            on_event(InstallEvent::Log(format!("[fdemon warn] {warning}")));
+        }
     }
 
     // ── Step 5: Install packages ─────────────────────────────────────────────
     on_event(InstallEvent::Phase("Installing packages"));
 
     let packages = sdkmanager_packages(target.api_level);
-    let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
 
-    // Build the full args slice: package names + --sdk_root.
+    // Build the full args slice: package names + --sdk_root flag.
     let sdk_root_arg = format!("--sdk_root={sdk_root_str}");
-    let mut install_args: Vec<&str> = pkg_refs.clone();
+    let mut install_args: Vec<&str> = packages.iter().map(String::as_str).collect();
     install_args.push(&sdk_root_arg);
 
     // Use run_streaming_with_input so that any inline license prompts during
@@ -342,6 +385,18 @@ pub fn relocate_cmdline_tools(extract_dir: &Path, sdk_root: &Path) -> Result<()>
     tracing::debug!("Relocated cmdline-tools to {}", dest.display());
 
     Ok(())
+}
+
+/// Check whether the `sdkmanager --licenses` output contains the expected
+/// success marker.
+///
+/// This is a pure function so it can be unit-tested without invoking
+/// `sdkmanager`.  The marker is defined by [`LICENSES_ACCEPTED_MARKER`]; see
+/// that constant's doc comment for format-dependency notes.
+///
+/// Returns `true` when at least one output line contains the marker substring.
+pub(crate) fn licenses_confirmed(lines: &[String]) -> bool {
+    lines.iter().any(|l| l.contains(LICENSES_ACCEPTED_MARKER))
 }
 
 /// Compute the full path to the `sdkmanager` binary for the given SDK root.
@@ -502,6 +557,51 @@ mod tests {
         assert!(
             result.is_err(),
             "must error when cmdline-tools is absent from extract dir"
+        );
+    }
+
+    // ── licenses_confirmed (m1) ───────────────────────────────────────────────
+
+    #[test]
+    fn test_licenses_confirmed_returns_true_when_marker_present() {
+        let lines = vec![
+            "Reuse the existing license accepted response.".to_string(),
+            "All SDK package licenses accepted.".to_string(),
+        ];
+        assert!(
+            licenses_confirmed(&lines),
+            "should return true when marker is present"
+        );
+    }
+
+    #[test]
+    fn test_licenses_confirmed_returns_false_when_marker_absent() {
+        let lines = vec![
+            "Reading existing licenses...".to_string(),
+            "License for package Android SDK Platform 36 not accepted.".to_string(),
+        ];
+        assert!(
+            !licenses_confirmed(&lines),
+            "should return false when marker is absent"
+        );
+    }
+
+    #[test]
+    fn test_licenses_confirmed_returns_false_for_empty_lines() {
+        assert!(
+            !licenses_confirmed(&[]),
+            "should return false for empty output"
+        );
+    }
+
+    #[test]
+    fn test_licenses_confirmed_marker_is_substring_match() {
+        // The marker can appear embedded in a longer line.
+        let lines =
+            vec!["[100% Installing...] All SDK package licenses accepted — done.".to_string()];
+        assert!(
+            licenses_confirmed(&lines),
+            "marker match should be a substring, not a whole-line match"
         );
     }
 
