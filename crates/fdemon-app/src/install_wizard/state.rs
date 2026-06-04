@@ -9,7 +9,7 @@ use std::cell::Cell;
 use fdemon_daemon::toolchain::{
     detect_linux_package_manager, parse_missing_prereq_keys, ComponentCheck, ComponentKind,
     ComponentStatus, HostPlatform, LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS,
-    PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+    PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 
 use super::types::{
@@ -351,8 +351,8 @@ fn prerequisites_guided_commands(
                 ),
                 LinuxPackageManager::Yum => (
                     "Install Linux prerequisites (yum)",
-                    "sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
-                    Some("or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
+                    "sudo yum install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
+                    Some("Package names are best-effort for RHEL7/CentOS7; consult your distro docs if a package is not found."),
                 ),
                 LinuxPackageManager::Pacman => (
                     "Install Linux prerequisites (pacman)",
@@ -423,7 +423,7 @@ fn prerequisites_guided_commands(
                 .unwrap_or("");
             let missing_keys = parse_missing_prereq_keys(detail);
 
-            if !missing_keys.contains(&fdemon_daemon::toolchain::PREREQ_KEY_GIT) {
+            if !missing_keys.contains(&PREREQ_KEY_GIT) {
                 // Git is present — no guided command needed.
                 return Vec::new();
             }
@@ -1500,9 +1500,26 @@ mod tests {
                     "apt command must have an alternative note"
                 );
             }
-            LinuxPackageManager::Dnf | LinuxPackageManager::Yum => {
-                assert!(cmds[0].command.contains("dnf"));
-                assert!(cmds[0].note.is_some());
+            LinuxPackageManager::Dnf => {
+                assert!(
+                    cmds[0].command.contains("dnf"),
+                    "dnf system should use dnf; got: {}",
+                    cmds[0].command
+                );
+                assert!(cmds[0].note.is_some(), "dnf command must have an alternative note");
+            }
+            LinuxPackageManager::Yum => {
+                assert!(
+                    cmds[0].command.contains("yum"),
+                    "yum system should use yum (not dnf); got: {}",
+                    cmds[0].command
+                );
+                assert!(
+                    !cmds[0].command.contains("dnf"),
+                    "yum arm must not invoke dnf (dnf is absent on yum-only systems); got: {}",
+                    cmds[0].command
+                );
+                assert!(cmds[0].note.is_some(), "yum command must have a caveat note");
             }
             LinuxPackageManager::Pacman => {
                 assert!(cmds[0].command.contains("pacman"));
