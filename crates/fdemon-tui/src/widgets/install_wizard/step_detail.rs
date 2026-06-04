@@ -216,8 +216,14 @@ impl<'a> StepDetailPane<'a> {
         } else if kind == WizardStepKind::Doctor {
             // Doctor step is a display-only view; no action
             return;
-        } else if kind == WizardStepKind::AndroidTools && has_guided_commands {
-            // AndroidTools gated — guided command section handles the CTA
+        } else if has_guided_commands
+            && matches!(
+                kind,
+                WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
+            )
+        {
+            // AndroidTools gated (JDK missing) or Prerequisites with guided commands —
+            // the guided-command section is the primary CTA; skip the "later phase" hint.
             return;
         } else {
             (
@@ -244,12 +250,15 @@ impl<'a> StepDetailPane<'a> {
     /// ```text
     ///   [blank row]
     ///   Guided steps (run these yourself, then press 'r' to re-check):
-    ///   [JDK 17 required caption — AndroidTools only]
+    ///   [caption — AndroidTools: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
     ///
     ///     Install JDK 17
     ///       $ sudo apt install openjdk-17-jdk
     ///       or: sudo dnf install java-17-openjdk-devel        [c] copy
     /// ```
+    ///
+    /// The `[c] copy` hint and selection highlight follow `selected_command_index`
+    /// so the visually-selected command is the one `c` will copy to the clipboard.
     ///
     /// Returns the number of rows consumed (for callers that track y-offset).
     fn render_guided_commands(
@@ -263,6 +272,7 @@ impl<'a> StepDetailPane<'a> {
             return;
         }
 
+        let selected_idx = self.state.selected_command_index;
         let mut y = area.y;
 
         // Section header
@@ -276,44 +286,68 @@ impl<'a> StepDetailPane<'a> {
             y += GUIDED_SECTION_HEADER_HEIGHT;
         }
 
-        // JDK-required caption for the AndroidTools step
-        if step_kind == WizardStepKind::AndroidTools && y < area.y + area.height {
-            let caption_style = Style::default()
-                .fg(palette::STATUS_YELLOW)
-                .add_modifier(Modifier::BOLD);
-            let caption = Line::from(Span::styled(
-                "  JDK 17 required before installing Android tools",
-                caption_style,
-            ));
-            Paragraph::new(caption).render(Rect::new(area.x, y, area.width, 1), buf);
-            y += JDK_CAPTION_HEIGHT;
+        // Per-step caption rendered above the command list.
+        let caption_text = match step_kind {
+            WizardStepKind::AndroidTools => {
+                Some("  JDK 17 required before installing Android tools")
+            }
+            WizardStepKind::Prerequisites => {
+                Some("  Install the OS build tools below, then press r to re-check")
+            }
+            _ => None,
+        };
+        if let Some(caption) = caption_text {
+            if y < area.y + area.height {
+                let caption_style = Style::default()
+                    .fg(palette::STATUS_YELLOW)
+                    .add_modifier(Modifier::BOLD);
+                let caption_line = Line::from(Span::styled(caption, caption_style));
+                Paragraph::new(caption_line).render(Rect::new(area.x, y, area.width, 1), buf);
+                y += JDK_CAPTION_HEIGHT;
+            }
         }
 
+        // Whether the first command block needs a blank row before it.
+        // When a caption was rendered there is already visual separation, so we
+        // skip the leading blank for that case to avoid double-spacing.
+        let has_caption = caption_text.is_some();
+
         for (i, cmd) in commands.iter().enumerate() {
-            // Blank separator before each command block (except for the very first
-            // when there is no caption, to avoid a double blank)
-            let needs_blank = i > 0 || step_kind != WizardStepKind::AndroidTools;
+            // Blank separator before each command block.
+            // Skip the leading blank when a caption was rendered above (the
+            // caption already provides visual separation from the header).
+            let needs_blank = i > 0 || !has_caption;
             if needs_blank && y < area.y + area.height {
                 y += 1; // blank row
             }
 
+            let is_selected = i == selected_idx;
+
             // Label row: "    Install JDK 17"
+            // Selected entries are rendered in the accent colour for emphasis.
             if y < area.y + area.height {
-                let label_style = Style::default()
-                    .fg(palette::TEXT_BRIGHT)
-                    .add_modifier(Modifier::BOLD);
+                let label_style = if is_selected {
+                    Style::default()
+                        .fg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(palette::TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD)
+                };
                 let label_line =
                     Line::from(Span::styled(format!("    {}", cmd.label), label_style));
                 Paragraph::new(label_line).render(Rect::new(area.x, y, area.width, 1), buf);
                 y += 1;
             }
 
-            // Command row: "      $ <command>        [c] copy" (first cmd gets the hint)
+            // Command row: "      $ <command>        [c] copy"
+            // The copy hint and highlight follow `selected_command_index`.
             if y < area.y + area.height {
                 let cmd_style = Style::default().fg(palette::ACCENT);
                 let copy_style = Style::default().fg(palette::TEXT_MUTED);
 
-                let copy_hint = if i == 0 { "  [c] copy" } else { "" };
+                let copy_hint = if is_selected { "  [c] copy" } else { "" };
                 let cmd_text = format!("      $ {}", cmd.command);
 
                 let line = Line::from(vec![
@@ -437,8 +471,12 @@ impl Widget for StepDetailPane<'_> {
             // Guided-command block: header(1) + caption(1 for AndroidTools) + blank(1)
             // + label(1) + command(1) + optional note(1) = up to 6 rows, minimum 4.
             // We reserve GUIDED_COMMAND_MIN_HEIGHT + GUIDED_SECTION_HEADER_HEIGHT rows.
-            // For AndroidTools also add JDK_CAPTION_HEIGHT.
-            let caption_rows = if step.kind == WizardStepKind::AndroidTools {
+            // AndroidTools adds the "JDK 17 required" caption row;
+            // Prerequisites adds the "Install the OS build tools …" caption row.
+            let caption_rows = if matches!(
+                step.kind,
+                WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
+            ) {
                 JDK_CAPTION_HEIGHT
             } else {
                 0
@@ -722,9 +760,40 @@ mod tests {
     }
 
     #[test]
-    fn test_step_detail_shows_phase_for_prerequisites_step() {
+    fn test_step_detail_shows_guided_block_for_prerequisites_step_with_commands() {
+        // Prerequisites step with a Linux guided command (Prerequisites component Missing).
+        // After task 05 the guided block replaces the "later phase" hint.
+        let state = make_state_prerequisites_linux_missing();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Guided steps"),
+            "Prerequisites step with guided commands should show the guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Install the OS build tools"),
+            "Prerequisites step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "Prerequisites step should show [c] copy affordance: '{content}'"
+        );
+        // The "later phase" hint must NOT appear when guided commands are present.
+        assert!(
+            !content.contains("later phase"),
+            "Prerequisites step with guided commands must NOT show 'later phase': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_shows_later_phase_for_prerequisites_step_with_no_commands() {
+        // Prerequisites step with no guided commands (all Ok) still shows "later phase".
         let mut state = make_state_components();
-        state.selected_index = 0; // Prerequisites step
+        state.selected_index = 0; // Prerequisites step (no guided commands in this report)
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -733,7 +802,7 @@ mod tests {
 
         assert!(
             content.contains("later phase"),
-            "Prerequisites step should show 'Available in a later phase': '{content}'"
+            "Prerequisites step with no guided commands should still show 'Available in a later phase': '{content}'"
         );
     }
 
@@ -949,6 +1018,70 @@ mod tests {
 
     // --- Phase 3: Guided command rendering tests ---
 
+    /// Build an `InstallWizardState` with the Prerequisites step selected and a
+    /// Linux guided command present (simulates Prerequisites missing scenario).
+    fn make_state_prerequisites_linux_missing() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::Prerequisites,
+                title: "Prerequisites".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Missing,
+                    detail: "missing: curl, git".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Linux prerequisites (apt)".to_string(),
+                    command: "sudo apt-get install -y curl git unzip".to_string(),
+                    note: Some("or: sudo dnf install -y curl git unzip".to_string()),
+                }],
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the Prerequisites step selected and three
+    /// guided commands (macOS: CLT + CocoaPods + Rosetta all missing).
+    ///
+    /// The step intentionally has no component checks so the guided commands
+    /// occupy the full content area (no bottom-section height clipping).
+    /// This allows the test to verify all three command rows render.
+    fn make_state_prerequisites_macos_three_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::Prerequisites,
+                title: "Prerequisites".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                // No component checks — guided commands fill the full content area.
+                components: vec![],
+                guided_commands: vec![
+                    GuidedCommand {
+                        label: "Install Xcode Command Line Tools".to_string(),
+                        command: "xcode-select --install".to_string(),
+                        note: Some("Opens a GUI dialog to install CLT.".to_string()),
+                    },
+                    GuidedCommand {
+                        label: "Install CocoaPods".to_string(),
+                        command: "brew install cocoapods".to_string(),
+                        note: Some("or: sudo gem install cocoapods".to_string()),
+                    },
+                    GuidedCommand {
+                        label: "Install Rosetta 2".to_string(),
+                        command: "sudo softwareupdate --install-rosetta --agree-to-license"
+                            .to_string(),
+                        note: None,
+                    },
+                ],
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
     /// Build an `InstallWizardState` with the AndroidTools step selected and a JDK
     /// guided command present (simulates JDK missing scenario).
     fn make_state_android_jdk_missing() -> InstallWizardState {
@@ -1078,6 +1211,150 @@ mod tests {
     #[test]
     fn test_no_panic_guided_command_tiny_area() {
         let state = make_state_android_jdk_missing();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic even in tight space
+    }
+
+    // --- Phase 5: Prerequisites detail-pane caption + index-aware copy hint ---
+
+    #[test]
+    fn test_prerequisites_caption_renders() {
+        // Linux single-command Prerequisites step → caption + command visible.
+        let state = make_state_prerequisites_linux_missing();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Install the OS build tools"),
+            "Prerequisites caption must render: '{content}'"
+        );
+        assert!(
+            content.contains("apt-get"),
+            "Prerequisites Linux command must render: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "Prerequisites [c] copy affordance must render: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_prerequisites_macos_three_commands_render() {
+        // macOS three-command Prerequisites step → all three commands visible.
+        let state = make_state_prerequisites_macos_three_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("xcode-select"),
+            "CLT command must render: '{content}'"
+        );
+        assert!(
+            content.contains("cocoapods"),
+            "CocoaPods command must render: '{content}'"
+        );
+        assert!(
+            content.contains("rosetta"),
+            "Rosetta command must render: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_copy_hint_follows_selected_command_index() {
+        // With three commands and selected_command_index=1, command 1 (CocoaPods)
+        // gets [c] copy; command 0 (CLT) and command 2 (Rosetta) do NOT.
+        // Use a tall enough area to ensure all three command rows render.
+        let mut state = make_state_prerequisites_macos_three_commands();
+        state.selected_command_index = 1; // CocoaPods selected
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Use a full-width, 50-row area so all three commands fit in the bottom section.
+        let area = Rect::new(0, 0, 100, 50);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+
+        // Collect all rows so we can check which one contains "copy".
+        let rows: Vec<String> = (0..area.height)
+            .map(|row| {
+                (0..area.width)
+                    .map(|col| buf.cell((col, row)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect()
+            })
+            .collect();
+
+        // The copy hint must appear somewhere.
+        let copy_row = rows
+            .iter()
+            .position(|r| r.contains("copy"))
+            .expect("a row with 'copy' must exist in the rendered output");
+
+        // The CocoaPods command must appear.
+        let cocoapods_cmd_row = rows
+            .iter()
+            .position(|r| r.contains("cocoapods"))
+            .expect("cocoapods command row must be visible");
+
+        // The copy hint row must be at or after the CocoaPods command row
+        // (command row is directly below the label row).
+        assert!(
+            copy_row >= cocoapods_cmd_row,
+            "copy hint (row {copy_row}) must be on or after the cocoapods command (row {cocoapods_cmd_row})"
+        );
+
+        // Confirm xcode-select renders above the copy hint — it belongs to
+        // command 0 (not selected) which must NOT carry the copy hint.
+        if let Some(xcode_row) = rows.iter().position(|r| r.contains("xcode-select")) {
+            assert!(
+                xcode_row < copy_row,
+                "xcode-select (row {xcode_row}) must be above the copy hint row ({copy_row})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_copy_hint_index_zero_stays_on_first_command() {
+        // With selected_command_index=0 (default), first command gets [c] copy.
+        let state = make_state_prerequisites_linux_missing();
+        assert_eq!(state.selected_command_index, 0);
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Single-command step → copy hint must appear
+        assert!(
+            content.contains("copy"),
+            "single-command step at index 0 must show [c] copy: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_prerequisites_no_later_phase_hint_when_has_commands() {
+        // When Prerequisites has guided commands, the "later phase" hint must not appear.
+        let state = make_state_prerequisites_linux_missing();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            !content.contains("later phase"),
+            "Prerequisites with guided commands must NOT show 'later phase': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_no_panic_prerequisites_guided_tiny_area() {
+        let state = make_state_prerequisites_linux_missing();
         let pane = StepDetailPane::new(&state, true, 0);
         let area = Rect::new(0, 0, 20, 5);
         let mut buf = Buffer::empty(area);
