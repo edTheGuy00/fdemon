@@ -485,13 +485,12 @@ pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult 
     let _ = state.install_wizard_state.install_task.take();
 
     if reason.starts_with("Cancelled:") {
-        // User-initiated cancellation: keep a neutral message; the step is
-        // reset to Idle so the next Enter retries cleanly.
+        // User-initiated cancellation: route through the Cancelled variant so
+        // the TUI renders a neutral (non-red) result summary and suppresses
+        // the run-failed badge.  The step is still retriable via Enter.
         state
             .install_wizard_state
-            .finish_step(StepExecStatus::Failed, reason);
-        // Overwrite the summary with a neutral cancelled message (it was set
-        // above by finish_step but we want a neutral display, not "Failed").
+            .finish_step(StepExecStatus::Cancelled, reason);
         state.install_wizard_state.status_message =
             Some("Cancelled. Press Enter to retry.".to_string());
     } else {
@@ -2332,6 +2331,98 @@ mod tests {
                 .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
             "DiscoverDevices must be dispatched even with partial toolchain; got {:?}",
             actions
+        );
+    }
+
+    // ── Task 03 (F18): Cancelled variant routing + no double-prefix ─────────
+
+    /// F18: `Error::Cancelled` Display already carries the "Cancelled: " prefix,
+    /// so `format!("{e}")` must produce exactly one prefix — not two.
+    #[test]
+    fn cancelled_error_display_has_no_double_prefix() {
+        let e = fdemon_core::Error::cancelled("Flutter install cancelled by user");
+        let s = format!("{e}");
+        // Must start with exactly one "Cancelled:" prefix.
+        assert!(
+            s.starts_with("Cancelled:"),
+            "Display must start with 'Cancelled:'; got: {s}"
+        );
+        // Must NOT start with "Cancelled: Cancelled:" (double prefix).
+        assert!(
+            !s.starts_with("Cancelled: Cancelled:"),
+            "Display must NOT have a double 'Cancelled:' prefix; got: {s}"
+        );
+        assert!(
+            s.contains("Flutter install cancelled by user"),
+            "Display must include the original message; got: {s}"
+        );
+    }
+
+    /// F18: `handle_step_failed` with a `"Cancelled: …"` reason must leave the
+    /// step in `StepExecStatus::Cancelled` (not `Failed`).
+    #[test]
+    fn step_failed_with_cancelled_reason_stores_cancelled_status() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+
+        handle_step_failed(
+            &mut state,
+            "Cancelled: Flutter install cancelled before start".to_string(),
+        );
+
+        assert_eq!(
+            state.install_wizard_state.execution.status,
+            crate::install_wizard::StepExecStatus::Cancelled,
+            "a 'Cancelled:' reason must result in StepExecStatus::Cancelled, not Failed"
+        );
+    }
+
+    /// F18: `handle_step_failed` with a genuine (non-Cancelled) reason must
+    /// leave the step in `StepExecStatus::Failed`.
+    #[test]
+    fn step_failed_with_genuine_reason_stores_failed_status() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+
+        handle_step_failed(&mut state, "network timeout".to_string());
+
+        assert_eq!(
+            state.install_wizard_state.execution.status,
+            crate::install_wizard::StepExecStatus::Failed,
+            "a genuine (non-Cancelled) reason must result in StepExecStatus::Failed"
+        );
+    }
+
+    /// F18: After a Cancelled terminal, `status_message` must be neutral —
+    /// must NOT contain "Failed".
+    #[test]
+    fn step_failed_with_cancelled_reason_neutral_status_message() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::AndroidTools);
+
+        handle_step_failed(
+            &mut state,
+            "Cancelled: download cancelled by user".to_string(),
+        );
+
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            !msg.starts_with("Failed"),
+            "status_message after cancel must not start with 'Failed'; got: {msg}"
+        );
+        assert!(
+            msg.contains("Cancelled") || msg.contains("retry"),
+            "status_message must mention 'Cancelled' or 'retry'; got: {msg}"
         );
     }
 }

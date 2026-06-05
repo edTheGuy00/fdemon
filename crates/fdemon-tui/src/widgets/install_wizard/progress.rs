@@ -120,7 +120,9 @@ impl<'a> StepProgress<'a> {
             }
             StepExecStatus::Succeeded => (SUCCESS_GLYPH, palette::STATUS_GREEN),
             StepExecStatus::Failed => (FAILED_GLYPH, palette::STATUS_RED),
-            StepExecStatus::Idle => ("\u{2026}", palette::TEXT_MUTED), // …
+            // Cancelled: neutral muted glyph — not an error.
+            StepExecStatus::Cancelled => ("\u{2014}", palette::TEXT_MUTED), // —
+            StepExecStatus::Idle => ("\u{2026}", palette::TEXT_MUTED),      // …
         };
 
         let line = Line::from(vec![
@@ -259,6 +261,8 @@ impl<'a> StepProgress<'a> {
                 let color = match self.exec.status {
                     StepExecStatus::Succeeded => palette::STATUS_GREEN,
                     StepExecStatus::Failed => palette::STATUS_RED,
+                    // Cancelled: neutral muted color — not an error display.
+                    StepExecStatus::Cancelled => palette::TEXT_MUTED,
                     _ => palette::TEXT_SECONDARY,
                 };
                 (format!("  {summary}"), color)
@@ -279,13 +283,13 @@ impl Widget for StepProgress<'_> {
             return;
         }
 
-        // For terminal states (Succeeded/Failed), show: phase row + separator +
+        // For terminal states (Succeeded/Failed/Cancelled), show: phase row + separator +
         // result summary + (optional) log tail remainder.
         // For Running/Idle, show: phase row + progress row + separator + log tail
         //   + optional "[Esc] Cancel" hint at the bottom.
         let is_terminal = matches!(
             self.exec.status,
-            StepExecStatus::Succeeded | StepExecStatus::Failed
+            StepExecStatus::Succeeded | StepExecStatus::Failed | StepExecStatus::Cancelled
         );
 
         if is_terminal {
@@ -682,5 +686,97 @@ mod tests {
         let area = Rect::new(0, 0, 10, 3);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
+    }
+
+    // --- Task 03 (F12): Cancelled state renders neutral (non-red) summary ---
+
+    fn make_cancelled_exec() -> StepExecution {
+        StepExecution {
+            kind: Some(fdemon_app::install_wizard::WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Cancelled,
+            phase_label: Some("Cancelled".to_string()),
+            received: 0,
+            total: None,
+            log_tail: std::collections::VecDeque::new(),
+            result_summary: Some("Cancelled: Flutter install cancelled by user".to_string()),
+        }
+    }
+
+    /// F12: A step in `StepExecStatus::Cancelled` must render a result summary
+    /// without using `STATUS_RED` — the summary color must be muted, not red.
+    #[test]
+    fn cancelled_exec_result_summary_is_not_red() {
+        let exec = make_cancelled_exec();
+        let area = large_area();
+        let mut buf = Buffer::empty(area);
+        let widget = StepProgress::new(&exec, 0, false);
+        widget.render(area, &mut buf);
+
+        // Verify the result summary text appears in the buffer.
+        let content = collect_content(&buf, area);
+        assert!(
+            content.contains("Cancelled"),
+            "Cancelled exec must render the result summary: '{content}'"
+        );
+
+        // The summary text spans row 2 (phase=0, separator=1, result=2).
+        // Find any cell in the buffer that contains the summary text and
+        // check it is NOT styled with STATUS_RED.
+        use crate::theme::palette;
+        let red_cells: Vec<_> = buf
+            .content()
+            .iter()
+            .filter(|c| c.fg == palette::STATUS_RED && c.symbol() != " " && c.symbol() != "─")
+            .collect();
+        assert!(
+            red_cells.is_empty(),
+            "Cancelled exec must NOT render any STATUS_RED cells; found {:?}",
+            red_cells.iter().map(|c| c.symbol()).collect::<Vec<_>>()
+        );
+    }
+
+    /// F12: A step in `StepExecStatus::Cancelled` must not trigger the
+    /// "cancel hint" layout branch (Cancelled is a terminal state).
+    /// The "[Esc] Cancel" hint must NOT appear — note that the result summary
+    /// may contain "Cancelled" (the status text), but the hint's "[Esc]" key
+    /// label must be absent from the buffer.
+    #[test]
+    fn cancelled_exec_does_not_show_cancel_hint() {
+        let exec = make_cancelled_exec();
+        let area = large_area();
+        let mut buf = Buffer::empty(area);
+        // show_cancel_hint=true: even if caller passes true, terminal state
+        // prevents the cancel-hint layout branch from rendering.
+        let widget = StepProgress::new(&exec, 0, true);
+        widget.render(area, &mut buf);
+        let content = collect_content(&buf, area);
+
+        // The "[Esc] Cancel" hint uses "[Esc]" — not present in the summary text.
+        assert!(
+            !content.contains("[Esc]"),
+            "Cancelled terminal state must not show '[Esc]' cancel hint: '{content}'"
+        );
+    }
+
+    /// F12: A genuine `StepExecStatus::Failed` exec must still render STATUS_RED
+    /// (this ensures we haven't accidentally neutralised genuine failures).
+    #[test]
+    fn failed_exec_result_summary_is_still_red() {
+        let exec = make_failed_exec();
+        let area = large_area();
+        let mut buf = Buffer::empty(area);
+        let widget = StepProgress::new(&exec, 0, false);
+        widget.render(area, &mut buf);
+
+        use crate::theme::palette;
+        // At least the glyph or summary should be STATUS_RED for a genuine failure.
+        let has_red = buf
+            .content()
+            .iter()
+            .any(|c| c.fg == palette::STATUS_RED && c.symbol() != " ");
+        assert!(
+            has_red,
+            "genuine Failed exec must still render at least one STATUS_RED cell"
+        );
     }
 }

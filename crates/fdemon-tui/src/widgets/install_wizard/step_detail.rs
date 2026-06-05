@@ -525,14 +525,21 @@ impl<'a> StepDetailPane<'a> {
     /// Whether the current execution is active for the given step kind.
     ///
     /// Returns `true` when `execution.kind == Some(kind)` and the status is
-    /// Running, Succeeded, or Failed (i.e. there is something live to show).
+    /// Running, Succeeded, Failed, or Cancelled (i.e. there is something live
+    /// to show in the progress view).  Cancelled is included so the detail pane
+    /// shows the neutral cancel summary rather than reverting to the static
+    /// component list — this also lets the user see the "Press Enter to retry"
+    /// hint from the progress widget's terminal-state layout.
     fn is_execution_active_for(&self, kind: WizardStepKind) -> bool {
         if self.state.execution.kind != Some(kind) {
             return false;
         }
         matches!(
             self.state.execution.status,
-            StepExecStatus::Running | StepExecStatus::Succeeded | StepExecStatus::Failed
+            StepExecStatus::Running
+                | StepExecStatus::Succeeded
+                | StepExecStatus::Failed
+                | StepExecStatus::Cancelled
         )
     }
 }
@@ -574,7 +581,7 @@ impl Widget for StepDetailPane<'_> {
         // with the StepProgress view (occupies the full content_area).
         if self.is_execution_active_for(step.kind) {
             // Show the "[Esc] Cancel" hint only while the step is actively Running,
-            // not when it has already reached a terminal state (Succeeded/Failed).
+            // not when it has reached a terminal state (Succeeded/Failed/Cancelled).
             let show_cancel_hint = self.state.execution.status == StepExecStatus::Running;
             let progress = StepProgress::new(
                 &self.state.execution,

@@ -994,13 +994,14 @@ pub fn handle_action(
                                     .await;
                             }
                             Err(ref e) if e.is_cancelled() => {
-                                // Cancelled by the user (Esc) — use the reserved
-                                // "Cancelled" prefix so the handler can distinguish
-                                // this from a genuine failure.
+                                // Cancelled by the user (Esc): forward the error Display
+                                // directly — Error::Cancelled already carries the
+                                // "Cancelled: " prefix, so format!("{e}") produces
+                                // "Cancelled: <message>" (no doubling).
                                 let _ = msg_tx
                                     .send(crate::message::Message::WizardStepFailed {
                                         kind,
-                                        reason: format!("Cancelled: {e}"),
+                                        reason: format!("{e}"),
                                     })
                                     .await;
                             }
@@ -1094,10 +1095,12 @@ pub fn handle_action(
                                     .await;
                             }
                             Err(ref e) if e.is_cancelled() => {
+                                // Forward the error Display directly — Error::Cancelled
+                                // already carries the "Cancelled: " prefix (no doubling).
                                 let _ = msg_tx
                                     .send(crate::message::Message::WizardStepFailed {
                                         kind,
-                                        reason: format!("Cancelled: {e}"),
+                                        reason: format!("{e}"),
                                     })
                                     .await;
                             }

@@ -72,6 +72,11 @@ pub enum StepExecStatus {
     Succeeded,
     /// The last run encountered an error.
     Failed,
+    /// The last run was cancelled by the user (e.g. via Esc or a daemon race).
+    ///
+    /// Distinct from `Failed` so the TUI can render a neutral (non-red) result
+    /// summary and suppress the run-failed badge — cancellation is not an error.
+    Cancelled,
 }
 
 /// Maximum number of streamed log lines retained in [`StepExecution::log_tail`].
@@ -143,6 +148,13 @@ mod tests {
     fn test_step_exec_status_variants_are_distinct() {
         assert_ne!(StepExecStatus::Idle, StepExecStatus::Running);
         assert_ne!(StepExecStatus::Succeeded, StepExecStatus::Failed);
+        assert_ne!(StepExecStatus::Cancelled, StepExecStatus::Failed);
+        assert_ne!(StepExecStatus::Cancelled, StepExecStatus::Idle);
+    }
+
+    #[test]
+    fn test_step_exec_status_cancelled_is_not_default() {
+        assert_ne!(StepExecStatus::default(), StepExecStatus::Cancelled);
     }
 
     #[test]

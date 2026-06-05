@@ -325,9 +325,10 @@ impl InstallWizardState {
 
     /// Finish a run with a terminal status and a human-readable summary.
     ///
-    /// `status` must be `Succeeded` or `Failed`; passing `Running` or `Idle`
-    /// is a logic error but will not panic (the summary is still stored).
-    /// After this call, [`is_step_running`][Self::is_step_running] returns `false`.
+    /// `status` should be `Succeeded`, `Failed`, or `Cancelled`; passing
+    /// `Running` or `Idle` is a logic error but will not panic (the summary is
+    /// still stored). After this call,
+    /// [`is_step_running`][Self::is_step_running] returns `false`.
     pub fn finish_step(&mut self, status: StepExecStatus, summary: String) {
         self.execution.status = status;
         self.execution.result_summary = Some(summary);

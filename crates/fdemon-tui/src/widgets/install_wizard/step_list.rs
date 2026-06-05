@@ -179,17 +179,33 @@ impl<'a> StepListPane<'a> {
         };
 
         let glyph_style = if is_selected && self.focused {
-            // Use row style for glyph too when fully selected+focused
+            // Use row style for glyph too when fully selected+focused.
+            // BOLD is always applied in this branch (it is already present in
+            // the base row_style) so no special run_failed guard is needed.
             Style::default()
                 .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else if is_selected {
-            Style::default()
+            let style = Style::default()
                 .fg(glyph_color)
-                .bg(palette::SELECTED_ROW_BG)
+                .bg(palette::SELECTED_ROW_BG);
+            // BOLD for run-failed badge to distinguish from plain Missing.
+            if run_failed {
+                style.add_modifier(Modifier::BOLD)
+            } else {
+                style
+            }
         } else {
-            Style::default().fg(glyph_color)
+            let style = Style::default().fg(glyph_color);
+            // BOLD for run-failed badge to distinguish from plain Missing (F11).
+            // A plain Missing step never has BOLD; this is the only distinguishing
+            // attribute when both glyphs are STATUS_RED.
+            if run_failed {
+                style.add_modifier(Modifier::BOLD)
+            } else {
+                style
+            }
         };
 
         let line = Line::from(vec![
@@ -509,6 +525,51 @@ mod tests {
             cell.fg,
             palette::STATUS_RED,
             "Missing step should show STATUS_RED badge when no run-failed override"
+        );
+    }
+
+    // --- Task 03 (F11): run-failed badge BOLD vs plain Missing distinctness ---
+
+    /// F11: The run-failed badge must have `Modifier::BOLD`; a plain `Missing`
+    /// badge (same codepoint, same colour) must NOT have `Modifier::BOLD`.
+    /// This is the only distinguishing attribute when both are `STATUS_RED`.
+    #[test]
+    fn run_failed_badge_is_bold_plain_missing_is_not() {
+        // steps[2] = FlutterSdk, status=Missing
+        // With failed_step_kind=Some(FlutterSdk) its glyph gets BOLD.
+        // With failed_step_kind=None its glyph does NOT get BOLD.
+        // Select index 0 (Prerequisites) so FlutterSdk row is unselected in both cases
+        // — the unselected branch is where the BOLD difference is visible.
+        let steps = make_steps();
+        let area = make_area();
+
+        // --- Run-failed: BOLD expected ---
+        let mut buf_failed = Buffer::empty(area);
+        let pane_failed = StepListPane::new(&steps, 0, true, Some(WizardStepKind::FlutterSdk));
+        pane_failed.render(area, &mut buf_failed);
+        // FlutterSdk glyph at x=2, y = HEADER_HEIGHT(2) + index(2) = 4
+        let run_failed_cell = &buf_failed[(2, 4)];
+        assert!(
+            run_failed_cell
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD),
+            "run-failed glyph must have Modifier::BOLD; modifiers: {:?}",
+            run_failed_cell.style().add_modifier
+        );
+
+        // --- Plain Missing: BOLD NOT expected ---
+        let mut buf_plain = Buffer::empty(area);
+        let pane_plain = StepListPane::new(&steps, 0, true, None);
+        pane_plain.render(area, &mut buf_plain);
+        let plain_missing_cell = &buf_plain[(2, 4)];
+        assert!(
+            !plain_missing_cell
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD),
+            "plain Missing glyph must NOT have Modifier::BOLD; modifiers: {:?}",
+            plain_missing_cell.style().add_modifier
         );
     }
 }
