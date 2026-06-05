@@ -39,7 +39,11 @@ pub async fn run_doctor(cwd: PathBuf, explicit_sdk: Option<PathBuf>) -> ExitCode
         if c.status != ComponentStatus::Ok {
             all_ok = false;
         }
-        println!("[{:>4}] {} — {}", c.status, c.kind, c.detail);
+        // Use .to_string() so the {:>4} right-align width specifier is
+        // honoured — a String value respects f.width() / f.pad() padding
+        // whereas a Display impl that calls write!() directly does not.
+        // Column widths: "OK"=2, "!"=1, "MISS"=4, "ERR"=3, "?"=1 → pad to 4.
+        println!("[{:>4}] {} — {}", c.status.to_string(), c.kind, c.detail);
     }
 
     if let Some(lines) = &report.doctor {
@@ -53,5 +57,40 @@ pub async fn run_doctor(cwd: PathBuf, explicit_sdk: Option<PathBuf>) -> ExitCode
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fdemon_daemon::toolchain::ComponentStatus;
+
+    /// F20: the status field must always be exactly 4 characters wide so the
+    /// printed column is aligned regardless of status variant.  This verifies
+    /// that `.to_string()` (a `String` value) correctly propagates the `{:>4}`
+    /// width specifier used in `run_doctor`'s print loop.
+    #[test]
+    fn status_field_is_always_4_chars_wide() {
+        let cases = [
+            (ComponentStatus::Ok, "  OK"),
+            (ComponentStatus::Missing, "MISS"),
+            (ComponentStatus::Error, " ERR"),
+            (ComponentStatus::Unknown, "   ?"),
+            (ComponentStatus::Partial, "   !"),
+        ];
+        for (status, expected) in &cases {
+            let field = format!("{:>4}", status.to_string());
+            assert_eq!(
+                field, *expected,
+                "status {:?}: expected {:?} got {:?}",
+                status, expected, field
+            );
+            assert_eq!(
+                field.len(),
+                4,
+                "status {:?} field width should be 4, got {}",
+                status,
+                field.len()
+            );
+        }
     }
 }

@@ -40,6 +40,11 @@ enum Commands {
     /// when Flutter is found.
     ///
     /// Exit code: 0 when all components are OK, 1 otherwise.
+    ///
+    /// NOTE: If your Flutter project is in a directory named `doctor`, use the
+    /// explicit path form to avoid this subcommand intercepting the token:
+    ///
+    ///   fdemon ./doctor
     Doctor {
         /// Flutter project directory to probe (defaults to the current
         /// working directory).
@@ -120,7 +125,12 @@ async fn main() -> Result<()> {
     if let Some(Commands::Doctor { path }) = cli.command {
         let cwd =
             path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let exit_code = doctor::run_doctor(cwd, None).await;
+        // F24: load project settings so the configured [flutter] sdk_path is
+        // honoured.  A user who pins a non-default SDK in .fdemon/config.toml
+        // should see the same SDK probed here as the TUI uses at runtime.
+        let settings = fdemon_app::config::load_settings(&cwd);
+        let explicit_sdk = settings.flutter.sdk_path.clone();
+        let exit_code = doctor::run_doctor(cwd, explicit_sdk).await;
         // `ExitCode` cannot be converted back to an integer on stable Rust, so
         // we compare against the two possible values and call `std::process::exit`
         // directly (we cannot return `ExitCode` from a `Result<()>` main).
