@@ -50,17 +50,44 @@ pub fn handle_preflight_completed(state: &mut AppState, report: ToolchainReport)
     // Handback: auto-close the wizard and dispatch device discovery when
     // Flutter is now live and the guard has not already fired.
     if state.install_wizard_state.flutter_now_live() && !state.install_wizard_state.handback_done {
-        if let Some(flutter) = state.flutter_executable() {
-            state.install_wizard_state.handback_done = true;
-            state.hide_install_wizard();
-            return UpdateResult::actions_vec(vec![
-                scan_action,
-                UpdateAction::DiscoverDevices { flutter },
-            ]);
+        if let Some(discover) = close_wizard_and_dispatch_discovery(state) {
+            return UpdateResult::actions_vec(vec![scan_action, discover]);
         }
     }
 
     UpdateResult::action(scan_action)
+}
+
+/// Shared handback helper: close the wizard, transition to the correct mode,
+/// set the one-shot guard, and return a `DiscoverDevices` action when a live
+/// SDK is available.
+///
+/// Always closes the wizard (sets `visible = false`). When a live Flutter
+/// executable exists, transitions to `UiMode::Startup` and returns
+/// `Some(DiscoverDevices)`; otherwise transitions to `UiMode::Normal` and
+/// returns `None`.
+///
+/// This function is the **single source of truth** for the post-install
+/// handback transition. Both the auto-close path (`handle_preflight_completed`)
+/// and the manual-close path (`maybe_dispatch_discovery_on_close` in
+/// `navigation.rs`) delegate here so the two paths cannot drift.
+///
+/// **Critical invariant:** when a live SDK is present, `ui_mode` is set to
+/// `UiMode::Startup` (not `Normal`) so the subsequent `DevicesDiscovered`
+/// message populates `new_session_dialog_state.target_selector` (the handler
+/// guards on `UiMode::Startup | UiMode::NewSessionDialog`).
+pub(super) fn close_wizard_and_dispatch_discovery(state: &mut AppState) -> Option<UpdateAction> {
+    if let Some(flutter) = state.flutter_executable() {
+        state.install_wizard_state.handback_done = true;
+        state.hide_install_wizard();
+        // Override the Normal mode set by hide_install_wizard() with Startup,
+        // so the subsequent DevicesDiscovered message populates the selector.
+        state.ui_mode = crate::state::UiMode::Startup;
+        Some(UpdateAction::DiscoverDevices { flutter })
+    } else {
+        state.hide_install_wizard();
+        None
+    }
 }
 
 /// Handle `InstallWizardRerunPreflight` — re-run the preflight check.
@@ -1711,8 +1738,8 @@ mod tests {
     }
 
     /// When preflight re-runs after a successful Flutter install (`resolved_sdk` is `Some`
-    /// and the report shows Flutter live), the wizard must auto-close and `DiscoverDevices`
-    /// must be dispatched exactly once.
+    /// and the report shows Flutter live), the wizard must auto-close, transition to
+    /// `UiMode::Startup` (not `Normal`), and dispatch `DiscoverDevices` exactly once.
     #[test]
     fn preflight_completed_with_live_flutter_autocloses_and_discovers() {
         use crate::state::UiMode;
@@ -1725,11 +1752,12 @@ mod tests {
 
         let result = handle_preflight_completed(&mut state, make_live_flutter_report());
 
-        // Wizard must be closed.
-        assert_ne!(
+        // AC#1: mode must be Startup (not merely != InstallWizard, not Normal).
+        assert_eq!(
             state.ui_mode,
-            UiMode::InstallWizard,
-            "wizard must auto-close when Flutter is live"
+            UiMode::Startup,
+            "wizard auto-close must leave UiMode::Startup so DevicesDiscovered \
+             populates the new-session dialog selector"
         );
         // handback_done must be set.
         assert!(
@@ -1744,6 +1772,57 @@ mod tests {
                 .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
             "DiscoverDevices action must be returned; got {:?}",
             actions
+        );
+    }
+
+    /// AC#2: after the auto-close, feeding `Message::DevicesDiscovered` through
+    /// `handler::update` must populate `target_selector.connected_devices`.
+    #[test]
+    fn devices_discovered_after_autoclose_populates_selector() {
+        use crate::handler::update;
+        use crate::message::Message;
+        use crate::state::UiMode;
+        use fdemon_daemon::Device;
+
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        inject_live_sdk(&mut state);
+
+        // Trigger the auto-close handback.
+        handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        // Postcondition from AC#1: mode must be Startup.
+        assert_eq!(state.ui_mode, UiMode::Startup, "precondition for AC#2");
+
+        // Simulate device discovery completing with one device.
+        let fake_device = Device {
+            id: "emulator-5554".to_string(),
+            name: "Pixel 6 Emulator".to_string(),
+            platform: "android-x86".to_string(),
+            emulator: true,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: true,
+            capabilities: None,
+        };
+        update(
+            &mut state,
+            Message::DevicesDiscovered {
+                devices: vec![fake_device],
+            },
+        );
+
+        // AC#2: the selector must now hold the discovered device.
+        assert!(
+            !state
+                .new_session_dialog_state
+                .target_selector
+                .connected_devices
+                .is_empty(),
+            "target_selector.connected_devices must be non-empty after DevicesDiscovered \
+             in Startup mode; the dialog would otherwise show no devices"
         );
     }
 
@@ -1834,11 +1913,11 @@ mod tests {
 
         let result = handle_preflight_completed(&mut state, report);
 
-        // Wizard must auto-close even though Android is missing.
-        assert_ne!(
+        // Wizard must auto-close to Startup even though Android is missing.
+        assert_eq!(
             state.ui_mode,
-            UiMode::InstallWizard,
-            "wizard must handback even when Android tools are still missing"
+            UiMode::Startup,
+            "wizard must handback to Startup even when Android tools are still missing"
         );
         let actions = result.actions();
         assert!(

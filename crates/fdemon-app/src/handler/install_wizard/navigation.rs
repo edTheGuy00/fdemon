@@ -5,7 +5,7 @@
 
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::install_wizard::WizardPane;
-use crate::state::{AppState, UiMode};
+use crate::state::AppState;
 
 /// Handle `ShowInstallWizard` — opens the Install Wizard panel.
 ///
@@ -28,10 +28,11 @@ pub fn handle_show(state: &mut AppState) -> UpdateResult {
 ///
 /// **Handback (Phase 5, Task 04).** When a live Flutter SDK exists at close
 /// time and the handback guard has not already fired, also dispatches
-/// `DiscoverDevices` and transitions toward the new-session/startup flow so
-/// the user lands in a populated launch dialog after a successful install.
+/// `DiscoverDevices` and transitions to `UiMode::Startup` so the new-session
+/// dialog is shown once devices arrive.  Delegates to
+/// `close_wizard_and_dispatch_discovery` (single source of truth) which also
+/// handles the wizard hide.
 pub fn handle_hide(state: &mut AppState) -> UpdateResult {
-    state.hide_install_wizard();
     maybe_dispatch_discovery_on_close(state)
 }
 
@@ -42,32 +43,33 @@ pub fn handle_hide(state: &mut AppState) -> UpdateResult {
 /// reached, no step is in flight.
 ///
 /// **Handback (Phase 5, Task 04).** Same as `handle_hide`: when a live SDK
-/// exists and the guard is unset, dispatch device discovery and route to the
-/// new-session/startup mode.
+/// exists and the guard is unset, dispatch device discovery and route to
+/// `UiMode::Startup`.  Delegates to `close_wizard_and_dispatch_discovery`
+/// (single source of truth) which also handles the wizard hide.
 pub fn handle_escape(state: &mut AppState) -> UpdateResult {
-    state.hide_install_wizard();
     maybe_dispatch_discovery_on_close(state)
 }
 
 /// Shared handback helper for `handle_hide` and `handle_escape`.
 ///
-/// When a live Flutter SDK exists (`flutter_executable().is_some()`) and the
-/// one-shot guard (`handback_done`) is unset, dispatches `DiscoverDevices` and
-/// transitions to `UiMode::Startup` (which shows the new-session dialog).
+/// Delegates to `close_wizard_and_dispatch_discovery` (defined in `actions.rs`)
+/// which is the single source of truth for the post-install handback transition.
+/// Both auto-close (`handle_preflight_completed`) and manual-close paths route
+/// through that function so they cannot drift.
 ///
-/// If the guard is already set (auto-close already fired discovery), this is
-/// a no-op — returns `UpdateResult::none()`.
+/// The wizard is always closed (hidden) by this call.  When the one-shot guard
+/// (`handback_done`) is already set — i.e. auto-close already dispatched
+/// discovery — the wizard is hidden and `UpdateResult::none()` is returned so
+/// a second `DiscoverDevices` is not emitted.
 fn maybe_dispatch_discovery_on_close(state: &mut AppState) -> UpdateResult {
     if state.install_wizard_state.handback_done {
+        // Guard already fired: hide the wizard (Normal mode) and return.
+        state.hide_install_wizard();
         return UpdateResult::none();
     }
-    if let Some(flutter) = state.flutter_executable() {
-        state.install_wizard_state.handback_done = true;
-        // Route to Startup so the new-session dialog is shown once devices arrive.
-        state.ui_mode = UiMode::Startup;
-        UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
-    } else {
-        UpdateResult::none()
+    match super::close_wizard_and_dispatch_discovery(state) {
+        Some(action) => UpdateResult::action(action),
+        None => UpdateResult::none(),
     }
 }
 
@@ -502,7 +504,8 @@ mod tests {
     #[test]
     fn manual_close_with_live_sdk_spawns_discovery() {
         // When Esc is pressed after a successful install (live SDK), handle_escape
-        // must dispatch DiscoverDevices and NOT return bare Normal mode.
+        // must dispatch DiscoverDevices and transition to UiMode::Startup (not Normal)
+        // so the subsequent DevicesDiscovered message populates the selector.
         let mut state = state_with_live_sdk();
         assert!(
             state.flutter_executable().is_some(),
@@ -511,11 +514,12 @@ mod tests {
 
         let result = handle_escape(&mut state);
 
-        // Must not remain in InstallWizard mode.
-        assert_ne!(
+        // Must transition to Startup (not merely != InstallWizard).
+        assert_eq!(
             state.ui_mode,
-            UiMode::InstallWizard,
-            "Esc with live SDK must leave InstallWizard mode"
+            UiMode::Startup,
+            "Esc with live SDK must leave UiMode::Startup so DevicesDiscovered \
+             populates the new-session dialog selector"
         );
         // Must dispatch DiscoverDevices.
         let actions = result.actions();
