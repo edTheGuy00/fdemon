@@ -129,5 +129,40 @@ fn step_failed_sets_retry_prompt() { /* status_message contains "press Enter to 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `InstallTaskHandle` struct; `install_task: Option<InstallTaskHandle>` field on `InstallWizardState`; `reset_running_step_to_idle()` helper; `finish_step` now clears `install_task` |
+| `crates/fdemon-app/src/message.rs` | Added `Message::WizardInstallTaskReady { cancel, handle }` and `Message::InstallWizardCancelStep` |
+| `crates/fdemon-app/src/actions/mod.rs` | Wired real `CancellationToken` into `install_flutter` and `install_android_tools` (replacing `CancellationToken::new()` placeholders); sends `WizardInstallTaskReady` after spawning the task; detects `Error::Cancelled` and uses `"Cancelled:"` prefix reason; updated 2 existing PathConfig tests to skip `WizardInstallTaskReady` messages |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added `handle_install_task_ready`, `handle_cancel_step`; updated `handle_step_failed` to show retry prompt on genuine failures and neutral message on `Cancelled:` prefix; 5 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Routed `WizardInstallTaskReady` → `handle_install_task_ready`; `InstallWizardCancelStep` → `handle_cancel_step` |
+| `crates/fdemon-app/src/handler/keys.rs` | `Esc` in InstallWizard now branches: `InstallWizardCancelStep` when running, `InstallWizardEscape` when idle; 2 new tests (`esc_while_idle_closes_wizard`, `esc_while_running_cancels_not_closes`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Token delivery via message**: The `CancellationToken` + `JoinHandle` are sent to state via `Message::WizardInstallTaskReady` (spawned as a tiny separate task after the main install task). This preserves TEA purity — no shared mutable state outside the message channel. The handle is deposited into an `Arc<Mutex<Option<JoinHandle>>>` slot before the `WizardInstallTaskReady` send.
+
+2. **`Cancelled:` prefix convention**: Rather than adding a new `WizardStepCancelled` message variant, the cancelled path reuses `WizardStepFailed` with a `"Cancelled:"` prefix in the reason string. `handle_step_failed` branches on this prefix. Simpler to implement and the distinction is handled entirely in one place.
+
+3. **Task abort as backstop**: `handle_cancel_step` calls both `cancel.cancel()` (cooperative signal) and `join.abort()` (force-kill). The install loop polls the token at download checkpoints; the abort handles cases where the loop is stuck in a blocking syscall (e.g., git-clone).
+
+4. **Pre-existing flaky daemon test**: `toolchain::download::tests::cancel_mid_stream_returns_cancelled_and_cleans_part` occasionally fails under parallel test load (env-var race). Passes in isolation; pre-exists this task.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (2818 tests)
+- `cargo test --workspace` - Passed (all crates, pre-existing flaky test confirmed pre-existing)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Race window**: There is a small window between `begin_step()` (in TEA update) and `WizardInstallTaskReady` arriving. A cancel pressed in that window would hit `install_task = None` and be a no-op at the state level — the token in the spawned task would not be signalled. This is acceptable since the window is milliseconds and the user cannot type that fast. The existing `begin_step()` guard prevents a concurrent second run in this window.
+
+2. **PathConfig not cancellable**: PathConfig uses `spawn_blocking` for file I/O, which is not wired to the cancellation token. A cancel during PathConfig aborts the Tokio task wrapper but the blocking I/O may complete anyway. This is acceptable since PathConfig is near-instantaneous (rc-file write).

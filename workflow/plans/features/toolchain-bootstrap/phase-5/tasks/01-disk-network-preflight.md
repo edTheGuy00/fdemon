@@ -127,5 +127,42 @@ async fn fetch_manifest_malformed_json_is_clear_error() { /* wiremock bad body *
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` | Added `fs4 = "1"` to workspace dependencies with doc comment |
+| `crates/fdemon-daemon/Cargo.toml` | Added `fs4.workspace = true` to `[dependencies]` |
+| `crates/fdemon-daemon/src/toolchain/download.rs` | Added `ensure_disk_space()`, `check_network_connectivity()`, `ARCHIVE_DISK_BUDGET_BYTES` constant, `CONNECTIVITY_PROBE_TIMEOUT` constant; added disk-space call in `download_to_file`; added 5 new tests (3 disk-space, 2 connectivity) |
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | Added HEAD probe in `fetch_release_manifest`; added disk-space check before extraction in `archive_install`; added 2 wiremock tests for 404 and malformed-JSON manifest error paths |
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | Added `ensure_disk_space` call before cmdline-tools extraction; added `ANDROID_DISK_BUDGET_BYTES` constant (2 GiB) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Conservative disk budget vs. Content-Length**: The task allows using `Content-Length` from the response headers or a conservative constant. Since `download_to_file` checks before any HTTP request, there is no content-length available at that point. I used `ARCHIVE_DISK_BUDGET_BYTES` (1.5 GiB) — generous enough for the compressed Flutter archive and the extracted SDK + precache artifacts. The constant is documented and re-exported for callers that may want a different budget.
+
+2. **Android budget is 2 GiB (separate constant)**: The Flutter download budget (1.5 GiB) is reused for the Flutter archive. For Android, the SDK plus `sdkmanager` package downloads can exceed the Flutter footprint, so a separate 2 GiB `ANDROID_DISK_BUDGET_BYTES` constant is defined in `android_install.rs`.
+
+3. **Network preflight in `fetch_release_manifest` only**: The task says to skip a second probe in the archive download path if the manifest fetch already succeeded ("it proves connectivity"). This is implemented: `fetch_release_manifest` does the HEAD probe; `archive_install` (which calls `fetch_release_manifest` first) relies on that proof and does not probe again for the archive download.
+
+4. **HEAD probe for `download_to_file` not added**: The task scopes the connectivity probe to `fetch_release_manifest` (manifest host) only, with a note to skip a second probe if the manifest fetch succeeded. `download_to_file` itself is not given a connectivity probe — its disk-space preflight is sufficient, and callers that need a connectivity check call `check_network_connectivity` themselves.
+
+5. **Wiremock tests exercise the error-path logic directly**: Since `fetch_release_manifest` has a hard-coded CDN URL that we cannot override without dependency injection, the 404 and malformed-JSON tests replicate the exact HTTP-client and error-mapping logic from the function using a helper `build_test_client()`. This approach verifies the contract without mocking the whole function.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (1050+ tests across all crates, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (0 warnings)
+- `cargo tree -d | grep windows-sys` — Empty (no duplicate `windows-sys` major versions)
+- Specific new tests: `ensure_disk_space_passes_for_tempdir`, `ensure_disk_space_errors_when_required_exceeds_available`, `ensure_disk_space_error_mentions_mib_counts`, `check_network_connectivity_succeeds_when_reachable`, `check_network_connectivity_errors_when_unreachable`, `fetch_manifest_404_is_clear_error`, `fetch_manifest_malformed_json_is_clear_error` — all passed
+
+### Risks/Limitations
+
+1. **`download_to_file` disk check uses parent dir**: When `dest`'s parent does not exist yet, `fs4::available_space` will return a probe error ("disk-space probe failed"). Callers must ensure the parent directory exists before calling `download_to_file`. In practice all call sites create the temp directory before downloading (this is already the case in both `android_install.rs` and `flutter_install.rs`).
+
+2. **No config toggle for skipping preflights**: Per the task spec, no `CONFIGURATION.md` change and no skip-preflight flag is added in this phase. A future phase may add a `[toolchain] skip_preflight` option.

@@ -126,5 +126,34 @@ fn resolve_stable_empty_manifest_is_none() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/main.rs` | Converted flat `Args` struct to `Cli` (with `#[command(subcommand)] command: Option<Commands>` + `#[command(flatten)] run: RunArgs`); added `Commands::Doctor { path }` variant; dispatched doctor before Engine/TUI init using `doctor::run_doctor`; added `mod doctor` declaration |
+| `src/doctor.rs` | **NEW** — `async fn run_doctor(cwd, explicit_sdk) -> ExitCode` calls `run_preflight`, formats component report with `[{status:>4}] {kind} — {detail}`, appends `flutter doctor` lines when present, exits 0 if all `Ok` else 1 |
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `Display` impl for `ComponentStatus` (`Ok`→`"OK"`, `Partial`→`"!"`, `Missing`→`"MISS"`, `Error`→`"ERR"`, `Unknown`→`"?"`); added `component_status_display_labels` test; added `resolve_stable_empty_manifest_is_none` test (all 3 arch variants) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`ExitCode` conversion**: Rust stable has no `u8::from(ExitCode)` — compared against `ExitCode::SUCCESS` and called `std::process::exit(0/1)` directly. This is the correct approach for `Result<()>` main.
+2. **`fdemon-daemon` already a direct dep**: The task specified adding it as a direct dep but it was already present in `[dependencies]` — no `Cargo.toml` change needed.
+3. **`resolve_stable` uses `HostArch`**: The task's sketch test showed `resolve_stable("x64")` (string), but the existing implementation takes `HostArch`. The test was implemented using `HostArch::X64/Arm64/Unknown` which covers the same correctness intent.
+4. **Existing `test_resolve_stable_returns_none_for_empty_manifest`**: Already covered the empty-manifest case; added the task-named `resolve_stable_empty_manifest_is_none` as a separate shorter test to satisfy the AC explicitly.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites green)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-daemon component_status_display_labels` - Passed (1 test)
+- `cargo test -p fdemon-daemon resolve_stable_empty_manifest` - Passed (1 test)
+
+### Risks/Limitations
+
+1. **`fdemon doctor` with explicit SDK path**: The `run_doctor` function accepts `explicit_sdk: Option<PathBuf>` but the CLI currently always passes `None`. A future enhancement could add a `--sdk-path` flag to `fdemon doctor`. This is not in scope per the task spec.
+2. **Clap subcommand conflict handling**: The `#[command(flatten)]` approach on `RunArgs` means both `path` (positional) and `RunArgs.path` can potentially conflict when the `doctor` subcommand is used. Clap handles this correctly — the `doctor` variant's `path` field takes the positional argument and `RunArgs` is ignored for that subcommand.

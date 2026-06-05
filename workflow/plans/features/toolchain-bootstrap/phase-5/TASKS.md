@@ -91,14 +91,14 @@ Wave 1 (parallel)         Wave 2      Wave 3        Wave 4 (parallel)      Wave 
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 01 | [01-disk-network-preflight](tasks/01-disk-network-preflight.md) | Not Started | - | 4-6h | `toolchain/download.rs`, `flutter_install.rs`, `android_install.rs`, `fdemon-daemon/Cargo.toml` |
-| 02 | [02-abortable-downloads-daemon](tasks/02-abortable-downloads-daemon.md) | Not Started | 01 | 3-4h | `toolchain/download.rs`, `flutter_install.rs`, `android_install.rs` |
-| 03 | [03-abort-retry-ux-app](tasks/03-abort-retry-ux-app.md) | Not Started | 02 | 4-5h | `actions/mod.rs`, `install_wizard/state.rs`, `message.rs`, `handler/install_wizard/actions.rs`, `handler/keys.rs`, `handler/update.rs` |
-| 04 | [04-launch-dialog-handback](tasks/04-launch-dialog-handback.md) | Not Started | 03 | 3-4h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `handler/install_wizard/navigation.rs`, `state.rs` |
-| 05 | [05-fdemon-doctor-cli](tasks/05-fdemon-doctor-cli.md) | Not Started | - | 3h | `src/main.rs`, `src/doctor.rs`, `toolchain/types.rs`, `Cargo.toml` |
-| 06 | [06-tui-wizard-polish](tasks/06-tui-wizard-polish.md) | Not Started | 03 | 2h | `widgets/install_wizard/step_list.rs`, `step_detail.rs` |
-| 07 | [07-windows-broadcast-path-tests](tasks/07-windows-broadcast-path-tests.md) | Not Started | - | 1.5-2h | `toolchain/path_config.rs` |
-| 08 | [08-update-docs](tasks/08-update-docs.md) | Not Started | 01,02,03,04,05,06,07 | 1.5-2h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-disk-network-preflight](tasks/01-disk-network-preflight.md) | Done | - | 4-6h | `toolchain/download.rs`, `flutter_install.rs`, `android_install.rs`, `fdemon-daemon/Cargo.toml` |
+| 02 | [02-abortable-downloads-daemon](tasks/02-abortable-downloads-daemon.md) | Done | 01 | 3-4h | `toolchain/download.rs`, `flutter_install.rs`, `android_install.rs` |
+| 03 | [03-abort-retry-ux-app](tasks/03-abort-retry-ux-app.md) | Done | 02 | 4-5h | `actions/mod.rs`, `install_wizard/state.rs`, `message.rs`, `handler/install_wizard/actions.rs`, `handler/keys.rs`, `handler/update.rs` |
+| 04 | [04-launch-dialog-handback](tasks/04-launch-dialog-handback.md) | Done | 03 | 3-4h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `handler/install_wizard/navigation.rs`, `state.rs` |
+| 05 | [05-fdemon-doctor-cli](tasks/05-fdemon-doctor-cli.md) | Done | - | 3h | `src/main.rs`, `src/doctor.rs`, `toolchain/types.rs`, `Cargo.toml` |
+| 06 | [06-tui-wizard-polish](tasks/06-tui-wizard-polish.md) | Done | 03 | 2h | `widgets/install_wizard/step_list.rs`, `step_detail.rs` |
+| 07 | [07-windows-broadcast-path-tests](tasks/07-windows-broadcast-path-tests.md) | Done | - | 1.5-2h | `toolchain/path_config.rs` |
+| 08 | [08-update-docs](tasks/08-update-docs.md) | Done | 01,02,03,04,05,06,07 | 1.5-2h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
 
 ## File Overlap Analysis
 

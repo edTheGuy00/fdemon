@@ -120,5 +120,43 @@ async fn precancelled_token_does_no_io() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/error.rs` | Added `Error::Cancelled` variant, `cancelled()` constructor, `is_cancelled()` predicate; added to `is_recoverable()`; 3 new tests |
+| `Cargo.toml` | Added `tokio-util = { version = "0.7", features = ["rt"] }` to workspace deps |
+| `crates/fdemon-daemon/Cargo.toml` | Added `tokio-util.workspace = true` |
+| `crates/fdemon-app/Cargo.toml` | Added `tokio-util.workspace = true` |
+| `crates/fdemon-daemon/src/toolchain/download.rs` | Added `PartFileGuard` RAII struct; rewrote `download_to_file` with `CancellationToken` param, pre-cancel check, `tokio::select!` streaming loop; updated module doc with Cancellation and XZ Decode Thread Teardown sections; updated all existing tests to pass `CancellationToken::new()`; added 4 new cancellation/guard tests |
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | Added `CancellationToken` param to `install_flutter`, `install_inner`, `archive_install`; pre-cancel check; forwarded token to `download_to_file`; updated 2 existing tests; added 1 new pre-cancel test |
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | Added `CancellationToken` param to `install_android_tools` and `install_android_tools_inner`; pre-cancel check; forwarded token to `download_to_file`; added 1 new pre-cancel test |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated 2 `install_flutter` / `install_android_tools` call sites to pass `CancellationToken::new()` with forward-compat comment for task 03 |
+
+### Notable Decisions/Tradeoffs
+
+1. **`PartFileGuard` is armed on entry, disarmed before rename**: This guarantees abort-safe cleanup even when the outer `JoinHandle` is aborted mid-await — the `Drop` impl runs on the finalizer. Disarming before the rename (not after) avoids a TOCTOU window.
+
+2. **Pre-cancel check before disk-space preflight**: The pre-cancel check fires before `ensure_disk_space`, so a cancelled token returns immediately without any filesystem I/O. This also handles the `precancelled_token_does_no_io` acceptance criterion without special-casing the `part_path`.
+
+3. **XZ decode thread documentation (no code change needed)**: Verified that `SenderWriter::write` returns `BrokenPipe` when the receiver is dropped, and that `lzma_rs::xz_decompress` propagates write errors immediately — so the thread terminates on the very next write after cancellation drops the `ReceiverReader`. Documented in the module `//!` header. No additional token check in `SenderWriter` is warranted.
+
+4. **`tokio-util` features = ["rt"]**: The `rt` feature is required for `CancellationToken` to work correctly with `tokio::select!`. Using `tokio-util` as a direct dep rather than relying on transitive exposure is cleaner and future-proof.
+
+5. **`fdemon-app` call sites use `CancellationToken::new()`**: Task 03 is responsible for storing the `JoinHandle`, wiring the cancel `Message`, and binding Esc. This task intentionally delivers only the daemon-side API, with a no-cancel placeholder at the call sites.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all crates, including new cancellation tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **`PartFileGuard` on rename failure**: On the rename error path, we manually remove the `.part` file and propagate the error rather than re-arming the guard — the guard has already been disarmed at that point. This is a clean invariant (disarm is irreversible) but slightly subtle; documented with a comment.
+
+2. **`cancel_mid_stream_returns_cancelled_and_cleans_part` test timing**: The test uses a 200 KiB body and cancels after the first chunk notification. On very fast networks/loopback this test could in theory complete before cancellation fires; in practice the mock server on loopback always has multiple chunks. The `Notify`-based synchronisation ensures at least one chunk has landed before cancellation is requested.

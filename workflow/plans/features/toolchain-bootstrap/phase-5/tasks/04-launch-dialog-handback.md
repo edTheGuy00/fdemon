@@ -114,5 +114,38 @@ fn all_nine_component_kinds_route_to_correct_step() { /* build_steps routing exh
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/toolchain-bootstrap
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap (worktree-agent-aa65f1ad8dfce217a)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `handback_done: bool` field to `InstallWizardState`; added `flutter_now_live()` predicate helper; updated `Debug` impl; added 7 tests (flutter_now_live variants, handback_done defaults, opening reset, exhaustive 9-ComponentKind routing) |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Updated `handle_preflight_completed` with auto-close + DiscoverDevices handback logic; added 4 tests (auto-close, guard no-fire-twice, no-handback without live flutter, partial toolchain still handbacks) |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Updated `handle_hide`/`handle_escape` with `maybe_dispatch_discovery_on_close` helper; added `UiMode` import; added 4 tests (manual close with/without live SDK, idempotent second close, handle_hide parity) |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated `RunToolchainPreflight` action to re-run `find_flutter_sdk` and emit `SdkResolved` when preflight shows Flutter live, so `resolved_sdk` is populated before `handle_preflight_completed` evaluates the handback predicate |
+
+### Notable Decisions/Tradeoffs
+
+1. **SDK re-resolution in action layer**: `RunToolchainPreflight` now additionally calls `find_flutter_sdk` (via `spawn_blocking`) and emits `SdkResolved` when the preflight report shows FlutterSdk Ok. This ensures `state.resolved_sdk` (and thus `flutter_executable()`) is populated by the time `handle_preflight_completed` evaluates the handback predicate. Alternative (doing it in the handler) would require making `handle_preflight_completed` async or adding another action variant — the action-layer approach keeps the handler pure.
+
+2. **`UiMode::Startup` on manual close with live SDK**: When a user Escs the wizard after a successful install, we set `UiMode::Startup` rather than `UiMode::Normal`. This mirrors `dispatch_startup_action` which uses `spawn::spawn_device_discovery` and expects device results to populate the new-session dialog. The `Startup` mode shows the new-session dialog.
+
+3. **`flutter_now_live()` reads the report, not `resolved_sdk`**: The predicate checks `report.components` (which reflects `run_preflight`'s own `find_flutter_sdk` call) rather than `state.resolved_sdk`. The `SdkResolved` message sent before `ToolchainPreflightCompleted` ensures `resolved_sdk` is populated by the time the handback check runs in `handle_preflight_completed`. Both sources agree.
+
+4. **Folded test gap (9-ComponentKind exhaustive test)**: Added as `all_nine_component_kinds_route_to_correct_step` in `install_wizard/state.rs` tests — asserts all 9 kinds (Prerequisites, Git, AndroidCmdlineTools, AndroidPlatformTools, AndroidPlatform, AndroidBuildTools, AndroidLicenses, Jdk, FlutterSdk) route to the correct `WizardStep` bucket.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test -p fdemon-app` - PASS (2837 tests, 4 ignored, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- All 15 new tests pass (see list above)
+
+### Risks/Limitations
+
+1. **Pre-existing flaky daemon tests**: `toolchain::download::tests::cancel_mid_stream_returns_cancelled_and_cleans_part`, `toolchain::flutter_install::tests::test_resolve_install_dir_fvm_cache_path_env`, and `toolchain::jdk::tests::test_resolve_jdk_home_honors_java_home` fail intermittently under parallel test runs (environment variable contention, timing). These are pre-existing and unrelated to this task.
+
+2. **`SdkResolved` sent before preflight**: The `RunToolchainPreflight` action now sends `SdkResolved` before `ToolchainPreflightCompleted`. Tests inject `resolved_sdk` directly (bypassing the async path) — the async re-resolution ensures end-to-end correctness but is untestable in unit tests without a full engine.

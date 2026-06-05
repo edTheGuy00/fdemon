@@ -93,5 +93,36 @@ fn windows_path_script_contains_broadcast_and_no_value_interpolation() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 **Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Added `broadcast_wm_settingchange()` helper; called after successful registry writes in `add_to_path_windows` and `add_android_env_windows`; added 8 new tests (6 shell error-path tests + 2 broadcast script shape tests) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Broadcast as separate fn, not inlined**: Extracted `broadcast_wm_settingchange()` as a standalone function rather than inlining the `Add-Type` snippet in each writer. This keeps both Windows writers readable, centralises the broadcast logic (no duplication), and makes the `#[cfg(target_os = "windows")]` / `#[cfg(not(target_os = "windows"))]` gating clear.
+
+2. **`#[cfg(not(target_os = "windows"))]` no-op block**: Added an explicit `#[cfg(not)]` branch with a comment (`// No-op on non-Windows.`) so the intent is clear and there's no "dead code" concern from clippy. The function compiles cleanly on all targets.
+
+3. **Script is a compile-time constant in the function body**: The PowerShell `Add-Type` heredoc and `SendMessageTimeout` call are written as a Rust raw string literal assigned to a local `script` variable (under `#[cfg(target_os = "windows")]`). This makes it easy to assert the script shape in unit tests (the test duplicates the literal, which is fine for a pure-string shape assertion).
+
+4. **Error-path tests use `HostPlatform::Linux`**: The `PowerShell`/`Cmd`/`Unknown` shell error path is reached on any non-Windows platform when the platform is not `HostPlatform::Windows`. Using `HostPlatform::Linux` in the tests is correct and avoids triggering the Windows registry path on CI.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all crate suites: 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Broadcast not testable on Linux CI**: The actual `SendMessageTimeout` P/Invoke call only runs on Windows. The tests assert on the *script string shape* (correct hex constants, no interpolation of path values) which is the correct strategy for cross-platform CI. Live broadcast must be verified manually on a Windows host.
+
+2. **`Add-Type` JIT cost**: `Add-Type` compiles a C# snippet at runtime (~once per PowerShell session). This is acceptable in an installer flow (rare operation, user-visible progress). No impact on the normal fdemon startup path.
+
+3. **Broadcast uses `| Out-Null` + no error check**: Consistent with the task spec's "best-effort" requirement. A stale/hung Explorer process that doesn't respond within 5 s (SMTO_ABORTIFHUNG) will not block the write outcome.

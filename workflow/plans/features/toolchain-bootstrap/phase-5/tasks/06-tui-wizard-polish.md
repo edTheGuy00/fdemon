@@ -79,5 +79,33 @@ fn detail_hides_cancel_hint_when_idle() { /* no running step -> hint absent */ }
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** feat/toolchain-bootstrap
+**Status:** Done
+**Branch:** worktree-agent-adac4a9c02a702851
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_list.rs` | Added `GLYPH_RUN_FAILED` constant, `failed_step_kind: Option<WizardStepKind>` field on `StepListPane`, run-failed badge override logic in `render_step_row`, updated `step_list_pane()` constructor signature, updated existing tests to 4-arg constructor, added 3 new run-failed badge tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/progress.rs` | Added `CANCEL_HINT_HEIGHT` constant, `show_cancel_hint: bool` field on `StepProgress`, `render_cancel_hint()` method, updated `Widget::render` to include a cancel-hint layout branch for Running state, updated all existing tests to 3-arg constructor, added 4 new cancel-hint tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Updated `StepProgress::new` call to pass `show_cancel_hint = execution.status == Running`, added 4 new detail-pane cancel-hint/status tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Added `failed_execution_kind()` helper method, updated both `step_list_pane()` call sites to pass the computed `failed_step_kind` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`show_cancel_hint` on `StepProgress` vs overlay in `step_detail.rs`**: Added the field to `StepProgress` so the hint is part of the progress widget's layout system, avoiding manual coordinate arithmetic for a reserved hint row. This keeps all layout math in `StepProgress::render`.
+2. **Terminal states don't show cancel hint**: Even if `show_cancel_hint=true` is passed (which `step_detail.rs` never does for terminal states), the terminal branch in `StepProgress::render` is taken first, so the cancel hint never appears for Succeeded/Failed. Belt-and-suspenders.
+3. **Run-failed badge colour when selected+focused**: When the failed step is the currently selected+focused row, the glyph uses `CONTRAST_FG` (black on accent bg) rather than `STATUS_RED`. This is consistent with the existing badge behaviour for all states — the accent row overrides individual glyph colours for readability. Tests reflect this by selecting a different row as current when checking the red colour.
+4. **`status_message` (retry prompt)**: Already rendered in the wizard footer by `InstallWizardPanel::render_footer` (line 239 in `mod.rs`). No new rendering needed — acceptance criterion 3 is met by the existing footer.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all crates: 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- New tests added: 3 step_list run-failed badge tests, 4 progress cancel-hint tests, 4 step_detail cancel-hint/idle tests
+
+### Risks/Limitations
+
+1. **Cancel hint layout with very short area**: When `area.height < 5` (PHASE+PROGRESS+SEP+HINT = 4 rows minimum + 0 for log tail), the `Layout` system gracefully clips the hint row to 0 height. The `render_cancel_hint` guard `if area.height < 1 { return; }` provides an additional safety net.
