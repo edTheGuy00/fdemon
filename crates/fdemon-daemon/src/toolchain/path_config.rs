@@ -49,6 +49,35 @@ use fdemon_core::error::{Error, Result};
 
 use super::types::{HostPlatform, HostShell};
 
+// ── Windows broadcast script constant ────────────────────────────────────────
+
+/// PowerShell script that broadcasts `WM_SETTINGCHANGE` so running processes
+/// pick up registry environment changes immediately.
+///
+/// The script uses P/Invoke via `Add-Type` to call
+/// `SendMessageTimeout(HWND_BROADCAST=0xFFFF, WM_SETTINGCHANGE=0x1A, ...)`.
+/// No user-controlled values are interpolated — the broadcast lParam is the
+/// system-constant literal `"Environment"`.
+///
+/// The `SMTO_ABORTIFHUNG` flag (2) gives each recipient a 5 000 ms deadline
+/// before giving up on that window. This is an in-script Win32 timeout; it
+/// does **not** constrain the lifetime of the `powershell.exe` process itself.
+///
+/// Referenced by `broadcast_wm_settingchange` (Windows) and by cross-platform
+/// shape tests so that CI catches any accidental script drift.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const BROADCAST_WM_SETTINGCHANGE_SCRIPT: &str = r#"Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class FdemonEnv {
+  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam,
+      string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+}
+"@
+[FdemonEnv]::SendMessageTimeout([IntPtr]0xFFFF, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]([UIntPtr]::Zero)) | Out-Null
+"#;
+
 // ── Marker constants ──────────────────────────────────────────────────────────
 
 /// Opening fence line that marks the start of a managed Flutter PATH block.
@@ -805,25 +834,24 @@ fn broadcast_wm_settingchange() {
     // Only meaningful on Windows; compiles to nothing on other targets.
     #[cfg(target_os = "windows")]
     {
-        // The script is a constant — no user-controlled values are interpolated.
-        // The broadcast target is the literal string "Environment" (a system
-        // constant), not any path value, so there is no injection surface.
-        let script = r#"Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class FdemonEnv {
-  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam,
-      string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
-}
-"@
-[FdemonEnv]::SendMessageTimeout([IntPtr]0xFFFF, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]([UIntPtr]::Zero)) | Out-Null
-"#;
-
-        // Ignore errors — broadcast is best-effort.
+        // Use the module-level constant — no inline duplication, and tests can
+        // assert against the same value that ships.
+        //
+        // Spawned detached with all stdio redirected to null so the wizard
+        // thread never blocks waiting for powershell.exe to exit.  If PowerShell
+        // stalls (e.g. Add-Type C# JIT, AV interception) the registry write has
+        // already committed; silently dropping the Child handle is correct here.
         let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output();
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                BROADCAST_WM_SETTINGCHANGE_SCRIPT,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1840,20 +1868,14 @@ mod tests {
     /// numeric constant `0x1A` (WM_SETTINGCHANGE) and broadcast to `0xFFFF`
     /// (HWND_BROADCAST), and must use the literal string `"Environment"` rather
     /// than any user-supplied value.
+    ///
+    /// Asserts against `BROADCAST_WM_SETTINGCHANGE_SCRIPT` — the actual constant
+    /// shipped to production — so any accidental drift is caught on Linux CI.
     #[test]
     fn windows_broadcast_script_contains_wm_settingchange_constant() {
-        // The script constant embedded in broadcast_wm_settingchange().
-        let script = r#"Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class FdemonEnv {
-  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam,
-      string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
-}
-"@
-[FdemonEnv]::SendMessageTimeout([IntPtr]0xFFFF, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]([UIntPtr]::Zero)) | Out-Null
-"#;
+        // Assert against the shared module-level constant so this test guards
+        // the actually-shipped script rather than a re-typed copy.
+        let script = BROADCAST_WM_SETTINGCHANGE_SCRIPT;
 
         // WM_SETTINGCHANGE hex constant must be present.
         assert!(
@@ -1885,20 +1907,27 @@ public class FdemonEnv {
 
     /// After a Windows PATH write, the set command references `$env:FDEMON_NEW_PATH`
     /// out-of-band, and the broadcast does not re-introduce any path interpolation.
+    ///
+    /// Asserts against `BROADCAST_WM_SETTINGCHANGE_SCRIPT` — the actual constant
+    /// shipped to production — so any accidental drift is caught on Linux CI.
     #[test]
     fn windows_path_set_and_broadcast_both_use_out_of_band_values() {
         let set_script =
             "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
-        let broadcast_lp_arg = "\"Environment\"";
+        // Assert against the shared constant, not a re-typed snippet.
+        let broadcast_script = BROADCAST_WM_SETTINGCHANGE_SCRIPT;
 
         // The set script must use the env-var reference form (out-of-band).
         assert!(set_script.contains("$env:FDEMON_NEW_PATH"));
         // The broadcast lParam is the literal word "Environment" — not any path.
-        assert_eq!(broadcast_lp_arg, "\"Environment\"");
+        assert!(
+            broadcast_script.contains("\"Environment\""),
+            "broadcast lParam must be the literal string \"Environment\""
+        );
         // Neither script may contain a raw Windows path.
         let tricky_path = "C:\\Users\\O'Brien\\flutter bin\\bin";
         assert!(!set_script.contains(tricky_path));
-        assert!(!broadcast_lp_arg.contains(tricky_path));
+        assert!(!broadcast_script.contains(tricky_path));
     }
 
     /// Replacing an Android env block when the SDK root changes leaves exactly
