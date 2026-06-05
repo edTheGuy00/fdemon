@@ -45,8 +45,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use super::download::{
-    check_network_connectivity, download_to_file, ensure_disk_space, extract_archive,
-    verify_sha256, ARCHIVE_DISK_BUDGET_BYTES,
+    check_network_connectivity, download_to_file, extract_archive, verify_sha256,
 };
 use super::process_stream::run_streaming;
 use super::types::{
@@ -128,6 +127,92 @@ impl Drop for LockGuard {
                 "Failed to remove install lockfile {}: {e}",
                 self.lock_path.display()
             );
+        }
+    }
+}
+
+// ── RAII temp-dir guard ───────────────────────────────────────────────────────
+
+/// RAII guard that removes a directory (and all its contents) when dropped.
+///
+/// The guard is **armed** on construction and **disarmed** only on success via
+/// [`TempDirGuard::disarm`].  Removal runs even when the outer future is
+/// dropped mid-execution via `JoinHandle::abort()`, because `Drop` is called
+/// synchronously during the drop cascade.
+///
+/// This ensures no partially-extracted SDK tree is leaked on cancellation,
+/// abort, or any other early-exit path.
+struct TempDirGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempDirGuard {
+    /// Create a new armed guard for `path`.
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    /// Disarm the guard so the directory is **not** removed on drop.
+    ///
+    /// Call this after a successful atomic rename so the guard does not attempt
+    /// to remove the now-renamed (and relocated) directory.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        if self.armed && self.path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.path) {
+                tracing::warn!(
+                    path = %self.path.display(),
+                    error = %e,
+                    "TempDirGuard: failed to remove install temp dir (best-effort)"
+                );
+            }
+        }
+    }
+}
+
+// ── Stale-temp reclamation ────────────────────────────────────────────────────
+
+/// Glob `install_root` for any `.fdemon-install-tmp-*` directories (from any
+/// PID) and remove them.
+///
+/// Must be called **under the `LockGuard`** so there is no race with a
+/// concurrent install that also holds a live temp dir.
+///
+/// Any directory that cannot be removed is logged as a warning and skipped;
+/// the function does **not** propagate removal errors.
+fn reclaim_stale_flutter_tmps(install_root: &Path) {
+    let read_dir = match std::fs::read_dir(install_root) {
+        Ok(rd) => rd,
+        Err(e) => {
+            tracing::debug!(
+                root = %install_root.display(),
+                error = %e,
+                "reclaim_stale_flutter_tmps: read_dir failed; skipping reclamation"
+            );
+            return;
+        }
+    };
+    for entry in read_dir.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(".fdemon-install-tmp-") {
+            let path = entry.path();
+            if path.is_dir() {
+                tracing::debug!(path = %path.display(), "reclaim_stale_flutter_tmps: removing stale temp dir");
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "reclaim_stale_flutter_tmps: could not remove stale temp dir"
+                    );
+                }
+            }
         }
     }
 }
@@ -525,46 +610,42 @@ where
     // ── Concurrent-install guard (M9) ────────────────────────────────────────
     let _lock = LockGuard::acquire(&target.install_root)?;
 
+    // ── Preflight: reclaim all stale temp dirs (any PID) under the lock ──────
+    // This recovers any leaked `.fdemon-install-tmp-*` trees from a prior run
+    // that was aborted via `JoinHandle::abort()` before the RAII guard could
+    // fire (e.g. a different PID's temp dir, or a dir that survived a crash).
+    reclaim_stale_flutter_tmps(&target.install_root);
+
     // ── Temp directory ───────────────────────────────────────────────────────
     let pid = std::process::id();
-    let tmp_dir = target
+    let tmp_dir_path = target
         .install_root
         .join(format!(".fdemon-install-tmp-{pid}"));
 
-    // Remove any stale temp dir from a previous interrupted install.
-    if tmp_dir.exists() {
-        std::fs::remove_dir_all(&tmp_dir).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                e.kind(),
-                format!("remove stale temp dir {tmp_dir:?}: {e}"),
-            ))
-        })?;
-    }
-
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+    std::fs::create_dir_all(&tmp_dir_path).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
-            format!("create temp dir {tmp_dir:?}: {e}"),
+            format!("create temp dir {tmp_dir_path:?}: {e}"),
         ))
     })?;
 
-    // Wrap the install body in a closure to ensure temp-dir cleanup on error.
-    let result = install_inner(target, &tmp_dir, &final_dir, cancel, &mut on_event).await;
+    // Arm the RAII guard. It calls `remove_dir_all` on the temp dir in its
+    // `Drop` implementation — this runs even when the outer `JoinHandle` is
+    // aborted mid-`await`, ensuring no partially-extracted SDK tree is leaked
+    // regardless of how the future exits.  The guard is disarmed by
+    // `install_inner` just before the atomic rename so it does not attempt to
+    // remove the now-renamed directory.
+    let mut tmp_guard = TempDirGuard::new(tmp_dir_path.clone());
 
-    match result {
-        Ok(outcome) => Ok(outcome),
-        Err(e) => {
-            // Best-effort cleanup of the temp dir.
-            if let Err(rm_err) = std::fs::remove_dir_all(&tmp_dir) {
-                tracing::warn!(
-                    "Failed to remove temp dir {} after install error: {}",
-                    tmp_dir.display(),
-                    rm_err
-                );
-            }
-            Err(e)
-        }
-    }
+    install_inner(
+        target,
+        &tmp_dir_path,
+        &final_dir,
+        cancel,
+        &mut on_event,
+        &mut tmp_guard,
+    )
+    .await
 }
 
 /// Inner install logic, called from [`install_flutter`].
@@ -573,12 +654,17 @@ where
 /// but is an incomplete install (directory exists, `bin/flutter` absent), it is
 /// removed before the rename so the install can proceed without an `ENOTEMPTY`
 /// error.
+///
+/// `tmp_guard` is disarmed just before the atomic rename so the RAII guard
+/// does not attempt to remove the directory after it has been renamed to
+/// `final_dir`.
 async fn install_inner<F>(
     target: &FlutterInstallTarget,
     tmp_dir: &Path,
     final_dir: &Path,
     cancel: CancellationToken,
     on_event: &mut F,
+    tmp_guard: &mut TempDirGuard,
 ) -> Result<FlutterInstallOutcome>
 where
     F: FnMut(InstallEvent) + Send,
@@ -590,7 +676,7 @@ where
     // For git clone: the clone target is `tmp_dir` directly (git creates a subdir).
     // For archive: Flutter archives extract a top-level `flutter/` dir inside `tmp_dir`.
     let sdk_root_in_tmp: PathBuf = if use_git {
-        git_install(target, tmp_dir, on_event).await?
+        git_install(target, tmp_dir, cancel, on_event).await?
     } else {
         archive_install(target, tmp_dir, cancel, on_event).await?
     };
@@ -625,6 +711,10 @@ where
     }
 
     // ── Atomic rename ────────────────────────────────────────────────────────
+    // Disarm the temp-dir guard before the rename so it does not attempt to
+    // remove a directory that is being atomically moved to `final_dir`.
+    tmp_guard.disarm();
+
     tracing::debug!(
         "Renaming {} → {}",
         sdk_root_in_tmp.display(),
@@ -666,16 +756,30 @@ where
 /// directory so they are always treated as positional operands and never
 /// interpreted as flags, regardless of their content.
 ///
+/// ## Cancellation
+///
+/// The `cancel` token is checked before starting the clone and is also wired
+/// into a `tokio::select!` around the `run_streaming` await so that a cancel
+/// during the clone exits cooperatively with `Error::Cancelled`.  Because
+/// `run_streaming` spawns the git process with `kill_on_drop(true)`, dropping
+/// the future kills the git child process.
+///
 /// Returns the path of the SDK root inside `tmp_dir` (i.e. `tmp_dir` itself,
 /// since git clones directly into the target directory).
 async fn git_install<F>(
     target: &FlutterInstallTarget,
     tmp_dir: &Path,
+    cancel: CancellationToken,
     on_event: &mut F,
 ) -> Result<PathBuf>
 where
     F: FnMut(InstallEvent) + Send,
 {
+    // Pre-cancel check.
+    if cancel.is_cancelled() {
+        return Err(Error::cancelled("git install cancelled before start"));
+    }
+
     on_event(InstallEvent::Phase("Cloning"));
     on_event(InstallEvent::Log(format!(
         "Cloning Flutter channel '{}' into {}",
@@ -701,10 +805,18 @@ where
         tmp_str.as_ref(),
     ];
 
-    let status = run_streaming("git", args, None, |line| {
-        on_event(InstallEvent::Log(line));
-    })
-    .await?;
+    // Wrap run_streaming in a select! so the token cancels the clone
+    // cooperatively.  `kill_on_drop(true)` in run_streaming ensures the git
+    // child is killed when the future is dropped on the cancel branch.
+    let status = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            return Err(Error::cancelled("git clone cancelled"));
+        }
+        result = run_streaming("git", args, None, |line| {
+            on_event(InstallEvent::Log(line));
+        }) => result?,
+    };
 
     if !status.success() {
         return Err(Error::process(format!(
@@ -802,10 +914,13 @@ where
         tmp_dir.display()
     )));
 
-    // Preflight: check disk space before extraction. The extracted Flutter SDK
-    // is ~1 GiB; ARCHIVE_DISK_BUDGET_BYTES (1.5 GiB) covers both the
-    // already-downloaded archive file and the extracted tree.
-    ensure_disk_space(tmp_dir, ARCHIVE_DISK_BUDGET_BYTES)?;
+    // Note: disk space was already checked before the download in
+    // `download_to_file` (which calls `ensure_disk_space` with
+    // `ARCHIVE_DISK_BUDGET_BYTES`). Repeating the check here on the same
+    // filesystem after the ~300 MiB archive is already written would
+    // effectively demand 1.5 GiB *plus* the archive size — a false-negative
+    // refusal on a tight disk (F15). The pre-download check already budgets
+    // both the compressed archive and the extracted tree.
 
     let tmp_dir_clone = tmp_dir.to_owned();
     let archive_path_clone2 = archive_path.clone();
@@ -1762,5 +1877,86 @@ mod tests {
             !lock_path.exists(),
             "lockfile must not be created for pre-cancelled install"
         );
+    }
+
+    // ── TempDirGuard (F14) ────────────────────────────────────────────────────
+
+    /// An armed `TempDirGuard` removes the directory (and contents) on drop.
+    #[test]
+    fn temp_dir_guard_removes_dir_on_drop() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("some-install-tmp");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("partial.file"), b"partial").unwrap();
+        assert!(dir.exists(), "dir must exist before drop");
+
+        {
+            let guard = TempDirGuard::new(dir.clone());
+            drop(guard);
+        }
+
+        assert!(
+            !dir.exists(),
+            "armed TempDirGuard must remove the dir on drop"
+        );
+    }
+
+    /// A `TempDirGuard` pointing to a non-existent directory must not panic on drop.
+    #[test]
+    fn temp_dir_guard_missing_dir_no_panic() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("does-not-exist");
+        let guard = TempDirGuard::new(dir);
+        drop(guard); // Must not panic.
+    }
+
+    /// `reclaim_stale_flutter_tmps` removes all `.fdemon-install-tmp-*` dirs
+    /// regardless of PID suffix.
+    #[test]
+    fn reclaim_stale_flutter_tmps_removes_all_tmp_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Plant two stale temp dirs with different PIDs.
+        let stale1 = root.join(".fdemon-install-tmp-12345");
+        let stale2 = root.join(".fdemon-install-tmp-99999");
+        std::fs::create_dir_all(&stale1).unwrap();
+        std::fs::write(stale1.join("partial.sdk"), b"").unwrap();
+        std::fs::create_dir_all(&stale2).unwrap();
+
+        // A non-tmp dir must be left alone.
+        let keep = root.join("stable");
+        std::fs::create_dir_all(&keep).unwrap();
+
+        reclaim_stale_flutter_tmps(root);
+
+        assert!(!stale1.exists(), "stale temp dir 1 must be removed");
+        assert!(!stale2.exists(), "stale temp dir 2 must be removed");
+        assert!(keep.exists(), "non-tmp dir must not be removed");
+    }
+
+    // ── git_install cancel (F23) ──────────────────────────────────────────────
+
+    /// `git_install` with a pre-cancelled token must return `Error::Cancelled`
+    /// without spawning `git`.
+    #[tokio::test]
+    async fn git_install_precancelled_returns_cancelled() {
+        let tmp = TempDir::new().unwrap();
+        let target = FlutterInstallTarget {
+            method: InstallMethod::GitClone,
+            channel: "stable".to_owned(),
+            install_root: tmp.path().to_owned(),
+            version_dir_name: "stable".to_owned(),
+        };
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let mut events: Vec<InstallEvent> = Vec::new();
+        let err = git_install(&target, tmp.path(), token, &mut |e| events.push(e))
+            .await
+            .expect_err("pre-cancelled git_install must return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
     }
 }

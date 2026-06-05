@@ -85,11 +85,15 @@ use super::types::DownloadProgress;
 /// still bounding the wizard stall on a totally unreachable endpoint.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Idle/stall guard for archive downloads.
+/// Per-read idle guard for archive downloads.
 ///
-/// If no bytes arrive within this window the stream is considered stalled and
-/// the attempt is abandoned.  30 s accommodates slow CDN edge nodes without
-/// letting a stalled socket hang the wizard indefinitely.
+/// If no bytes arrive within this window on a single read the stream is
+/// considered stalled and the attempt is abandoned.  30 s accommodates slow
+/// CDN edge nodes without letting a stalled socket hang the wizard
+/// indefinitely.  This is wired via `ClientBuilder::read_timeout` (resets
+/// after each successful chunk) — **not** `ClientBuilder::timeout` (which is a
+/// total-request deadline and would abort any ~300 MiB download over a slow
+/// link before the transfer completes).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum number of download attempts before giving up.
@@ -106,8 +110,9 @@ pub(crate) const ARCHIVE_DISK_BUDGET_BYTES: u64 = 1_572_864_000; // 1.5 GiB
 
 /// Fast HEAD probe timeout for the network-connectivity check.
 ///
-/// 5 seconds bounds the stall when the host is offline, far below the
-/// 90-second worst-case of `IDLE_TIMEOUT × MAX_DOWNLOAD_ATTEMPTS`.
+/// 5 seconds bounds the stall when the host is offline.  For comparison,
+/// `IDLE_TIMEOUT` is a per-read idle guard (not a total deadline), so the
+/// offline stall without this probe could be much longer than 30 seconds.
 const CONNECTIVITY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ── Preflight helpers ─────────────────────────────────────────────────────────
@@ -154,6 +159,21 @@ pub(crate) fn ensure_disk_space(dir: &Path, required: u64) -> Result<()> {
 /// Call this once before the first download attempt to bound the offline
 /// stall. Skip the probe if a previous request to the same origin already
 /// succeeded in the same install session (connectivity is implicitly proven).
+///
+/// ## Captive-portal limitation
+///
+/// This probe **cannot reliably detect captive portals**.  When a portal
+/// returns an HTTP 2xx/3xx response (e.g. a redirect to a login page), the
+/// probe succeeds even though the real download endpoint is not reachable.
+/// The subsequent download then fails with a parse or content error rather
+/// than a fast "no network" message.
+///
+/// However, because the target URL uses HTTPS (`storage.googleapis.com`), a
+/// transparent MITM portal that cannot present a valid certificate for that
+/// host will fail the TLS handshake and *is* caught by this probe (fast
+/// failure).  Only a portal that passively passes HTTPS traffic without
+/// interception (and instead intercepts DNS or TCP at the application layer)
+/// can sneak past this check.
 ///
 /// # Errors
 ///
@@ -268,7 +288,7 @@ where
     let client = reqwest::Client::builder()
         .user_agent(concat!("fdemon/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(IDLE_TIMEOUT)
+        .read_timeout(IDLE_TIMEOUT)
         .build()
         .map_err(|e| Error::process(format!("failed to build HTTP client: {e}")))?;
 

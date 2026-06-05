@@ -46,6 +46,76 @@ use super::types::{
     DownloadProgress,
 };
 
+// ── RAII temp-dir guard ───────────────────────────────────────────────────────
+
+/// RAII guard that removes a directory (and all its contents) when dropped.
+///
+/// The guard is **armed** on construction.  Removal runs even when the outer
+/// future is dropped mid-execution via `JoinHandle::abort()`, because `Drop`
+/// is called synchronously during the drop cascade.  This ensures that a
+/// partially-extracted Android SDK tree is never leaked on abort or panic.
+struct TempDirGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempDirGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        if self.armed && self.path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.path) {
+                tracing::warn!(
+                    path = %self.path.display(),
+                    error = %e,
+                    "TempDirGuard: failed to remove android install temp dir (best-effort)"
+                );
+            }
+        }
+    }
+}
+
+// ── Stale-temp reclamation ────────────────────────────────────────────────────
+
+/// Glob `sdk_root` for any `.fdemon-android-tmp-*` directories (from any PID)
+/// and remove them.
+///
+/// Any directory that cannot be removed is logged as a warning and skipped.
+fn reclaim_stale_android_tmps(sdk_root: &Path) {
+    let read_dir = match std::fs::read_dir(sdk_root) {
+        Ok(rd) => rd,
+        Err(e) => {
+            tracing::debug!(
+                root = %sdk_root.display(),
+                error = %e,
+                "reclaim_stale_android_tmps: read_dir failed; skipping reclamation"
+            );
+            return;
+        }
+    };
+    for entry in read_dir.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(".fdemon-android-tmp-") {
+            let path = entry.path();
+            if path.is_dir() {
+                tracing::debug!(path = %path.display(), "reclaim_stale_android_tmps: removing stale temp dir");
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "reclaim_stale_android_tmps: could not remove stale temp dir"
+                    );
+                }
+            }
+        }
+    }
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Number of `y\n` responses to feed to `sdkmanager --licenses`.
@@ -144,46 +214,31 @@ where
         ))
     })?;
 
-    let tmp_dir = target
+    // Reclaim any stale `.fdemon-android-tmp-*` dirs from prior aborted runs
+    // (any PID — a future-abort drops the guard without running `Drop` in the
+    // aborted context if the abort wins the race before `Drop` fires).
+    reclaim_stale_android_tmps(&target.sdk_root);
+
+    let tmp_dir_path = target
         .sdk_root
         .join(format!(".fdemon-android-tmp-{}", std::process::id()));
 
-    // Remove any pre-existing temp dir from a previous (crashed) run with the
-    // same PID before creating a fresh one.  PID recycling means a stale dir
-    // could otherwise contain partial downloads or extracted files, leading to
-    // a corrupted install.
-    if tmp_dir.exists() {
-        std::fs::remove_dir_all(&tmp_dir).map_err(|e| {
-            Error::Io(std::io::Error::new(
-                e.kind(),
-                format!(
-                    "remove stale android install temp dir {}: {e}",
-                    tmp_dir.display()
-                ),
-            ))
-        })?;
-    }
-
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+    std::fs::create_dir_all(&tmp_dir_path).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
-            format!("create android install temp dir {}: {e}", tmp_dir.display()),
+            format!(
+                "create android install temp dir {}: {e}",
+                tmp_dir_path.display()
+            ),
         ))
     })?;
 
-    let result = install_android_tools_inner(target, &tmp_dir, &url, cancel, &mut on_event).await;
+    // Arm the RAII guard. Its `Drop` removes the temp dir even when the outer
+    // `JoinHandle` is aborted mid-`await`, ensuring no partially-extracted
+    // Android SDK tree is leaked.
+    let _tmp_guard = TempDirGuard::new(tmp_dir_path.clone());
 
-    // Clean up the temp dir on either success or failure.
-    if tmp_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
-            tracing::warn!(
-                "Failed to remove android install temp dir {}: {e}",
-                tmp_dir.display()
-            );
-        }
-    }
-
-    result
+    install_android_tools_inner(target, &tmp_dir_path, &url, cancel, &mut on_event).await
 }
 
 // ── Inner implementation (with cleanup on drop via caller) ─────────────────
@@ -684,5 +739,52 @@ mod tests {
             .expect_err("pre-cancelled install must return Err");
 
         assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
+    }
+
+    // ── TempDirGuard (F14) ────────────────────────────────────────────────────
+
+    /// An armed `TempDirGuard` removes the directory and its contents on drop.
+    #[test]
+    fn android_temp_dir_guard_removes_dir_on_drop() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join(".fdemon-android-tmp-12345");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("partial.zip"), b"partial").unwrap();
+        assert!(dir.exists(), "dir must exist before drop");
+
+        {
+            let guard = TempDirGuard::new(dir.clone());
+            drop(guard);
+        }
+
+        assert!(
+            !dir.exists(),
+            "armed TempDirGuard must remove the dir on drop"
+        );
+    }
+
+    /// `reclaim_stale_android_tmps` removes all `.fdemon-android-tmp-*` dirs
+    /// regardless of PID suffix, and leaves other directories intact.
+    #[test]
+    fn reclaim_stale_android_tmps_removes_all_tmp_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Plant two stale temp dirs with different PIDs.
+        let stale1 = root.join(".fdemon-android-tmp-11111");
+        let stale2 = root.join(".fdemon-android-tmp-22222");
+        std::fs::create_dir_all(&stale1).unwrap();
+        std::fs::write(stale1.join("cmdline-tools.zip"), b"").unwrap();
+        std::fs::create_dir_all(&stale2).unwrap();
+
+        // A non-tmp dir (e.g. installed SDK component) must be left alone.
+        let keep = root.join("cmdline-tools");
+        std::fs::create_dir_all(&keep).unwrap();
+
+        reclaim_stale_android_tmps(root);
+
+        assert!(!stale1.exists(), "stale android temp dir 1 must be removed");
+        assert!(!stale2.exists(), "stale android temp dir 2 must be removed");
+        assert!(keep.exists(), "non-tmp dir must not be removed");
     }
 }
