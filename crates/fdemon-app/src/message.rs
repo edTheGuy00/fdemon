@@ -1814,21 +1814,32 @@ pub enum Message {
         reason: String,
     },
 
-    /// The install task for a wizard step is ready — carries the cancel token
-    /// and join handle so the TEA can store them for later cancellation.
+    /// The install task for a wizard step is ready — carries the join handle
+    /// so the TEA can upgrade the already-stored `InstallTaskHandle`.
     ///
-    /// Sent by `handle_action(RunWizardStep)` immediately before the install
-    /// work begins (so state has the handle before any event arrives).
-    /// The TEA update handler stores this on `InstallWizardState::install_task`.
+    /// Sent by `handle_action(RunWizardStep)` after `tokio::spawn` returns
+    /// (so the `JoinHandle` is available). The token is no longer carried here
+    /// — it is minted synchronously by `handle_run_selected_step` and stored
+    /// on `InstallWizardState::install_task` **before** `RunWizardStep` is
+    /// dispatched. This message only upgrades the `join` field.
+    ///
+    /// `handle_install_task_ready` validates that `kind` and `run_seq` match
+    /// the current run before upgrading — stale messages are discarded and
+    /// the associated `JoinHandle` is aborted.
     WizardInstallTaskReady {
-        /// Token used to signal the running task to stop.
+        /// Which wizard step this ready message belongs to.
         ///
-        /// Wrapped in `Arc` to satisfy the `Clone` bound on `Message`.
-        cancel: std::sync::Arc<tokio_util::sync::CancellationToken>,
+        /// Used by `handle_install_task_ready` to reject stale messages from
+        /// a previously cancelled run of the same step kind.
+        kind: WizardStepKind,
+        /// Sequence counter from `InstallWizardState::run_seq` at the time
+        /// the run was started. Used alongside `kind` to distinguish run A
+        /// from run B when the same step kind is retried after a cancel.
+        run_seq: u64,
         /// JoinHandle for the install task.
         ///
         /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
-        /// `Message`. The handler takes the handle out when storing it.
+        /// `Message`. The handler takes the handle out when upgrading.
         handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     },
 

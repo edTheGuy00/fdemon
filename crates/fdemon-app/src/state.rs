@@ -1730,7 +1730,18 @@ impl AppState {
     }
 
     /// Close the Install Wizard panel and return to Normal mode.
+    ///
+    /// Cancels and clears any in-flight install task handle (F19) so that the
+    /// install loop stops promptly and the `LockGuard` is released even when
+    /// the wizard is closed by an external signal (e.g. `HideInstallWizard`).
     pub fn hide_install_wizard(&mut self) {
+        // F19: cancel + clear any running install task before hiding.
+        if let Some(task) = self.install_wizard_state.install_task.take() {
+            task.cancel.cancel();
+            if let Some(j) = task.join {
+                j.abort();
+            }
+        }
         self.install_wizard_state.visible = false;
         self.ui_mode = UiMode::Normal;
     }

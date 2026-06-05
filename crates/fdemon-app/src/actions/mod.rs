@@ -866,6 +866,8 @@ pub fn handle_action(
         // `handler/install_wizard/actions.rs` remain pure.
         UpdateAction::RunWizardStep {
             kind,
+            run_seq,
+            cancel_token,
             install,
             path_bin_dir,
             android_sdk_root,
@@ -877,20 +879,19 @@ pub fn handle_action(
                 resolve_install_dir, AndroidInstallTarget, FlutterInstallTarget, HostPlatform,
                 HostShell, InstallEvent, DEFAULT_CMDLINE_TOOLS_BUILD,
             };
-            use tokio_util::sync::CancellationToken;
 
             // Clone msg_tx: one for the spawned task, one for the ready message.
             let msg_tx_task = msg_tx.clone();
             let msg_tx_ready = msg_tx.clone();
 
-            // Create the cancellation token before spawning so the task handle
-            // and token can be sent back to state before any install I/O begins.
-            let cancel_token = CancellationToken::new();
-            let cancel_for_task = cancel_token.clone();
-            let cancel_for_msg = std::sync::Arc::new(cancel_token);
+            // Reuse the token minted synchronously by `handle_run_selected_step`
+            // (already stored on `InstallWizardState::install_task`). This
+            // eliminates the window where `is_step_running()==true` but the
+            // cancel token is unknown to state (F3 fix).
+            let cancel_for_task = cancel_token;
 
             // Shared slot to deposit the JoinHandle after spawn so that
-            // `WizardInstallTaskReady` can carry it to state.
+            // `WizardInstallTaskReady` can carry it to state for abort backstop.
             let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
                 std::sync::Arc::new(std::sync::Mutex::new(None));
             let handle_slot_for_task = handle_slot.clone();
@@ -1197,19 +1198,21 @@ pub fn handle_action(
             });
 
             // Deposit the JoinHandle into the shared slot so the
-            // WizardInstallTaskReady message can carry it to state.
+            // WizardInstallTaskReady message can carry it to state for abort backstop.
             // This must happen after `tokio::spawn` returns the handle.
             if let Ok(mut guard) = handle_slot_for_task.lock() {
                 *guard = Some(join);
             }
 
-            // Eagerly enqueue the task handle + cancel token to state so it
-            // can cancel on Esc. Spawn a tiny task so we can `.await` the send
-            // without blocking `handle_action` (which is called synchronously).
+            // Send the JoinHandle upgrade to state. The token is already stored
+            // synchronously; this message only provides the backstop abort handle.
+            // Spawn a tiny task so we can `.await` the send without blocking
+            // `handle_action` (which is called synchronously from the Engine).
             tokio::spawn(async move {
                 let _ = msg_tx_ready
                     .send(crate::message::Message::WizardInstallTaskReady {
-                        cancel: cancel_for_msg,
+                        kind,
+                        run_seq,
                         handle: handle_slot,
                     })
                     .await;
@@ -2058,6 +2061,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::FlutterSdk,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None, // Missing params → WizardStepFailed will follow, but Started comes first.
             path_bin_dir: None,
             android_sdk_root: None,
@@ -2087,6 +2092,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::FlutterSdk,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
             path_bin_dir: None,
             android_sdk_root: None,
@@ -2123,6 +2130,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::PathConfig,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
             path_bin_dir: None, // Missing — executor must fail cleanly.
             android_sdk_root: None,
@@ -2164,6 +2173,8 @@ mod tests {
         for kind in [WizardStepKind::Prerequisites, WizardStepKind::Doctor] {
             let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
                 kind,
+                run_seq: 1,
+                cancel_token: tokio_util::sync::CancellationToken::new(),
                 install: None,
                 path_bin_dir: None,
                 android_sdk_root: None,
@@ -2203,6 +2214,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::PathConfig,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
             path_bin_dir: Some(bin_dir),
             android_sdk_root: None,
@@ -2240,6 +2253,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::AndroidTools,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
             path_bin_dir: None,
             android_sdk_root: None,
@@ -2293,6 +2308,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::AndroidTools,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
             path_bin_dir: None,
             android_sdk_root: None,
@@ -2333,6 +2350,8 @@ mod tests {
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
             kind: WizardStepKind::PathConfig,
+            run_seq: 1,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
             path_bin_dir: Some(bin_dir),
             android_sdk_root: None, // No android root — must not fail because of this.

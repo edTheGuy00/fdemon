@@ -687,6 +687,16 @@ pub enum UpdateAction {
     RunWizardStep {
         /// Which wizard step to execute.
         kind: WizardStepKind,
+        /// Sequence counter from `InstallWizardState::run_seq` at the time the
+        /// run was started. Forwarded to `WizardInstallTaskReady` so the handler
+        /// can reject stale ready messages from a previous run.
+        run_seq: u64,
+        /// Cancellation token minted synchronously by `handle_run_selected_step`
+        /// and already stored on `InstallWizardState::install_task`. The
+        /// executor reuses this token (instead of minting a fresh one) so that
+        /// the token stored in state and the one checked in the install loop are
+        /// the same object — closing the F3 race window.
+        cancel_token: tokio_util::sync::CancellationToken,
         /// Resolved Flutter install parameters.
         ///
         /// `None` for the `PathConfig` step (no download/clone needed).

@@ -3274,9 +3274,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::WizardStepFailed { reason, .. } => {
             install_wizard::handle_step_failed(state, reason)
         }
-        Message::WizardInstallTaskReady { cancel, handle } => {
-            install_wizard::handle_install_task_ready(state, cancel, handle)
-        }
+        Message::WizardInstallTaskReady {
+            kind,
+            run_seq,
+            handle,
+        } => install_wizard::handle_install_task_ready(state, kind, run_seq, handle),
         Message::InstallWizardCancelStep => install_wizard::handle_cancel_step(state),
 
         // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────

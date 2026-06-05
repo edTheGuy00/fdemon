@@ -23,14 +23,28 @@ use super::types::{
 /// Held on [`InstallWizardState::install_task`] while a wizard step is in
 /// flight. Cleared (via `take()`) on completion, failure, or cancellation so
 /// a stale handle never lingers.
+///
+/// **Lifecycle:** The token is minted and stored synchronously by
+/// `handle_run_selected_step` (so `Esc` can cancel even before the
+/// `WizardInstallTaskReady` message arrives). The `JoinHandle` starts as
+/// `None` and is upgraded to `Some` when `handle_install_task_ready` validates
+/// the `kind` + `run_seq` pair — ensuring late ready messages from a cancelled
+/// or superseded run never clobber a live handle.
 pub struct InstallTaskHandle {
-    /// The async task running the install operation.
-    pub join: tokio::task::JoinHandle<()>,
     /// Token used to signal the install operation to stop.
     ///
     /// Call `cancel.cancel()` to set the token, which causes the running
     /// installer to return `Err(Error::Cancelled)` at the next poll point.
+    ///
+    /// Always `Some` — the token is minted synchronously by
+    /// `handle_run_selected_step` before any async work begins.
     pub cancel: CancellationToken,
+    /// The async task running the install operation.
+    ///
+    /// `None` until `handle_install_task_ready` upgrades it (after spawn
+    /// returns inside `handle_action`). The join handle is only used as a
+    /// backstop abort; the token is the primary cancellation mechanism.
+    pub join: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// A single UI step in the install wizard, grouping one or more component checks.
@@ -100,10 +114,22 @@ pub struct InstallWizardState {
 
     /// Handle for the currently running install task (Phase 5, Task 03).
     ///
-    /// Set by `WizardInstallTaskReady` immediately before the install task begins
-    /// running. Cleared (`take()`d) on completion, failure, or cancellation to
-    /// prevent stale handles from lingering. `None` when no step is in flight.
+    /// The `CancellationToken` inside is minted synchronously by
+    /// `handle_run_selected_step` and stored here **before** `RunWizardStep`
+    /// is dispatched, so `Esc` can always fire the token even in the window
+    /// before `WizardInstallTaskReady` arrives. The `JoinHandle` starts as
+    /// `None` and is upgraded by `handle_install_task_ready` once the token's
+    /// `kind` + `run_seq` are validated.
+    ///
+    /// Cleared (`take()`d) on completion, failure, or cancellation to prevent
+    /// stale handles from lingering. `None` when no step is in flight.
     pub install_task: Option<InstallTaskHandle>,
+
+    /// Monotonically increasing counter bumped by `begin_step` each time a new
+    /// run starts. Carried by `WizardInstallTaskReady` so
+    /// `handle_install_task_ready` can reject late-arriving ready messages from
+    /// a previous run (cancel→retry scenario).
+    pub run_seq: u64,
 
     /// One-shot guard that prevents device discovery from being dispatched more
     /// than once per wizard session (Phase 5, Task 04).
@@ -223,13 +249,24 @@ impl InstallWizardState {
             .any(|c| c.kind == ComponentKind::FlutterSdk && c.status == ComponentStatus::Ok)
     }
 
-    /// Begin a run: set `Running`, clear prior progress/log/summary, and record
-    /// the step kind.
+    /// Begin a run: set `Running`, clear prior progress/log/summary, record the
+    /// step kind, clear any previous task handle, and bump the run sequence.
     ///
-    /// Called by [`handle_step_started`] and [`handle_run_selected_step`] when a
-    /// step execution starts. Resets all progress fields so the TUI always shows
-    /// fresh state.
+    /// Called **only** by [`handle_run_selected_step`] when a new step execution
+    /// starts. Clears `install_task` so a new run never inherits a stale handle
+    /// (F8), and bumps `run_seq` so late `WizardInstallTaskReady` messages from
+    /// the previous run are rejected.
+    ///
+    /// `handle_step_started` does **not** call this method. Instead it calls
+    /// [`reset_progress_display`][Self::reset_progress_display] (which only
+    /// resets the display fields) when the step is already Running for the same
+    /// kind — preserving the synchronously-stored `install_task` and `run_seq`.
     pub fn begin_step(&mut self, kind: WizardStepKind) {
+        // Clear any prior handle so a new run never inherits a stale one (F8).
+        let _ = self.install_task.take();
+        // Bump the sequence counter so late `WizardInstallTaskReady` messages
+        // from the previous run are rejected by `handle_install_task_ready`.
+        self.run_seq = self.run_seq.wrapping_add(1);
         self.execution = StepExecution {
             kind: Some(kind),
             status: StepExecStatus::Running,
@@ -239,6 +276,24 @@ impl InstallWizardState {
             log_tail: std::collections::VecDeque::new(),
             result_summary: None,
         };
+    }
+
+    /// Reset only the progress display fields for an already-running step.
+    ///
+    /// Clears `phase_label`, `received`, `total`, `log_tail`, and
+    /// `result_summary` without touching `install_task`, `run_seq`, `status`,
+    /// or `kind`.
+    ///
+    /// Called by [`handle_step_started`] when the step is already `Running`
+    /// for the correct kind (i.e. `handle_run_selected_step` already called
+    /// `begin_step`). Gives the TUI a fresh display without clobbering the
+    /// synchronously-stored cancellation token or the run-sequence counter.
+    pub fn reset_progress_display(&mut self) {
+        self.execution.phase_label = None;
+        self.execution.received = 0;
+        self.execution.total = None;
+        self.execution.log_tail.clear();
+        self.execution.result_summary = None;
     }
 
     /// Record a streamed log line, bounded to [`MAX_LOG_TAIL`] lines.
@@ -320,6 +375,7 @@ impl std::fmt::Debug for InstallWizardState {
                 "install_task",
                 &self.install_task.as_ref().map(|_| "<running>"),
             )
+            .field("run_seq", &self.run_seq)
             .field("handback_done", &self.handback_done)
             .finish()
     }
@@ -2319,5 +2375,41 @@ mod tests {
             doctor.components.is_empty(),
             "Doctor step must have no components"
         );
+    }
+
+    // ── Phase 5 Task 02: begin_step clears install_task and bumps run_seq ──────
+
+    /// `begin_step` must clear any pre-existing `install_task` so a new run
+    /// never inherits a stale handle from the previous step (F8).
+    #[tokio::test]
+    async fn test_begin_step_clears_pre_set_install_task() {
+        let mut s = InstallWizardState::default();
+        // Pre-set a task handle as if a previous run left one.
+        let token = tokio_util::sync::CancellationToken::new();
+        s.install_task = Some(InstallTaskHandle {
+            cancel: token,
+            join: Some(tokio::spawn(std::future::ready(()))),
+        });
+        assert!(s.install_task.is_some(), "precondition");
+
+        s.begin_step(WizardStepKind::FlutterSdk);
+
+        assert!(
+            s.install_task.is_none(),
+            "begin_step must clear install_task so the new run starts clean (F8)"
+        );
+    }
+
+    /// `begin_step` must bump `run_seq` each time it is called.
+    #[test]
+    fn test_begin_step_bumps_run_seq() {
+        let mut s = InstallWizardState::default();
+        assert_eq!(s.run_seq, 0, "run_seq starts at 0");
+
+        s.begin_step(WizardStepKind::FlutterSdk);
+        assert_eq!(s.run_seq, 1, "first begin_step bumps to 1");
+
+        s.begin_step(WizardStepKind::PathConfig);
+        assert_eq!(s.run_seq, 2, "second begin_step bumps to 2");
     }
 }

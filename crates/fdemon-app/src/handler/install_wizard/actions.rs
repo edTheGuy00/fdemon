@@ -17,10 +17,11 @@
 
 use crate::config::types::InstallMethod;
 use crate::handler::{AndroidStepParams, FlutterStepParams, UpdateAction, UpdateResult};
-use crate::install_wizard::{is_jdk_actionable, WizardStepKind};
+use crate::install_wizard::{is_jdk_actionable, InstallTaskHandle, WizardStepKind};
 use crate::message::Message;
 use crate::state::AppState;
 use fdemon_daemon::toolchain::ToolchainReport;
+use tokio_util::sync::CancellationToken;
 
 /// Handle `ToolchainPreflightCompleted` — populate the wizard with the report.
 ///
@@ -158,10 +159,23 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             };
 
             // Flip UI to Running immediately before the async round-trip.
+            // begin_step clears any prior install_task and bumps run_seq (F8).
             state.install_wizard_state.begin_step(kind);
+
+            // Mint the cancellation token synchronously (F3 fix) and store it
+            // in state immediately so `Esc` can fire it even before the
+            // `WizardInstallTaskReady` message arrives.
+            let cancel_token = CancellationToken::new();
+            let run_seq = state.install_wizard_state.run_seq;
+            state.install_wizard_state.install_task = Some(InstallTaskHandle {
+                cancel: cancel_token.clone(),
+                join: None,
+            });
 
             UpdateResult::action(UpdateAction::RunWizardStep {
                 kind,
+                run_seq,
+                cancel_token,
                 install: Some(params),
                 path_bin_dir: None,
                 android_sdk_root: None,
@@ -192,10 +206,21 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             };
 
             // Flip UI to Running immediately before the async round-trip.
+            // begin_step clears any prior install_task and bumps run_seq (F8).
             state.install_wizard_state.begin_step(kind);
+
+            // Mint the cancellation token synchronously (F3 fix).
+            let cancel_token = CancellationToken::new();
+            let run_seq = state.install_wizard_state.run_seq;
+            state.install_wizard_state.install_task = Some(InstallTaskHandle {
+                cancel: cancel_token.clone(),
+                join: None,
+            });
 
             UpdateResult::action(UpdateAction::RunWizardStep {
                 kind,
+                run_seq,
+                cancel_token,
                 install: None,
                 path_bin_dir: None,
                 android_sdk_root: None,
@@ -239,10 +264,21 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                     }
 
                     // Flip UI to Running immediately.
+                    // begin_step clears any prior install_task and bumps run_seq (F8).
                     state.install_wizard_state.begin_step(kind);
+
+                    // Mint the cancellation token synchronously (F3 fix).
+                    let cancel_token = CancellationToken::new();
+                    let run_seq = state.install_wizard_state.run_seq;
+                    state.install_wizard_state.install_task = Some(InstallTaskHandle {
+                        cancel: cancel_token.clone(),
+                        join: None,
+                    });
 
                     UpdateResult::action(UpdateAction::RunWizardStep {
                         kind,
+                        run_seq,
+                        cancel_token,
                         install: None,
                         path_bin_dir: Some(bin),
                         android_sdk_root,
@@ -274,12 +310,43 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
     }
 }
 
-/// Handle `WizardStepStarted` — transition the execution state to `Running`.
+/// Handle `WizardStepStarted` — ensure the execution state is `Running` and
+/// reset the progress display fields.
 ///
-/// Idempotent if `begin_step` was already called on dispatch (the step kind
-/// and `Running` status will be the same).
+/// **Normal flow:** `handle_run_selected_step` always calls `begin_step(kind)`
+/// before dispatching `RunWizardStep`, so by the time this message arrives the
+/// step is already `Running` for the same `kind`. In that case this handler
+/// calls `reset_progress_display()` — which clears only the visible
+/// progress/log/summary fields — so the TUI shows a fresh state without
+/// clobbering the synchronously-stored `install_task` (cancellation token) or
+/// `run_seq`. Preserving both is essential: `install_task` must not be `None`
+/// during the running window (otherwise `Esc` cannot fire the token), and
+/// `run_seq` must not be bumped again (otherwise the legitimate
+/// `WizardInstallTaskReady` would be rejected by the seq-mismatch guard).
+///
+/// **Defensive fallback:** when the step is NOT already `Running` for this
+/// `kind` (a hypothetical code path where dispatch did not pre-begin), the
+/// full `begin_step(kind)` is called. The caller is expected to install
+/// `install_task` immediately after. This is a defensive guard, not the
+/// normal flow.
+///
+/// Idempotent if `begin_step` was already called on dispatch.
 pub fn handle_step_started(state: &mut AppState, kind: WizardStepKind) -> UpdateResult {
-    state.install_wizard_state.begin_step(kind);
+    let already_running_for_kind = state.install_wizard_state.execution.status
+        == crate::install_wizard::StepExecStatus::Running
+        && state.install_wizard_state.execution.kind == Some(kind);
+
+    if already_running_for_kind {
+        // Normal flow: token and run_seq were stored synchronously by
+        // handle_run_selected_step. Only reset the progress display — do NOT
+        // clear install_task and do NOT bump run_seq.
+        state.install_wizard_state.reset_progress_display();
+    } else {
+        // Defensive fallback: step not yet Running for this kind.
+        // Call the full begin_step so the state is correct; the caller should
+        // install install_task immediately after this returns.
+        state.install_wizard_state.begin_step(kind);
+    }
     UpdateResult::none()
 }
 
@@ -441,44 +508,66 @@ pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult 
 // Phase 5, Task 03 — Cancel step handler
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Handle `WizardInstallTaskReady` — store the cancel token and join handle.
+/// Handle `WizardInstallTaskReady` — upgrade the stored handle's `join` field.
 ///
-/// Called immediately after `RunWizardStep` spawns its background task, so
-/// the TEA layer has access to the handle before any subsequent `Esc` press.
-/// Idempotent: if no step is currently running, the handle is stored anyway
-/// (it will be cleared when the terminal `WizardStepCompleted/Failed` arrives).
+/// The cancellation token has already been stored synchronously by
+/// `handle_run_selected_step`; this message carries only the `JoinHandle`
+/// (which is not available until after `tokio::spawn` returns).
+///
+/// **Validation (F4/F7):** The `kind` and `run_seq` fields must match the
+/// current run before upgrading. If they don't match (e.g., the message
+/// belongs to a previous run that was cancelled), the `JoinHandle` is
+/// aborted and the message is silently discarded — the live `install_task`
+/// is left untouched.
+///
+/// Also discards (with abort) when no step is currently running (the step
+/// already completed before the ready arrived — fast-finish F7 path).
 pub fn handle_install_task_ready(
     state: &mut AppState,
-    cancel: std::sync::Arc<tokio_util::sync::CancellationToken>,
+    kind: WizardStepKind,
+    run_seq: u64,
     handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 ) -> UpdateResult {
-    use crate::install_wizard::InstallTaskHandle;
-    use tokio_util::sync::CancellationToken;
-
     // Extract the JoinHandle from the Arc<Mutex<Option<>>>.
-    let join = handle
-        .lock()
-        .ok()
-        .and_then(|mut g| g.take())
-        .unwrap_or_else(|| {
-            // Handle not yet deposited — create a no-op handle as a fallback.
-            tokio::spawn(std::future::ready(()))
-        });
+    let join = handle.lock().ok().and_then(|mut g| g.take());
 
-    // Unwrap the Arc to get the underlying token (or clone if Arc is shared).
-    let cancel_token: CancellationToken = (*cancel).clone();
+    // Guard 1: no step is currently running — the step already completed or
+    // was cancelled before this ready arrived. Abort the handle and discard.
+    if !state.install_wizard_state.is_step_running() {
+        if let Some(j) = join {
+            j.abort();
+        }
+        return UpdateResult::none();
+    }
 
-    state.install_wizard_state.install_task = Some(InstallTaskHandle {
-        join,
-        cancel: cancel_token,
-    });
+    // Guard 2: kind/run_seq mismatch — this ready belongs to a superseded run.
+    // Abort the handle and discard without touching the live install_task.
+    let current_kind = state.install_wizard_state.execution.kind;
+    let current_seq = state.install_wizard_state.run_seq;
+    if current_kind != Some(kind) || current_seq != run_seq {
+        if let Some(j) = join {
+            j.abort();
+        }
+        return UpdateResult::none();
+    }
+
+    // Validated: upgrade the existing handle's `join` field.
+    if let Some(task) = state.install_wizard_state.install_task.as_mut() {
+        task.join = join;
+    }
     UpdateResult::none()
 }
 
 /// Handle `InstallWizardCancelStep` — signal the running install to stop.
 ///
-/// Cancels the token, optionally aborts the task as a backstop, resets
-/// the step to idle, and sets a neutral "Cancelled" status message.
+/// Cancels the token stored on `install_task`, aborts the join handle as a
+/// backstop, resets the step to idle, and sets a neutral "Cancelled" status
+/// message.
+///
+/// **Defensive (F3 fix):** only resets the step to Idle when a token was
+/// actually present and fired, preventing a silent `Running → Idle` flip
+/// from a future regression where `install_task` is `None` while a step is
+/// still running (which would leave an orphaned download holding the lock).
 ///
 /// Idempotent — a second cancel with no running task is a no-op.
 pub fn handle_cancel_step(state: &mut AppState) -> UpdateResult {
@@ -487,11 +576,16 @@ pub fn handle_cancel_step(state: &mut AppState) -> UpdateResult {
         task.cancel.cancel();
         // Abort the task as a backstop in case the install loop doesn't check
         // the token frequently enough (e.g., during a blocking git-clone).
-        task.join.abort();
+        if let Some(j) = task.join {
+            j.abort();
+        }
+        // Token was fired — safe to reset the step to Idle.
+        state.install_wizard_state.reset_running_step_to_idle();
+        state.install_wizard_state.status_message =
+            Some("Cancelled. Press Enter to retry.".to_string());
     }
-    state.install_wizard_state.reset_running_step_to_idle();
-    state.install_wizard_state.status_message =
-        Some("Cancelled. Press Enter to retry.".to_string());
+    // If install_task was None, we do NOT reset to Idle — this prevents a
+    // silent flip that would hide an orphaned task holding the install lock.
     UpdateResult::none()
 }
 
@@ -916,6 +1010,55 @@ mod tests {
         assert_eq!(
             state.install_wizard_state.execution.kind,
             Some(WizardStepKind::FlutterSdk)
+        );
+    }
+
+    /// `handle_step_started` must NOT clobber the synchronously-stored
+    /// `install_task` or bump `run_seq` when the step is already Running for
+    /// the same kind (the normal flow after `handle_run_selected_step`).
+    ///
+    /// This is the regression guard for the F3-race defect: if `begin_step` is
+    /// called again inside `handle_step_started`, `install_task` becomes `None`
+    /// during the running window and `Esc` cannot fire the token.
+    #[test]
+    fn test_step_started_preserves_install_task_and_run_seq() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+
+        // Drive handle_run_selected_step — this calls begin_step, mints the
+        // token, and stores install_task synchronously.
+        let result = handle_run_selected_step(&mut state);
+        assert!(
+            result.action.is_some(),
+            "precondition: action must be dispatched"
+        );
+
+        // Capture the run_seq and verify install_task is Some.
+        let run_seq_after_dispatch = state.install_wizard_state.run_seq;
+        assert!(
+            state.install_wizard_state.install_task.is_some(),
+            "install_task must be Some immediately after handle_run_selected_step (precondition)"
+        );
+
+        // Now simulate WizardStepStarted arriving from the executor.
+        handle_step_started(&mut state, WizardStepKind::FlutterSdk);
+
+        // install_task must STILL be Some — the token was not cleared.
+        assert!(
+            state.install_wizard_state.install_task.is_some(),
+            "install_task must still be Some after handle_step_started \
+             (clobbering would break Esc cancellation)"
+        );
+        // run_seq must NOT have been bumped again.
+        assert_eq!(
+            state.install_wizard_state.run_seq, run_seq_after_dispatch,
+            "run_seq must NOT be incremented by handle_step_started \
+             (a second bump would cause the legitimate WizardInstallTaskReady to be discarded)"
+        );
+        // Step must still be Running.
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "step must still be Running after handle_step_started"
         );
     }
 
@@ -1588,11 +1731,11 @@ mod tests {
             .begin_step(WizardStepKind::FlutterSdk);
         assert!(state.install_wizard_state.is_step_running());
 
-        // Populate install_task with a trivial no-op handle.
+        // Populate install_task with a trivial no-op handle (join is Some).
         let token = tokio_util::sync::CancellationToken::new();
         state.install_wizard_state.install_task = Some(crate::install_wizard::InstallTaskHandle {
-            join: tokio::spawn(std::future::ready(())),
             cancel: token,
+            join: Some(tokio::spawn(std::future::ready(()))),
         });
         assert!(state.install_wizard_state.install_task.is_some());
 
@@ -1877,6 +2020,269 @@ mod tests {
                 .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
             "must not dispatch DiscoverDevices when Flutter is still missing; got {:?}",
             actions
+        );
+    }
+
+    // ── Phase 5 Task 02: run_seq + synchronous token tests ───────────────────
+
+    /// After `handle_run_selected_step`, `install_task` must be `Some` with
+    /// a token that can be cancelled (F3: token stored before RunWizardStep
+    /// dispatches, so Esc works in the window before WizardInstallTaskReady).
+    #[test]
+    fn run_selected_step_stores_token_synchronously() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+
+        let result = handle_run_selected_step(&mut state);
+
+        assert!(result.action.is_some(), "must return an action");
+        // install_task must already be Some (synchronous store).
+        let task = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .expect("install_task must be Some immediately after run_selected_step (F3)");
+        // Token must not yet be cancelled.
+        assert!(
+            !task.cancel.is_cancelled(),
+            "token must not be pre-cancelled"
+        );
+        // join is None until WizardInstallTaskReady upgrades it.
+        assert!(
+            task.join.is_none(),
+            "join must be None before WizardInstallTaskReady upgrades it"
+        );
+    }
+
+    /// Cancelling in the "running but no join yet" window must fire the
+    /// synchronously-stored token and reset to Idle (F3).
+    #[test]
+    fn cancel_during_early_window_fires_token_and_resets_to_idle() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        handle_run_selected_step(&mut state);
+        assert!(state.install_wizard_state.is_step_running(), "precondition");
+        assert!(
+            state
+                .install_wizard_state
+                .install_task
+                .as_ref()
+                .map(|t| t.join.is_none())
+                .unwrap_or(false),
+            "join must still be None in the early window"
+        );
+
+        // Cancel in the early window (before WizardInstallTaskReady).
+        let token = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .map(|t| t.cancel.clone())
+            .expect("token must exist");
+
+        handle_cancel_step(&mut state);
+
+        // Token must have been fired.
+        assert!(
+            token.is_cancelled(),
+            "cancel token must be set after handle_cancel_step (F3)"
+        );
+        // Step must be reset to Idle.
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "step must be Idle after cancel (F3)"
+        );
+    }
+
+    /// `handle_install_task_ready` with a matching kind and run_seq must
+    /// upgrade the join handle (happy path).
+    #[tokio::test]
+    async fn install_task_ready_matching_seq_upgrades_join() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        handle_run_selected_step(&mut state);
+
+        let current_seq = state.install_wizard_state.run_seq;
+        let join_handle = tokio::spawn(std::future::ready(()));
+        let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(join_handle)));
+
+        handle_install_task_ready(
+            &mut state,
+            WizardStepKind::FlutterSdk,
+            current_seq,
+            handle_slot,
+        );
+
+        // join must have been upgraded.
+        let task = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .expect("install_task must still be Some");
+        assert!(
+            task.join.is_some(),
+            "join must be Some after a matching WizardInstallTaskReady"
+        );
+    }
+
+    /// `handle_install_task_ready` with a non-matching kind must discard the
+    /// join handle without touching `install_task` (F4).
+    #[tokio::test]
+    async fn install_task_ready_kind_mismatch_is_discarded() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        handle_run_selected_step(&mut state);
+
+        let current_seq = state.install_wizard_state.run_seq;
+        // Send a ready for AndroidTools — kind mismatch.
+        let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(tokio::spawn(
+                std::future::ready(()),
+            ))));
+
+        handle_install_task_ready(
+            &mut state,
+            WizardStepKind::AndroidTools, // wrong kind
+            current_seq,
+            handle_slot,
+        );
+
+        // install_task must still be present (join still None — not upgraded).
+        let task = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .expect("install_task must survive a kind-mismatch discard (F4)");
+        assert!(
+            task.join.is_none(),
+            "join must remain None after kind-mismatch discard"
+        );
+    }
+
+    /// `handle_install_task_ready` with a non-matching run_seq must discard
+    /// the join handle (cancel→retry same kind, F4).
+    #[tokio::test]
+    async fn install_task_ready_seq_mismatch_is_discarded() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        handle_run_selected_step(&mut state);
+
+        let stale_seq = state.install_wizard_state.run_seq - 1; // seq before this run
+        let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(tokio::spawn(
+                std::future::ready(()),
+            ))));
+
+        handle_install_task_ready(
+            &mut state,
+            WizardStepKind::FlutterSdk, // kind matches but seq is stale
+            stale_seq,
+            handle_slot,
+        );
+
+        let task = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .expect("install_task must survive a seq-mismatch discard (F4)");
+        assert!(
+            task.join.is_none(),
+            "join must remain None after seq-mismatch discard"
+        );
+    }
+
+    /// A late `WizardInstallTaskReady` arriving AFTER a terminal `WizardStepFailed`
+    /// must NOT re-install a handle — `install_task` stays None (F7).
+    #[tokio::test]
+    async fn install_task_ready_after_terminal_does_not_reinstall_handle() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        let result = handle_run_selected_step(&mut state);
+        let run_seq = state.install_wizard_state.run_seq;
+        let _action = result.action;
+
+        // Simulate terminal: WizardStepFailed clears install_task.
+        handle_step_failed(&mut state, "network timeout".to_string());
+        assert!(
+            state.install_wizard_state.install_task.is_none(),
+            "precondition: install_task cleared by terminal"
+        );
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "precondition: step no longer running"
+        );
+
+        // Late ready arrives after the terminal.
+        let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(tokio::spawn(
+                std::future::ready(()),
+            ))));
+        handle_install_task_ready(&mut state, WizardStepKind::FlutterSdk, run_seq, handle_slot);
+
+        assert!(
+            state.install_wizard_state.install_task.is_none(),
+            "install_task must stay None — late ready after terminal must be discarded (F7)"
+        );
+    }
+
+    /// cancel(A) → begin_step(K) again (run B) → late ready for A must be
+    /// discarded; the live install_task is B's. Cancelling afterwards fires
+    /// B's token (F4 full scenario).
+    #[tokio::test]
+    async fn cancel_retry_same_kind_late_ready_for_a_is_discarded() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+
+        // Start run A.
+        handle_run_selected_step(&mut state);
+        let seq_a = state.install_wizard_state.run_seq;
+        let token_a = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .unwrap()
+            .cancel
+            .clone();
+
+        // Cancel run A.
+        handle_cancel_step(&mut state);
+        assert!(token_a.is_cancelled(), "A's token must be cancelled");
+
+        // Start run B (same step kind).
+        handle_run_selected_step(&mut state);
+        let seq_b = state.install_wizard_state.run_seq;
+        assert_ne!(seq_a, seq_b, "seq must have been bumped for run B");
+        let token_b = state
+            .install_wizard_state
+            .install_task
+            .as_ref()
+            .unwrap()
+            .cancel
+            .clone();
+
+        // Late ready for A arrives (kind matches, seq is stale).
+        // It must be discarded — B's install_task must survive untouched.
+        let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(tokio::spawn(
+                std::future::ready(()),
+            ))));
+        handle_install_task_ready(
+            &mut state,
+            WizardStepKind::FlutterSdk,
+            seq_a, // stale seq from run A
+            handle_slot,
+        );
+
+        // B's install_task must still be present.
+        assert!(
+            state.install_wizard_state.install_task.is_some(),
+            "install_task must be B's (not cleared by A's stale ready)"
+        );
+        // B's token must not be cancelled (A's cancel did not affect B).
+        assert!(
+            !token_b.is_cancelled(),
+            "B's token must not be cancelled by A's stale ready"
         );
     }
 
