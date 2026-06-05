@@ -404,12 +404,8 @@ struct RawManifest {
 /// The manifest is downloaded from the Google Flutter infrastructure CDN.
 /// URL format: `https://storage.googleapis.com/flutter_infra_release/releases/releases_<os>.json`
 ///
-/// The HTTP client applies a [`MANIFEST_CONNECT_TIMEOUT_SECS`] TCP connect
-/// timeout and a [`MANIFEST_REQUEST_TIMEOUT_SECS`] total request timeout.
-///
-/// A ≤5s HEAD probe is performed against the manifest URL before the full GET.
-/// This bounds the offline stall to 5 seconds instead of
-/// `MANIFEST_REQUEST_TIMEOUT_SECS` (60 s) for users without network access.
+/// This is a thin wrapper around [`fetch_release_manifest_from`] that
+/// constructs the CDN URL from `platform` and delegates all HTTP work there.
 ///
 /// # Errors
 ///
@@ -417,6 +413,27 @@ struct RawManifest {
 /// HTTP status, or JSON parse error.
 pub async fn fetch_release_manifest(platform: HostPlatform) -> Result<FlutterReleaseManifest> {
     let url = manifest_url(&platform);
+    fetch_release_manifest_from(&url).await
+}
+
+/// Fetch and parse the Flutter releases manifest from an explicit URL.
+///
+/// The HTTP client applies a [`MANIFEST_CONNECT_TIMEOUT_SECS`] TCP connect
+/// timeout and a [`MANIFEST_REQUEST_TIMEOUT_SECS`] total request timeout.
+///
+/// A ≤5s HEAD probe is performed against `url` before the full GET.  This
+/// bounds the offline stall to 5 seconds instead of
+/// `MANIFEST_REQUEST_TIMEOUT_SECS` (60 s) for users without network access.
+///
+/// Extracted from [`fetch_release_manifest`] so that tests can point it at a
+/// local mock server instead of the production CDN URL, exercising the real
+/// HEAD→GET→parse sequencing end-to-end.
+///
+/// # Errors
+///
+/// Returns an error on network failure (including the HEAD probe), non-2xx
+/// HTTP status, or JSON parse error.
+pub(crate) async fn fetch_release_manifest_from(url: &str) -> Result<FlutterReleaseManifest> {
     tracing::debug!("Fetching Flutter releases manifest from {url}");
 
     let client = reqwest::Client::builder()
@@ -433,10 +450,10 @@ pub async fn fetch_release_manifest(platform: HostPlatform) -> Result<FlutterRel
     // Network preflight: fast HEAD probe bounds the offline stall to ≤5 s.
     // If the probe fails the full GET would also fail, so surface the error
     // immediately with a clear "no network connectivity" message.
-    check_network_connectivity(&client, &url).await?;
+    check_network_connectivity(&client, url).await?;
 
     let response = client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|e| Error::process(format!("manifest request failed for {url}: {e}")))?;
@@ -1719,31 +1736,15 @@ mod tests {
         let _e6 = e5.clone();
     }
 
-    // ── fetch_release_manifest error paths (wiremock) ─────────────────────────
-
-    /// Helper: build an HTTP client with the same settings as
-    /// `fetch_release_manifest`, pointing at a local mock server.
-    ///
-    /// We exercise the JSON parsing / HTTP-status handling paths by calling the
-    /// client layer directly with a mock URL rather than overriding the hard-
-    /// coded CDN URL, which would require dependency injection.  The error-path
-    /// contract is: HTTP non-2xx → `Error::Process` containing the status code;
-    /// malformed JSON → `Error::Process` containing a parse-failure message.
-    fn build_test_client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .user_agent("fdemon-test")
-            .connect_timeout(std::time::Duration::from_secs(
-                MANIFEST_CONNECT_TIMEOUT_SECS,
-            ))
-            .timeout(std::time::Duration::from_secs(
-                MANIFEST_REQUEST_TIMEOUT_SECS,
-            ))
-            .build()
-            .expect("test client must build")
-    }
+    // ── fetch_release_manifest_from error and happy paths (wiremock) ────────────
 
     /// A 404 response from the manifest endpoint must produce a clear
     /// `Error::Process` whose message mentions the HTTP status code.
+    ///
+    /// Calls the real `fetch_release_manifest_from` against a wiremock server so
+    /// the production HEAD→GET→parse sequencing (and `is_success()` branch) is
+    /// exercised end-to-end.  Changing the error string in production would fail
+    /// this test.
     #[tokio::test]
     async fn fetch_manifest_404_is_clear_error() {
         use wiremock::matchers::{method, path};
@@ -1751,52 +1752,44 @@ mod tests {
 
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path("/releases_linux.json"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&mock_server)
-            .await;
-
-        // Also handle the HEAD probe.
+        // HEAD probe — must succeed so the function proceeds to the GET.
         Mock::given(method("HEAD"))
             .and(path("/releases_linux.json"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&mock_server)
             .await;
 
-        let client = build_test_client();
+        // GET returns 404.
+        Mock::given(method("GET"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
         let url = format!("{}/releases_linux.json", mock_server.uri());
 
-        // Replicate the logic of fetch_release_manifest for error-path testing.
-        let response = client
-            .get(&url)
-            .send()
+        let err = fetch_release_manifest_from(&url)
             .await
-            .expect("mock request must not fail at the transport layer");
+            .expect_err("HTTP 404 must return an error");
 
-        let status = response.status();
-        let result: Result<RawManifest> = if !status.is_success() {
-            Err(Error::process(format!(
-                "manifest HTTP {} for {url}",
-                status
-            )))
-        } else {
-            response
-                .json()
-                .await
-                .map_err(|e| Error::process(format!("failed to parse manifest from {url}: {e}")))
-        };
-
-        let err = result.expect_err("HTTP 404 must return an error");
         let msg = err.to_string();
         assert!(
             msg.contains("404"),
             "error message must contain the HTTP status code: {msg}"
         );
+        // Confirm the real production error-string prefix is present.
+        assert!(
+            msg.contains("manifest HTTP"),
+            "error message must use the 'manifest HTTP' prefix: {msg}"
+        );
     }
 
     /// A 200 response with malformed JSON must produce a clear `Error::Process`
     /// whose message mentions a parse failure.
+    ///
+    /// Calls the real `fetch_release_manifest_from` so that the production JSON
+    /// parse path is exercised end-to-end.  Changing the error string in
+    /// production would fail this test.
     #[tokio::test]
     async fn fetch_manifest_malformed_json_is_clear_error() {
         use wiremock::matchers::{method, path};
@@ -1804,46 +1797,91 @@ mod tests {
 
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path("/releases_linux.json"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("this is not valid { json }!"))
-            .mount(&mock_server)
-            .await;
-
-        // Also handle the HEAD probe.
+        // HEAD probe — must succeed.
         Mock::given(method("HEAD"))
             .and(path("/releases_linux.json"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&mock_server)
             .await;
 
-        let client = build_test_client();
+        // GET returns 200 with malformed JSON body.
+        Mock::given(method("GET"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("this is not valid { json }!"))
+            .mount(&mock_server)
+            .await;
+
         let url = format!("{}/releases_linux.json", mock_server.uri());
 
-        let response = client
-            .get(&url)
-            .send()
+        let err = fetch_release_manifest_from(&url)
             .await
-            .expect("mock request must not fail at the transport layer");
+            .expect_err("malformed JSON must return an error");
 
-        let status = response.status();
-        let result: Result<RawManifest> = if !status.is_success() {
-            Err(Error::process(format!(
-                "manifest HTTP {} for {url}",
-                status
-            )))
-        } else {
-            response
-                .json()
-                .await
-                .map_err(|e| Error::process(format!("failed to parse manifest from {url}: {e}")))
-        };
-
-        let err = result.expect_err("malformed JSON must return an error");
         let msg = err.to_string();
         assert!(
-            msg.contains("parse") || msg.contains("json") || msg.contains("JSON"),
-            "error message must mention a JSON parse failure: {msg}"
+            msg.contains("failed to parse manifest"),
+            "error message must use the 'failed to parse manifest' prefix: {msg}"
+        );
+    }
+
+    /// HEAD→GET→parse happy path: a well-formed manifest returned by the mock
+    /// server must be parsed into a `FlutterReleaseManifest` with correctly
+    /// mapped fields, proving that both the HEAD probe path and the
+    /// `RawManifest → FlutterReleaseManifest` field mapping are exercised.
+    #[tokio::test]
+    async fn fetch_manifest_from_happy_path_exercises_head_get_parse() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // HEAD probe — must succeed.
+        Mock::given(method("HEAD"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        // GET returns the standard fixture.
+        Mock::given(method("GET"))
+            .and(path("/releases_linux.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(MANIFEST_FIXTURE))
+            .mount(&mock_server)
+            .await;
+
+        let url = format!("{}/releases_linux.json", mock_server.uri());
+
+        let manifest = fetch_release_manifest_from(&url)
+            .await
+            .expect("well-formed manifest must parse without error");
+
+        // Field-mapping assertions: RawManifest → FlutterReleaseManifest.
+        assert_eq!(
+            manifest.base_url, "https://storage.googleapis.com/flutter_infra_release/releases",
+            "base_url must be passed through unchanged"
+        );
+        assert_eq!(
+            manifest.current_stable_hash.as_deref(),
+            Some("aabbccdd"),
+            "current_stable_hash must be extracted from current_release.stable"
+        );
+        assert_eq!(
+            manifest.releases.len(),
+            3,
+            "all three fixture releases must be present"
+        );
+
+        // Verify one release is correctly mapped.
+        let stable_x64 = manifest
+            .releases
+            .iter()
+            .find(|r| r.channel == "stable" && r.dart_sdk_arch.as_deref() == Some("x64"))
+            .expect("stable/x64 release must be present");
+        assert_eq!(stable_x64.version, "3.24.0");
+        assert_eq!(stable_x64.sha256, "deadbeefdeadbeef");
+        assert_eq!(
+            stable_x64.archive,
+            "stable/linux/flutter_linux_3.24.0-stable.tar.xz"
         );
     }
 

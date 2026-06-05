@@ -1650,23 +1650,31 @@ mod tests {
     /// A token cancelled after the download starts must cause the streaming loop
     /// to exit with `Error::Cancelled` and must not leave a `.part` file behind.
     ///
-    /// This test uses a mock server that streams a chunked response; we cancel
-    /// the token after the first chunk is received.
+    /// ## Determinism rationale (F2)
+    ///
+    /// The token is cancelled **synchronously from inside the first progress
+    /// callback**.  After `on_progress` returns, the `select!` loop re-enters
+    /// with the biased arm; `cancel.cancelled()` is already resolved, so the
+    /// cancellation branch fires before `stream.next()` is polled again —
+    /// regardless of whether the body arrived as one chunk or many.  This is
+    /// deterministic on loopback where a 200 KiB body may arrive as a single
+    /// chunk, unlike the previous design that used an external `Notify` +
+    /// `token.cancel()` from a separate task (which raced against the stream
+    /// exhausting before the cancel was observed).
     #[tokio::test]
     async fn cancel_mid_stream_returns_cancelled_and_cleans_part() {
-        use std::sync::Arc;
-        use tokio::sync::Notify;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-        /// A responder that sends a large body so there are multiple chunk
-        /// iterations and cancellation has time to fire.
+        /// A responder that sends a sizeable body so at least one progress
+        /// callback fires.  The exact chunk count does not matter: cancellation
+        /// is set synchronously inside the callback, guaranteeing the biased
+        /// `select!` arm picks it up on the next iteration.
         struct LargeBodyResponder;
 
         impl Respond for LargeBodyResponder {
             fn respond(&self, _req: &Request) -> ResponseTemplate {
-                // 200 KiB of zeros — large enough that the streaming loop runs
-                // multiple iterations before the token is cancelled.
+                // 200 KiB — enough to trigger at least one progress callback.
                 ResponseTemplate::new(200).set_body_bytes(vec![0u8; 200 * 1024])
             }
         }
@@ -1685,30 +1693,20 @@ mod tests {
         let url = format!("{}/large.bin", mock_server.uri());
 
         let token = CancellationToken::new();
-        let token_clone = token.clone();
+        let token_for_callback = token.clone();
 
-        // A notifier so the progress callback can signal that at least one
-        // chunk has been received before we cancel.
-        let first_chunk = Arc::new(Notify::new());
-        let first_chunk_clone = first_chunk.clone();
-
-        // Spawn the download on a task so we can cancel it from the test body.
-        let download_task = tokio::spawn(async move {
-            let mut received_any = false;
-            download_to_file(&url, &dest, token_clone, |_p| {
-                if !received_any {
-                    received_any = true;
-                    first_chunk_clone.notify_one();
-                }
-            })
-            .await
-        });
-
-        // Wait for the first progress callback, then cancel.
-        first_chunk.notified().await;
-        token.cancel();
-
-        let result = download_task.await.expect("task must not panic");
+        // Cancel the token from within the first progress callback.  This is
+        // synchronous: by the time `on_progress` returns, `cancel.is_cancelled()`
+        // is `true`, and the biased `select!` in the next loop iteration will
+        // observe it before calling `stream.next()` again.
+        let mut cancelled_in_cb = false;
+        let result = download_to_file(&url, &dest, token, |_p| {
+            if !cancelled_in_cb {
+                cancelled_in_cb = true;
+                token_for_callback.cancel();
+            }
+        })
+        .await;
 
         let err = result.expect_err("cancelled download must return Err");
         assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
