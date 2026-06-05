@@ -99,3 +99,37 @@ explicitly sets `state.ui_mode = UiMode::Startup` (line 67) before dispatching
   02 and 03; run them serially on the same branch (chain A), not in parallel worktrees.
 - Do **not** add a launch.toml/launch.json assertion — launch configs are not part of
   `target_selector` and the handback code does not touch them.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-adc799e34dec8db7c
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added `close_wizard_and_dispatch_discovery` shared helper (`pub(super)`); updated `handle_preflight_completed` to delegate to it; updated assertions in 3 tests from `!= InstallWizard` to `== Startup`; added new `devices_discovered_after_autoclose_populates_selector` test (AC#2) |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Updated `maybe_dispatch_discovery_on_close` to delegate to shared `close_wizard_and_dispatch_discovery`; removed direct `hide_install_wizard()` calls from `handle_hide`/`handle_escape` (now handled centrally); removed top-level `UiMode` import (only needed in tests); strengthened `manual_close_with_live_sdk_spawns_discovery` test to assert `== Startup` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single source of truth via `close_wizard_and_dispatch_discovery`**: Placed in `actions.rs` as `pub(super)`, used by both the auto-close path (in `actions.rs`) and the manual-close path (`maybe_dispatch_discovery_on_close` in `navigation.rs`). Both paths now share identical transition logic so they cannot drift again.
+
+2. **`close_wizard_and_dispatch_discovery` always hides the wizard**: To avoid the double-`hide_install_wizard()` anti-pattern, the helper always calls `hide_install_wizard()` directly. `handle_hide`/`handle_escape` no longer call it upfront. The `handback_done` guard early path in `maybe_dispatch_discovery_on_close` still calls `hide_install_wizard()` directly to ensure the wizard is always hidden even when discovery is already done.
+
+3. **AC#2 test uses `crate::handler::update`**: The new test drives `Message::DevicesDiscovered` through the real `handler::update` function to verify the end-to-end `Startup → DevicesDiscovered → selector populated` path, not just mocking the state.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — PASSED
+- `cargo check --workspace --all-targets` — PASSED
+- `cargo test -p fdemon-app --lib` — PASSED (2834 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASSED
+- `cargo test --workspace` — 2834 (fdemon-app) + 514 (fdemon-tui) + 1062 (fdemon-daemon) passed; 2 pre-existing flaky fdemon-daemon tests (`cancel_mid_stream_returns_cancelled_and_cleans_part`, `test_resolve_jdk_home_honors_java_home`) fail only when run in the full parallel suite but pass individually — unrelated to this task.
+
+### Risks/Limitations
+
+1. **Pre-existing flaky tests in fdemon-daemon**: Two tests in `toolchain/download.rs` and `toolchain/jdk.rs` fail intermittently under parallel test execution (they use filesystem/environment state). These are not caused by this task's changes and are the subject of separate followup tasks (02, 04).

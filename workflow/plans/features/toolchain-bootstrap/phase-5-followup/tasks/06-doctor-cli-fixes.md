@@ -87,3 +87,35 @@ for the bare token `doctor`. Do **not** add filesystem-aware subcommand resoluti
 - File-disjoint from every other task in this followup — safe to run in Wave 1.
 - Prefer F20 fix (a) (`.to_string()`) unless you also want every future `{:>N}` use of
   `ComponentStatus` to align, in which case (b) `f.pad` in `types.rs` is cleaner.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/doctor.rs` | F20: changed `c.status` to `c.status.to_string()` so `{:>4}` width specifier is honoured; added `#[cfg(test)] mod tests` with `status_field_is_always_4_chars_wide` verifying all 5 variants produce a 4-char padded string |
+| `src/main.rs` | F24: load `fdemon_app::config::load_settings(&cwd)` in the `Commands::Doctor` branch and pass `settings.flutter.sdk_path` as `explicit_sdk` to `run_doctor`; F25: added `./doctor` workaround note to `Doctor` subcommand's doc comment (shown in `fdemon doctor --help`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **F20 fix (a) chosen**: Used `.to_string()` at the call site (`doctor.rs`) rather than making `Display` width-aware via `f.pad()` in `types.rs`. This is the minimal, lowest-risk fix — `types.rs` is shared daemon code and the doctor report is the only call site that needs alignment.
+2. **Test helper not extracted**: Avoided a `pub fn format_status_field` helper (which would emit a `dead_code` warning in non-test builds). The test directly applies `format!("{:>4}", status.to_string())` — the same expression used in the production code — making the test both representative and warning-free.
+3. **F25 approach**: Documented the `fdemon ./doctor` workaround inline in the clap `Doctor` variant doc comment so it appears in `fdemon doctor --help` output. No filesystem-aware subcommand resolution added (disproportionate complexity as specified by the task).
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (0 warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (6,944+ tests, 0 failed)
+- `cargo test -p flutter-demon doctor -- --nocapture` — Passed (1 new test: `doctor::tests::status_field_is_always_4_chars_wide`)
+
+### Risks/Limitations
+
+1. **F24 test coverage**: The task's suggested F24 test ("with a settings fixture pinning flutter.sdk_path, assert run_doctor is invoked with Some(path)") was not added as a unit test because `run_doctor` is async and requires `run_preflight` which spawns real processes — it's an integration concern. The wiring itself is a 3-line change that is straightforward to verify by inspection, and it mirrors the existing engine/navigation.rs patterns.

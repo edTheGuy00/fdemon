@@ -126,3 +126,48 @@ which is not used.
 - Shares `download.rs`/`flutter_install.rs` with Task 05 — serialise (chain B).
 - Keep `cancel.cancel()` as the primary cancellation path and `join.abort()` as the
   backstop; the RAII temp-dir guard is what makes the backstop leak-free.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ad70e3eb5390ed07a
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` | F26: removed `rt` feature from `tokio-util` workspace dep |
+| `crates/fdemon-daemon/src/toolchain/download.rs` | F5: changed `.timeout()` to `.read_timeout()` on client builder; updated `IDLE_TIMEOUT` doc to clarify per-read semantics; updated `CONNECTIVITY_PROBE_TIMEOUT` doc accordingly; F16: added captive-portal limitation doc to `check_network_connectivity` |
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | F14: added `TempDirGuard` RAII struct + `reclaim_stale_flutter_tmps` fn; updated `install_flutter` to use them; updated `install_inner` to accept + disarm guard before rename; F15: removed redundant `ensure_disk_space` call before extraction; F23: added `cancel: CancellationToken` param to `git_install` + `tokio::select!` wrapper around `run_streaming`; removed `ensure_disk_space`/`ARCHIVE_DISK_BUDGET_BYTES` from imports (no longer used directly); added 5 new unit tests |
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | F14: added `TempDirGuard` RAII struct + `reclaim_stale_android_tmps` fn; replaced manual cleanup in `install_android_tools` with RAII guard + preflight reclamation; added 2 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`TempDirGuard` vs `tempfile::TempDir`**: Used a custom RAII guard instead of `tempfile::TempDir::new_in()` because the temp dir name is derived deterministically from the PID (`.fdemon-install-tmp-<pid>`) for the glob-based stale reclamation to work. `tempfile::TempDir` uses a random suffix which would prevent the preflight glob from finding dirs from other processes. The custom guard is simpler and sufficient.
+
+2. **`reclaim_stale_flutter_tmps` placement**: Called under the `LockGuard` in `install_flutter` so there's no race with a concurrent install. The lock serializes both the reclamation and the new install.
+
+3. **F15 removal vs delta budget**: Removed the second `ensure_disk_space` call entirely (rather than computing a delta) since the pre-download check at `ARCHIVE_DISK_BUDGET_BYTES` (1.5 GiB) already conservatively budgets both the archive and the extracted tree. Adding complexity for a delta calculation was not warranted.
+
+4. **`git_install` cancel token**: The `tokio::select! { biased; ... }` pattern matches the existing `download_to_file` streaming loop. Because `run_streaming` uses `kill_on_drop(true)`, dropping the future on the cancel branch kills the git child process cleanly.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test --workspace` - Passed (6 new tests added, all pass)
+  - `temp_dir_guard_removes_dir_on_drop` - ok
+  - `temp_dir_guard_missing_dir_no_panic` - ok
+  - `reclaim_stale_flutter_tmps_removes_all_tmp_dirs` - ok
+  - `git_install_precancelled_returns_cancelled` - ok
+  - `android_temp_dir_guard_removes_dir_on_drop` - ok
+  - `reclaim_stale_android_tmps_removes_all_tmp_dirs` - ok
+
+### Risks/Limitations
+
+1. **F14 abort-race note**: `Drop` on a `TempDirGuard` inside a future that is `abort()`ed runs synchronously during the drop cascade — this is correct Rust behavior and ensures cleanup. The preflight `reclaim_stale_*` functions provide a second line of defence for any dir that might be leaked across process restarts (different PID).
+
+2. **F16 partial coverage**: The captive-portal limitation is now documented but not programmatically detected. A portal returning 2xx over HTTPS to a different host (e.g. DNS-based interception with a valid wildcard cert) could still slip past. This is an inherent limitation of the pre-flight HEAD probe design, documented as per the task spec.

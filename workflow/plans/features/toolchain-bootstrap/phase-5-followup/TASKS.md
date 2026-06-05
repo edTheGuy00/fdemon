@@ -105,14 +105,14 @@ Parallel disjoint (no shared files with A/B or each other)
 
 | # | Task | Status | Depends On | Sev (max) | Est. Hours | Modules |
 |---|------|--------|------------|-----------|------------|---------|
-| 01 | [01-handback-autoclose-uimode](tasks/01-handback-autoclose-uimode.md) | Pending | - | CRITICAL | 1.5-2h | `handler/install_wizard/actions.rs`, `handler/install_wizard/navigation.rs` |
-| 02 | [02-install-task-handle-race](tasks/02-install-task-handle-race.md) | Pending | 01 | HIGH | 5-7h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `message.rs`, `actions/mod.rs`, `handler/install_wizard/navigation.rs`, `state.rs` |
-| 03 | [03-cancelled-state-rendering](tasks/03-cancelled-state-rendering.md) | Pending | 02 | MEDIUM | 3-4h | `install_wizard/types.rs`, `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `actions/mod.rs`, `widgets/install_wizard/{progress,step_list,step_detail,mod}.rs` |
-| 04 | [04-download-pipeline-robustness](tasks/04-download-pipeline-robustness.md) | Pending | - | MEDIUM | 4-5h | `toolchain/download.rs`, `toolchain/flutter_install.rs`, `toolchain/android_install.rs`, `Cargo.toml` |
-| 05 | [05-daemon-download-tests](tasks/05-daemon-download-tests.md) | Pending | 04 | HIGH | 3-4h | `toolchain/download.rs`, `toolchain/flutter_install.rs` |
-| 06 | [06-doctor-cli-fixes](tasks/06-doctor-cli-fixes.md) | Pending | - | LOW | 1.5-2h | `src/doctor.rs`, `src/main.rs`, `toolchain/types.rs` |
-| 07 | [07-windows-broadcast-hardening](tasks/07-windows-broadcast-hardening.md) | Pending | - | LOW | 1.5-2h | `toolchain/path_config.rs` |
-| 08 | [08-update-docs](tasks/08-update-docs.md) | Pending | 01,02,03,04,06 | — | 1-1.5h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
+| 01 | [01-handback-autoclose-uimode](tasks/01-handback-autoclose-uimode.md) | ✅ Done | - | CRITICAL | 1.5-2h | `handler/install_wizard/actions.rs`, `handler/install_wizard/navigation.rs` |
+| 02 | [02-install-task-handle-race](tasks/02-install-task-handle-race.md) | ✅ Done | 01 | HIGH | 5-7h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `message.rs`, `actions/mod.rs`, `handler/install_wizard/navigation.rs`, `state.rs` |
+| 03 | [03-cancelled-state-rendering](tasks/03-cancelled-state-rendering.md) | ✅ Done | 02 | MEDIUM | 3-4h | `install_wizard/types.rs`, `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `actions/mod.rs`, `widgets/install_wizard/{progress,step_list,step_detail,mod}.rs` |
+| 04 | [04-download-pipeline-robustness](tasks/04-download-pipeline-robustness.md) | ✅ Done | - | MEDIUM | 4-5h | `toolchain/download.rs`, `toolchain/flutter_install.rs`, `toolchain/android_install.rs`, `Cargo.toml` |
+| 05 | [05-daemon-download-tests](tasks/05-daemon-download-tests.md) | ✅ Done | 04 | HIGH | 3-4h | `toolchain/download.rs`, `toolchain/flutter_install.rs` |
+| 06 | [06-doctor-cli-fixes](tasks/06-doctor-cli-fixes.md) | ✅ Done | - | LOW | 1.5-2h | `src/doctor.rs`, `src/main.rs`, `toolchain/types.rs` |
+| 07 | [07-windows-broadcast-hardening](tasks/07-windows-broadcast-hardening.md) | ✅ Done | - | LOW | 1.5-2h | `toolchain/path_config.rs` |
+| 08 | [08-update-docs](tasks/08-update-docs.md) | ✅ Done | 01,02,03,04,06 | — | 1-1.5h | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
 
 **Total Tasks:** 8
 **Estimated Hours:** 21–28 hours

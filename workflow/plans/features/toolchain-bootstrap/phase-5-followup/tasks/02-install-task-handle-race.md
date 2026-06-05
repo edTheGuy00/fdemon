@@ -120,3 +120,69 @@ and demote `WizardInstallTaskReady` to a *handle upgrade* that is validated:
 - This is the load-bearing concurrency task; tasks 03 builds on its `install_task`
   semantics. Serialise on the same branch (chain A).
 - F9 (the missing-test finding) is satisfied by the Testing block above.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1db8e1913d5a56e7
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | `InstallTaskHandle.join` → `Option<JoinHandle<()>>`, field order flipped (`cancel` first); `InstallWizardState` gains `run_seq: u64`; `begin_step` clears `install_task` and bumps `run_seq` (F8); `Debug` impl includes `run_seq`; new tests for `begin_step_clears_pre_set_install_task` and `begin_step_bumps_run_seq` |
+| `crates/fdemon-app/src/state.rs` | `hide_install_wizard` cancels+clears any in-flight install task via `install_task.take()` + `cancel.cancel()` + optional `join.abort()` (F19) |
+| `crates/fdemon-app/src/message.rs` | `WizardInstallTaskReady` drops `cancel` field; gains `kind: WizardStepKind` and `run_seq: u64` for validation; doc comment updated |
+| `crates/fdemon-app/src/handler/mod.rs` | `RunWizardStep` action gains `cancel_token: CancellationToken` and `run_seq: u64` fields; doc comment updated |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | `handle_run_selected_step`: each executable arm mints token synchronously, stores on `install_task` before dispatch, passes `cancel_token`+`run_seq` to action (F3); `handle_install_task_ready`: validates `kind`+`run_seq`, discards+aborts stale handles, upgrades join on match (F4/F7); `handle_cancel_step`: defensive — only resets to Idle when token was present (F3 backstop); new import `InstallTaskHandle`+`CancellationToken`; 9 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | `WizardInstallTaskReady` dispatch updated to pass `kind`+`run_seq` instead of `cancel` |
+| `crates/fdemon-app/src/actions/mod.rs` | `RunWizardStep` handler: removes local `CancellationToken::new()`, reuses `cancel_token` from action; `WizardInstallTaskReady` send drops `cancel`, adds `kind`+`run_seq`; all 8 test call sites updated with `run_seq` and `cancel_token` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Token stored before dispatch, join upgraded later**: `handle_run_selected_step` calls `begin_step` (clears prior handle, bumps `run_seq`), then mints the token and stores `InstallTaskHandle { cancel, join: None }` — all synchronous TEA. The `RunWizardStep` action carries the same token clone. `WizardInstallTaskReady` only upgrades the `join` field, validated by `kind`+`run_seq`. This exactly matches the task plan's Fix items 1–3.
+
+2. **Defensive cancel**: `handle_cancel_step` only resets to Idle when it actually takes a handle and fires the token (Fix 6). If `install_task` is unexpectedly `None` while running, the step stays Running rather than silently becoming Idle — this surfaces the bug rather than hiding it.
+
+3. **`begin_step` clears handle**: Always clears `install_task` before establishing the new one (Fix 4). Ensures no run can inherit a stale handle from a previous step or a same-kind retry.
+
+4. **`hide_install_wizard` clears handle**: Cancels and clears any in-flight task (Fix 5/F19) — idempotent when `None`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app --lib` — Passed (2843 tests including all 9 new tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test --workspace` — Passed (pre-existing `fdemon-daemon` flaky test `cancel_mid_stream_returns_cancelled_and_cleans_part` fails intermittently; confirmed pre-existing with `git stash`)
+
+### Risks/Limitations
+
+1. **Pre-existing daemon flaky test**: `toolchain::download::tests::cancel_mid_stream_returns_cancelled_and_cleans_part` fails intermittently in the full workspace run. Confirmed pre-existing — unrelated to this task's changes.
+2. **join.abort() is best-effort**: JoinHandle abortion is not guaranteed to stop a blocking `spawn_blocking` thread (which is how PathConfig runs). However, `cancel.cancel()` is the primary mechanism and `abort()` is just a backstop. PathConfig is synchronous blocking I/O (file writes), so even without abort it completes quickly.
+
+---
+
+## Defect Fix (Validation Round 2)
+
+**Status:** Done
+**Branch:** worktree-agent-a1db8e1913d5a56e7
+**Commit:** fix(02): preserve synchronously-stored install_task in handle_step_started
+
+A post-implementation validation found a CRITICAL defect introduced by the Task 02 implementation itself: `handle_step_started` called `begin_step(kind)` unconditionally, which cleared `install_task` and bumped `run_seq` a second time — undoing the synchronous storage that `handle_run_selected_step` had just done. Net effect: during the entire running window `install_task` was `None`, so `Esc` could not fire the token (the exact F3 race Task 02 was supposed to eliminate).
+
+### Additional Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `reset_progress_display()` method that clears only display fields (phase_label, received, total, log_tail, result_summary) without touching `install_task` or `run_seq`; updated `begin_step` doc comment to note it is called only by `handle_run_selected_step` |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | `handle_step_started`: guarded — when step is already `Running` for the same kind, calls `reset_progress_display()` instead of `begin_step()`, preserving `install_task` and `run_seq`; falls back to full `begin_step()` only when not yet Running (defensive); doc comment updated; new regression test `test_step_started_preserves_install_task_and_run_seq` |
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app` — Passed (2844 tests, all including the new regression test)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed

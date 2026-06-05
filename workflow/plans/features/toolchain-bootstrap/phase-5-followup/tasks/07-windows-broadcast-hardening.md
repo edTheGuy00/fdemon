@@ -79,3 +79,35 @@ child — but never `.output()` on the calling thread.
 - Production runtime behaviour of the script is correct today; F21 is purely
   test-quality (the assertion targets a copy, not the shipped script).
 - File-disjoint from every other followup task — safe to run in Wave 1.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Hoisted PowerShell script to module-level `BROADCAST_WM_SETTINGCHANGE_SCRIPT` const (non-cfg-gated, with `#[cfg_attr(not(target_os = "windows"), allow(dead_code))]`); replaced `.output()` with detached `.spawn()` + null stdio; updated both shape tests to assert against the shared const |
+
+### Notable Decisions/Tradeoffs
+
+1. **`allow(dead_code)` on non-Windows**: Used `#[cfg_attr(not(target_os = "windows"), allow(dead_code))]` rather than unconditionally allowing dead_code. The production code path inside `broadcast_wm_settingchange` is `#[cfg(target_os = "windows")]`, so on non-Windows the const is only referenced from tests. The `cfg_attr` suppresses the lint without masking real dead-code issues on other items.
+
+2. **Simple spawn-and-drop vs. watchdog thread**: Chose the simpler spawn-and-drop approach (the task offered a watchdog-thread alternative). The registry write has already committed before the broadcast call, and the broadcast is best-effort; there's no value in monitoring or killing the child, and the added complexity of a watchdog thread is unwarranted for a best-effort operation.
+
+3. **Second test refactor**: The second shape test (`windows_path_set_and_broadcast_both_use_out_of_band_values`) was updated to assert against `BROADCAST_WM_SETTINGCHANGE_SCRIPT` rather than the locally-defined `broadcast_lp_arg` literal, making it guard the shipped script on Linux CI consistent with the first test.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites green)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Windows runtime only**: The spawn-detach behaviour cannot be unit-tested cross-platform. The shape tests (which run on Linux CI) guard the script content; the detach behaviour is validated by code review.

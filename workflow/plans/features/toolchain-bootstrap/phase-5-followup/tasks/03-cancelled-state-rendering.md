@@ -111,3 +111,50 @@ progress widget.
   string coupling and forces touching every Failed-styled widget.
 - Optionally clear `execution.kind` in `reset_running_step_to_idle` for defensiveness;
   the `Cancelled` variant already makes any stale-kind render benign.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/types.rs` | Added `StepExecStatus::Cancelled` variant with doc comment |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Updated `finish_step` doc comment to include `Cancelled` |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Route `Cancelled:` prefix branch through `StepExecStatus::Cancelled` (not `Failed`); added F18 tests |
+| `crates/fdemon-app/src/actions/mod.rs` | Fixed double-prefix: changed `format!("Cancelled: {e}")` to `format!("{e}")` at both FlutterSdk and AndroidTools cancel branches (F17) |
+| `crates/fdemon-tui/src/widgets/install_wizard/progress.rs` | Added neutral glyph+color for `Cancelled` in `render_phase_row`; neutral color in `render_result_summary`; included `Cancelled` in `is_terminal` check; added F12 tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Included `Cancelled` in `is_execution_active_for` matches arm |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_list.rs` | Added `Modifier::BOLD` to run-failed badge glyph style in unselected and selected-unfocused branches (F11); added F11 test |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Cancelled` as terminal state**: `is_terminal` in `progress.rs` now includes `Cancelled`, so it uses the phase-row + separator + result-summary layout (same as Succeeded/Failed) rather than the running layout. This means the neutral cancel summary is visible but the "[Esc] Cancel" hint is absent — correct behaviour.
+
+2. **`failed_execution_kind()` unchanged**: The `mod.rs` helper already only returns `Some` for `Failed`, so the run-failed badge in the step list is automatically suppressed for `Cancelled` without any change.
+
+3. **`is_execution_active_for` includes `Cancelled`**: This ensures the detail pane shows the neutral cancel summary in the progress view rather than reverting to static component list. The user can still retry from this view.
+
+4. **Double-prefix fix (F17)**: `Error::Cancelled` Display is `#[error("Cancelled: {message}")]`, so wrapping with `format!("Cancelled: {e}")` produced double prefix. Changed to `format!("{e}")` at both FlutterSdk and AndroidTools cancel arms.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all ~4,978 tests including new ones)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added:
+- F18 (actions.rs): `cancelled_error_display_has_no_double_prefix`, `step_failed_with_cancelled_reason_stores_cancelled_status`, `step_failed_with_genuine_reason_stores_failed_status`, `step_failed_with_cancelled_reason_neutral_status_message`
+- F11 (step_list.rs): `run_failed_badge_is_bold_plain_missing_is_not`
+- F12 (progress.rs): `cancelled_exec_result_summary_is_not_red`, `cancelled_exec_does_not_show_cancel_hint`, `failed_exec_result_summary_is_still_red`
+
+### Risks/Limitations
+
+1. **`starts_with("Cancelled:")` string check preserved**: The handler still uses the string prefix to distinguish cancel from genuine failure. The `Cancelled` variant makes the TUI rendering correct without removing this check. A future cleanup could replace the string check with an `Error::is_cancelled()` check passed through the message, but that would require changing the `WizardStepFailed` message type.
+
+2. **`Cancelled` state is retriable**: The step is left in `Cancelled` (terminal) state — not reset to `Idle`. The next `Enter` press will dispatch a new run because `is_step_running()` returns `false` for `Cancelled`. This matches the task requirement that the step is "still retriable via Enter".

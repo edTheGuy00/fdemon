@@ -100,3 +100,37 @@ for i in $(seq 1 20); do cargo test -p fdemon-daemon --lib cancel_mid_stream -- 
 - Shares files with Task 04 — serialise (chain B). The F5 `read_timeout` change from
   Task 04 does not affect these tests (the cancel loop polls `stream.next()`
   independently of client timeout config).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/download.rs` | Rewrote `cancel_mid_stream_returns_cancelled_and_cleans_part` to use option (a): cancel the token synchronously from inside the first progress callback, removing the external `Notify` + separate task race. |
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | Extracted `fetch_release_manifest_from(url: &str)` as `pub(crate)` function containing all the HTTP logic; `fetch_release_manifest(platform)` is now a thin wrapper. Rewrote `fetch_manifest_404_is_clear_error` and `fetch_manifest_malformed_json_is_clear_error` to call the real function. Added `fetch_manifest_from_happy_path_exercises_head_get_parse` test. Removed dead `build_test_client` helper. |
+
+### Notable Decisions/Tradeoffs
+
+1. **F2 option (a) chosen over (b)**: Cancelling inside the progress callback is self-contained and requires no chunking guarantees from wiremock. The biased `select!` in `download_to_file`'s streaming loop ensures `cancel.cancelled()` wins the next iteration deterministically once the token is set — even if the stream was exhausted in a single chunk delivery.
+
+2. **`fetch_release_manifest_from` visibility**: Marked `pub(crate)` rather than `pub` since it's an implementation detail used only by tests and the public wrapper. The production-facing API remains `fetch_release_manifest(platform)`.
+
+3. **`build_test_client` helper removed**: It was only used by the two tests being replaced. The new tests call `fetch_release_manifest_from` directly without needing a manually-constructed client.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo test --workspace` — PASS (all test suites pass, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+- Determinism check: `cancel_mid_stream_returns_cancelled_and_cleans_part` run 20× — 20/20 PASS
+
+### Risks/Limitations
+
+1. **Single-chunk delivery still works**: The fix relies on the biased `select!` re-checking `cancel.cancelled()` after the callback returns. If Tokio ever changes biased-select semantics, this could theoretically break — but biased ordering is documented behavior in `tokio::select!`.
