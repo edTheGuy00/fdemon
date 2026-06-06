@@ -162,17 +162,21 @@ pub fn validate_sdk_path(root: &Path) -> Result<FlutterExecutable> {
         ));
     }
 
-    // Check VERSION file is readable (try both `version` and `VERSION` — older
-    // Flutter SDKs used uppercase, newer ones use lowercase).
+    // Check a version source is present. Legacy SDKs ship a plain-text
+    // `version`/`VERSION` file at the root; Flutter 3.x+ dropped that in favour
+    // of `bin/cache/flutter.version.json`. Accept any of the three — otherwise a
+    // freshly-installed modern SDK would be (incorrectly) rejected as invalid.
     let version_file = root.join("version");
     let version_file_alt = root.join("VERSION");
-    if !version_file.is_file() && !version_file_alt.is_file() {
+    let version_json = flutter_version_json_path(root);
+    if !version_file.is_file() && !version_file_alt.is_file() && !version_json.is_file() {
         return Err(Error::flutter_sdk_invalid(
             root,
             format!(
-                "version file not found at {} or {}",
+                "version file not found at {}, {}, or {}",
                 version_file.display(),
-                version_file_alt.display()
+                version_file_alt.display(),
+                version_json.display()
             ),
         ));
     }
@@ -218,30 +222,76 @@ pub fn validate_sdk_path_lenient(root: &Path) -> Result<FlutterExecutable> {
     Ok(executable_ctor(flutter_bin))
 }
 
-/// Reads the Flutter version string from `<root>/version` (or `<root>/VERSION`).
+/// Path to the modern Flutter version manifest: `<root>/bin/cache/flutter.version.json`.
 ///
-/// The version file typically contains a version like `3.19.0\n`.
-/// Newer Flutter SDKs use lowercase `version`; older ones use uppercase `VERSION`.
-/// This function tries lowercase first, then falls back to uppercase.
+/// Flutter 3.x dropped the plain-text `version`/`VERSION` file at the SDK root in
+/// favour of this JSON manifest (written by the engine on first cache populate /
+/// `flutter precache`). It carries `frameworkVersion`, `channel`, etc.
+fn flutter_version_json_path(root: &Path) -> PathBuf {
+    root.join("bin").join("cache").join("flutter.version.json")
+}
+
+/// Read `frameworkVersion` from `<root>/bin/cache/flutter.version.json`, if present.
+///
+/// Returns `None` when the file is absent, unreadable, not valid JSON, or lacks a
+/// non-empty `frameworkVersion` field.
+fn read_framework_version_json(root: &Path) -> Option<String> {
+    let path = flutter_version_json_path(root);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    value
+        .get("frameworkVersion")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Reads the Flutter version string for the SDK at `root`.
+///
+/// Resolution order (first hit wins):
+/// 1. `<root>/version` (lowercase — newer legacy SDKs)
+/// 2. `<root>/VERSION` (uppercase — older legacy SDKs)
+/// 3. `<root>/bin/cache/flutter.version.json` → `frameworkVersion` (Flutter 3.x+,
+///    which no longer ships a plain-text version file at the root).
 pub fn read_version_file(root: &Path) -> Result<String> {
     let lowercase = root.join("version");
     let uppercase = root.join("VERSION");
-    let version_file = if lowercase.is_file() {
-        lowercase
-    } else {
-        uppercase
-    };
-    let content = std::fs::read_to_string(&version_file).map_err(|e| {
-        Error::flutter_sdk_invalid(
-            root,
-            format!(
-                "failed to read version file at {}: {}",
-                version_file.display(),
-                e
-            ),
-        )
-    })?;
-    Ok(content.trim().to_string())
+
+    if lowercase.is_file() || uppercase.is_file() {
+        let version_file = if lowercase.is_file() {
+            lowercase
+        } else {
+            uppercase
+        };
+        let content = std::fs::read_to_string(&version_file).map_err(|e| {
+            Error::flutter_sdk_invalid(
+                root,
+                format!(
+                    "failed to read version file at {}: {}",
+                    version_file.display(),
+                    e
+                ),
+            )
+        })?;
+        return Ok(content.trim().to_string());
+    }
+
+    // Fallback: Flutter 3.x+ stores the version in the cache manifest instead of
+    // a root-level version file.
+    if let Some(version) = read_framework_version_json(root) {
+        return Ok(version);
+    }
+
+    Err(Error::flutter_sdk_invalid(
+        root,
+        format!(
+            "no version file found at {}, {}, or {}",
+            lowercase.display(),
+            uppercase.display(),
+            flutter_version_json_path(root).display()
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -315,9 +365,58 @@ mod tests {
     #[test]
     fn test_read_version_file_missing() {
         let tmp = TempDir::new().unwrap();
-        // No VERSION file
+        // No VERSION file and no JSON manifest.
         let result = read_version_file(tmp.path());
         assert!(result.is_err());
+    }
+
+    /// Helper: write a modern (Flutter 3.x+) `flutter.version.json` manifest.
+    fn write_version_json(root: &Path, framework_version: &str) {
+        fs::create_dir_all(root.join("bin/cache")).unwrap();
+        fs::write(
+            root.join("bin/cache/flutter.version.json"),
+            format!(
+                r#"{{"frameworkVersion": "{framework_version}", "channel": "stable"}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_read_version_file_falls_back_to_version_json() {
+        // Flutter 3.x+ ships no root version file — read frameworkVersion from
+        // bin/cache/flutter.version.json instead.
+        let tmp = TempDir::new().unwrap();
+        write_version_json(tmp.path(), "3.44.1");
+        let version = read_version_file(tmp.path()).unwrap();
+        assert_eq!(version, "3.44.1");
+    }
+
+    #[test]
+    fn test_read_version_file_prefers_root_file_over_json() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("version"), "3.19.0\n").unwrap();
+        write_version_json(tmp.path(), "9.9.9");
+        // Legacy root file wins when both are present.
+        assert_eq!(read_version_file(tmp.path()).unwrap(), "3.19.0");
+    }
+
+    #[test]
+    fn test_validate_sdk_path_valid_with_only_version_json() {
+        // Regression: a freshly-installed modern SDK (bin/flutter +
+        // flutter.version.json, no root VERSION file) must validate as OK.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("bin/cache/dart-sdk")).unwrap();
+        fs::write(root.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
+        write_version_json(root, "3.44.1");
+
+        assert!(
+            validate_sdk_path(root).is_ok(),
+            "modern SDK with flutter.version.json must validate"
+        );
     }
 
     #[test]
