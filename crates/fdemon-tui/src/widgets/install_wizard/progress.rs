@@ -125,27 +125,32 @@ impl<'a> StepProgress<'a> {
             StepExecStatus::Idle => ("\u{2026}", palette::TEXT_MUTED),      // …
         };
 
+        // Lead with the status glyph so the activity/result indicator is always
+        // at the left edge — never trailing off the right edge where a narrow
+        // pane would clip it.
         let line = Line::from(vec![
             Span::raw("  "),
-            Span::styled(label, Style::default().fg(palette::TEXT_PRIMARY)),
-            Span::raw(" "),
             Span::styled(glyph, Style::default().fg(glyph_color)),
+            Span::raw(" "),
+            Span::styled(label, Style::default().fg(palette::TEXT_PRIMARY)),
         ]);
         Paragraph::new(line).render(Rect::new(area.x, area.y, area.width, 1), buf);
     }
 
     /// Render the phase row specifically for the `Running` status (includes spinner char).
     fn render_phase_row_running(&self, area: Rect, buf: &mut Buffer, label: &str, spinner: char) {
+        // Lead with the animated spinner so the "something is happening" signal
+        // sits at the left edge and stays visible regardless of pane width.
         let line = Line::from(vec![
             Span::raw("  "),
-            Span::styled(label, Style::default().fg(palette::TEXT_PRIMARY)),
-            Span::raw(" "),
             Span::styled(
                 spinner.to_string(),
                 Style::default()
                     .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::raw(" "),
+            Span::styled(label, Style::default().fg(palette::TEXT_PRIMARY)),
         ]);
         Paragraph::new(line).render(Rect::new(area.x, area.y, area.width, 1), buf);
     }

@@ -249,6 +249,69 @@ impl<'a> InstallWizardPanel<'a> {
         detail_pane.render(chunks[2], buf);
     }
 
+    /// Whether a step is actively installing (live run in progress).
+    ///
+    /// True only for the `Running` status — terminal states
+    /// (Succeeded/Failed/Cancelled) revert to the split layout so the result
+    /// summary shows next to the updated step list.
+    fn is_step_running(&self) -> bool {
+        use fdemon_app::install_wizard::StepExecStatus;
+        self.state.execution.status == StepExecStatus::Running
+            && self.state.execution.kind.is_some()
+    }
+
+    /// Render the live execution view across the full content width.
+    ///
+    /// Used while a step is actively `Running`.  Shows an "Installing: <step>"
+    /// caption + separator, then hands the rest of the area to [`StepProgress`]
+    /// (phase, gauge/counter, log tail, and the `[Esc] Cancel` hint) at full
+    /// width — so the progress is prominent on both wide (side-by-side) and
+    /// narrow (stacked) terminals instead of being squeezed into a corner.
+    fn render_running_fullwidth(&self, area: Rect, buf: &mut Buffer) {
+        if area.height < 1 || area.width < 1 {
+            return;
+        }
+
+        // Caption: "Installing: <step title>"
+        let title = self
+            .state
+            .steps
+            .iter()
+            .find(|s| Some(s.kind) == self.state.execution.kind)
+            .map(|s| s.title.as_str())
+            .unwrap_or("step");
+        let caption = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Installing: ", Style::default().fg(palette::TEXT_SECONDARY)),
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        Paragraph::new(caption).render(Rect::new(area.x, area.y, area.width, 1), buf);
+
+        if area.height >= 2 {
+            let sep = "\u{2500}".repeat(area.width as usize); // ─
+            buf.set_string(
+                area.x,
+                area.y + 1,
+                &sep,
+                Style::default().fg(palette::BORDER_DIM),
+            );
+        }
+
+        // Progress occupies the rest of the content area, full width.
+        let body_y = area.y + 2;
+        if body_y >= area.y + area.height {
+            return;
+        }
+        let body = Rect::new(area.x, body_y, area.width, area.height - 2);
+        progress::StepProgress::new(&self.state.execution, self.animation_frame, true)
+            .render(body, buf);
+    }
+
     /// Render the footer: Phase 1 key hints (and optional status message).
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         let hints = "[Tab] switch \u{00b7} [j/k] move \u{00b7} [r] re-run \u{00b7} [Esc] close";
@@ -333,9 +396,17 @@ impl Widget for InstallWizardPanel<'_> {
         self.render_header(chunks[0], buf);
         self.render_separator(chunks[1], buf);
 
-        // 8. Loading state — show placeholder; skip pane split
+        // 8. Content area:
+        //    - loading → placeholder
+        //    - a step actively running → full-width progress (the static step
+        //      list is the least useful thing on screen mid-install; handing the
+        //      whole content area to the progress view keeps it prominent at any
+        //      width instead of confining it to the right/bottom)
+        //    - otherwise → the side-by-side / stacked step-list + detail split
         if self.state.loading {
             self.render_loading(chunks[2], buf);
+        } else if self.is_step_running() {
+            self.render_running_fullwidth(chunks[2], buf);
         } else if inner.width >= MIN_HORIZONTAL_WIDTH {
             self.render_horizontal_panes(chunks[2], buf);
         } else {
@@ -406,6 +477,65 @@ mod tests {
 
     fn empty_steps_state() -> InstallWizardState {
         InstallWizardState::default()
+    }
+
+    fn running_flutter_state() -> InstallWizardState {
+        use fdemon_app::install_wizard::{StepExecStatus, StepExecution, WizardStepKind};
+        let mut state = populated_state();
+        state.execution = StepExecution {
+            kind: Some(WizardStepKind::FlutterSdk),
+            status: StepExecStatus::Running,
+            phase_label: Some("Cloning".to_string()),
+            received: 0,
+            total: None,
+            log_tail: std::collections::VecDeque::new(),
+            result_summary: None,
+        };
+        if let Some(idx) = state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::FlutterSdk)
+        {
+            state.selected_index = idx;
+        }
+        state
+    }
+
+    /// While a step is actively running, the wizard hands the whole content area
+    /// to the progress view (full-width "Installing: <step>" caption + progress),
+    /// hiding the static step list — at both wide and narrow widths.
+    #[test]
+    fn test_running_step_renders_fullwidth_progress() {
+        for (w, h) in [(90u16, 26u16), (70, 22)] {
+            let state = running_flutter_state();
+            let widget = InstallWizardPanel::new(&state, 0);
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            widget.render(area, &mut buf);
+            let content: String = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| buf.cell((x, y)).unwrap().symbol().to_string())
+                .collect();
+
+            assert!(
+                content.contains("Installing:"),
+                "{w}x{h}: full-width run view must show the 'Installing:' caption: '{content}'"
+            );
+            assert!(
+                content.contains("Cloning"),
+                "{w}x{h}: must show the live phase label: '{content}'"
+            );
+            // The static step list is hidden mid-run: a non-executing step's title
+            // ("Android Tools") must NOT be drawn while the full-width view is up.
+            assert!(
+                !content.contains("Android Tools"),
+                "{w}x{h}: step list must be hidden during an active run: '{content}'"
+            );
+            assert!(
+                !content.contains("Setup Steps"),
+                "{w}x{h}: step-list header must be hidden during an active run: '{content}'"
+            );
+        }
     }
 
     #[test]
