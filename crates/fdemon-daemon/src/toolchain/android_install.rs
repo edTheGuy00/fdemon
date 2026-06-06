@@ -17,9 +17,12 @@
 //! - **Atomic relocation**: extraction happens in a sibling temp directory;
 //!   the final `cmdline-tools/latest` rename is atomic on POSIX. Temp dirs are
 //!   cleaned up on failure.
-//! - **No SHA verification**: Google publishes no easily-fetched per-build
-//!   SHA-256 for `cmdline-tools`. The download relies on HTTPS/TLS. A future
-//!   `[toolchain] cmdline_tools_sha256` override is not implemented here.
+//! - **SHA verification**: when [`AndroidInstallTarget::cmdline_tools_sha256`]
+//!   is `Some`, `verify_sha256` is called (via `spawn_blocking`) on the
+//!   downloaded zip **before** `extract_zip` or any binary is executed.  A
+//!   mismatching digest aborts the install and cleans up the temp dir.  When
+//!   `None`, the download relies on HTTPS/TLS for integrity (Google publishes
+//!   no easily-fetched per-build SHA-256 for the floating `_latest.zip`).
 //! - **License acceptance is idempotent**: re-running `--licenses` on an
 //!   already-licensed SDK is harmless.
 //! - **`spawn_blocking` for sync extract**: [`extract_zip`] is synchronous;
@@ -38,7 +41,7 @@ use fdemon_core::{Error, Result};
 use tokio_util::sync::CancellationToken;
 
 use super::checks::sdkmanager_bin_name;
-use super::download::{download_to_file, ensure_disk_space, extract_zip};
+use super::download::{download_to_file, ensure_disk_space, extract_zip, verify_sha256};
 use super::flutter_install::InstallEvent;
 use super::process_stream::run_streaming_with_input;
 use super::types::{
@@ -262,6 +265,33 @@ where
     })
     .await
     .map_err(|e| Error::process(format!("failed to download cmdline-tools from {url}: {e}")))?;
+
+    // ── Step 1b: Verify SHA-256 (if configured) ──────────────────────────────
+    //
+    // When `cmdline_tools_sha256` is configured, verify the downloaded zip
+    // before any extraction or execution.  This mirrors the Flutter install
+    // path (flutter_install.rs:914-925).
+    //
+    // When no hash is provided, we rely on the HTTPS/TLS channel enforced by
+    // `download_to_file` (non-https URLs and http-downgrade redirects are
+    // rejected at the transport layer).  The residual risk is undetected
+    // on-disk corruption; callers who need integrity assurance should set the
+    // `[toolchain] cmdline_tools_sha256` override.
+    if let Some(ref expected_sha) = target.cmdline_tools_sha256 {
+        on_event(InstallEvent::Phase("Verifying"));
+        on_event(InstallEvent::Log(
+            "Verifying SHA-256 checksum of cmdline-tools …".to_owned(),
+        ));
+
+        let sha_zip_path = tmp_zip.clone();
+        let expected_sha_clone = expected_sha.clone();
+        tokio::task::spawn_blocking(move || verify_sha256(&sha_zip_path, &expected_sha_clone))
+            .await
+            .map_err(|e| Error::process(format!("spawn_blocking for verify_sha256 panicked: {e}")))?
+            .map_err(|e| {
+                Error::process(format!("cmdline-tools SHA-256 verification failed: {e}"))
+            })?;
+    }
 
     // ── Step 2: Extract ──────────────────────────────────────────────────────
     on_event(InstallEvent::Phase("Extracting"));
@@ -512,6 +542,7 @@ mod tests {
             cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
             jdk_path: None,
             platform: HostPlatform::Linux,
+            cmdline_tools_sha256: None,
         };
         let url = resolve_cmdline_tools_url(&target).expect("must resolve for Linux");
         assert!(
@@ -532,6 +563,7 @@ mod tests {
             cmdline_tools_build: "12345".to_string(),
             jdk_path: None,
             platform: HostPlatform::Unknown,
+            cmdline_tools_sha256: None,
         };
         assert!(
             resolve_cmdline_tools_url(&target).is_err(),
@@ -547,6 +579,7 @@ mod tests {
             cmdline_tools_build: "99999999".to_string(),
             jdk_path: None,
             platform: HostPlatform::MacOs,
+            cmdline_tools_sha256: None,
         };
         let url = resolve_cmdline_tools_url(&target).expect("must resolve");
         assert!(url.contains("99999999"), "URL must use custom build number");
@@ -729,6 +762,7 @@ mod tests {
             cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
             jdk_path: None,
             platform: HostPlatform::Linux,
+            cmdline_tools_sha256: None,
         };
 
         let token = CancellationToken::new();
@@ -786,5 +820,162 @@ mod tests {
         assert!(!stale1.exists(), "stale android temp dir 1 must be removed");
         assert!(!stale2.exists(), "stale android temp dir 2 must be removed");
         assert!(keep.exists(), "non-tmp dir must not be removed");
+    }
+
+    // ── SHA-256 verification before extraction (AC2) ──────────────────────────
+
+    /// Build a minimal valid zip archive in memory (single stored file).
+    ///
+    /// Used to produce a real zip body so `download_to_file` can write it to
+    /// disk; the content is arbitrary since the SHA check fires before unzip.
+    fn make_minimal_zip() -> Vec<u8> {
+        use std::io::Write as IoWrite;
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("dummy.txt", opts).unwrap();
+            writer.write_all(b"dummy content").unwrap();
+            writer.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Compute the SHA-256 hex digest of a byte slice (test helper).
+    fn sha256_hex(data: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(data);
+        format!("{:x}", h.finalize())
+    }
+
+    /// When `cmdline_tools_sha256` is configured and the downloaded zip has a
+    /// *mismatching* digest, the install must fail before `extract_zip` is
+    /// invoked (i.e., no files are extracted and an error is returned).
+    ///
+    /// We verify the "before extraction" property by asserting that the extract
+    /// directory is empty/absent after the failed install.
+    #[tokio::test]
+    async fn test_sha256_mismatch_rejects_before_extraction() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Serve a known valid zip.
+        let zip_bytes = make_minimal_zip();
+        let correct_sha = sha256_hex(&zip_bytes);
+        // Tamper: flip the first hex digit to produce a wrong digest.
+        let wrong_sha = {
+            let mut s = correct_sha.clone();
+            // Replace the first char with a different hex digit.
+            let first = s.chars().next().unwrap();
+            let replacement = if first == 'f' { '0' } else { 'f' };
+            s.replace_range(..1, &replacement.to_string());
+            s
+        };
+        // Ensure they actually differ (they should unless the hash starts with 'f' and
+        // we swapped to 'f' again — statistically impossible but guard it).
+        assert_ne!(
+            correct_sha, wrong_sha,
+            "test setup error: hashes must differ"
+        );
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/cmdline-tools.zip"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(zip_bytes.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sdk_root = tmp.path().join("sdk");
+        let tmp_dir = tmp.path().join("work");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let target = AndroidInstallTarget {
+            sdk_root: sdk_root.clone(),
+            api_level: 36,
+            cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
+            jdk_path: None,
+            platform: HostPlatform::Linux,
+            // Provide a WRONG SHA-256 digest.
+            cmdline_tools_sha256: Some(wrong_sha),
+        };
+
+        let url = format!("{}/cmdline-tools.zip", mock_server.uri());
+        let token = tokio_util::sync::CancellationToken::new();
+        let mut events: Vec<String> = Vec::new();
+
+        let result =
+            install_android_tools_inner(&target, &tmp_dir, &url, token, &mut |evt| match evt {
+                InstallEvent::Phase(p) => events.push(p.to_string()),
+                InstallEvent::Log(l) => events.push(l),
+                _ => {}
+            })
+            .await;
+
+        // Must fail with a SHA mismatch error.
+        let err = result.expect_err("mismatched SHA must cause an error");
+        assert!(
+            err.to_string().contains("SHA-256") || err.to_string().contains("mismatch"),
+            "error should mention SHA-256 or mismatch: {err}"
+        );
+
+        // The extract directory must NOT have been created/populated —
+        // extraction was never reached.
+        let extract_dir = tmp_dir.join("extract");
+        assert!(
+            !extract_dir.exists() || std::fs::read_dir(&extract_dir).unwrap().next().is_none(),
+            "extract_dir must be absent or empty (extraction must not have happened)"
+        );
+    }
+
+    /// When `cmdline_tools_sha256` is configured and matches the downloaded zip,
+    /// the installer proceeds past verification (it may fail later when trying
+    /// to run `sdkmanager`, but the SHA check itself must not reject it).
+    #[tokio::test]
+    async fn test_sha256_match_passes_verification() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let zip_bytes = make_minimal_zip();
+        let correct_sha = sha256_hex(&zip_bytes);
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/cmdline-tools.zip"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(zip_bytes.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sdk_root = tmp.path().join("sdk");
+        std::fs::create_dir_all(&sdk_root).unwrap();
+        let tmp_dir = tmp.path().join("work");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let target = AndroidInstallTarget {
+            sdk_root: sdk_root.clone(),
+            api_level: 36,
+            cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
+            jdk_path: None,
+            platform: HostPlatform::Linux,
+            // Provide the CORRECT SHA-256 digest.
+            cmdline_tools_sha256: Some(correct_sha),
+        };
+
+        let url = format!("{}/cmdline-tools.zip", mock_server.uri());
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let result = install_android_tools_inner(&target, &tmp_dir, &url, token, &mut |_| {}).await;
+
+        // The install will fail at relocation (the zip doesn't contain a
+        // `cmdline-tools` dir), not at SHA verification.  We assert the error
+        // message does NOT mention SHA to confirm the check passed.
+        let err = result.expect_err("install must fail (no real sdkmanager)");
+        assert!(
+            !err.to_string().contains("SHA-256") && !err.to_string().contains("mismatch"),
+            "error must not be a SHA-256 mismatch (sha check must have passed): {err}"
+        );
     }
 }

@@ -425,6 +425,16 @@ pub struct AndroidInstallTarget {
     /// The host operating system, used to select the correct cmdline-tools
     /// archive.
     pub platform: HostPlatform,
+    /// Optional SHA-256 hex digest for the cmdline-tools zip.
+    ///
+    /// When `Some`, the installer verifies the downloaded archive against this
+    /// digest before extracting or executing any contained binary.  When
+    /// `None`, the download relies on HTTPS/TLS for integrity (Google does not
+    /// publish a stable per-build digest for the floating `_latest.zip`).
+    ///
+    /// Configurable via `[toolchain] cmdline_tools_sha256` in
+    /// `.fdemon/config.toml`.
+    pub cmdline_tools_sha256: Option<String>,
 }
 
 /// Final outcome of a managed Android SDK installation.
@@ -791,11 +801,13 @@ mod tests {
             cmdline_tools_build: DEFAULT_CMDLINE_TOOLS_BUILD.to_string(),
             jdk_path: None,
             platform: HostPlatform::Linux,
+            cmdline_tools_sha256: None,
         };
         assert_eq!(target.api_level, 36);
         assert_eq!(target.cmdline_tools_build, DEFAULT_CMDLINE_TOOLS_BUILD);
         assert!(target.jdk_path.is_none());
         assert_eq!(target.platform, HostPlatform::Linux);
+        assert!(target.cmdline_tools_sha256.is_none());
     }
 
     #[test]
@@ -806,6 +818,7 @@ mod tests {
             cmdline_tools_build: "12345678".to_string(),
             jdk_path: Some(PathBuf::from("/usr/lib/jvm/java-21")),
             platform: HostPlatform::MacOs,
+            cmdline_tools_sha256: None,
         };
         assert!(target.jdk_path.is_some());
         assert_eq!(

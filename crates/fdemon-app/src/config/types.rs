@@ -205,6 +205,16 @@ pub struct ToolchainSettings {
     ///
     /// Default (`None`) → auto-detect via `JAVA_HOME`, `which java`, etc.
     pub jdk_path: Option<PathBuf>,
+
+    /// Optional SHA-256 hex digest for the Android cmdline-tools zip.
+    ///
+    /// When set, the installer verifies the downloaded archive against this
+    /// digest before extracting or executing any contained binary.  When
+    /// `None`, the download relies on HTTPS/TLS for integrity.
+    ///
+    /// Configurable via `[toolchain] cmdline_tools_sha256` in
+    /// `.fdemon/config.toml`.
+    pub cmdline_tools_sha256: Option<String>,
 }
 
 impl Default for ToolchainSettings {
@@ -217,6 +227,7 @@ impl Default for ToolchainSettings {
             android_api_level: 36,
             cmdline_tools_build: None,
             jdk_path: None,
+            cmdline_tools_sha256: None,
         }
     }
 }
@@ -3984,6 +3995,7 @@ android_api_level = 35
             android_api_level: 34,
             cmdline_tools_build: Some("10406996".to_string()),
             jdk_path: Some(PathBuf::from("/usr/lib/jvm/java-17")),
+            cmdline_tools_sha256: None,
         };
 
         let serialized = toml::to_string(&original).unwrap();

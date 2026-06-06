@@ -1054,6 +1054,7 @@ pub fn handle_action(
                                 .unwrap_or_else(|| DEFAULT_CMDLINE_TOOLS_BUILD.to_string()),
                             jdk_path: resolve_effective_jdk_path(params.jdk_path),
                             platform: HostPlatform::detect(),
+                            cmdline_tools_sha256: params.cmdline_tools_sha256,
                         };
 
                         // Clone a sender for the synchronous on_event callback.
@@ -2344,6 +2345,7 @@ mod tests {
                 api_level: 36,
                 cmdline_tools_build: None,
                 jdk_path: None,
+                cmdline_tools_sha256: None,
             }),
         });
 

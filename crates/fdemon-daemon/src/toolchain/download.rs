@@ -115,6 +115,37 @@ pub(crate) const ARCHIVE_DISK_BUDGET_BYTES: u64 = 1_572_864_000; // 1.5 GiB
 /// offline stall without this probe could be much longer than 30 seconds.
 const CONNECTIVITY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+// ── Transport security constants ─────────────────────────────────────────────
+
+/// Maximum number of HTTP redirects to follow for a single download.
+///
+/// Bounds the redirect chain so a CDN misconfiguration or adversarial server
+/// cannot cause an unbounded redirect loop.  Five hops is more than enough for
+/// well-behaved CDN redirect chains; the Flutter and Android CDNs typically
+/// require at most 2-3 redirects.
+const MAX_REDIRECTS: usize = 5;
+
+// ── URL-scheme guard ──────────────────────────────────────────────────────────
+
+/// Validate that `url` uses the `https://` scheme.
+///
+/// All production download targets use HTTPS. Accepting a plain `http://` URL
+/// (or any other scheme) could allow a transparent downgrade attack if a URL
+/// were somehow supplied from an untrusted source or misconfigured redirect
+/// chain.
+///
+/// # Errors
+///
+/// Returns [`Error::Process`] when `url` does not start with `https://`.
+pub(crate) fn validate_https_url(url: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        return Err(Error::process(format!(
+            "download URL must use HTTPS (got: {url:?})"
+        )));
+    }
+    Ok(())
+}
+
 // ── Preflight helpers ─────────────────────────────────────────────────────────
 
 /// Assert that the filesystem holding `dir` has at least `required` free bytes.
@@ -285,10 +316,42 @@ where
         return Err(Error::cancelled("download cancelled before start"));
     }
 
+    // Reject non-HTTPS URLs up front. In test builds this check is skipped so
+    // that wiremock (http://) tests can exercise the download pipeline without
+    // requiring a real TLS server.
+    #[cfg(not(test))]
+    validate_https_url(url)?;
+
+    // Install a custom redirect policy that:
+    // - Bounds the redirect chain to MAX_REDIRECTS hops.
+    // - Rejects any redirect that downgrades from HTTPS to HTTP (scheme check
+    //   on the target URL).  This prevents a CDN misconfiguration or MITM from
+    //   silently moving the download to a plaintext channel.
+    //
+    // In test builds we allow HTTP redirects so that wiremock redirect tests
+    // work correctly without a TLS server.
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        let target_url = attempt.url().clone();
+        if attempt.previous().len() >= MAX_REDIRECTS {
+            attempt.error(format!(
+                "too many redirects (limit: {MAX_REDIRECTS}) for {target_url}"
+            ))
+        } else {
+            // In production (non-test) builds, reject any redirect that
+            // downgrades to a non-HTTPS scheme.
+            #[cfg(not(test))]
+            if target_url.scheme() != "https" {
+                return attempt.error(format!("redirect to non-HTTPS URL rejected: {target_url}"));
+            }
+            attempt.follow()
+        }
+    });
+
     let client = reqwest::Client::builder()
         .user_agent(concat!("fdemon/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(IDLE_TIMEOUT)
+        .redirect(redirect_policy)
         .build()
         .map_err(|e| Error::process(format!("failed to build HTTP client: {e}")))?;
 
@@ -690,16 +753,16 @@ impl Write for SenderWriter {
 /// decompresses to ≈ 1 GB).  Peak RAM usage is proportional to the XZ block
 /// size rather than the total archive size.
 ///
-/// Uses [`tar::Archive::unpack_in`] to prevent tar traversal / symlink
-/// escape. Unix mode bits on extracted files are preserved.
-///
-/// Entries with `..` components are rejected by both the channel-based guard
-/// and `unpack_in`.
+/// Entries are iterated explicitly; each entry path is passed through
+/// [`sanitize_entry_path`] before any file is written.  Any entry whose path
+/// contains `..` components, is absolute, or would escape `dest_dir` causes
+/// an immediate `Err` — matching the fail-closed behaviour of [`extract_zip`].
+/// Unix mode bits on extracted files are preserved.
 ///
 /// # Errors
 ///
-/// Returns an error on decompression, traversal detection, or tar-unpack
-/// failures.
+/// Returns an error on decompression failures, path-traversal/symlink-escape
+/// entries, or I/O failures during extraction.
 pub fn extract_tar_xz(archive: &Path, dest_dir: &Path) -> Result<()> {
     let file = File::open(archive)
         .map_err(|e| Error::Io(io::Error::new(e.kind(), format!("open {archive:?}: {e}"))))?;
@@ -725,12 +788,91 @@ pub fn extract_tar_xz(archive: &Path, dest_dir: &Path) -> Result<()> {
     tar_archive.set_preserve_permissions(true);
     tar_archive.set_unpack_xattrs(false);
 
-    // `Archive::unpack` delegates to `Entry::unpack_in` for each entry,
-    // which silently skips entries with `..` components or symlink escapes
-    // and validates against `dest_dir` canonicalization.
-    let unpack_result = tar_archive
-        .unpack(dest_dir)
-        .map_err(|e| Error::Io(io::Error::new(e.kind(), format!("unpack {archive:?}: {e}"))));
+    // Iterate entries explicitly so we can fail-closed on any traversal entry,
+    // matching the behaviour of extract_zip / sanitize_entry_path.
+    let unpack_result: Result<()> = (|| {
+        let entries = tar_archive.entries().map_err(|e| {
+            Error::Io(io::Error::new(
+                e.kind(),
+                format!("read tar entries from {archive:?}: {e}"),
+            ))
+        })?;
+
+        for entry_result in entries {
+            let mut entry = entry_result.map_err(|e| {
+                Error::Io(io::Error::new(
+                    e.kind(),
+                    format!("read tar entry from {archive:?}: {e}"),
+                ))
+            })?;
+
+            // Validate path against traversal before writing anything.
+            let raw_path = entry
+                .path()
+                .map_err(|e| {
+                    Error::process(format!("invalid path in tar entry from {archive:?}: {e}"))
+                })?
+                .into_owned();
+
+            let raw_str = raw_path.to_string_lossy();
+            let out_path = sanitize_entry_path(dest_dir, &raw_str)?;
+
+            let entry_type = entry.header().entry_type();
+
+            if entry_type.is_dir() {
+                std::fs::create_dir_all(&out_path).map_err(|e| {
+                    Error::Io(io::Error::new(
+                        e.kind(),
+                        format!("create dir {out_path:?}: {e}"),
+                    ))
+                })?;
+            } else if entry_type.is_symlink() {
+                // Reject symlinks: a symlink whose target points outside
+                // dest_dir is a symlink-escape attack.  Fail closed rather
+                // than trusting the link target.
+                return Err(Error::process(format!(
+                    "archive entry is a symlink (rejected to prevent symlink-escape): {:?}",
+                    raw_str.as_ref()
+                )));
+            } else {
+                // Regular file (or hard link, treated as file).
+                if let Some(parent) = out_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        Error::Io(io::Error::new(
+                            e.kind(),
+                            format!("create dir {parent:?}: {e}"),
+                        ))
+                    })?;
+                }
+
+                let mut out_file = File::create(&out_path).map_err(|e| {
+                    Error::Io(io::Error::new(
+                        e.kind(),
+                        format!("create file {out_path:?}: {e}"),
+                    ))
+                })?;
+
+                io::copy(&mut entry, &mut out_file).map_err(|e| {
+                    Error::Io(io::Error::new(e.kind(), format!("write {out_path:?}: {e}")))
+                })?;
+
+                // Preserve Unix mode bits.
+                #[cfg(unix)]
+                if let Ok(mode) = entry.header().mode() {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::Permissions::from_mode(mode);
+                    std::fs::set_permissions(&out_path, perms).map_err(|e| {
+                        Error::Io(io::Error::new(
+                            e.kind(),
+                            format!("set permissions on {out_path:?}: {e}"),
+                        ))
+                    })?;
+                }
+            }
+        }
+
+        Ok(())
+    })();
 
     // Wait for the decode thread and surface any decoding error.
     let decode_result = decode_thread
@@ -740,7 +882,7 @@ pub fn extract_tar_xz(archive: &Path, dest_dir: &Path) -> Result<()> {
 
     // Prefer the decode error (more informative) if both fail.
     match (decode_result, unpack_result) {
-        (Ok(()), Ok(_)) => Ok(()),
+        (Ok(()), Ok(())) => Ok(()),
         (Err(e), _) => Err(e),
         (Ok(()), Err(e)) => Err(e),
     }
@@ -782,6 +924,43 @@ mod tests {
     use super::*;
     use std::io::Write as IoWrite;
     use tempfile::TempDir;
+
+    // ── validate_https_url ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_https_url_accepts_https() {
+        validate_https_url("https://storage.googleapis.com/flutter_infra/releases/stable/linux/flutter_linux_3.0.0-stable.tar.xz")
+            .expect("HTTPS URL must be accepted");
+    }
+
+    #[test]
+    fn test_validate_https_url_rejects_http() {
+        let err = validate_https_url("http://storage.googleapis.com/file.tar.xz")
+            .expect_err("HTTP URL must be rejected");
+        assert!(
+            err.to_string().contains("HTTPS"),
+            "error should mention HTTPS: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_https_url_rejects_ftp() {
+        let err = validate_https_url("ftp://example.com/file.tar.xz")
+            .expect_err("FTP URL must be rejected");
+        assert!(
+            err.to_string().contains("HTTPS"),
+            "error should mention HTTPS: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_https_url_rejects_empty() {
+        let err = validate_https_url("").expect_err("empty URL must be rejected");
+        assert!(
+            err.to_string().contains("HTTPS"),
+            "error should mention HTTPS: {err}"
+        );
+    }
 
     // ── verify_sha256 ─────────────────────────────────────────────────────────
 
@@ -1203,23 +1382,90 @@ mod tests {
         let dest_dir = tmp.path().join("out");
         std::fs::create_dir_all(&dest_dir).unwrap();
 
-        // The tar crate's Entry::unpack_in silently skips entries with
-        // `..` components rather than returning an error, so the
-        // extraction itself succeeds but the traversal entry is not
-        // written to disk.
+        // extract_tar_xz now iterates entries explicitly and calls
+        // sanitize_entry_path on each one.  A `../` traversal entry must
+        // cause an immediate Err (fail-closed), matching extract_zip.
         let xz_data = make_traversal_tar_xz("../escape.txt", b"evil content");
         std::fs::write(&archive_path, &xz_data).unwrap();
 
-        // Extraction must not error — the traversal entry is silently
-        // skipped by Entry::unpack_in.
-        extract_tar_xz(&archive_path, &dest_dir)
-            .expect("extraction must succeed (traversal entry is skipped)");
+        let err = extract_tar_xz(&archive_path, &dest_dir)
+            .expect_err("traversal entry must be rejected with Err");
+
+        assert!(
+            err.to_string().contains("traversal"),
+            "error should mention traversal: {err}"
+        );
 
         // The parent of dest_dir must not contain "escape.txt".
         let escaped = tmp.path().join("escape.txt");
         assert!(
             !escaped.exists(),
             "traversal file must not have been written: {escaped:?}"
+        );
+    }
+
+    /// Build a `.tar.xz` with a symlink entry (type flag `2`).
+    ///
+    /// Used to verify that `extract_tar_xz` rejects symlinks fail-closed.
+    fn make_symlink_tar_xz(link_name: &str, link_target: &str) -> Vec<u8> {
+        let mut tar_buf: Vec<u8> = Vec::new();
+        let mut header = [0u8; 512];
+
+        // File name (bytes 0..100).
+        let name_bytes = link_name.as_bytes();
+        let name_len = name_bytes.len().min(99);
+        header[..name_len].copy_from_slice(&name_bytes[..name_len]);
+
+        // File mode.
+        header[100..108].copy_from_slice(b"0000777\0");
+        // UID/GID zeroed.
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
+        // File size: 0 for symlinks.
+        header[124..136].copy_from_slice(b"00000000000\0");
+        // Mtime.
+        header[136..148].copy_from_slice(b"00000000000\0");
+        // Type flag: '2' = symbolic link.
+        header[156] = b'2';
+        // Link target (bytes 157..257).
+        let target_bytes = link_target.as_bytes();
+        let target_len = target_bytes.len().min(99);
+        header[157..157 + target_len].copy_from_slice(&target_bytes[..target_len]);
+        // ustar magic.
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+
+        // Checksum.
+        header[148..156].copy_from_slice(b"        ");
+        let checksum: u32 = header.iter().map(|&b| b as u32).sum();
+        let cksum_str = format!("{:06o}\0 ", checksum);
+        header[148..156].copy_from_slice(cksum_str.as_bytes());
+
+        tar_buf.extend_from_slice(&header);
+        // End-of-archive markers.
+        tar_buf.extend(std::iter::repeat_n(0u8, 1024));
+
+        let mut xz_buf = Vec::new();
+        lzma_rs::xz_compress(&mut tar_buf.as_slice(), &mut xz_buf).unwrap();
+        xz_buf
+    }
+
+    #[test]
+    fn test_extract_tar_xz_rejects_symlink() {
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("symlink.tar.xz");
+        let dest_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        // An archive with a symlink pointing outside dest_dir must be rejected.
+        let xz_data = make_symlink_tar_xz("safe_name.txt", "/etc/passwd");
+        std::fs::write(&archive_path, &xz_data).unwrap();
+
+        let err = extract_tar_xz(&archive_path, &dest_dir)
+            .expect_err("symlink entry must be rejected with Err");
+        assert!(
+            err.to_string().contains("symlink"),
+            "error should mention symlink: {err}"
         );
     }
 

@@ -205,6 +205,7 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                 api_level: ts.android_api_level,
                 cmdline_tools_build: ts.cmdline_tools_build.clone(),
                 jdk_path: ts.jdk_path.clone(),
+                cmdline_tools_sha256: ts.cmdline_tools_sha256.clone(),
             };
 
             // Flip UI to Running immediately before the async round-trip.

@@ -858,6 +858,11 @@ pub struct AndroidStepParams {
     ///
     /// `None` → the executor uses the system JDK or installs one if missing.
     pub jdk_path: Option<std::path::PathBuf>,
+    /// Optional SHA-256 hex digest to verify the downloaded cmdline-tools zip.
+    ///
+    /// When `Some`, the installer verifies the archive before extraction.
+    /// When `None`, the download relies on HTTPS/TLS for integrity.
+    pub cmdline_tools_sha256: Option<String>,
 }
 
 /// Background tasks to spawn
