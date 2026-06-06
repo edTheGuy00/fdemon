@@ -816,6 +816,117 @@ mod tests {
         );
     }
 
+    // ── F-PR53-12: execution cleared on apply_report / handle_preflight_completed ─
+
+    /// F-PR53-12: after `handle_step_failed` → `handle_preflight_completed`,
+    /// `execution` must be back to `Idle` so the detail pane renders the
+    /// refreshed component list rather than the stale "Failed" view.
+    #[test]
+    fn test_preflight_completed_after_failed_step_clears_execution() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state.install_wizard_state.apply_report(make_report());
+
+        // Simulate a failed step run.
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+        handle_step_failed(&mut state, "network timeout".into());
+        assert_eq!(
+            state.install_wizard_state.execution.status,
+            crate::install_wizard::StepExecStatus::Failed,
+            "precondition: execution must be Failed after handle_step_failed"
+        );
+
+        // User fixes the issue and re-checks — a new report arrives.
+        handle_preflight_completed(&mut state, make_report());
+
+        // execution must be back to default so the component list renders.
+        assert_eq!(
+            state.install_wizard_state.execution.status,
+            crate::install_wizard::StepExecStatus::Idle,
+            "handle_preflight_completed must reset execution to Idle"
+        );
+        assert_eq!(
+            state.install_wizard_state.execution.kind, None,
+            "handle_preflight_completed must clear execution.kind"
+        );
+    }
+
+    /// F-PR53-12 (Cancelled variant): after a user-cancelled step, re-check
+    /// via `handle_preflight_completed` must clear execution.
+    #[test]
+    fn test_preflight_completed_after_cancelled_step_clears_execution() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state.install_wizard_state.apply_report(make_report());
+
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::AndroidTools);
+        handle_step_failed(&mut state, "Cancelled: user pressed Esc".into());
+        assert_eq!(
+            state.install_wizard_state.execution.status,
+            crate::install_wizard::StepExecStatus::Cancelled,
+            "precondition: execution must be Cancelled"
+        );
+
+        handle_preflight_completed(&mut state, make_report());
+
+        assert_eq!(
+            state.install_wizard_state.execution.status,
+            crate::install_wizard::StepExecStatus::Idle,
+            "handle_preflight_completed must reset Cancelled execution to Idle"
+        );
+    }
+
+    /// F-PR53-12 regression: handback auto-close still works when
+    /// `apply_report` resets `execution`. The predicate `flutter_now_live()`
+    /// reads `report.components`, not `execution`, so clearing execution must
+    /// not break the auto-close path.
+    #[test]
+    fn test_preflight_completed_handback_still_fires_after_execution_reset() {
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state.install_wizard_state.apply_report(make_report());
+
+        // Simulate a successful step run that leaves execution = Succeeded.
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+        state.install_wizard_state.finish_step(
+            crate::install_wizard::StepExecStatus::Succeeded,
+            "done".into(),
+        );
+
+        // Inject a live SDK so close_wizard_and_dispatch_discovery returns Some.
+        inject_live_sdk(&mut state);
+        assert!(!state.install_wizard_state.handback_done, "precondition");
+
+        // A re-check report arrives with Flutter live.
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        // Wizard must auto-close.
+        assert!(
+            !state.install_wizard_state.visible,
+            "wizard must auto-close on live Flutter report"
+        );
+        // handback_done guard must be set.
+        assert!(
+            state.install_wizard_state.handback_done,
+            "handback_done must be set after auto-close"
+        );
+        // DiscoverDevices action must be returned.
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "DiscoverDevices action must be returned even when execution was reset; got {:?}",
+            actions
+        );
+    }
+
     // ── Step execution handler tests ──────────────────────────────────────────
 
     /// Helper: build a fresh state with the wizard open and a completed preflight.

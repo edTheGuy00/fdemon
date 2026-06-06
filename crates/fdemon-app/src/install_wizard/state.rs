@@ -161,6 +161,13 @@ impl InstallWizardState {
     /// Replaces any existing steps, clears `loading`, and clamps
     /// `selected_index` if the new step list is shorter.
     /// Also resets `selected_command_index` to 0 since the step list is rebuilt.
+    ///
+    /// **Execution reset (F-PR53-12):** clears `execution` back to `Idle` so
+    /// that a stale `Failed`/`Cancelled`/`Succeeded` display state from a
+    /// previous run does not mask the freshly rebuilt component list.  The
+    /// handback predicate [`flutter_now_live`][Self::flutter_now_live] reads
+    /// `report.components`, not `execution`, so clearing execution here does
+    /// not affect auto-close behaviour.
     pub fn apply_report(&mut self, report: ToolchainReport) {
         self.steps = build_steps(&report);
         self.report = Some(report);
@@ -169,6 +176,9 @@ impl InstallWizardState {
             self.selected_index = 0;
         }
         self.selected_command_index = 0;
+        // Clear the per-run execution display so the refreshed component list
+        // is shown rather than a stale progress/result view.
+        self.execution = StepExecution::default();
     }
 
     /// Return the currently selected step, or `None` if the list is empty.
@@ -1067,6 +1077,97 @@ mod tests {
             state.selected_index, 0,
             "selected_index must be clamped when >= steps.len()"
         );
+    }
+
+    /// F-PR53-12: `apply_report` must reset a stale `execution` back to
+    /// `Idle` so the static component list renders over a previous
+    /// Failed/Cancelled/Succeeded view.
+    #[test]
+    fn test_apply_report_resets_execution() {
+        let mut state = InstallWizardState::opening();
+
+        // Simulate a completed (failed) step.
+        state.begin_step(WizardStepKind::FlutterSdk);
+        state.finish_step(StepExecStatus::Failed, "network timeout".to_string());
+        assert_eq!(state.execution.status, StepExecStatus::Failed);
+        assert_eq!(state.execution.kind, Some(WizardStepKind::FlutterSdk));
+
+        // Apply a fresh report (e.g. user fixed the issue and re-checked).
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+
+        // execution must be back to default (Idle, kind = None).
+        assert_eq!(
+            state.execution.status,
+            StepExecStatus::Idle,
+            "apply_report must reset execution.status to Idle"
+        );
+        assert_eq!(
+            state.execution.kind, None,
+            "apply_report must reset execution.kind to None"
+        );
+        assert!(
+            state.execution.result_summary.is_none(),
+            "apply_report must clear execution.result_summary"
+        );
+    }
+
+    /// F-PR53-12 (Cancelled variant): `apply_report` must also clear a
+    /// stale `Cancelled` execution so the component list renders.
+    #[test]
+    fn test_apply_report_resets_cancelled_execution() {
+        let mut state = InstallWizardState::opening();
+
+        state.begin_step(WizardStepKind::AndroidTools);
+        state.finish_step(
+            StepExecStatus::Cancelled,
+            "Cancelled: user pressed Esc".to_string(),
+        );
+        assert_eq!(state.execution.status, StepExecStatus::Cancelled);
+
+        let report = make_report(vec![make_check(
+            ComponentKind::AndroidCmdlineTools,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+
+        assert_eq!(
+            state.execution.status,
+            StepExecStatus::Idle,
+            "apply_report must reset Cancelled execution to Idle"
+        );
+        assert_eq!(state.execution.kind, None);
+    }
+
+    /// F-PR53-12 (Succeeded variant): `apply_report` after an auto-triggered
+    /// re-check (e.g. AndroidTools/PathConfig success) must clear the stale
+    /// `Succeeded` execution.
+    #[test]
+    fn test_apply_report_resets_succeeded_execution() {
+        let mut state = InstallWizardState::opening();
+
+        state.begin_step(WizardStepKind::AndroidTools);
+        state.finish_step(
+            StepExecStatus::Succeeded,
+            "Android tools installed".to_string(),
+        );
+        assert_eq!(state.execution.status, StepExecStatus::Succeeded);
+
+        let report = make_report(vec![make_check(
+            ComponentKind::AndroidCmdlineTools,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(report);
+
+        assert_eq!(
+            state.execution.status,
+            StepExecStatus::Idle,
+            "apply_report must reset Succeeded execution to Idle"
+        );
+        assert_eq!(state.execution.kind, None);
     }
 
     #[test]
