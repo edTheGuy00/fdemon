@@ -103,9 +103,11 @@ pub async fn capture_flutter_doctor(exe: &FlutterExecutable) -> Option<String> {
         combined.push_str(&String::from_utf8_lossy(&stdout_bytes));
         if !stderr_bytes.is_empty() {
             let stderr_str = String::from_utf8_lossy(&stderr_bytes);
-            // Avoid doubling content if stderr is a copy of stdout (some shells
-            // redirect stderr into stdout by default).
-            if !combined.contains(stderr_str.trim_start()) {
+            // Avoid doubling content only when stderr is an *exact* copy of
+            // stdout (e.g. some shells forward stderr into stdout verbatim).
+            // A substring test over-eagerly drops legitimate stderr diagnostics
+            // that happen to appear somewhere inside a larger stdout body.
+            if combined.trim() != stderr_str.trim() {
                 combined.push_str(&stderr_str);
             }
         }
@@ -367,5 +369,76 @@ mod tests {
         let lines = parse_doctor_output(input);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].marker, DoctorMarker::Ok);
+    }
+
+    // ── stderr dedup logic ────────────────────────────────────────────────────
+    // These tests verify the exact-equality dedup rule used when combining
+    // stdout + stderr from `flutter doctor -v`.
+    //
+    // We test the dedup predicate directly rather than going through the async
+    // capture function, keeping the tests synchronous and hermetic.
+
+    /// Helper: apply the same dedup logic as `capture_flutter_doctor` and
+    /// return the resulting combined string.
+    fn combine(stdout: &str, stderr: &str) -> String {
+        let mut combined = stdout.to_string();
+        if !stderr.is_empty() {
+            // Exact-equality dedup: only suppress stderr when it is a
+            // whitespace-normalised duplicate of stdout.
+            if combined.trim() != stderr.trim() {
+                combined.push_str(stderr);
+            }
+        }
+        combined
+    }
+
+    /// stderr that is a strict substring of stdout must still be appended.
+    #[test]
+    fn stderr_substring_of_stdout_is_retained() {
+        let stdout = "[✓] Flutter\n  • some detail line\n";
+        let stderr = "  • some detail line\n"; // proper substring
+        let result = combine(stdout, stderr);
+        assert!(
+            result.contains("some detail line\n  • some detail line"),
+            "stderr substring should be appended, not suppressed; got: {:?}",
+            result
+        );
+    }
+
+    /// Exactly-equal stderr (content identical after trim) is dropped.
+    #[test]
+    fn exactly_equal_stderr_is_dropped() {
+        let content = "[✓] Flutter\n  • ok\n";
+        let result = combine(content, content);
+        // The combined string should equal the single copy, not a doubled copy.
+        assert_eq!(result, content, "duplicate stderr should be suppressed");
+    }
+
+    /// Exactly-equal after whitespace-trim is also dropped.
+    #[test]
+    fn exactly_equal_after_trim_is_dropped() {
+        let stdout = "  [✓] Flutter\n";
+        let stderr = "[✓] Flutter"; // different leading/trailing whitespace
+        let result = combine(stdout, stderr);
+        // trim() of both is "[✓] Flutter" → suppress.
+        assert_eq!(result, stdout, "trimmed-equal stderr should be suppressed");
+    }
+
+    /// Distinct stderr is always appended regardless of partial overlap.
+    #[test]
+    fn distinct_stderr_is_appended() {
+        let stdout = "[✓] Flutter\n";
+        let stderr = "[!] Android toolchain - incomplete\n";
+        let result = combine(stdout, stderr);
+        assert!(result.contains("Flutter"));
+        assert!(result.contains("Android toolchain"));
+    }
+
+    /// Empty stderr produces no change to stdout.
+    #[test]
+    fn empty_stderr_produces_no_change() {
+        let stdout = "[✓] Flutter\n";
+        let result = combine(stdout, "");
+        assert_eq!(result, stdout);
     }
 }

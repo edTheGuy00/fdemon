@@ -123,6 +123,30 @@ async fn main() -> Result<()> {
     // Dispatch before any Engine / TUI initialisation.  `run_doctor` never
     // panics and never starts the TUI; it prints to stdout/stderr and exits.
     if let Some(Commands::Doctor { path }) = cli.command {
+        // Reject run-mode flags that are silently ignored when `doctor` is
+        // the active subcommand.  The user most likely made a flag-ordering
+        // mistake (e.g. `fdemon --headless doctor` instead of `fdemon doctor`);
+        // failing loudly prevents confusing silent no-ops.
+        let run = &cli.run;
+        let has_run_flags = run.headless
+            || run.dap_stdio
+            || run.dap_port.is_some()
+            || run.log_dir.is_some()
+            || run.dap_config.is_some();
+        if has_run_flags {
+            // Mimic clap's error style: message to stderr, exit code 2.
+            eprintln!(
+                "error: run-mode flags (--headless, --dap-stdio, --dap-port, \
+                 --log-dir, --dap-config) are not compatible with the `doctor` \
+                 subcommand and would be silently ignored.\n\
+                 \n\
+                 hint: place flags after the subcommand, or omit them:\n  \
+                 fdemon doctor [PATH]\n  \
+                 fdemon --headless [PATH]"
+            );
+            std::process::exit(2);
+        }
+
         let cwd =
             path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         // F24: load project settings so the configured [flutter] sdk_path is
