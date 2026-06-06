@@ -314,14 +314,19 @@ impl Widget for InstallWizardPanel<'_> {
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);
 
-        // 7. Layout: header(2) | separator(1) | panes(flex) | separator(1) | footer(1) | absorber(0)
+        // 7. Layout: header(2) | separator(1) | panes(flex) | separator(1) | footer(1)
+        //
+        // The panes row is the ONLY flexible constraint, so it absorbs all
+        // remaining vertical space and the footer stays anchored to the bottom
+        // edge. A second flexible constraint here (e.g. a trailing `Min(0)`
+        // absorber) would make the solver split the leftover space ~evenly,
+        // floating the footer into the middle and leaving a dead band beneath it.
         let chunks = Layout::vertical([
             Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Min(5),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(0), // absorber
         ])
         .split(inner);
 
@@ -481,6 +486,40 @@ mod tests {
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();
         assert!(content.contains("Tab"), "footer should show Tab hint");
         assert!(content.contains("re-run"), "footer should show re-run hint");
+    }
+
+    #[test]
+    fn test_footer_anchored_to_bottom_no_dead_band() {
+        // Regression: a second flexible constraint (`Min(0)` absorber) used to
+        // split the leftover vertical space, floating the footer into the middle
+        // and leaving a large empty band beneath it. The footer key-hint row must
+        // sit on the last inner row, directly above the bottom border.
+        let state = populated_state();
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 100, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        // Locate the footer row (the one containing the key hints) and the
+        // bottom border row (containing the rounded corner '╰').
+        let row_text = |y: u16| -> String {
+            (0..area.width)
+                .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                .collect()
+        };
+        let footer_y = (0..area.height)
+            .find(|&y| row_text(y).contains("re-run"))
+            .expect("footer row with key hints must be rendered");
+        let bottom_border_y = (0..area.height)
+            .find(|&y| row_text(y).contains('\u{2570}')) // ╰
+            .expect("bottom border row must be rendered");
+
+        assert_eq!(
+            footer_y + 1,
+            bottom_border_y,
+            "footer must be the last inner row (immediately above the bottom border); \
+             no dead band of empty rows may sit between them"
+        );
     }
 
     #[test]
