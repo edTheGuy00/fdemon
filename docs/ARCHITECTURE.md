@@ -2117,7 +2117,13 @@ Running       Set ONLY on the app.started daemon event
               (DaemonMessage::AppStarted). current_progress is cleared.
 ```
 
-The key invariant: process attachment and `app.start` advance the phase to `Launching`; only `app.started` advances it to `Running`. This prevents a false-running display during long first-compile cycles.
+The key invariant: process attachment and `app.start` advance the phase to `Launching`; only `app.started` advances it to `Running`. This invariant is enforced on all paths, not just the initial daemon-event path:
+
+- **Auto-reload selection** (`SessionManager::reloadable_sessions()`): only sessions in `Running` are eligible for file-watcher-triggered reloads. A session may have both `app_id` and a live command sender while still in `Launching` (the `app.start` event sets `app_id` before the first build completes), so `app_id` presence alone is not sufficient. The manual `HotReload`/`HotRestart` handlers gate on `is_running()` by the same rule.
+
+- **Reload completion and failure** (`Session::complete_reload()`, `Session::fail_reload()`): both methods act only when the session is in `Reloading`. A `SessionReloadFailed` or `SessionRestartFailed` message arriving while the session is still `Launching` (e.g. because a file change fired an auto-reload during a long first-compile) leaves the phase as `Launching`; it does not promote the session to `Running`.
+
+This matters most on targets with long build windows (Android/Gradle), where the `Launching` phase can span many seconds and a file-watcher event can race with the first `app.started`. On fast targets the app typically reaches `Running` before any file change is detected, which is why the gap was not visible on macOS.
 
 ### Install Wizard Step Execution Flow (Phase 2 + Phase 5)
 
