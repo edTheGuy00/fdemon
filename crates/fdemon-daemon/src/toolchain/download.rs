@@ -599,6 +599,15 @@ fn sanitize_entry_path(dest_dir: &Path, raw_name: &str) -> Result<PathBuf> {
 
 // ── ZIP Extraction ────────────────────────────────────────────────────────────
 
+/// Number of archive entries to process between cancellation-token checks.
+///
+/// Checking on every entry would incur a small but measurable overhead for
+/// archives with tens of thousands of entries (the Flutter SDK has ~80k entries
+/// in its tar.xz). Checking every 256 entries bounds the cancellation latency
+/// to at most the time to process 256 entries — well under a second — without
+/// the per-entry check cost.
+const CANCEL_CHECK_INTERVAL: usize = 256;
+
 /// Extract a `.zip` archive into `dest_dir`.
 ///
 /// On Unix, executable mode bits recorded in the zip's external attributes
@@ -608,11 +617,21 @@ fn sanitize_entry_path(dest_dir: &Path, raw_name: &str) -> Result<PathBuf> {
 /// Entries with absolute paths or `..` components are rejected to prevent
 /// zip-slip / path traversal attacks.
 ///
+/// ## Cancellation
+///
+/// The extraction loop checks `cancel` every [`CANCEL_CHECK_INTERVAL`] entries.
+/// When cancelled, extraction stops promptly and returns
+/// [`fdemon_core::Error::Cancelled`].  No partial file is left behind — the
+/// caller's [`TempDirGuard`] (in `flutter_install.rs`) removes the destination
+/// directory.
+///
+/// For a non-cancellable extraction, pass `CancellationToken::new()`.
+///
 /// # Errors
 ///
 /// Returns an error on archive I/O failures, path traversal attempts, or when
 /// a file cannot be created inside `dest_dir`.
-pub fn extract_zip(archive: &Path, dest_dir: &Path) -> Result<()> {
+pub fn extract_zip(archive: &Path, dest_dir: &Path, cancel: &CancellationToken) -> Result<()> {
     let file = File::open(archive)
         .map_err(|e| Error::Io(io::Error::new(e.kind(), format!("open {archive:?}: {e}"))))?;
 
@@ -620,6 +639,13 @@ pub fn extract_zip(archive: &Path, dest_dir: &Path) -> Result<()> {
         .map_err(|e| Error::process(format!("open zip {archive:?}: {e}")))?;
 
     for i in 0..zip.len() {
+        // Check for cancellation every CANCEL_CHECK_INTERVAL entries so a
+        // token fired during extraction stops the loop promptly without
+        // incurring a per-entry atomic load.
+        if i.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
+            return Err(Error::cancelled("archive extraction cancelled"));
+        }
+
         let mut entry = zip
             .by_index(i)
             .map_err(|e| Error::process(format!("zip entry {i} in {archive:?}: {e}")))?;
@@ -759,11 +785,22 @@ impl Write for SenderWriter {
 /// an immediate `Err` — matching the fail-closed behaviour of [`extract_zip`].
 /// Unix mode bits on extracted files are preserved.
 ///
+/// ## Cancellation
+///
+/// The extraction loop checks `cancel` every [`CANCEL_CHECK_INTERVAL`] entries.
+/// When cancelled, extraction stops promptly and returns
+/// [`fdemon_core::Error::Cancelled`].  Dropping the `ReceiverReader` signals
+/// the XZ decode thread (via `BrokenPipe` on its next `SenderWriter::write`)
+/// so it self-terminates without needing an explicit abort — see module-level
+/// doc for details.
+///
+/// For a non-cancellable extraction, pass `CancellationToken::new()`.
+///
 /// # Errors
 ///
 /// Returns an error on decompression failures, path-traversal/symlink-escape
 /// entries, or I/O failures during extraction.
-pub fn extract_tar_xz(archive: &Path, dest_dir: &Path) -> Result<()> {
+pub fn extract_tar_xz(archive: &Path, dest_dir: &Path, cancel: &CancellationToken) -> Result<()> {
     let file = File::open(archive)
         .map_err(|e| Error::Io(io::Error::new(e.kind(), format!("open {archive:?}: {e}"))))?;
 
@@ -798,7 +835,14 @@ pub fn extract_tar_xz(archive: &Path, dest_dir: &Path) -> Result<()> {
             ))
         })?;
 
-        for entry_result in entries {
+        for (entry_count, entry_result) in entries.enumerate() {
+            // Check for cancellation every CANCEL_CHECK_INTERVAL entries.
+            // Dropping out of this closure drops the ReceiverReader, which
+            // causes BrokenPipe in the XZ decode thread so it self-terminates.
+            if entry_count.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
+                return Err(Error::cancelled("archive extraction cancelled"));
+            }
+
             let mut entry = entry_result.map_err(|e| {
                 Error::Io(io::Error::new(
                     e.kind(),
@@ -897,19 +941,25 @@ pub fn extract_tar_xz(archive: &Path, dest_dir: &Path) -> Result<()> {
 /// - `.zip` → [`extract_zip`]
 /// - `.tar.xz`, `.txz` → [`extract_tar_xz`]
 ///
+/// ## Cancellation
+///
+/// `cancel` is forwarded to the underlying extractor.  When cancelled,
+/// extraction stops promptly and returns [`fdemon_core::Error::Cancelled`].
+/// For a non-cancellable extraction, pass `CancellationToken::new()`.
+///
 /// # Errors
 ///
 /// Returns an error when the extension is not recognised or extraction fails.
-pub fn extract_archive(archive: &Path, dest_dir: &Path) -> Result<()> {
+pub fn extract_archive(archive: &Path, dest_dir: &Path, cancel: &CancellationToken) -> Result<()> {
     let name = archive
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
 
     if name.ends_with(".tar.xz") || name.ends_with(".txz") {
-        extract_tar_xz(archive, dest_dir)
+        extract_tar_xz(archive, dest_dir, cancel)
     } else if name.ends_with(".zip") {
-        extract_zip(archive, dest_dir)
+        extract_zip(archive, dest_dir, cancel)
     } else {
         Err(Error::process(format!(
             "unsupported archive format: {archive:?}; expected .zip, .tar.xz, or .txz"
@@ -1198,7 +1248,8 @@ mod tests {
         ]);
         std::fs::write(&archive_path, &zip_data).unwrap();
 
-        extract_zip(&archive_path, &dest_dir).expect("extract_zip must succeed");
+        extract_zip(&archive_path, &dest_dir, &CancellationToken::new())
+            .expect("extract_zip must succeed");
 
         // Top-level file
         let hello = std::fs::read(dest_dir.join("hello.txt")).unwrap();
@@ -1214,7 +1265,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let missing = tmp.path().join("no_such.zip");
         let dest = tmp.path().join("out");
-        let err = extract_zip(&missing, &dest).expect_err("must fail on missing archive");
+        let err = extract_zip(&missing, &dest, &CancellationToken::new())
+            .expect_err("must fail on missing archive");
         assert!(
             matches!(err, Error::Io(_)),
             "expected Io error, got {err:?}"
@@ -1232,8 +1284,8 @@ mod tests {
         let zip_data = make_malicious_zip("../escape.txt", b"evil content");
         std::fs::write(&archive_path, &zip_data).unwrap();
 
-        let err =
-            extract_zip(&archive_path, &dest_dir).expect_err("zip-slip entry must be rejected");
+        let err = extract_zip(&archive_path, &dest_dir, &CancellationToken::new())
+            .expect_err("zip-slip entry must be rejected");
         assert!(
             err.to_string().contains("traversal"),
             "error should mention traversal: {err}"
@@ -1354,7 +1406,8 @@ mod tests {
         ]);
         std::fs::write(&archive_path, &xz_data).unwrap();
 
-        extract_tar_xz(&archive_path, &dest_dir).expect("extract_tar_xz must succeed");
+        extract_tar_xz(&archive_path, &dest_dir, &CancellationToken::new())
+            .expect("extract_tar_xz must succeed");
 
         let alpha = std::fs::read(dest_dir.join("alpha.txt")).unwrap();
         assert_eq!(alpha, b"alpha content");
@@ -1368,7 +1421,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let missing = tmp.path().join("no_such.tar.xz");
         let dest = tmp.path().join("out");
-        let err = extract_tar_xz(&missing, &dest).expect_err("must fail on missing archive");
+        let err = extract_tar_xz(&missing, &dest, &CancellationToken::new())
+            .expect_err("must fail on missing archive");
         assert!(
             matches!(err, Error::Io(_)),
             "expected Io error, got {err:?}"
@@ -1388,7 +1442,7 @@ mod tests {
         let xz_data = make_traversal_tar_xz("../escape.txt", b"evil content");
         std::fs::write(&archive_path, &xz_data).unwrap();
 
-        let err = extract_tar_xz(&archive_path, &dest_dir)
+        let err = extract_tar_xz(&archive_path, &dest_dir, &CancellationToken::new())
             .expect_err("traversal entry must be rejected with Err");
 
         assert!(
@@ -1461,7 +1515,7 @@ mod tests {
         let xz_data = make_symlink_tar_xz("safe_name.txt", "/etc/passwd");
         std::fs::write(&archive_path, &xz_data).unwrap();
 
-        let err = extract_tar_xz(&archive_path, &dest_dir)
+        let err = extract_tar_xz(&archive_path, &dest_dir, &CancellationToken::new())
             .expect_err("symlink entry must be rejected with Err");
         assert!(
             err.to_string().contains("symlink"),
@@ -1496,7 +1550,7 @@ mod tests {
         lzma_rs::xz_compress(&mut tar_buf.as_slice(), &mut xz_buf).unwrap();
         std::fs::write(&archive_path, &xz_buf).unwrap();
 
-        extract_tar_xz(&archive_path, &dest_dir).expect("must succeed");
+        extract_tar_xz(&archive_path, &dest_dir, &CancellationToken::new()).expect("must succeed");
 
         let meta = std::fs::metadata(dest_dir.join("bin/flutter")).unwrap();
         let mode = meta.permissions().mode();
@@ -1519,7 +1573,8 @@ mod tests {
         let zip_data = make_zip(&[("x.txt", b"zip dispatch")]);
         std::fs::write(&archive_path, &zip_data).unwrap();
 
-        extract_archive(&archive_path, &dest_dir).expect("zip dispatch must succeed");
+        extract_archive(&archive_path, &dest_dir, &CancellationToken::new())
+            .expect("zip dispatch must succeed");
         let x = std::fs::read(dest_dir.join("x.txt")).unwrap();
         assert_eq!(x, b"zip dispatch");
     }
@@ -1534,7 +1589,8 @@ mod tests {
         let xz_data = make_tar_xz(&[("y.txt", b"tar xz dispatch")]);
         std::fs::write(&archive_path, &xz_data).unwrap();
 
-        extract_archive(&archive_path, &dest_dir).expect("tar.xz dispatch must succeed");
+        extract_archive(&archive_path, &dest_dir, &CancellationToken::new())
+            .expect("tar.xz dispatch must succeed");
         let y = std::fs::read(dest_dir.join("y.txt")).unwrap();
         assert_eq!(y, b"tar xz dispatch");
     }
@@ -1545,8 +1601,8 @@ mod tests {
         let archive_path = tmp.path().join("file.bz2");
         let dest_dir = tmp.path().join("out");
 
-        let err =
-            extract_archive(&archive_path, &dest_dir).expect_err("unsupported extension must fail");
+        let err = extract_archive(&archive_path, &dest_dir, &CancellationToken::new())
+            .expect_err("unsupported extension must fail");
         assert!(
             err.to_string().contains("unsupported archive format"),
             "error should mention unsupported format: {err}"
@@ -2014,5 +2070,76 @@ mod tests {
         // Do not create the file; dropping the guard must not panic.
         let guard = PartFileGuard::new(path);
         drop(guard);
+    }
+
+    // ── Extraction cancellation ───────────────────────────────────────────────
+
+    /// A pre-cancelled token passed to `extract_zip` must cause extraction to
+    /// return `Error::Cancelled` at the first CANCEL_CHECK_INTERVAL boundary
+    /// (index 0, since 0 % CANCEL_CHECK_INTERVAL == 0 and the token is already
+    /// cancelled on entry).
+    #[test]
+    fn extract_zip_cancelled_token_stops_extraction() {
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("cancel_test.zip");
+        let dest_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        // Build a small zip with at least one entry.
+        let zip_data = make_zip(&[("file.txt", b"content"), ("file2.txt", b"content2")]);
+        std::fs::write(&archive_path, &zip_data).unwrap();
+
+        // Pre-cancel the token before passing to extract_zip.
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = extract_zip(&archive_path, &dest_dir, &token)
+            .expect_err("pre-cancelled token must cause extract_zip to return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
+    }
+
+    /// A pre-cancelled token passed to `extract_tar_xz` must cause extraction
+    /// to return `Error::Cancelled` at the first CANCEL_CHECK_INTERVAL boundary.
+    #[test]
+    fn extract_tar_xz_cancelled_token_stops_extraction() {
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("cancel_test.tar.xz");
+        let dest_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        // Build a small tar.xz with at least one entry.
+        let xz_data = make_tar_xz(&[("file.txt", b"content"), ("file2.txt", b"content2")]);
+        std::fs::write(&archive_path, &xz_data).unwrap();
+
+        // Pre-cancel the token before passing to extract_tar_xz.
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = extract_tar_xz(&archive_path, &dest_dir, &token)
+            .expect_err("pre-cancelled token must cause extract_tar_xz to return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
+    }
+
+    /// A pre-cancelled token passed to `extract_archive` must cause extraction
+    /// to return `Error::Cancelled` regardless of the archive format.
+    #[test]
+    fn extract_archive_cancelled_token_stops_extraction() {
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("cancel_test.zip");
+        let dest_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        let zip_data = make_zip(&[("file.txt", b"content")]);
+        std::fs::write(&archive_path, &zip_data).unwrap();
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let err = extract_archive(&archive_path, &dest_dir, &token)
+            .expect_err("pre-cancelled token must cause extract_archive to return Err");
+
+        assert!(err.is_cancelled(), "error must be Cancelled, got: {err:?}");
     }
 }

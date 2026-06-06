@@ -310,12 +310,17 @@ where
     ensure_disk_space(&target.sdk_root, ANDROID_DISK_BUDGET_BYTES)?;
 
     // extract_zip is synchronous — wrap in spawn_blocking.
+    // The cancel token was consumed by download_to_file above; extraction
+    // here is not cancellable (the Android install path was already past the
+    // download gate, and the blocking thread cannot be aborted mid-write).
     let zip_path = tmp_zip.clone();
     let extract_path = tmp_extract.clone();
-    tokio::task::spawn_blocking(move || extract_zip(&zip_path, &extract_path))
-        .await
-        .map_err(|e| Error::process(format!("extract_zip task panicked: {e}")))?
-        .map_err(|e| Error::process(format!("failed to extract cmdline-tools zip: {e}")))?;
+    tokio::task::spawn_blocking(move || {
+        extract_zip(&zip_path, &extract_path, &CancellationToken::new())
+    })
+    .await
+    .map_err(|e| Error::process(format!("extract_zip task panicked: {e}")))?
+    .map_err(|e| Error::process(format!("failed to extract cmdline-tools zip: {e}")))?;
 
     // ── Step 3: Relocate to cmdline-tools/latest ─────────────────────────────
     on_event(InstallEvent::Phase("Relocating to cmdline-tools/latest"));
