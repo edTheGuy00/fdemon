@@ -601,11 +601,13 @@ fn test_sdk_version_file_empty() {
         "validate_sdk_path should pass for empty VERSION file (file exists)"
     );
 
-    // read_version_file should return empty string after trimming.
-    let version = read_version_file(&sdk_root).unwrap();
-    assert_eq!(
-        version, "",
-        "Empty VERSION file should read as empty string"
+    // read_version_file should fall through to flutter.version.json when the legacy
+    // file is blank. Here there is no JSON manifest, so the result is an error —
+    // the empty file must not propagate as Ok("").
+    let result = read_version_file(&sdk_root);
+    assert!(
+        result.is_err(),
+        "Empty VERSION file with no JSON fallback should return an error, not Ok(\"\")"
     );
 }
 

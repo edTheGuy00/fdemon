@@ -27,8 +27,8 @@ use fdemon_core::prelude::*;
 use super::{
     channel::detect_channel,
     types::{
-        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterExecutable,
-        FlutterSdk, SdkSource,
+        read_channel_from_version_json, read_version_file, validate_sdk_path,
+        validate_sdk_path_lenient, FlutterExecutable, FlutterSdk, SdkSource,
     },
     version_managers,
 };
@@ -206,7 +206,9 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
         match validate_sdk_path_lenient(sdk_root) {
             Ok(executable) => {
                 let version = read_version_file(sdk_root).unwrap_or_else(|_| "unknown".to_string());
-                let channel = detect_channel(sdk_root).map(|c| c.to_string());
+                let channel = detect_channel(sdk_root)
+                    .map(|c| c.to_string())
+                    .or_else(|| read_channel_from_version_json(sdk_root));
                 let sdk = FlutterSdk {
                     root: sdk_root.clone(),
                     executable,
@@ -360,7 +362,11 @@ fn try_resolve_sdk(
                     return None;
                 }
             };
-            let channel = detect_channel(&sdk_root).map(|c| c.to_string());
+            // git-based detection first; fall back to flutter.version.json `channel`
+            // field for archive/wizard-produced installs that have no .git directory.
+            let channel = detect_channel(&sdk_root)
+                .map(|c| c.to_string())
+                .or_else(|| read_channel_from_version_json(&sdk_root));
             let source = make_source(&version);
             let sdk = FlutterSdk {
                 root: sdk_root,
@@ -521,6 +527,20 @@ mod tests {
         #[cfg(target_os = "windows")]
         fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), version).unwrap();
+    }
+
+    /// Create a git-less (archive/wizard-produced) mock SDK: no `.git` dir, no
+    /// root VERSION file; version and channel come from `flutter.version.json`.
+    fn create_mock_sdk_gitless(root: &Path, version: &str, channel: &str) {
+        fs::create_dir_all(root.join("bin/cache")).unwrap();
+        fs::write(root.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
+        fs::write(
+            root.join("bin/cache/flutter.version.json"),
+            format!(r#"{{"frameworkVersion": "{version}", "channel": "{channel}"}}"#),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -911,6 +931,21 @@ mod tests {
             sdk.executable.path().ends_with("flutter")
                 || sdk.executable.path().ends_with("flutter.bat")
         );
+    }
+
+    #[test]
+    fn test_channel_from_version_json_for_gitless_install() {
+        // A git-less install (no .git directory) whose flutter.version.json carries
+        // "channel": "stable" must report FlutterSdk.channel == Some("stable").
+        // Git-based installs are unaffected (covered by the existing test fixtures
+        // that create .git/HEAD).
+        let tmp = TempDir::new().unwrap();
+        let sdk_root = tmp.path().join("gitless-flutter");
+        create_mock_sdk_gitless(&sdk_root, "3.44.1", "stable");
+
+        let result = find_flutter_sdk(tmp.path(), Some(&sdk_root)).unwrap();
+        assert_eq!(result.channel.as_deref(), Some("stable"));
+        assert_eq!(result.version, "3.44.1");
     }
 
     #[test]

@@ -247,6 +247,23 @@ fn read_framework_version_json(root: &Path) -> Option<String> {
         .map(String::from)
 }
 
+/// Read `channel` from `<root>/bin/cache/flutter.version.json`, if present.
+///
+/// Returns `None` when the file is absent, unreadable, not valid JSON, or lacks a
+/// non-empty `channel` field. This is used as a fallback for git-less installs
+/// (archive/tarball/wizard-produced) where `detect_channel` returns `None`.
+pub(crate) fn read_channel_from_version_json(root: &Path) -> Option<String> {
+    let path = flutter_version_json_path(root);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    value
+        .get("channel")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
 /// Reads the Flutter version string for the SDK at `root`.
 ///
 /// Resolution order (first hit wins):
@@ -259,12 +276,12 @@ pub fn read_version_file(root: &Path) -> Result<String> {
     let uppercase = root.join("VERSION");
 
     if lowercase.is_file() || uppercase.is_file() {
-        let version_file = if lowercase.is_file() {
-            lowercase
+        let version_file: &Path = if lowercase.is_file() {
+            &lowercase
         } else {
-            uppercase
+            &uppercase
         };
-        let content = std::fs::read_to_string(&version_file).map_err(|e| {
+        let content = std::fs::read_to_string(version_file).map_err(|e| {
             Error::flutter_sdk_invalid(
                 root,
                 format!(
@@ -274,7 +291,11 @@ pub fn read_version_file(root: &Path) -> Result<String> {
                 ),
             )
         })?;
-        return Ok(content.trim().to_string());
+        let trimmed = content.trim().to_string();
+        if !trimmed.is_empty() {
+            return Ok(trimmed);
+        }
+        // Legacy file is blank — fall through to the JSON manifest.
     }
 
     // Fallback: Flutter 3.x+ stores the version in the cache manifest instead of
@@ -397,6 +418,18 @@ mod tests {
         write_version_json(tmp.path(), "9.9.9");
         // Legacy root file wins when both are present.
         assert_eq!(read_version_file(tmp.path()).unwrap(), "3.19.0");
+    }
+
+    #[test]
+    fn test_read_version_file_blank_legacy_falls_back_to_json() {
+        // A truncated/blank legacy version file must not short-circuit with Ok("")
+        // — it must fall through to flutter.version.json and return its frameworkVersion.
+        let tmp = TempDir::new().unwrap();
+        // Write a blank/whitespace-only legacy version file.
+        fs::write(tmp.path().join("VERSION"), "   \n").unwrap();
+        write_version_json(tmp.path(), "3.44.1");
+        let version = read_version_file(tmp.path()).unwrap();
+        assert_eq!(version, "3.44.1");
     }
 
     #[test]
@@ -541,6 +574,21 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("/path/to/sdk"));
         assert!(msg.contains("missing binary"));
+    }
+
+    #[test]
+    fn test_read_channel_from_version_json_present() {
+        let tmp = TempDir::new().unwrap();
+        write_version_json(tmp.path(), "3.44.1"); // includes "channel": "stable"
+        let channel = read_channel_from_version_json(tmp.path());
+        assert_eq!(channel.as_deref(), Some("stable"));
+    }
+
+    #[test]
+    fn test_read_channel_from_version_json_missing_file() {
+        let tmp = TempDir::new().unwrap();
+        let channel = read_channel_from_version_json(tmp.path());
+        assert_eq!(channel, None);
     }
 
     #[test]

@@ -70,8 +70,12 @@ pub(crate) fn strip_ansi(input: &str) -> String {
                             break;
                         }
                         if inner == '\x1b' {
-                            // Two-char ST: ESC '\'
-                            chars.next(); // consume '\'
+                            // Two-char ST: ESC '\' — only consume the next char if it
+                            // actually is '\'; a bare inner ESC not followed by '\'
+                            // terminates the OSC without eating the next char.
+                            if chars.peek() == Some(&'\\') {
+                                chars.next(); // consume '\'
+                            }
                             break;
                         }
                     }
@@ -129,5 +133,20 @@ mod tests {
             strip_ansi("\x1b[32mgreen\x1b[0m\x1b]0;title\x07text"),
             "greentext"
         );
+    }
+
+    #[test]
+    fn test_strip_ansi_malformed_osc_keeps_following_char() {
+        // OSC terminated by a bare inner ESC not followed by '\':
+        // "\x1b]2;ab\x1bcd" — the 'c' must NOT be dropped.
+        // The OSC ends at the bare ESC; 'c' and 'd' are plain text.
+        assert_eq!(strip_ansi("\x1b]2;ab\x1bcd"), "cd");
+    }
+
+    #[test]
+    fn test_strip_ansi_well_formed_esc_backslash_st_still_strips() {
+        // Well-formed ST (ESC '\') must still terminate the OSC correctly.
+        // The "after" text must be preserved.
+        assert_eq!(strip_ansi("\x1b]2;title\x1b\\after"), "after");
     }
 }
