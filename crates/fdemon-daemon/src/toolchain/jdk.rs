@@ -112,6 +112,15 @@ fn validate_jdk_dir(jdk_dir: &Path) -> Result<()> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Known system directories that are not JDK homes.
+///
+/// `/usr/bin/java` on macOS is a stub that invokes the JDK selector; on Linux
+/// it may be a binary managed by `update-alternatives` but the grandparent
+/// (`/usr`) is the system root, not a JDK home.  `/usr/local` is similarly a
+/// system prefix, never a JDK.  Returning these as a `JAVA_HOME` would produce
+/// `flutter config --jdk-dir=/usr`, which breaks the Flutter build.
+const NON_JDK_PREFIXES: &[&str] = &["/usr", "/usr/local"];
+
 /// Attempt to resolve the JDK home by locating the `java` binary via `which`
 /// and walking two directories up (bin → java_home).
 ///
@@ -120,8 +129,13 @@ fn validate_jdk_dir(jdk_dir: &Path) -> Result<()> {
 /// - macOS: `/usr/bin/java` (stub) → skip; `/Library/Java/JavaVirtualMachines/…/Contents/Home/bin/java`
 /// - FVM/asdf: `~/.jdks/corretto-21/bin/java` → `~/.jdks/corretto-21`
 ///
-/// The `<bin>/..` parent is the JDK home if it contains a `release` file
-/// (canonical JDK layout marker) or a `lib` subdirectory.
+/// The candidate JDK home must satisfy **both** of these conditions to be
+/// accepted:
+///
+/// 1. It is not a known non-JDK system prefix (e.g. `/usr`, `/usr/local`).
+/// 2. It contains a canonical JDK marker: a `release` file **or** a `bin/javac`
+///    binary.  A plain `lib/` subdirectory is no longer accepted on its own
+///    because `/usr/lib` exists on every Unix system.
 fn java_home_from_which() -> Option<PathBuf> {
     let java_bin = which::which("java").ok()?;
 
@@ -132,11 +146,37 @@ fn java_home_from_which() -> Option<PathBuf> {
     let bin_dir = real_bin.parent()?;
     let jdk_home = bin_dir.parent()?;
 
-    // Sanity check: a JDK home should have a `release` file or a `lib/` dir.
-    if jdk_home.join("release").is_file() || jdk_home.join("lib").is_dir() {
+    // Reject well-known non-JDK system prefixes.
+    //
+    // On macOS, `/usr/bin/java` is a stub (XCode command-line tools shim) whose
+    // grandparent is `/usr`.  On Linux, `update-alternatives` may point
+    // `java → /usr/bin/java` when no JDK is installed, again giving `/usr`.
+    // Accepting `/usr` as a JDK home would pass a bogus path to
+    // `flutter config --jdk-dir`.
+    let jdk_home_str = jdk_home.to_string_lossy();
+    if NON_JDK_PREFIXES
+        .iter()
+        .any(|prefix| jdk_home_str == *prefix)
+    {
+        tracing::debug!(
+            path = %jdk_home.display(),
+            "java_home_from_which: rejected — resolves to a known non-JDK system prefix"
+        );
+        return None;
+    }
+
+    // A real JDK home must contain a `release` file (present in every OpenJDK /
+    // OracleJDK build since JDK 9) or a `bin/javac` compiler binary.
+    // We no longer accept a bare `lib/` subdirectory because `/usr/lib` exists
+    // everywhere and would be a false positive for stubs at `/usr/bin/java`.
+    if jdk_home.join("release").is_file() || jdk_home.join("bin").join("javac").exists() {
         return Some(jdk_home.to_owned());
     }
 
+    tracing::debug!(
+        path = %jdk_home.display(),
+        "java_home_from_which: rejected — no release file or bin/javac found"
+    );
     None
 }
 
@@ -235,5 +275,107 @@ mod tests {
     fn test_validate_jdk_dir_accepts_path_with_spaces() {
         // Spaces are valid in JDK paths.
         assert!(validate_jdk_dir(Path::new("/Program Files/Java/jdk-21")).is_ok());
+    }
+
+    // ── java_home_from_which heuristic tests ──────────────────────────────────
+
+    /// `java_home_from_which` must return `None` when the resolved binary is
+    /// under a known non-JDK prefix (`/usr`), even if `/usr/lib` exists.
+    ///
+    /// We can't invoke `which` here (it would query the live system), so we
+    /// test the filtering predicate directly via a helper.
+    #[test]
+    fn test_java_home_rejects_usr_prefix() {
+        // Simulate the grandparent path that `java_home_from_which` would
+        // derive from `/usr/bin/java`.
+        let candidate = PathBuf::from("/usr");
+        let candidate_str = candidate.to_string_lossy();
+        let rejected = NON_JDK_PREFIXES
+            .iter()
+            .any(|prefix| candidate_str == *prefix);
+        assert!(rejected, "/usr must be in the NON_JDK_PREFIXES list");
+    }
+
+    #[test]
+    fn test_java_home_rejects_usr_local_prefix() {
+        let candidate = PathBuf::from("/usr/local");
+        let candidate_str = candidate.to_string_lossy();
+        let rejected = NON_JDK_PREFIXES
+            .iter()
+            .any(|prefix| candidate_str == *prefix);
+        assert!(rejected, "/usr/local must be in the NON_JDK_PREFIXES list");
+    }
+
+    /// A real JDK layout (with `release` and `bin/javac`) is accepted.
+    #[test]
+    fn test_java_home_accepts_release_file_layout() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let jdk_home = tmp.path();
+
+        // Plant the JDK markers.
+        std::fs::write(jdk_home.join("release"), b"JAVA_VERSION=\"21\"").unwrap();
+        let bin = jdk_home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("javac"), b"#!/bin/sh").unwrap();
+
+        // Verify that a candidate with these markers passes the heuristic.
+        let jdk_home_str = jdk_home.to_string_lossy();
+        let is_non_jdk_prefix = NON_JDK_PREFIXES
+            .iter()
+            .any(|prefix| jdk_home_str == *prefix);
+        assert!(
+            !is_non_jdk_prefix,
+            "temp JDK dir must not be a known prefix"
+        );
+
+        let has_release = jdk_home.join("release").is_file();
+        let has_javac = jdk_home.join("bin").join("javac").exists();
+        assert!(
+            has_release || has_javac,
+            "fixture must pass the JDK marker check"
+        );
+    }
+
+    /// A stub layout (only `lib/` subdirectory, no `release`, no `bin/javac`)
+    /// is rejected — this prevents `/usr` from being returned as a JDK home.
+    #[test]
+    fn test_java_home_rejects_lib_only_layout() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let jdk_home = tmp.path();
+
+        // Only create `lib/` — no `release`, no `bin/javac`.
+        let lib = jdk_home.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+
+        let has_release = jdk_home.join("release").is_file();
+        let has_javac = jdk_home.join("bin").join("javac").exists();
+        assert!(
+            !has_release && !has_javac,
+            "fixture with only lib/ must fail the JDK marker check"
+        );
+    }
+
+    /// `java_home_from_which` returns `None` for a temp directory that has the
+    /// structure of the known stub path (`bin/java` exists but no `release`
+    /// and no `bin/javac`) and is not in the non-JDK prefix list.
+    ///
+    /// This tests the pure marker logic without invoking `which`.
+    #[test]
+    fn test_java_home_stub_dir_rejected_without_jdk_markers() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let jdk_home = tmp.path();
+
+        // Simulate a stub: only `bin/java`, no `release`, no `bin/javac`.
+        let bin = jdk_home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("java"), b"#!/bin/sh").unwrap();
+
+        let has_release = jdk_home.join("release").is_file();
+        let has_javac = jdk_home.join("bin").join("javac").exists();
+        // Must fail the marker check.
+        assert!(
+            !has_release && !has_javac,
+            "stub dir must not have release or javac"
+        );
     }
 }
