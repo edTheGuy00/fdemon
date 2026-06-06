@@ -624,8 +624,19 @@ impl Session {
         }
         self.vm_service_unavailable = true;
 
-        // Flush any batched raw lines first so the triggering error appears in
-        // the log immediately before our guidance (add_log bypasses the batcher).
+        // Flush any partially-accumulated exception block and any batched raw
+        // lines so the triggering error line appears in the log immediately
+        // before our guidance.  Order matters:
+        //   1. flush_exception_buffer — if the marker line was consumed as part
+        //      of an in-progress exception block, emit that partial block first
+        //      so it lands before the guidance entries.
+        //   2. flush_batched_logs — any already-queued raw lines follow.
+        // Note: the VM-service marker does not start an exception block, so
+        // (1) only fires in the narrow corner-case where the parser was already
+        // mid-block when the marker arrived.
+        if let Some(partial) = self.flush_exception_buffer() {
+            self.add_log(partial);
+        }
         self.flush_batched_logs();
 
         self.add_log(LogEntry::error(
