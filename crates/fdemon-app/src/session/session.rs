@@ -139,6 +139,17 @@ pub struct Session {
     /// Whether the VM Service WebSocket is currently connected
     pub vm_connected: bool,
 
+    /// Set when the on-device Dart VM service failed to start (Android only).
+    ///
+    /// When the app cannot bind its local VM service socket — typically a
+    /// missing `INTERNET` permission or a device that blocks per-app network
+    /// usage (common on MIUI/Xiaomi) — Flutter never emits `app.started`, so
+    /// the session would otherwise sit in `Launching` forever with no
+    /// explanation. We detect the failure line in the raw output and surface
+    /// actionable guidance once. Reset on each `app.start` so a re-launch
+    /// re-evaluates.
+    pub vm_service_unavailable: bool,
+
     /// DevTools server endpoint (populated from `app.devTools` event or
     /// `devtools.serve` RPC response). `None` until the daemon reports that
     /// DevTools is ready.
@@ -255,6 +266,7 @@ impl Session {
             app_id: None,
             ws_uri: None,
             vm_connected: false,
+            vm_service_unavailable: false,
             devtools_endpoint: None,
             devtools_serve_pending: false,
             launch_config: None,
@@ -586,6 +598,62 @@ impl Session {
         self.app_id = Some(app_id);
         self.started_at = Some(Local::now());
         self.phase = AppPhase::Launching;
+        // A fresh launch attempt — re-evaluate VM service health from scratch.
+        self.vm_service_unavailable = false;
+    }
+
+    /// Detect the on-device "Dart VM service failed to start" error in a raw
+    /// (non-JSON) Flutter output line and, on **Android only**, surface
+    /// actionable guidance exactly once.
+    ///
+    /// The Dart VM service binds a localhost socket on the device. If the app
+    /// lacks the `INTERNET` permission, or the device blocks per-app network
+    /// usage (common on MIUI/Xiaomi), the bind fails with `errno 111` and
+    /// Flutter never emits `app.started` — leaving the session stuck in
+    /// `Launching` with no explanation. We log the two known fixes and set a
+    /// short progress hint shown next to the (still shimmering) phase label.
+    ///
+    /// No-op when already surfaced, on non-Android platforms, or when the line
+    /// does not contain the VM-service-failure marker.
+    pub fn detect_vm_service_failure(&mut self, line: &str) {
+        if self.vm_service_unavailable
+            || self.platform != "android"
+            || !line.contains("Could not start Dart VM service")
+        {
+            return;
+        }
+        self.vm_service_unavailable = true;
+
+        // Flush any batched raw lines first so the triggering error appears in
+        // the log immediately before our guidance (add_log bypasses the batcher).
+        self.flush_batched_logs();
+
+        self.add_log(LogEntry::error(
+            LogSource::App,
+            "Dart VM service failed to start on this Android device — hot reload, \
+             DevTools, and the Performance/Network panels will be unavailable.",
+        ));
+        self.add_log(LogEntry::warn(
+            LogSource::App,
+            "Likely cause: the app cannot open its local VM service socket (missing \
+             INTERNET permission, or per-app network access blocked — common on MIUI/Xiaomi).",
+        ));
+        self.add_log(LogEntry::info(
+            LogSource::App,
+            "Fix 1: add  <uses-permission android:name=\"android.permission.INTERNET\"/>  to \
+             android/app/src/main/AndroidManifest.xml, then rebuild.",
+        ));
+        self.add_log(LogEntry::info(
+            LogSource::App,
+            "Fix 2: on the device, open this app's settings and enable \
+             \"Allow network usage\" (network access), then relaunch.",
+        ));
+
+        // Surface a compact hint next to the shimmering phase label. Safe to set
+        // here: the Gradle install has already finished (clearing any build
+        // progress), and no further app.progress arrives, so this hint persists.
+        self.current_progress =
+            Some("VM service unavailable — see logs (INTERNET permission / network access)".into());
     }
 
     /// Mark the session as actually running (the `app.started` daemon event).
@@ -1222,5 +1290,76 @@ mod tests {
             "fail_reload must not resurrect a Launching session to Running"
         );
         assert!(s2.reload_start_time.is_none());
+    }
+
+    const VM_FAIL_LINE: &str = "I/flutter (25963): Could not start Dart VM service HTTP server:";
+
+    #[test]
+    fn detect_vm_service_failure_surfaces_guidance_on_android() {
+        let mut s = make_session(); // android
+        assert!(!s.vm_service_unavailable);
+        let before = s.logs.len();
+
+        s.detect_vm_service_failure(VM_FAIL_LINE);
+
+        assert!(s.vm_service_unavailable, "flag must be set on Android");
+        // Four guidance entries appended (error, warn, info, info).
+        assert_eq!(s.logs.len(), before + 4);
+        assert!(s.logs.iter().any(|e| e.level == LogLevel::Error));
+        assert!(s
+            .logs
+            .iter()
+            .any(|e| e.message.contains("android.permission.INTERNET")));
+        assert!(s
+            .logs
+            .iter()
+            .any(|e| e.message.contains("Allow network usage")));
+        // Compact hint shown next to the (still Launching) phase label.
+        assert!(s
+            .current_progress
+            .as_deref()
+            .is_some_and(|p| p.contains("VM service unavailable")));
+    }
+
+    #[test]
+    fn detect_vm_service_failure_is_idempotent() {
+        let mut s = make_session();
+        s.detect_vm_service_failure(VM_FAIL_LINE);
+        let after_first = s.logs.len();
+        // A second matching line must not append more guidance.
+        s.detect_vm_service_failure(VM_FAIL_LINE);
+        assert_eq!(s.logs.len(), after_first);
+    }
+
+    #[test]
+    fn detect_vm_service_failure_ignored_on_non_android() {
+        let mut s = Session::new("d".into(), "iPhone".into(), "ios".into(), false);
+        let before = s.logs.len();
+        s.detect_vm_service_failure(VM_FAIL_LINE);
+        assert!(
+            !s.vm_service_unavailable,
+            "guidance is Android-only; iOS must be untouched"
+        );
+        assert_eq!(s.logs.len(), before);
+        assert!(s.current_progress.is_none());
+    }
+
+    #[test]
+    fn detect_vm_service_failure_ignores_unrelated_lines() {
+        let mut s = make_session();
+        let before = s.logs.len();
+        s.detect_vm_service_failure("I/flutter (25963): Hello, world!");
+        assert!(!s.vm_service_unavailable);
+        assert_eq!(s.logs.len(), before);
+    }
+
+    #[test]
+    fn mark_started_resets_vm_service_unavailable() {
+        let mut s = make_session();
+        s.detect_vm_service_failure(VM_FAIL_LINE);
+        assert!(s.vm_service_unavailable);
+        // A fresh launch attempt clears the flag so it can re-detect.
+        s.mark_started("app-2".into());
+        assert!(!s.vm_service_unavailable);
     }
 }

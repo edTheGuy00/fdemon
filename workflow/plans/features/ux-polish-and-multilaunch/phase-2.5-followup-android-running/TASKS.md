@@ -80,8 +80,8 @@ Both together guarantee the Phase 2.5 invariant ("only `app.started` →
 
 | # | Task | Status | Depends On | Agent | Est. Hours | Modules |
 |---|------|--------|------------|-------|------------|---------|
-| 01 | [01-gate-reload-to-running-sessions](tasks/01-gate-reload-to-running-sessions.md) | ⬜ Todo | - | implementor | 2–3h | `session_manager.rs`, `session/session.rs`, `handler/update.rs` |
-| 02 | [02-update-architecture-lifecycle-invariant](tasks/02-update-architecture-lifecycle-invariant.md) | ⬜ Todo | 01 | doc_maintainer | 0.5h | `docs/ARCHITECTURE.md` |
+| 01 | [01-gate-reload-to-running-sessions](tasks/01-gate-reload-to-running-sessions.md) | ✅ Done | - | implementor | 2–3h | `session_manager.rs`, `session/session.rs`, `handler/update.rs` |
+| 02 | [02-update-architecture-lifecycle-invariant](tasks/02-update-architecture-lifecycle-invariant.md) | ✅ Done | 01 | doc_maintainer | 0.5h | `docs/ARCHITECTURE.md` |
 
 **Total Tasks:** 2
 **Estimated Hours:** 2.5–3.5 hours
@@ -139,18 +139,20 @@ Phase 2.5 follow-up is complete when:
       `Launching` state for the entire build and only flips to `Running` when the
       `app.started` daemon event arrives (verified against a fresh run log:
       `"app is running: app_id=…"` precedes the first `Running` display).
-- [ ] A file-watcher `AutoReloadTriggered` while a session is
+      _(logic covered by unit tests; live Android run-log verification still
+      pending — manual step.)_
+- [x] A file-watcher `AutoReloadTriggered` while a session is
       `Initializing`/`Preparing`/`Launching` is a **no-op** (no reload dispatched,
       phase unchanged) — `reloadable_sessions()` excludes non-`Running` sessions.
-- [ ] `Session::complete_reload()` only sets `Running` when the session was
+- [x] `Session::complete_reload()` only sets `Running` when the session was
       `Reloading`; called on a `Launching` session it leaves the phase unchanged.
-- [ ] `SessionReloadFailed` / `SessionRestartFailed` only restore `Running` from
+- [x] `SessionReloadFailed` / `SessionRestartFailed` only restore `Running` from
       `Reloading` (they don't resurrect a `Launching`/`Stopped` session).
-- [ ] A normal reload/restart of a genuinely `Running` session is unchanged
+- [x] A normal reload/restart of a genuinely `Running` session is unchanged
       (`Running → Reloading → Running`), including the reload-success flash.
-- [ ] Unit tests cover: reloadable filtering by phase, no-op auto-reload during
+- [x] Unit tests cover: reloadable filtering by phase, no-op auto-reload during
       `Launching`, guarded `complete_reload`, and guarded failed-restore.
-- [ ] `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`,
+- [x] `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`,
       `cargo test --workspace`, and `cargo clippy --workspace --all-targets
       -- -D warnings` all pass.
 

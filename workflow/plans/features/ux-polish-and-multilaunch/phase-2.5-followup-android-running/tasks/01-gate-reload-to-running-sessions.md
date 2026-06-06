@@ -150,3 +150,50 @@ Defense in depth, so no future/edge reload path can corrupt the launch phase:
   building app picks up the latest source anyway. (A "reload once running" queue is
   a possible future enhancement, out of scope.)
 - Keep all changes within `fdemon-app`; no `fdemon-core`/`fdemon-daemon` edits.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session_manager.rs` | Fix A: `reloadable_sessions()` now gates on `AppPhase::Running` as the first filter. Added 3 new tests. |
+| `crates/fdemon-app/src/session/session.rs` | Fix B1: `complete_reload()` guarded — no-ops unless `Reloading`. Fix B2: new `fail_reload()` helper. Added 3 new tests. |
+| `crates/fdemon-app/src/handler/update.rs` | Fix B3: `SessionReloadFailed` and `SessionRestartFailed` now call `fail_reload()` instead of direct `phase = Running`. Added 4 new tests. |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated 5 existing auto-reload tests to call `mark_running()` after `mark_started()` so they exercise truly-running sessions. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Phase check before `is_busy()` in `reloadable_sessions()`**: The `AppPhase::Running` guard is placed first for clarity and because `is_busy()` only matches `Reloading` (already excluded by the Running check). The `is_busy()` call is kept for forward-compatibility with any future busy phases that may be added.
+
+2. **`fail_reload()` shared helper**: Rather than duplicating the guard in both `SessionReloadFailed` and `SessionRestartFailed`, a single `Session::fail_reload()` method encapsulates the logic. This follows the existing `complete_reload()` / `start_reload()` pattern.
+
+3. **Existing test updates**: Five tests in `handler/tests.rs` called `mark_started()` (→ `Launching`) without `mark_running()` (→ `Running`). These tests were implicitly relying on the old unguarded filter. The fix adds `mark_running()` calls so the tests correctly simulate fully-running sessions. The intent (test auto-reload with running sessions) is preserved; only the setup was incomplete.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2881 + 514 + 1094 + 842 + 1478 + others = all green, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added:
+- `session_manager::tests::reloadable_sessions_excludes_launching_session`
+- `session_manager::tests::reloadable_sessions_includes_running_session`
+- `session_manager::tests::reloadable_sessions_excludes_preparing_and_initializing`
+- `session::tests::complete_reload_noop_when_launching`
+- `session::tests::complete_reload_promotes_only_from_reloading`
+- `session::tests::fail_reload_restores_only_from_reloading`
+- `handler::tests::auto_reload_noop_while_launching`
+- `handler::tests::auto_reload_running_session_still_reloads`
+- `handler::tests::session_reload_failed_does_not_resurrect_launching`
+- `handler::tests::session_restart_failed_does_not_resurrect_launching`
+
+### Risks/Limitations
+
+1. **Dropped auto-reloads during build**: As noted in the task, reloads fired while `Launching` are silently dropped. The building app already picks up the latest source from disk, so this is correct behaviour. No replay queue is implemented (out of scope per the task notes).

@@ -77,7 +77,7 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
         // Update session state based on message type
         handle_session_message_state(state, session_id, &msg);
     } else if !line.trim().is_empty() {
-        // Non-JSON output (build progress, etc.)
+        // Non-JSON output (build progress, device logcat, etc.)
         if let Some(handle) = state.session_manager.get_mut(session_id) {
             // Process through exception detection and raw line handling
             let entries = handle.session.process_raw_line(line);
@@ -87,6 +87,11 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
                     handle.session.flush_batched_logs();
                 }
             }
+            // Surface the on-device Dart VM service failure (Android only) with
+            // actionable guidance. Without the VM service, Flutter never emits
+            // `app.started`, so the session would otherwise stay in Launching
+            // with no explanation. No-op unless the line is the failure marker.
+            handle.session.detect_vm_service_failure(line);
         }
     }
 }
@@ -276,6 +281,18 @@ pub fn handle_session_message_state(
                     "Session {} app is running: app_id={}",
                     session_id,
                     app_started.app_id
+                );
+            } else {
+                // Observability: an app.started whose app_id does not match the
+                // session's app_id (captured at app.start) is dropped here, so the
+                // session stays in Launching. Log it instead of silently ignoring,
+                // so a stuck-in-Launching report is diagnosable from the INFO log.
+                tracing::warn!(
+                    "Session {} received app.started for app_id={} but session app_id={:?}; \
+                     phase NOT advanced to Running (app_id mismatch)",
+                    session_id,
+                    app_started.app_id,
+                    handle.session.app_id,
                 );
             }
         }
@@ -943,5 +960,37 @@ mod tests {
             handle.session.current_progress.is_none(),
             "AppProgress should be ignored once running"
         );
+    }
+
+    #[test]
+    fn vm_service_failure_line_surfaces_guidance_and_keeps_launching() {
+        // Android session in Launching (state_with_session marks app.start).
+        let (mut state, session_id) = state_with_session("my-app");
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert_eq!(handle.session.phase, AppPhase::Launching);
+            assert!(!handle.session.vm_service_unavailable);
+        }
+
+        // The raw on-device error line (non-JSON) flows through stdout handling.
+        handle_session_stdout(
+            &mut state,
+            session_id,
+            "I/flutter (25963): Could not start Dart VM service HTTP server:",
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.vm_service_unavailable,
+            "failure line must flag the session"
+        );
+        // The phase machine is untouched — only app.started promotes to Running.
+        assert_eq!(handle.session.phase, AppPhase::Launching);
+        // Guidance reached the log buffer.
+        assert!(handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("android.permission.INTERNET")));
     }
 }
