@@ -29,9 +29,9 @@ tar.workspace = true
 lzma-rs.workspace = true
 sha2.workspace = true
 fs4.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 tokio-test.workspace = true
 serial_test.workspace = true
 wiremock.workspace = true

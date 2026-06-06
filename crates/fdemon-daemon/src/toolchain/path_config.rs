@@ -49,6 +49,10 @@ use fdemon_core::error::{Error, Result};
 
 use super::types::{HostPlatform, HostShell};
 
+// On Unix we need PermissionsExt to read/write mode bits.
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 // ── Windows broadcast script constant ────────────────────────────────────────
 
 /// PowerShell script that broadcasts `WM_SETTINGCHANGE` so running processes
@@ -521,15 +525,61 @@ fn read_rc_contents(rc_file: &Path) -> Result<String> {
 /// Write `new_contents` to `rc_file` atomically using a temp file + rename.
 ///
 /// Creates parent directories if they do not yet exist.
+///
+/// ## Permission preservation (Unix)
+///
+/// If `rc_file` already exists, its mode bits are read before the write and
+/// re-applied to the temp file immediately after writing — before the rename.
+/// This prevents a `chmod 600 ~/.zshenv` from being silently downgraded to the
+/// process umask (typically `0644`) after fdemon edits it.
+///
+/// If `rc_file` does not yet exist (new file), the temp file is created with
+/// mode `0600` (user-readable/writable only) rather than inheriting the umask,
+/// which could make the file world-readable.
+///
+/// On non-Unix platforms the mode-preservation step is a no-op.
+///
+/// ## Temp file uniqueness
+///
+/// The temp file is created via [`tempfile::NamedTempFile::new_in`] rather than
+/// a deterministic `<rc_file>.fdemon_tmp` name.  This prevents two concurrent
+/// fdemon processes targeting the same rc file from clobbering each other's
+/// temp file.
 fn write_rc_atomically(rc_file: &Path, new_contents: &str) -> Result<()> {
     // Ensure parent directory exists.
-    if let Some(parent) = rc_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = rc_file
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
 
-    // Use a simple temp-file approach: write to `<rc_file>.fdemon.tmp` then rename.
-    let tmp_path = rc_file.with_extension("fdemon_tmp");
+    // ── Permission snapshot ────────────────────────────────────────────────────
+    // On Unix: read the existing mode before writing so we can restore it after.
+    // If the file does not exist we will use 0600 for the new file.
+    #[cfg(unix)]
+    let target_mode: u32 = match std::fs::metadata(rc_file) {
+        Ok(m) => m.permissions().mode(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0o600,
+        Err(e) => return Err(Error::Io(e)),
+    };
 
+    // ── Create unique temp file in the same directory ─────────────────────────
+    // Using the same directory as rc_file is required for an atomic rename
+    // (cross-device renames are not guaranteed atomic on Linux/macOS).
+    let tmp_named = tempfile::Builder::new()
+        .prefix(".fdemon-rc-tmp-")
+        .tempfile_in(parent)
+        .map_err(|e| {
+            Error::config(format!(
+                "Failed to create temp file in {}: {}",
+                parent.display(),
+                e
+            ))
+        })?;
+
+    let tmp_path = tmp_named.path().to_path_buf();
+
+    // Write contents to the temp file (the NamedTempFile already holds an open fd).
     std::fs::write(&tmp_path, new_contents).map_err(|e| {
         Error::config(format!(
             "Failed to write temp file {}: {}",
@@ -538,20 +588,29 @@ fn write_rc_atomically(rc_file: &Path, new_contents: &str) -> Result<()> {
         ))
     })?;
 
-    std::fs::rename(&tmp_path, rc_file).map_err(|e| {
-        // Clean up the temp file on failure (best effort).
-        if let Err(remove_err) = std::fs::remove_file(&tmp_path) {
+    // ── Apply permissions to temp file before rename ───────────────────────────
+    // On Unix: set the permissions on the temp file to match the target mode so
+    // the rename preserves permissions atomically from the reader's perspective.
+    #[cfg(unix)]
+    {
+        let perms = std::fs::Permissions::from_mode(target_mode);
+        if let Err(e) = std::fs::set_permissions(&tmp_path, perms) {
             tracing::debug!(
                 path = %tmp_path.display(),
-                error = %remove_err,
-                "Failed to clean up temp rc file after rename failure"
+                error = %e,
+                "Failed to set permissions on temp rc file (best effort)"
             );
         }
+    }
+
+    // ── Atomic rename (temp → destination) ────────────────────────────────────
+    // `persist` consumes the NamedTempFile and renames it to rc_file, preventing
+    // the Drop impl from deleting the file before we've renamed it.
+    tmp_named.persist(rc_file).map_err(|e| {
         Error::config(format!(
-            "Failed to move {} → {}: {}",
-            tmp_path.display(),
+            "Failed to move temp file → {}: {}",
             rc_file.display(),
-            e
+            e.error
         ))
     })?;
 
@@ -2337,6 +2396,98 @@ mod tests {
             contents.matches(ANDROID_FENCE_OPEN).count(),
             1,
             "exactly one Android fence block"
+        );
+    }
+
+    // ── write_rc_atomically permission and uniqueness tests ──────────────────
+
+    /// On Unix: when the destination rc file already exists with mode 0600, the
+    /// file's mode must still be 0600 after `add_to_rc_file` edits it.
+    #[test]
+    #[cfg(unix)]
+    fn test_write_rc_preserves_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let rc_file = tmp.path().join("test_rc");
+
+        // Create the file and harden it to 0600.
+        std::fs::write(&rc_file, "# existing content\n").unwrap();
+        std::fs::set_permissions(&rc_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let bin_dir = PathBuf::from("/opt/flutter/bin");
+        let outcome = add_to_rc_file(&rc_file, &bin_dir).unwrap();
+        assert!(
+            matches!(outcome, PathConfigOutcome::Written { .. }),
+            "should write new content"
+        );
+
+        let mode = std::fs::metadata(&rc_file).unwrap().permissions().mode();
+        // Only the permission bits (lower 12 bits).
+        assert_eq!(
+            mode & 0o7777,
+            0o600,
+            "rc file mode must be preserved as 0600 after write, got {:o}",
+            mode & 0o7777
+        );
+    }
+
+    /// On Unix: when the rc file does not yet exist, the created file must have
+    /// mode 0600 (not the umask-derived 0644).
+    #[test]
+    #[cfg(unix)]
+    fn test_write_rc_new_file_is_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let rc_file = tmp.path().join("new_rc_file");
+
+        // File must not exist yet.
+        assert!(!rc_file.exists());
+
+        let bin_dir = PathBuf::from("/opt/flutter/bin");
+        let outcome = add_to_rc_file(&rc_file, &bin_dir).unwrap();
+        assert!(
+            matches!(outcome, PathConfigOutcome::Written { .. }),
+            "should create and write new file"
+        );
+
+        let mode = std::fs::metadata(&rc_file).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o7777,
+            0o600,
+            "newly created rc file must have mode 0600, got {:o}",
+            mode & 0o7777
+        );
+    }
+
+    /// Two separate calls to `write_rc_atomically` (via `add_to_rc_file`) must
+    /// not share a deterministic `.fdemon_tmp` sibling path — the temp files
+    /// created must have distinct, non-deterministic names.
+    #[test]
+    fn test_write_rc_temp_name_is_not_deterministic_fdemon_tmp() {
+        let tmp = TempDir::new().unwrap();
+        let rc_file = tmp.path().join("test_rc");
+        std::fs::write(&rc_file, "# existing content\n").unwrap();
+
+        let bin_a = PathBuf::from("/opt/flutter_a/bin");
+        let bin_b = PathBuf::from("/opt/flutter_b/bin");
+
+        // Write bin_a — afterwards verify that no `.fdemon_tmp` sibling exists.
+        add_to_rc_file(&rc_file, &bin_a).unwrap();
+        let sibling = rc_file.with_extension("fdemon_tmp");
+        assert!(
+            !sibling.exists(),
+            "write must not leave a .fdemon_tmp sibling: {}",
+            sibling.display()
+        );
+
+        // Write bin_b — same check.
+        add_to_rc_file(&rc_file, &bin_b).unwrap();
+        assert!(
+            !sibling.exists(),
+            "write must not leave a .fdemon_tmp sibling on second call: {}",
+            sibling.display()
         );
     }
 
