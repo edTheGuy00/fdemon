@@ -1767,7 +1767,13 @@ pub enum Message {
     ///
     /// Transitions the step's status to `StepStatus::Running` (added in task 07)
     /// and clears any previous log lines for the step.
-    WizardStepStarted { kind: WizardStepKind },
+    ///
+    /// `run_seq` is the sequence counter assigned at dispatch (mirrors the value
+    /// stored on `InstallWizardState::run_seq`). The handler discards any message
+    /// whose `run_seq` does not equal the current state `run_seq`, closing the
+    /// cross-kind race where a delayed Started from a cancelled run (Run A) can
+    /// clobber the live install (Run B) via the `begin_step` defensive fallback.
+    WizardStepStarted { kind: WizardStepKind, run_seq: u64 },
 
     /// Streamed log line from a running wizard step.
     ///

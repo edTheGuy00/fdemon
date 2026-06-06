@@ -898,11 +898,18 @@ pub fn handle_action(
                 std::sync::Arc::new(std::sync::Mutex::new(None));
             let handle_slot_for_task = handle_slot.clone();
 
+            // Capture run_seq for inclusion in WizardStepStarted so the handler
+            // can discard stale cross-kind Started messages (F-PR53-01 fix).
+            let run_seq_for_task = run_seq;
+
             let join = tokio::spawn(async move {
                 let msg_tx = msg_tx_task;
                 // ── Announce start ────────────────────────────────────────────
                 let _ = msg_tx
-                    .send(crate::message::Message::WizardStepStarted { kind })
+                    .send(crate::message::Message::WizardStepStarted {
+                        kind,
+                        run_seq: run_seq_for_task,
+                    })
                     .await;
 
                 // Capture cancel token for use in install calls.
@@ -2095,7 +2102,8 @@ mod tests {
             matches!(
                 first,
                 crate::message::Message::WizardStepStarted {
-                    kind: WizardStepKind::FlutterSdk
+                    kind: WizardStepKind::FlutterSdk,
+                    ..
                 }
             ),
             "first message must be WizardStepStarted; got: {first:?}"
@@ -2288,7 +2296,8 @@ mod tests {
             matches!(
                 first,
                 crate::message::Message::WizardStepStarted {
-                    kind: WizardStepKind::AndroidTools
+                    kind: WizardStepKind::AndroidTools,
+                    ..
                 }
             ),
             "first message must be WizardStepStarted; got: {first:?}"
@@ -2347,7 +2356,8 @@ mod tests {
             matches!(
                 first,
                 crate::message::Message::WizardStepStarted {
-                    kind: WizardStepKind::AndroidTools
+                    kind: WizardStepKind::AndroidTools,
+                    ..
                 }
             ),
             "first message must be WizardStepStarted; got: {first:?}"

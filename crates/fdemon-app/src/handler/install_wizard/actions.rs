@@ -329,43 +329,53 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
     }
 }
 
-/// Handle `WizardStepStarted` — ensure the execution state is `Running` and
+/// Handle `WizardStepStarted` — guard against stale cross-kind messages, then
 /// reset the progress display fields.
 ///
-/// **Normal flow:** `handle_run_selected_step` always calls `begin_step(kind)`
-/// before dispatching `RunWizardStep`, so by the time this message arrives the
-/// step is already `Running` for the same `kind`. In that case this handler
-/// calls `reset_progress_display()` — which clears only the visible
-/// progress/log/summary fields — so the TUI shows a fresh state without
-/// clobbering the synchronously-stored `install_task` (cancellation token) or
-/// `run_seq`. Preserving both is essential: `install_task` must not be `None`
-/// during the running window (otherwise `Esc` cannot fire the token), and
-/// `run_seq` must not be bumped again (otherwise the legitimate
-/// `WizardInstallTaskReady` would be rejected by the seq-mismatch guard).
+/// ## Seq-guard (F-PR53-01)
 ///
-/// **Defensive fallback:** when the step is NOT already `Running` for this
-/// `kind` (a hypothetical code path where dispatch did not pre-begin), the
-/// full `begin_step(kind)` is called. The caller is expected to install
-/// `install_task` immediately after. This is a defensive guard, not the
-/// normal flow.
+/// `WizardStepStarted` now carries the `run_seq` assigned at dispatch.  Any
+/// message whose `run_seq` does not equal `install_wizard_state.run_seq` is a
+/// **no-op**: it means the message was emitted by a run that has already been
+/// superseded (e.g. the user pressed Esc and then Enter before the first run's
+/// async task sent its announce).  Discarding it prevents the cross-kind zombie:
 ///
-/// Idempotent if `begin_step` was already called on dispatch.
-pub fn handle_step_started(state: &mut AppState, kind: WizardStepKind) -> UpdateResult {
-    let already_running_for_kind = state.install_wizard_state.execution.status
-        == crate::install_wizard::StepExecStatus::Running
-        && state.install_wizard_state.execution.kind == Some(kind);
-
-    if already_running_for_kind {
-        // Normal flow: token and run_seq were stored synchronously by
-        // handle_run_selected_step. Only reset the progress display — do NOT
-        // clear install_task and do NOT bump run_seq.
-        state.install_wizard_state.reset_progress_display();
-    } else {
-        // Defensive fallback: step not yet Running for this kind.
-        // Call the full begin_step so the state is correct; the caller should
-        // install install_task immediately after this returns.
-        state.install_wizard_state.begin_step(kind);
+/// ```text
+/// Run A (AndroidTools, seq=1) → Esc → Run B (FlutterSdk, seq=2)
+/// Delayed WizardStepStarted{AndroidTools, seq=1} arrives:
+///   seq 1 ≠ state.run_seq 2  →  no-op  →  Run B survives intact
+/// ```
+///
+/// ## Normal flow (same-seq, same-kind)
+///
+/// `handle_run_selected_step` always calls `begin_step(kind)` before
+/// dispatching `RunWizardStep`, so by the time a current-seq Started arrives
+/// the step is already `Running` for the same `kind`.  In that case this
+/// handler calls `reset_progress_display()` — which clears only the visible
+/// progress/log/summary fields — without touching `install_task` or `run_seq`.
+///
+/// ## Dropped fallback
+///
+/// The prior `begin_step(kind)` defensive fallback has been removed.
+/// `handle_run_selected_step` is the single code path that calls `begin_step`,
+/// so a current-seq Started is always already Running for its kind.  The
+/// fallback path was reachable only by stale messages, which are now caught by
+/// the seq-guard above.
+pub fn handle_step_started(
+    state: &mut AppState,
+    _kind: WizardStepKind,
+    run_seq: u64,
+) -> UpdateResult {
+    // Seq-guard: discard any Started from a superseded run.
+    if run_seq != state.install_wizard_state.run_seq {
+        return UpdateResult::none();
     }
+
+    // Normal flow: the step is already Running for this kind (begin_step was
+    // called synchronously by handle_run_selected_step before dispatch).
+    // Reset only the progress display — do NOT clear install_task or run_seq.
+    state.install_wizard_state.reset_progress_display();
+
     UpdateResult::none()
 }
 
@@ -1026,8 +1036,9 @@ mod tests {
         state
             .install_wizard_state
             .begin_step(WizardStepKind::FlutterSdk);
-        // WizardStepStarted arrives from the executor
-        handle_step_started(&mut state, WizardStepKind::FlutterSdk);
+        let current_seq = state.install_wizard_state.run_seq;
+        // WizardStepStarted arrives from the executor with the same run_seq.
+        handle_step_started(&mut state, WizardStepKind::FlutterSdk, current_seq);
         // Must still be Running (not reset to Idle).
         assert!(state.install_wizard_state.is_step_running());
         assert_eq!(
@@ -1063,8 +1074,12 @@ mod tests {
             "install_task must be Some immediately after handle_run_selected_step (precondition)"
         );
 
-        // Now simulate WizardStepStarted arriving from the executor.
-        handle_step_started(&mut state, WizardStepKind::FlutterSdk);
+        // Now simulate WizardStepStarted arriving from the executor (same seq).
+        handle_step_started(
+            &mut state,
+            WizardStepKind::FlutterSdk,
+            run_seq_after_dispatch,
+        );
 
         // install_task must STILL be Some — the token was not cleared.
         assert!(
@@ -1082,6 +1097,108 @@ mod tests {
         assert!(
             state.install_wizard_state.is_step_running(),
             "step must still be Running after handle_step_started"
+        );
+    }
+
+    /// A `WizardStepStarted` whose `run_seq` does not match the current
+    /// `install_wizard_state.run_seq` must be a complete no-op: `install_task`,
+    /// `run_seq`, and `execution.kind/status` are all unchanged.
+    ///
+    /// This is the core guard for the cross-kind zombie race (F-PR53-01):
+    ///
+    /// ```text
+    /// Run A (AndroidTools, seq=N) starts
+    /// Esc → handle_cancel_step takes install_task, resets to Idle
+    /// Enter → Run B (FlutterSdk, seq=N+1) begin_step; install_task=Some{cancelB}
+    /// Delayed WizardStepStarted{AndroidTools, seq=N} arrives:
+    ///   seq N ≠ state.run_seq (N+1) → no-op → Run B survives intact
+    /// ```
+    #[test]
+    fn test_stale_cross_kind_step_started_is_noop() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+
+        // Simulate Run B: begin_step(FlutterSdk) with seq = N (e.g. 2).
+        // We do this via handle_run_selected_step to get a real install_task.
+        let result = handle_run_selected_step(&mut state);
+        assert!(
+            result.action.is_some(),
+            "precondition: action must be dispatched"
+        );
+        let run_seq_b = state.install_wizard_state.run_seq; // This is N (e.g. 1 after first begin_step)
+
+        // Stale run_seq simulating a delayed WizardStepStarted from Run A.
+        // Use a seq that is not equal to the current one.
+        let stale_seq = run_seq_b.wrapping_sub(1);
+
+        // Feed the stale cross-kind Started (AndroidTools with Run A's seq).
+        handle_step_started(&mut state, WizardStepKind::AndroidTools, stale_seq);
+
+        // install_task must still be Some (Run B's cancelB token is intact).
+        assert!(
+            state.install_wizard_state.install_task.is_some(),
+            "install_task must still be Some after stale Started (Run B's token must survive)"
+        );
+        // run_seq must NOT have been bumped.
+        assert_eq!(
+            state.install_wizard_state.run_seq, run_seq_b,
+            "run_seq must NOT be bumped by a stale Started"
+        );
+        // execution.kind must still be FlutterSdk (Run B's kind).
+        assert_eq!(
+            state.install_wizard_state.execution.kind,
+            Some(WizardStepKind::FlutterSdk),
+            "execution.kind must remain FlutterSdk after stale AndroidTools Started"
+        );
+        // Step must still be Running.
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "step must still be Running after stale Started"
+        );
+    }
+
+    /// A `WizardStepStarted` with the current `run_seq` and the same kind as
+    /// the running step routes through `reset_progress_display()` — preserving
+    /// `install_task` and `run_seq` while clearing the visible progress fields.
+    ///
+    /// Regression guard for Phase-5 task 02: the same-kind, current-seq path
+    /// must NOT call `begin_step` or otherwise drop the token.
+    #[test]
+    fn test_step_started_with_current_seq_same_kind_preserves_task() {
+        let mut state = state_with_preflight();
+        state.install_wizard_state.selected_index = 3; // FlutterSdk
+
+        // Drive handle_run_selected_step to get a real install_task.
+        let result = handle_run_selected_step(&mut state);
+        assert!(
+            result.action.is_some(),
+            "precondition: action must be dispatched"
+        );
+
+        let run_seq = state.install_wizard_state.run_seq;
+        assert!(
+            state.install_wizard_state.install_task.is_some(),
+            "precondition: install_task must be Some"
+        );
+
+        // Feed the Started with the correct (current) run_seq and same kind.
+        handle_step_started(&mut state, WizardStepKind::FlutterSdk, run_seq);
+
+        // install_task preserved.
+        assert!(
+            state.install_wizard_state.install_task.is_some(),
+            "install_task must be preserved by same-seq same-kind Started"
+        );
+        // run_seq preserved.
+        assert_eq!(
+            state.install_wizard_state.run_seq, run_seq,
+            "run_seq must be preserved by same-seq same-kind Started"
+        );
+        // Step still Running for FlutterSdk.
+        assert!(state.install_wizard_state.is_step_running());
+        assert_eq!(
+            state.install_wizard_state.execution.kind,
+            Some(WizardStepKind::FlutterSdk)
         );
     }
 

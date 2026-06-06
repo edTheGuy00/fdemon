@@ -3260,7 +3260,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::InstallWizardRunSelectedStep => install_wizard::handle_run_selected_step(state),
 
         // These lifecycle messages are produced by the RunWizardStep executor (task 08).
-        Message::WizardStepStarted { kind } => install_wizard::handle_step_started(state, kind),
+        Message::WizardStepStarted { kind, run_seq } => {
+            install_wizard::handle_step_started(state, kind, run_seq)
+        }
         Message::WizardStepLog { line, .. } => install_wizard::handle_step_log(state, line),
         Message::WizardStepPhase { kind, label } => {
             install_wizard::handle_step_phase(state, kind, label)
