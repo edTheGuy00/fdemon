@@ -38,8 +38,8 @@ use super::PROBE_TIMEOUT;
 /// install executor (which creates the directory) and the post-install check
 /// (which filters by `is_dir()`).
 ///
-/// See [`android_sdk_root`] for the check-time variant that additionally
-/// requires the resolved path to be an existing directory.
+/// See [`android_sdk_root_with_override`] for the check-time variant that
+/// additionally requires the resolved path to be an existing directory.
 pub fn resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf {
     // 1. Caller-provided path.
     if let Some(p) = override_path {
@@ -64,17 +64,22 @@ pub fn resolve_android_sdk_root_path(override_path: Option<&Path>) -> PathBuf {
     platform_default_android_sdk().unwrap_or_else(|| PathBuf::from("Android/Sdk"))
 }
 
-/// Resolve the Android SDK root path, returning `Some` only when the resolved
-/// path is an **existing directory** on the filesystem.
+/// Resolve the Android SDK root, preferring a caller-supplied override before
+/// falling back to env vars / the platform default. Returns `Some` only when
+/// the resolved path is an **existing directory** on the filesystem.
 ///
-/// Delegates env-var resolution to [`resolve_android_sdk_root_path`] (with no
-/// caller override), then applies an `is_dir()` filter and wraps the result in
-/// the `AndroidSdkRoot` newtype.
+/// Delegates path resolution to [`resolve_android_sdk_root_path`], then applies
+/// an `is_dir()` filter and wraps the result in the `AndroidSdkRoot` newtype.
 ///
-/// This is the check-time variant used during toolchain preflight. For the
-/// install executor, use [`resolve_android_sdk_root_path`] directly.
-pub fn android_sdk_root() -> Option<AndroidSdkRoot> {
-    let path = resolve_android_sdk_root_path(None);
+/// This is the check-time variant used during toolchain preflight. The
+/// `override_path` is passed by the install wizard (from
+/// `settings.toolchain.android_sdk_root`) so a re-check after a managed install
+/// finds the freshly-installed tools **without** requiring the user to reload
+/// their shell — the running process's `$ANDROID_HOME` is still stale at that
+/// point, but the persisted override takes precedence over it. For the install
+/// executor, use [`resolve_android_sdk_root_path`] directly.
+pub fn android_sdk_root_with_override(override_path: Option<&Path>) -> Option<AndroidSdkRoot> {
+    let path = resolve_android_sdk_root_path(override_path);
     if path.is_dir() {
         tracing::debug!("Android SDK root resolved to: {}", path.display());
         Some(AndroidSdkRoot(path))
@@ -446,7 +451,7 @@ mod tests {
         let _home = EnvGuard::set("ANDROID_HOME", &path);
         let _sdk_root = EnvGuard::remove("ANDROID_SDK_ROOT");
 
-        let result = android_sdk_root();
+        let result = android_sdk_root_with_override(None);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, tmp.path());
@@ -459,7 +464,41 @@ mod tests {
         let _sdk_root = EnvGuard::remove("ANDROID_SDK_ROOT");
         // Default platform path is unlikely to exist in CI with a made-up name,
         // but we cannot set it to nothing easily — just verify no panic.
-        let _ = android_sdk_root();
+        let _ = android_sdk_root_with_override(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_android_sdk_root_override_takes_precedence_over_stale_env() {
+        // Core of the post-install fix: a wizard-persisted SDK root passed as the
+        // override must win over a stale/wrong `$ANDROID_HOME` in the running
+        // process, so the re-check probes the just-installed SDK on disk.
+        let real_sdk = TempDir::new().unwrap();
+        let _home = EnvGuard::set("ANDROID_HOME", "/nonexistent/stale/android/home");
+        let _sdk_root = EnvGuard::remove("ANDROID_SDK_ROOT");
+
+        let result = android_sdk_root_with_override(Some(real_sdk.path()));
+
+        assert_eq!(
+            result.expect("override to an existing dir must resolve").0,
+            real_sdk.path(),
+            "the override must take precedence over the stale ANDROID_HOME env var"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_android_sdk_root_override_nonexistent_returns_none() {
+        let _home = EnvGuard::remove("ANDROID_HOME");
+        let _sdk_root = EnvGuard::remove("ANDROID_SDK_ROOT");
+
+        let result =
+            android_sdk_root_with_override(Some(Path::new("/definitely/not/a/real/sdk/root")));
+
+        assert!(
+            result.is_none(),
+            "a non-existent override path must resolve to None (is_dir filter)"
+        );
     }
 
     // ── Android SDK component checks ──────────────────────────────────────────
@@ -579,7 +618,7 @@ mod tests {
         let _sdk = EnvGuard::remove("ANDROID_SDK_ROOT");
 
         let unconditional = resolve_android_sdk_root_path(None);
-        let check_time = android_sdk_root().map(|r| r.0);
+        let check_time = android_sdk_root_with_override(None).map(|r| r.0);
 
         // Both must resolve to the tempdir.
         assert_eq!(unconditional, tmp.path(), "unconditional resolver mismatch");

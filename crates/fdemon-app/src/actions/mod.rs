@@ -800,12 +800,14 @@ pub fn handle_action(
         UpdateAction::RunToolchainPreflight {
             project_path,
             explicit_sdk_path,
+            android_sdk_root,
         } => {
             let msg_tx = msg_tx.clone();
             tokio::spawn(async move {
                 let report = fdemon_daemon::toolchain::run_preflight(
                     &project_path,
                     explicit_sdk_path.as_deref(),
+                    android_sdk_root.as_deref(),
                 )
                 .await;
 

@@ -68,6 +68,12 @@ use std::path::Path;
 /// * `explicit_sdk_path` — Optional user-configured SDK path from
 ///   `.fdemon/config.toml` `[flutter] sdk_path`. Pass `None` to rely on
 ///   automatic detection.
+/// * `override_android_root` — Optional Android SDK root that takes precedence
+///   over `$ANDROID_HOME` / `$ANDROID_SDK_ROOT` / the platform default. Passed
+///   by the install wizard (from `settings.toolchain.android_sdk_root`) so a
+///   re-check after a managed install finds the freshly-installed tools even
+///   though the running process's environment is still stale. Pass `None` to
+///   rely on env/default resolution.
 ///
 /// # Returns
 ///
@@ -78,6 +84,7 @@ use std::path::Path;
 pub async fn run_preflight(
     project_path: &Path,
     explicit_sdk_path: Option<&Path>,
+    override_android_root: Option<&Path>,
 ) -> ToolchainReport {
     let platform = HostPlatform::detect();
     let shell = HostShell::detect();
@@ -94,7 +101,7 @@ pub async fn run_preflight(
 
     // Step 2: If Flutter was found, capture `flutter doctor -v` concurrently
     //         with the remaining component probes.
-    let android_root = checks::android_sdk_root();
+    let android_root = checks::android_sdk_root_with_override(override_android_root);
     let android_root_ref = android_root.as_ref();
 
     // Capture synchronous Android filesystem checks before entering async block
@@ -186,7 +193,7 @@ mod tests {
         // Use a temp directory as the project path so the locator does not
         // accidentally pick up the actual repo's Flutter configuration.
         let tmp = tempfile::TempDir::new().unwrap();
-        let report = run_preflight(tmp.path(), None).await;
+        let report = run_preflight(tmp.path(), None, None).await;
 
         // Must always have 9 components in the defined order
         assert_eq!(report.components.len(), 9);
@@ -211,7 +218,7 @@ mod tests {
     async fn test_run_preflight_nonexistent_sdk_path_does_not_panic() {
         let tmp = tempfile::TempDir::new().unwrap();
         let fake_sdk = PathBuf::from("/nonexistent/flutter/sdk");
-        let report = run_preflight(tmp.path(), Some(&fake_sdk)).await;
+        let report = run_preflight(tmp.path(), Some(&fake_sdk), None).await;
 
         // With a non-existent explicit SDK path, Flutter check should be Partial or Missing
         let flutter = &report.components[0];
@@ -245,7 +252,7 @@ mod tests {
         // We accept any LinuxPackageManager variant — the exact result depends
         // on what is installed on the test host.
         let tmp = tempfile::TempDir::new().unwrap();
-        let report = run_preflight(tmp.path(), None).await;
+        let report = run_preflight(tmp.path(), None, None).await;
 
         if cfg!(target_os = "linux") {
             assert!(
@@ -265,7 +272,7 @@ mod tests {
         // On non-Windows hosts winget must always be false (binary not present).
         // On Windows we accept any bool — winget may or may not be installed.
         let tmp = tempfile::TempDir::new().unwrap();
-        let report = run_preflight(tmp.path(), None).await;
+        let report = run_preflight(tmp.path(), None, None).await;
 
         if !cfg!(target_os = "windows") {
             assert!(

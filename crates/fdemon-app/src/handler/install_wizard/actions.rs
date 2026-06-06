@@ -110,10 +110,12 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
 
     let project_path = state.project_path.clone();
     let explicit_sdk_path = state.settings.flutter.sdk_path.clone();
+    let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
 
     UpdateResult::action(UpdateAction::RunToolchainPreflight {
         project_path,
         explicit_sdk_path,
+        android_sdk_root,
     })
 }
 
@@ -481,6 +483,11 @@ pub fn handle_step_completed(
         // path from winning on a later PathConfig run (e.g. if the user changes
         // `settings.flutter.sdk_path` and re-runs PathConfig without re-installing).
         state.install_wizard_state.installed_sdk_path = None;
+
+        // Re-run preflight so the step list reflects the just-written PATH/env
+        // (otherwise the PathConfig step stays visually stale until the user
+        // manually re-checks).
+        return UpdateResult::message(Message::InstallWizardRerunPreflight);
     }
 
     UpdateResult::none()
@@ -1079,20 +1086,18 @@ mod tests {
     }
 
     #[test]
-    fn test_completed_non_flutter_sdk_returns_none() {
+    fn test_completed_inert_step_returns_none() {
+        // A step with no completion side-effect (Doctor) chains nothing.
+        // (FlutterSdk/AndroidTools persist+rerun, PathConfig reruns — covered
+        // by their own tests.)
         let mut state = state_with_preflight();
         state
             .install_wizard_state
-            .begin_step(WizardStepKind::PathConfig);
+            .begin_step(WizardStepKind::Doctor);
 
-        let result = handle_step_completed(
-            &mut state,
-            WizardStepKind::PathConfig,
-            "PATH updated".into(),
-            None,
-        );
+        let result =
+            handle_step_completed(&mut state, WizardStepKind::Doctor, "Doctor done".into(), None);
 
-        // No chain for non-FlutterSdk steps.
         assert!(result.action.is_none());
         assert!(result.message.is_none());
     }
@@ -1439,6 +1444,59 @@ mod tests {
             "must still re-run preflight when sdk_root is absent; got {:?}",
             result.message
         );
+    }
+
+    #[test]
+    fn test_completed_pathconfig_reruns_preflight() {
+        // Bug fix: PathConfig completion used to return `none()`, leaving the
+        // step list visually stale after PATH/env were written. It must now
+        // re-run preflight.
+        let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::PathConfig);
+
+        let result = handle_step_completed(
+            &mut state,
+            WizardStepKind::PathConfig,
+            "PATH configured".into(),
+            None,
+        );
+
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "PathConfig completion must re-run preflight; got {:?}",
+            result.message
+        );
+        // The session stash is still cleared.
+        assert!(state.install_wizard_state.installed_sdk_path.is_none());
+    }
+
+    #[test]
+    fn test_rerun_preflight_forwards_android_sdk_root_override() {
+        // The persisted Android SDK root must be threaded into the preflight
+        // action so the re-check finds a just-installed SDK even when the
+        // running process's $ANDROID_HOME is stale.
+        let mut state = AppState::new();
+        state.show_install_wizard();
+        state.install_wizard_state.apply_report(make_report()); // loading = false
+        let root = std::path::PathBuf::from("/home/user/Android/Sdk");
+        state.settings.toolchain.android_sdk_root = Some(root.clone());
+
+        let result = handle_rerun_preflight(&mut state);
+
+        match result.action {
+            Some(UpdateAction::RunToolchainPreflight {
+                android_sdk_root, ..
+            }) => {
+                assert_eq!(
+                    android_sdk_root,
+                    Some(root),
+                    "rerun preflight must forward settings.toolchain.android_sdk_root as the override"
+                );
+            }
+            other => panic!("expected RunToolchainPreflight; got {other:?}"),
+        }
     }
 
     #[test]

@@ -6,19 +6,19 @@
 //!
 //! Android-specific probes live in the [`android`] submodule and are
 //! re-exported here so callers in `toolchain/mod.rs` see them via
-//! `checks::check_android_*` and `checks::android_sdk_root`.
+//! `checks::check_android_*` and `checks::android_sdk_root_with_override`.
 //!
 //! OS-level prerequisites live in the [`prerequisites`] submodule and are
 //! re-exported here as `checks::check_prerequisites`.
 //!
-//! See also: [`android_sdk_root`] — resolves the Android SDK root from env vars
-//! and OS-specific default locations.
+//! See also: [`android_sdk_root_with_override`] — resolves the Android SDK root
+//! from an optional override, env vars, and OS-specific default locations.
 
 mod android;
 mod prerequisites;
 
 pub use android::{
-    android_sdk_root, check_android_build_tools, check_android_cmdline_tools,
+    android_sdk_root_with_override, check_android_build_tools, check_android_cmdline_tools,
     check_android_licenses, check_android_platform, check_android_platform_tools,
     resolve_android_sdk_root_path, sdkmanager_bin_name,
 };

@@ -32,7 +32,9 @@ pub async fn run_doctor(cwd: PathBuf, explicit_sdk: Option<PathBuf>) -> ExitCode
     // Warn the user that preflight can take a while before blocking.
     eprintln!("Running toolchain checks…");
 
-    let report = run_preflight(&cwd, explicit_sdk.as_deref()).await;
+    // Headless doctor has no persisted wizard settings — rely on env/default
+    // Android SDK resolution (no override).
+    let report = run_preflight(&cwd, explicit_sdk.as_deref(), None).await;
 
     let mut all_ok = true;
     for c in &report.components {

@@ -669,6 +669,11 @@ pub enum UpdateAction {
         project_path: std::path::PathBuf,
         /// Explicit SDK path from `settings.flutter.sdk_path`, if set.
         explicit_sdk_path: Option<std::path::PathBuf>,
+        /// Android SDK root override from `settings.toolchain.android_sdk_root`,
+        /// if set. Takes precedence over `$ANDROID_HOME` / the platform default
+        /// so a re-check after a managed install finds the freshly-installed
+        /// tools without requiring a shell reload.
+        android_sdk_root: Option<std::path::PathBuf>,
     },
 
     /// Execute a wizard step asynchronously (Flutter SDK install or PATH config).

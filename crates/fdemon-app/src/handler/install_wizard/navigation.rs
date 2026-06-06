@@ -17,10 +17,12 @@ pub fn handle_show(state: &mut AppState) -> UpdateResult {
 
     let project_path = state.project_path.clone();
     let explicit_sdk_path = state.settings.flutter.sdk_path.clone();
+    let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
 
     UpdateResult::action(UpdateAction::RunToolchainPreflight {
         project_path,
         explicit_sdk_path,
+        android_sdk_root,
     })
 }
 
