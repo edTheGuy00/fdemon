@@ -1095,8 +1095,12 @@ mod tests {
             .install_wizard_state
             .begin_step(WizardStepKind::Doctor);
 
-        let result =
-            handle_step_completed(&mut state, WizardStepKind::Doctor, "Doctor done".into(), None);
+        let result = handle_step_completed(
+            &mut state,
+            WizardStepKind::Doctor,
+            "Doctor done".into(),
+            None,
+        );
 
         assert!(result.action.is_none());
         assert!(result.message.is_none());

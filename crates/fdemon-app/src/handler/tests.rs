@@ -1095,10 +1095,12 @@ fn test_auto_reload_triggers_all_sessions() {
     // Mark sessions as running with app_ids
     if let Some(handle) = state.session_manager.get_mut(session1) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
     if let Some(handle) = state.session_manager.get_mut(session2) {
         handle.session.mark_started("app-2".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
 
@@ -1159,9 +1161,10 @@ fn test_auto_reload_skips_sessions_without_app_id() {
     let session1 = state.session_manager.create_session(&device1).unwrap();
     let _session2 = state.session_manager.create_session(&device2).unwrap();
 
-    // Only session 1 has app_id
+    // Only session 1 has app_id and is fully running
     if let Some(handle) = state.session_manager.get_mut(session1) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
     // Session 2 is still initializing (no app_id)
@@ -1269,10 +1272,12 @@ fn test_auto_reload_logs_to_each_session() {
     // Mark both as running
     if let Some(handle) = state.session_manager.get_mut(session1) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
     if let Some(handle) = state.session_manager.get_mut(session2) {
         handle.session.mark_started("app-2".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
 
@@ -1407,6 +1412,7 @@ fn test_auto_reload_single_session_logs_to_session() {
 
     if let Some(handle) = state.session_manager.get_mut(session_id) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
 
@@ -1438,11 +1444,13 @@ fn test_reloadable_sessions_helper() {
     // Session 1: running, has cmd_sender
     if let Some(handle) = state.session_manager.get_mut(session1) {
         handle.session.mark_started("app-1".to_string());
+        handle.session.mark_running();
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
     }
-    // Session 2: running, NO cmd_sender
+    // Session 2: has app_id but NO cmd_sender (and not Running)
     if let Some(handle) = state.session_manager.get_mut(session2) {
         handle.session.mark_started("app-2".to_string());
+        handle.session.mark_running();
         // No cmd_sender
     }
     // Session 3: not running (no app_id)

@@ -617,12 +617,30 @@ impl Session {
         self.phase = AppPhase::Reloading;
     }
 
-    /// Called when a reload completes successfully
+    /// Called when a reload completes successfully.
+    ///
+    /// A reload only ever starts from `Running` (`start_reload` sets `Reloading`).
+    /// If we are not `Reloading`, this completion is stale or spurious — do not
+    /// promote a building/stopped session to `Running` or stamp reload metrics.
     pub fn complete_reload(&mut self) {
+        if self.phase != AppPhase::Reloading {
+            self.reload_start_time = None;
+            return;
+        }
         self.reload_count += 1;
         self.last_reload_time = Some(Local::now());
         self.reload_start_time = None;
         self.phase = AppPhase::Running;
+    }
+
+    /// Restore `Running` after a failed reload, but only when the session was
+    /// actually `Reloading`.  If the phase is anything else (e.g. `Launching`),
+    /// the session was never validly in a reload — leave the phase untouched.
+    pub fn fail_reload(&mut self) {
+        self.reload_start_time = None;
+        if self.phase == AppPhase::Reloading {
+            self.phase = AppPhase::Running;
+        }
     }
 
     /// Get elapsed time since reload started
@@ -1135,5 +1153,74 @@ mod tests {
                 "alpha {alpha} out of [0,1] at offset {offset_ms} ms"
             );
         }
+    }
+
+    // ── complete_reload / fail_reload guards ────────────────────────────────
+
+    #[test]
+    fn complete_reload_noop_when_launching() {
+        // Calling complete_reload on a Launching session must not promote it to
+        // Running and must not increment reload_count or stamp last_reload_time.
+        let mut s = make_session();
+        s.phase = AppPhase::Launching;
+        let count_before = s.reload_count;
+
+        s.complete_reload();
+
+        assert_eq!(
+            s.phase,
+            AppPhase::Launching,
+            "complete_reload must leave a Launching session in Launching"
+        );
+        assert_eq!(
+            s.reload_count, count_before,
+            "reload_count must not change for a spurious completion"
+        );
+        assert!(
+            s.last_reload_time.is_none(),
+            "last_reload_time must not be stamped for a spurious completion"
+        );
+        assert!(
+            s.reload_start_time.is_none(),
+            "reload_start_time must be cleared even for a no-op completion"
+        );
+    }
+
+    #[test]
+    fn complete_reload_promotes_only_from_reloading() {
+        // The normal path: Reloading → Running, count incremented, time stamped.
+        let mut s = make_session();
+        s.phase = AppPhase::Reloading;
+        let count_before = s.reload_count;
+
+        s.complete_reload();
+
+        assert_eq!(s.phase, AppPhase::Running);
+        assert_eq!(s.reload_count, count_before + 1);
+        assert!(
+            s.last_reload_time.is_some(),
+            "last_reload_time must be stamped after a real reload"
+        );
+        assert!(s.reload_start_time.is_none());
+    }
+
+    #[test]
+    fn fail_reload_restores_only_from_reloading() {
+        // Reloading → Running on failure.
+        let mut s = make_session();
+        s.phase = AppPhase::Reloading;
+        s.fail_reload();
+        assert_eq!(s.phase, AppPhase::Running);
+
+        // Launching stays Launching on failure.
+        let mut s2 = make_session();
+        s2.phase = AppPhase::Launching;
+        s2.fail_reload();
+        assert_eq!(
+            s2.phase,
+            AppPhase::Launching,
+            "fail_reload must not resurrect a Launching session to Running"
+        );
+        assert!(s2.reload_start_time.is_none());
     }
 }

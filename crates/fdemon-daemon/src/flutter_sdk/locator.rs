@@ -292,8 +292,7 @@ fn fvm_versions_root() -> Option<PathBuf> {
 
 /// Whether `<root>/bin/flutter` (or `flutter.bat` on Windows) exists.
 fn has_flutter_binary(root: &Path) -> bool {
-    root.join("bin").join("flutter").is_file()
-        || root.join("bin").join("flutter.bat").is_file()
+    root.join("bin").join("flutter").is_file() || root.join("bin").join("flutter.bat").is_file()
 }
 
 /// Ordered candidate SDK roots under the fvm versions cache.

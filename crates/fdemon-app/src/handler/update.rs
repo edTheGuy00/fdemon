@@ -230,8 +230,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::SessionReloadFailed { session_id, reason } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                handle.session.phase = AppPhase::Running;
-                handle.session.reload_start_time = None;
+                // Only restore Running from Reloading — do not resurrect a
+                // Launching/Stopped session whose reload never legitimately started.
+                handle.session.fail_reload();
                 handle.session.add_log(fdemon_core::LogEntry::error(
                     LogSource::App,
                     format!("Reload failed: {}", reason),
@@ -287,8 +288,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::SessionRestartFailed { session_id, reason } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                handle.session.phase = AppPhase::Running;
-                handle.session.reload_start_time = None;
+                // Only restore Running from Reloading — do not resurrect a
+                // Launching/Stopped session whose restart never legitimately started.
+                handle.session.fail_reload();
                 handle.session.add_log(fdemon_core::LogEntry::error(
                     LogSource::App,
                     format!("Restart failed: {}", reason),
@@ -3488,5 +3490,117 @@ mod tests {
             },
         );
         assert!(state.startup_notice.is_none());
+    }
+
+    // ── Auto-reload / reload-failed phase guards ─────────────────────────────
+
+    fn make_test_device(id: &str, name: &str) -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: true,
+            capabilities: None,
+        }
+    }
+
+    /// Create an AppState with a single session in the given phase, with
+    /// app_id and cmd_sender set so the session *would* pass the old filter.
+    fn state_with_session(phase: AppPhase) -> (AppState, crate::session::SessionId) {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&make_test_device("d1", "D1"))
+            .unwrap();
+        let handle = state.session_manager.get_mut(id).unwrap();
+        handle.session.phase = phase;
+        handle.session.app_id = Some("test-app".to_string());
+        handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
+        (state, id)
+    }
+
+    #[test]
+    fn auto_reload_noop_while_launching() {
+        // AutoReloadTriggered with a Launching session must dispatch no action and
+        // must leave the session phase as Launching.
+        let (mut state, id) = state_with_session(AppPhase::Launching);
+
+        let result = update(&mut state, Message::AutoReloadTriggered);
+
+        assert!(
+            result.action.is_none(),
+            "AutoReloadTriggered while Launching must not dispatch a reload action"
+        );
+        assert_eq!(
+            state.session_manager.get(id).unwrap().session.phase,
+            AppPhase::Launching,
+            "phase must remain Launching after AutoReloadTriggered"
+        );
+    }
+
+    #[test]
+    fn auto_reload_running_session_still_reloads() {
+        // Regression: AutoReloadTriggered with a Running session MUST dispatch a
+        // reload action and must transition the session to Reloading.
+        let (mut state, id) = state_with_session(AppPhase::Running);
+
+        let result = update(&mut state, Message::AutoReloadTriggered);
+
+        assert!(
+            result.action.is_some(),
+            "AutoReloadTriggered with a Running session must dispatch a reload action"
+        );
+        assert_eq!(
+            state.session_manager.get(id).unwrap().session.phase,
+            AppPhase::Reloading,
+            "phase must be Reloading after auto-reload starts"
+        );
+    }
+
+    #[test]
+    fn session_reload_failed_does_not_resurrect_launching() {
+        // SessionReloadFailed on a Launching session must leave the phase as
+        // Launching, not promote it to Running.
+        let (mut state, id) = state_with_session(AppPhase::Launching);
+
+        update(
+            &mut state,
+            Message::SessionReloadFailed {
+                session_id: id,
+                reason: "test error".to_string(),
+            },
+        );
+
+        assert_eq!(
+            state.session_manager.get(id).unwrap().session.phase,
+            AppPhase::Launching,
+            "SessionReloadFailed must not promote a Launching session to Running"
+        );
+    }
+
+    #[test]
+    fn session_restart_failed_does_not_resurrect_launching() {
+        // SessionRestartFailed on a Launching session must leave the phase as
+        // Launching, not promote it to Running.
+        let (mut state, id) = state_with_session(AppPhase::Launching);
+
+        update(
+            &mut state,
+            Message::SessionRestartFailed {
+                session_id: id,
+                reason: "test error".to_string(),
+            },
+        );
+
+        assert_eq!(
+            state.session_manager.get(id).unwrap().session.phase,
+            AppPhase::Launching,
+            "SessionRestartFailed must not promote a Launching session to Running"
+        );
     }
 }

@@ -375,9 +375,7 @@ mod tests {
         fs::create_dir_all(root.join("bin/cache")).unwrap();
         fs::write(
             root.join("bin/cache/flutter.version.json"),
-            format!(
-                r#"{{"frameworkVersion": "{framework_version}", "channel": "stable"}}"#
-            ),
+            format!(r#"{{"frameworkVersion": "{framework_version}", "channel": "stable"}}"#),
         )
         .unwrap();
     }
