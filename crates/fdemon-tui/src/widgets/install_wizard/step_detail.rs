@@ -24,7 +24,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 use fdemon_app::install_wizard::{
@@ -170,10 +170,23 @@ impl<'a> StepDetailPane<'a> {
         }
     }
 
-    /// Render a single `ComponentCheck` row.
+    /// Render a single `ComponentCheck` row, wrapping if the text is wider than `area.width`.
     ///
     /// Format: `  <glyph> <kind label>: <detail>`
-    fn render_component_row(check: &ComponentCheck, y: u16, area: Rect, buf: &mut Buffer) {
+    ///
+    /// Returns the number of terminal rows consumed (≥ 1), so callers can advance `y`
+    /// by the correct amount.  The rendered height is clamped to `remaining` rows so the
+    /// output never overflows the content area.
+    fn render_component_row(
+        check: &ComponentCheck,
+        y: u16,
+        area: Rect,
+        remaining: u16,
+        buf: &mut Buffer,
+    ) -> u16 {
+        if remaining == 0 {
+            return 0;
+        }
         let glyph = Self::component_glyph(&check.status);
         let color = Self::component_color(&check.status);
 
@@ -184,8 +197,12 @@ impl<'a> StepDetailPane<'a> {
             format!("  {glyph} {kind_label}: {}", check.detail)
         };
 
+        let h = wrapped_height(&text, area.width).min(remaining);
         let line = Line::from(vec![Span::styled(text, Style::default().fg(color))]);
-        Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
+        Paragraph::new(line)
+            .wrap(Wrap { trim: false })
+            .render(Rect::new(area.x, y, area.width, h), buf);
+        h
     }
 
     /// Whether this step kind is executable (can be triggered with Enter).
@@ -267,23 +284,44 @@ impl<'a> StepDetailPane<'a> {
         Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
     }
 
-    /// Height of a single guided-command block.
+    /// Height of a single guided-command block, accounting for text wrapping.
     ///
     /// A command block consists of:
     /// - Optional leading blank row: present when `i > 0` or when there is no caption
     ///   (i.e., `needs_blank = i > 0 || !has_caption`).
-    /// - Label row (always 1).
-    /// - Command row (always 1; `[c] copy` hint is inline, not a separate row).
-    /// - Optional note row (1 if `cmd.note.is_some()`, 0 otherwise).
+    /// - Label row (always 1; label lines are short and do not wrap).
+    /// - Command row (wrapped height; `[c] copy` hint is inline, not a separate row).
+    /// - Optional note row (wrapped height if `cmd.note.is_some()`).
+    ///
+    /// `width` is the available pane width used to compute the wrapped row counts for
+    /// the command and note rows.  Pass `0` to get the pre-wrapping fallback (1 row each).
     ///
     /// This is a pure function of the command and its position — shared between
     /// [`guided_section_full_height`] (total) and [`compute_guided_window`] (windowing).
-    fn command_block_height(cmd: &GuidedCommand, i: usize, has_caption: bool) -> u16 {
+    fn command_block_height(cmd: &GuidedCommand, i: usize, has_caption: bool, width: u16) -> u16 {
         let needs_blank = i > 0 || !has_caption;
         let blank: u16 = if needs_blank { 1 } else { 0 };
-        let note: u16 = if cmd.note.is_some() { 1 } else { 0 };
-        // blank + label(1) + command(1) + note
-        blank + 1 + 1 + note
+
+        let cmd_rows = if width > 0 {
+            let cmd_text = format!("      $ {}", cmd.command);
+            wrapped_height(&cmd_text, width)
+        } else {
+            1
+        };
+
+        let note_rows: u16 = if let Some(ref note) = cmd.note {
+            if width > 0 {
+                let note_text = format!("      {note}");
+                wrapped_height(&note_text, width)
+            } else {
+                1
+            }
+        } else {
+            0
+        };
+
+        // blank + label(1) + command(wrapped) + note(wrapped)
+        blank + 1 + cmd_rows + note_rows
     }
 
     /// Compute the total row height needed to render the entire guided-command section
@@ -292,13 +330,21 @@ impl<'a> StepDetailPane<'a> {
     /// Accounts for:
     /// - Section header: `GUIDED_SECTION_HEADER_HEIGHT` rows (1)
     /// - Optional per-step caption (AndroidTools / Prerequisites): `JDK_CAPTION_HEIGHT` rows (1)
-    /// - Per-command blocks: label(1) + command(1) + optional note(0–1) + optional leading blank
-    ///   (skipped for command 0 when a caption was rendered, i.e. `has_caption` is true).
+    /// - Per-command blocks: label(1) + command(wrapped) + optional note(wrapped) + optional
+    ///   leading blank (skipped for command 0 when a caption was rendered, i.e. `has_caption`
+    ///   is true).
+    ///
+    /// `width` is the available pane width passed through to `command_block_height` for
+    /// accurate wrap-aware height estimation.  Pass `0` to use the pre-wrapping (1 row) fallback.
     ///
     /// The caller is responsible for clamping this value to `content_area.height` before
     /// using it as a layout reservation — the saturating clamp in [`Widget::render`] ensures
     /// the resulting `Rect` never exceeds the content area.
-    fn guided_section_full_height(commands: &[GuidedCommand], step_kind: WizardStepKind) -> u16 {
+    fn guided_section_full_height(
+        commands: &[GuidedCommand],
+        step_kind: WizardStepKind,
+        width: u16,
+    ) -> u16 {
         if commands.is_empty() {
             return 0;
         }
@@ -308,7 +354,7 @@ impl<'a> StepDetailPane<'a> {
         let cmd_rows: u16 = commands
             .iter()
             .enumerate()
-            .map(|(i, cmd)| Self::command_block_height(cmd, i, has_caption))
+            .map(|(i, cmd)| Self::command_block_height(cmd, i, has_caption, width))
             .sum();
 
         GUIDED_SECTION_HEADER_HEIGHT + caption_rows + cmd_rows
@@ -334,6 +380,7 @@ impl<'a> StepDetailPane<'a> {
         has_caption: bool,
         available_rows: u16,
         selected_idx: usize,
+        width: u16,
     ) -> usize {
         if commands.is_empty() || available_rows == 0 {
             return 0;
@@ -354,7 +401,7 @@ impl<'a> StepDetailPane<'a> {
         // 0 only; if we slide the window so that index 1 becomes the first rendered
         // command, it still carries its blank row (i=1 → needs_blank=true).
         let selected_block_h =
-            Self::command_block_height(&commands[selected_idx], selected_idx, has_caption);
+            Self::command_block_height(&commands[selected_idx], selected_idx, has_caption, width);
 
         // If the selected block alone does not fit, nothing can be done — start window
         // at selected_idx so at least the first rows of it are shown (bounds guards
@@ -370,7 +417,7 @@ impl<'a> StepDetailPane<'a> {
         let mut i = selected_idx;
         while i > 0 {
             i -= 1;
-            let h = Self::command_block_height(&commands[i], i, has_caption);
+            let h = Self::command_block_height(&commands[i], i, has_caption, width);
             if used.saturating_add(h) > available_rows {
                 break;
             }
@@ -389,7 +436,7 @@ impl<'a> StepDetailPane<'a> {
     ///   [caption — AndroidTools: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
     ///
     ///     Install JDK 17
-    ///       $ sudo apt install openjdk-17-jdk       [c] copy
+    ///       $ sudo pacman -S jdk17-openjdk          [c] copy
     ///       or: sudo dnf install java-17-openjdk-devel
     /// ```
     ///
@@ -455,8 +502,13 @@ impl<'a> StepDetailPane<'a> {
             .height
             .saturating_sub(GUIDED_SECTION_HEADER_HEIGHT)
             .saturating_sub(if has_caption { JDK_CAPTION_HEIGHT } else { 0 });
-        let window_start =
-            Self::compute_guided_window(commands, has_caption, rows_for_commands, selected_idx);
+        let window_start = Self::compute_guided_window(
+            commands,
+            has_caption,
+            rows_for_commands,
+            selected_idx,
+            area.width,
+        );
 
         for (i, cmd) in commands.iter().enumerate() {
             // Skip commands before the window start.
@@ -474,8 +526,13 @@ impl<'a> StepDetailPane<'a> {
 
             let is_selected = i == selected_idx;
 
+            if y >= area.y + area.height {
+                break;
+            }
+
             // Label row: "    Install JDK 17"
             // Selected entries are rendered in the accent colour for emphasis.
+            // Label lines are short and do not need wrapping.
             if y < area.y + area.height {
                 let label_style = if is_selected {
                     Style::default()
@@ -492,8 +549,9 @@ impl<'a> StepDetailPane<'a> {
                 y += 1;
             }
 
-            // Command row: "      $ <command>        [c] copy"
+            // Command row: "      $ <command>  [c] copy"
             // The copy hint and highlight follow `selected_command_index`.
+            // Rendered with word-wrap so long commands are not clipped.
             if y < area.y + area.height {
                 let cmd_style = Style::default().fg(palette::ACCENT);
                 let copy_style = Style::default().fg(palette::TEXT_MUTED);
@@ -501,21 +559,35 @@ impl<'a> StepDetailPane<'a> {
                 let copy_hint = if is_selected { "  [c] copy" } else { "" };
                 let cmd_text = format!("      $ {}", cmd.command);
 
+                // Use `wrapped_height` on the command text (without the copy hint,
+                // which is short and rendered on the first visual row) for the height
+                // estimate.  The copy hint is always on the first visual row so it
+                // doesn't add extra rows in practice.
+                let remaining = area.y + area.height - y;
+                let cmd_h = wrapped_height(&cmd_text, area.width).min(remaining);
+
                 let line = Line::from(vec![
                     Span::styled(cmd_text, cmd_style),
                     Span::styled(copy_hint.to_string(), copy_style),
                 ]);
-                Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf);
-                y += 1;
+                Paragraph::new(line)
+                    .wrap(Wrap { trim: false })
+                    .render(Rect::new(area.x, y, area.width, cmd_h), buf);
+                y += cmd_h;
             }
 
             // Note row (optional): "      or: sudo dnf install …"
+            // Rendered with word-wrap so long notes are not clipped.
             if let Some(ref note) = cmd.note {
                 if y < area.y + area.height {
+                    let note_text = format!("      {note}");
+                    let remaining = area.y + area.height - y;
+                    let note_h = wrapped_height(&note_text, area.width).min(remaining);
                     let note_style = Style::default().fg(palette::TEXT_SECONDARY);
-                    let note_line = Line::from(Span::styled(format!("      {note}"), note_style));
-                    Paragraph::new(note_line).render(Rect::new(area.x, y, area.width, 1), buf);
-                    y += 1;
+                    Paragraph::new(Line::from(Span::styled(note_text, note_style)))
+                        .wrap(Wrap { trim: false })
+                        .render(Rect::new(area.x, y, area.width, note_h), buf);
+                    y += note_h;
                 }
             }
         }
@@ -634,13 +706,17 @@ impl Widget for StepDetailPane<'_> {
         // When not, we need just ACTION_HINT_HEIGHT at the bottom.
         let bottom_section_height: u16 = if has_guided_commands {
             // Compute the exact number of rows required to render all guided commands
-            // (header + caption + Σ per-command blocks), then clamp to content_area.height
-            // so the reservation never exceeds the available space.
+            // (header + caption + Σ per-command blocks, wrap-aware), then clamp to
+            // content_area.height so the reservation never exceeds the available space.
             //
             // This ensures that when there are multiple guided commands (e.g. macOS
             // Prerequisites: CLT + CocoaPods + Rosetta), all commands fit in the
             // bottom section rather than only the first command being visible.
-            let full_height = Self::guided_section_full_height(&step.guided_commands, step.kind);
+            let full_height = Self::guided_section_full_height(
+                &step.guided_commands,
+                step.kind,
+                content_area.width,
+            );
             full_height.min(content_area.height)
         } else {
             ACTION_HINT_HEIGHT
@@ -653,7 +729,9 @@ impl Widget for StepDetailPane<'_> {
             visible_height
         };
 
-        // Scroll clamp (render-time safety net)
+        // Scroll clamp (render-time safety net).
+        // With wrapping, one logical item may occupy >1 row, so we use item count
+        // for the scroll model (item-based scroll — not per-row virtual scroll).
         let corrected_scroll = compute_corrected_scroll(
             self.state.detail_scroll,
             effective_visible,
@@ -663,9 +741,16 @@ impl Widget for StepDetailPane<'_> {
         let start = corrected_scroll;
         let end = (start + effective_visible).min(step.components.len());
 
-        for (i, check) in step.components[start..end].iter().enumerate() {
-            let y = content_area.y + i as u16;
-            Self::render_component_row(check, y, content_area, buf);
+        // Render component rows with wrapping, advancing y by each row's rendered height.
+        let mut y = content_area.y;
+        let component_area_bottom = content_area.y + component_height as u16;
+        for check in step.components[start..end].iter() {
+            if y >= component_area_bottom {
+                break;
+            }
+            let remaining = component_area_bottom.saturating_sub(y);
+            let h = Self::render_component_row(check, y, content_area, remaining, buf);
+            y += h;
         }
 
         // Bottom section: guided commands or action hint
@@ -685,6 +770,72 @@ impl Widget for StepDetailPane<'_> {
         } else if content_area.height >= ACTION_HINT_HEIGHT {
             self.render_action_hint(step.kind, has_guided_commands, bottom_y, content_area, buf);
         }
+    }
+}
+
+/// Compute the number of terminal rows needed to render `text` in a pane of `width` columns.
+///
+/// Uses Unicode display-width measurement (each character contributes its display width;
+/// wide characters such as CJK ideographs count as 2 columns).  Each source `\n` starts
+/// a new logical line; each logical line is ceil-divided by `width` to give the wrapped
+/// row count.
+///
+/// This is a lightweight fallback for `Paragraph::line_count` (which is behind an
+/// `#[instability::unstable]` gate in the current ratatui version and therefore
+/// inaccessible without opt-in).  The approximation is slightly conservative for very
+/// short strings (≤ width), where it always returns 1 — identical to ratatui's own
+/// result for non-wrapping text.
+///
+/// Returns at least 1 even for an empty string.
+fn wrapped_height(text: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    let mut total: u16 = 0;
+    for logical_line in text.split('\n') {
+        // Measure display width of the logical line (accounts for multi-byte / wide chars).
+        let display_w: u16 = logical_line.chars().map(unicode_display_width).sum::<u16>();
+        // Each logical line occupies at least 1 row even if it is empty.
+        let rows = ((display_w.max(1) as u32).div_ceil(width as u32)) as u16;
+        total = total.saturating_add(rows);
+    }
+    total.max(1)
+}
+
+/// Return the terminal display width of a single Unicode scalar value.
+///
+/// Simplified heuristic that covers the common cases seen in install-wizard text
+/// (ASCII, common European, a handful of emoji / box-drawing glyphs):
+/// - ASCII control characters → 0
+/// - Most Latin / Cyrillic / Greek / Hebrew / Arabic → 1
+/// - CJK / Hangul / wide emoji → 2
+fn unicode_display_width(c: char) -> u16 {
+    // Control characters occupy 0 columns.
+    if c.is_control() {
+        return 0;
+    }
+    // Rough CJK/wide heuristic: any character in U+1100–U+FFEF blocks that are
+    // typically double-width, plus supplementary planes (>U+FFFF).
+    let cp = c as u32;
+    if matches!(cp,
+        0x1100..=0x115F    // Hangul Jamo
+        | 0x2E80..=0x303E  // CJK radicals / Kangxi / misc
+        | 0x3041..=0x33FF  // CJK unified / kana / CJK compat
+        | 0x3400..=0x4DBF  // CJK ext A
+        | 0x4E00..=0xA4CF  // CJK unified ideographs
+        | 0xA960..=0xA97F  // Hangul Jamo Extended-A
+        | 0xAC00..=0xD7FF  // Hangul Syllables
+        | 0xF900..=0xFAFF  // CJK compatibility ideographs
+        | 0xFE10..=0xFE19  // vertical forms
+        | 0xFE30..=0xFE4F  // CJK compat forms
+        | 0xFF01..=0xFF60  // fullwidth forms
+        | 0xFFE0..=0xFFE6  // fullwidth signs
+        | 0x1F004..=0x1F9FF // emoji + misc supplementary
+        | 0x20000..=0x2FFFF // supplementary ideographic planes
+    ) {
+        2
+    } else {
+        1
     }
 }
 
@@ -1262,7 +1413,7 @@ mod tests {
                 }],
                 guided_commands: vec![GuidedCommand {
                     label: "Install JDK 17".to_string(),
-                    command: "sudo apt install openjdk-17-jdk".to_string(),
+                    command: "sudo pacman -S jdk17-openjdk".to_string(),
                     note: Some("or: sudo dnf install java-17-openjdk-devel".to_string()),
                 }],
             }],
@@ -1314,7 +1465,7 @@ mod tests {
             "should render the guided command label: '{content}'"
         );
         assert!(
-            content.contains("openjdk-17-jdk"),
+            content.contains("jdk17-openjdk"),
             "should render the guided command text: '{content}'"
         );
         assert!(
@@ -1679,7 +1830,7 @@ mod tests {
             "single-command AndroidTools must still render label: '{content}'"
         );
         assert!(
-            content.contains("openjdk-17-jdk"),
+            content.contains("jdk17-openjdk"),
             "single-command AndroidTools must still render command: '{content}'"
         );
         assert!(
@@ -1735,8 +1886,10 @@ mod tests {
                 note: None,
             },
         ];
+        // Pass width=0 to use the pre-wrapping (1 row each) fallback, which gives the
+        // same result as the original non-wrapping implementation for short commands.
         let height =
-            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites);
+            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites, 0);
         assert_eq!(
             height, 12,
             "3-command Prerequisites section should need 12 rows"
@@ -1756,11 +1909,13 @@ mod tests {
     fn test_guided_section_full_height_single_command_with_note() {
         let commands = vec![GuidedCommand {
             label: "Install JDK 17".to_string(),
-            command: "sudo apt install openjdk-17-jdk".to_string(),
+            command: "sudo pacman -S jdk17-openjdk".to_string(),
             note: Some("or: sudo dnf install java-17-openjdk-devel".to_string()),
         }];
+        // Pass width=0 to use the pre-wrapping (1 row each) fallback so the test
+        // is not sensitive to terminal width — structure check only.
         let height =
-            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::AndroidTools);
+            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::AndroidTools, 0);
         assert_eq!(
             height, 5,
             "single-command AndroidTools section with note should need 5 rows"
@@ -1772,7 +1927,7 @@ mod tests {
     fn test_guided_section_full_height_empty() {
         let commands: Vec<GuidedCommand> = vec![];
         let height =
-            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites);
+            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::Prerequisites, 0);
         assert_eq!(height, 0, "empty command list should return 0");
     }
 
@@ -1925,7 +2080,8 @@ mod tests {
         ];
         // Prerequisites has caption → cmd 0 costs 2, cmd 1 costs 3, total = 5.
         // available_rows = 10 → everything fits, start should be 0.
-        let start = StepDetailPane::compute_guided_window(&commands, true, 10, 0);
+        // width=0 uses the pre-wrapping (1 row) fallback so arithmetic is stable.
+        let start = StepDetailPane::compute_guided_window(&commands, true, 10, 0, 0);
         assert_eq!(start, 0, "when all blocks fit, window should start at 0");
     }
 
@@ -1954,7 +2110,8 @@ mod tests {
         ];
         // has_caption=false → cmd 0 costs 2, cmd 1 costs 3, cmd 2 costs 3.
         // available_rows = 3 (fits only cmd 2). selected_idx = 2.
-        let start = StepDetailPane::compute_guided_window(&commands, false, 3, 2);
+        // width=0 uses the pre-wrapping (1 row) fallback so arithmetic is stable.
+        let start = StepDetailPane::compute_guided_window(&commands, false, 3, 2, 0);
         assert_eq!(
             start, 2,
             "with budget for 1 command and selected=2, window must start at 2"
@@ -1985,7 +2142,8 @@ mod tests {
         ];
         // has_caption=true → cmd 0: 2 rows, cmd 1: 3 rows, cmd 2: 3 rows.
         // selected=1, available=6: cmd 1(3) + cmd 0(2) = 5 ≤ 6 → start = 0.
-        let start = StepDetailPane::compute_guided_window(&commands, true, 6, 1);
+        // width=0 uses the pre-wrapping (1 row) fallback so arithmetic is stable.
+        let start = StepDetailPane::compute_guided_window(&commands, true, 6, 1, 0);
         assert_eq!(
             start, 0,
             "greedy backwards fill: cmd 0 + cmd 1 fit in budget 6, start should be 0"
@@ -1996,7 +2154,7 @@ mod tests {
     #[test]
     fn test_compute_guided_window_empty_commands() {
         let commands: Vec<GuidedCommand> = vec![];
-        let start = StepDetailPane::compute_guided_window(&commands, true, 10, 0);
+        let start = StepDetailPane::compute_guided_window(&commands, true, 10, 0, 0);
         assert_eq!(start, 0, "empty command list should return 0");
     }
 
@@ -2008,7 +2166,7 @@ mod tests {
             command: "cmd_a".to_string(),
             note: None,
         }];
-        let start = StepDetailPane::compute_guided_window(&commands, true, 0, 0);
+        let start = StepDetailPane::compute_guided_window(&commands, true, 0, 0, 0);
         assert_eq!(start, 0, "zero available rows should return 0");
     }
 
@@ -2125,6 +2283,178 @@ mod tests {
         assert!(
             content.contains("network timeout"),
             "failure summary should be visible after failure: '{content}'"
+        );
+    }
+
+    // --- Phase 6: wrapping tests ---
+
+    /// Build a Prerequisites state with a long Linux apt command that would be wider
+    /// than the detail pane at 80 columns (after LEFT_PANE_PERCENT and border overheads).
+    ///
+    /// The command intentionally contains `libgtk-3-dev` at the tail — a token that
+    /// would be clipped without wrapping.  The test asserts the token is visible.
+    fn make_state_long_apt_prerequisites() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::Prerequisites,
+                title: "Prerequisites".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Linux build dependencies (apt)".to_string(),
+                    command:
+                        "sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa cmake ninja-build pkg-config libgtk-3-dev"
+                            .to_string(),
+                    note: None,
+                }],
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// NEW (Phase 6): A guided command longer than the detail-pane width wraps onto
+    /// multiple rows and the full command text is present in the rendered buffer.
+    ///
+    /// Uses an 80×24 terminal area.  After LEFT_PANE_PERCENT(28%) and borders the
+    /// detail pane is roughly 54 columns wide, which is far narrower than the
+    /// ~110-char apt command — so without wrapping `libgtk-3-dev` would be clipped.
+    #[test]
+    fn test_long_guided_command_wraps_and_is_fully_visible() {
+        let state = make_state_long_apt_prerequisites();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Use the full 80×24 area (same as the install wizard itself would give).
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The tail token of the long command must be present — it was clipped before wrapping.
+        assert!(
+            content.contains("libgtk-3-dev"),
+            "tail of long apt command ('libgtk-3-dev') must be visible after wrapping: '{content}'"
+        );
+        // The beginning of the command must also be present.
+        assert!(
+            content.contains("apt-get"),
+            "head of long apt command ('apt-get') must be visible: '{content}'"
+        );
+        // The [c] copy hint must still be present (selected command = index 0).
+        assert!(
+            content.contains("copy"),
+            "[c] copy hint must still appear when the command wraps: '{content}'"
+        );
+    }
+
+    /// NEW (Phase 6): Component detail rows also wrap — a long detail string must not
+    /// be clipped at the right edge of the pane.
+    #[test]
+    fn test_component_row_wraps_long_detail() {
+        let state = InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::FlutterSdk,
+                title: "Flutter SDK".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::FlutterSdk,
+                    status: ComponentStatus::Ok,
+                    // Detail wider than a narrow pane (~30 cols)
+                    detail: "3.19.0 on channel stable at /home/user/flutter (dart sdk 3.3.0)"
+                        .to_string(),
+                }],
+                guided_commands: vec![],
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        };
+        // Use a narrow pane so the detail wraps.
+        let area = Rect::new(0, 0, 40, 15);
+        let pane = StepDetailPane::new(&state, true, 0);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The tail of the detail string must appear (would be clipped without wrap).
+        assert!(
+            content.contains("dart sdk"),
+            "wrapped component detail tail ('dart sdk') must be visible: '{content}'"
+        );
+    }
+
+    /// NEW (Phase 6): Doctor lines also wrap on a narrow pane.
+    #[test]
+    fn test_doctor_lines_wrap_on_narrow_pane() {
+        let mut state = InstallWizardState::opening();
+        state.apply_report(fdemon_app::install_wizard::ToolchainReport {
+            platform: fdemon_app::install_wizard::HostPlatform::Linux,
+            shell: fdemon_app::install_wizard::HostShell::Bash,
+            components: vec![],
+            doctor: Some(vec![DoctorLine {
+                marker: DoctorMarker::Ok,
+                // Long enough to force wrapping on a 40-wide pane
+                text: "Flutter (Channel stable, 3.19.0, on Linux 6.x.y x86_64, locale en_US.UTF-8)"
+                    .to_string(),
+                indent: 0,
+            }]),
+            linux_package_manager: Some(LinuxPackageManager::Apt),
+            winget_available: false,
+        });
+        state.selected_index = 4; // Doctor step
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 40, 15);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The tail of the doctor line must be present after wrapping.
+        assert!(
+            content.contains("en_US.UTF-8"),
+            "wrapped doctor line tail ('en_US.UTF-8') must be visible on narrow pane: '{content}'"
+        );
+    }
+
+    /// NEW (Phase 6): `wrapped_height` helper — basic ASCII string shorter than width → 1 row.
+    #[test]
+    fn test_wrapped_height_short_string_returns_one() {
+        assert_eq!(
+            wrapped_height("hello", 80),
+            1,
+            "short string should need exactly 1 row"
+        );
+    }
+
+    /// NEW (Phase 6): `wrapped_height` helper — string exactly `width` chars → 1 row.
+    #[test]
+    fn test_wrapped_height_exactly_width_returns_one() {
+        let text = "a".repeat(80);
+        assert_eq!(
+            wrapped_height(&text, 80),
+            1,
+            "string of exactly width chars should need 1 row"
+        );
+    }
+
+    /// NEW (Phase 6): `wrapped_height` helper — string of `width + 1` chars → 2 rows.
+    #[test]
+    fn test_wrapped_height_over_width_returns_two() {
+        let text = "a".repeat(81);
+        assert_eq!(
+            wrapped_height(&text, 80),
+            2,
+            "string 1 char over width should wrap to 2 rows"
+        );
+    }
+
+    /// NEW (Phase 6): `wrapped_height` helper — zero width returns 1 (no divide-by-zero).
+    #[test]
+    fn test_wrapped_height_zero_width_returns_one() {
+        assert_eq!(
+            wrapped_height("anything", 0),
+            1,
+            "zero-width pane should return 1 to avoid division by zero"
         );
     }
 }

@@ -16,12 +16,45 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
 use fdemon_app::install_wizard::{DoctorLine, DoctorMarker};
 
 use crate::theme::palette;
+
+/// Compute the number of terminal rows needed to render `text` in a pane of `width` columns.
+///
+/// Fallback for `Paragraph::line_count` (which is behind an unstable gate).
+/// Each character is measured by its display width; wide (CJK/emoji) characters count as 2.
+/// Returns at least 1.
+fn wrapped_height(text: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    let display_w: u16 = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| {
+            let cp = c as u32;
+            if matches!(cp,
+                0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+                | 0x4E00..=0xA4CF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
+                | 0xFE10..=0xFE19 | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6
+                | 0x1F004..=0x1F9FF | 0x20000..=0x2FFFF
+            ) {
+                2u16
+            } else {
+                1u16
+            }
+        })
+        .sum();
+    (display_w.max(1) as u32)
+        .div_ceil(width as u32)
+        .try_into()
+        .unwrap_or(u16::MAX)
+        .max(1)
+}
 
 /// Glyph prefix for `DoctorMarker::Ok` lines (`[✓]`).
 const MARKER_OK: &str = "[✓] ";
@@ -48,8 +81,20 @@ impl<'a> DoctorView<'a> {
         Self { lines }
     }
 
-    /// Render a single [`DoctorLine`] into the buffer at `y`.
-    fn render_doctor_line(line: &DoctorLine, y: u16, area: Rect, buf: &mut Buffer) {
+    /// Render a single [`DoctorLine`] into the buffer at `y`, wrapping if needed.
+    ///
+    /// Returns the number of terminal rows consumed (≥ 1), clamped to `remaining`.
+    fn render_doctor_line(
+        line: &DoctorLine,
+        y: u16,
+        area: Rect,
+        remaining: u16,
+        buf: &mut Buffer,
+    ) -> u16 {
+        if remaining == 0 {
+            return 0;
+        }
+
         let color = match line.marker {
             DoctorMarker::Ok => palette::STATUS_GREEN,
             DoctorMarker::Warning => palette::STATUS_YELLOW,
@@ -68,9 +113,13 @@ impl<'a> DoctorView<'a> {
         let indent = " ".repeat(line.indent);
         let text = format!("{indent}{prefix}{}", line.text);
 
+        let h = wrapped_height(&text, area.width).min(remaining);
         let spans = vec![Span::styled(text, Style::default().fg(color))];
         let row_line = Line::from(spans);
-        Paragraph::new(row_line).render(Rect::new(area.x, y, area.width, 1), buf);
+        Paragraph::new(row_line)
+            .wrap(Wrap { trim: false })
+            .render(Rect::new(area.x, y, area.width, h), buf);
+        h
     }
 }
 
@@ -99,10 +148,17 @@ impl Widget for DoctorView<'_> {
             return;
         }
 
-        let visible_height = area.height as usize;
-        for (i, line) in lines.iter().take(visible_height).enumerate() {
-            let y = area.y + i as u16;
-            Self::render_doctor_line(line, y, area, buf);
+        // Render lines with wrapping, advancing y by each line's rendered height.
+        // This replaces the old fixed i→y mapping so long doctor lines wrap instead
+        // of being clipped at the right edge of the pane.
+        let mut y = area.y;
+        for line in lines.iter() {
+            if y >= area.y + area.height {
+                break;
+            }
+            let remaining = area.y + area.height - y;
+            let h = Self::render_doctor_line(line, y, area, remaining, buf);
+            y += h;
         }
     }
 }
@@ -251,5 +307,41 @@ mod tests {
             content.contains("some detail"),
             "indented line text should appear"
         );
+    }
+
+    /// NEW (Phase 6): A long doctor line wraps onto the next row so the tail is visible.
+    #[test]
+    fn test_doctor_view_long_line_wraps() {
+        // A line too long for a 40-column pane — tail token "en_US.UTF-8" would be clipped
+        // without wrapping.
+        let lines = vec![DoctorLine {
+            marker: DoctorMarker::Ok,
+            text: "Flutter (Channel stable, 3.19.0, on Linux 6.x x86_64, locale en_US.UTF-8)"
+                .to_string(),
+            indent: 0,
+        }];
+        let view = DoctorView::new(Some(&lines));
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("en_US.UTF-8"),
+            "tail of long doctor line must be visible after wrapping: '{content}'"
+        );
+    }
+
+    /// NEW (Phase 6): `wrapped_height` helper unit test — basic ASCII.
+    #[test]
+    fn test_wrapped_height_basic() {
+        assert_eq!(wrapped_height("hello", 80), 1, "short string → 1 row");
+        assert_eq!(
+            wrapped_height(&"a".repeat(80), 80),
+            1,
+            "exact width → 1 row"
+        );
+        assert_eq!(wrapped_height(&"a".repeat(81), 80), 2, "width+1 → 2 rows");
+        assert_eq!(wrapped_height("x", 0), 1, "zero width → 1 (no panic)");
     }
 }

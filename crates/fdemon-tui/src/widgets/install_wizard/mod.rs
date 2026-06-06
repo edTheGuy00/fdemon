@@ -55,8 +55,8 @@ const MIN_RENDER_WIDTH: u16 = 40;
 
 /// Minimum dialog height for any rendering.
 ///
-/// Derived from: 3 header + 1 sep + 5 content + 1 sep + 1 footer + 2 border = 13.
-const MIN_RENDER_HEIGHT: u16 = 13;
+/// Derived from: 2 header + 1 sep + 5 content + 1 sep + 1 footer + 2 border = 12.
+const MIN_RENDER_HEIGHT: u16 = 12;
 
 /// Panel width as a percentage of the terminal width.
 ///
@@ -65,13 +65,14 @@ const PANEL_WIDTH_PERCENT: u16 = 80;
 
 /// Panel height as a percentage of the terminal height.
 ///
-/// Derived from: 70% reserves header/footer space while showing all panel content.
-const PANEL_HEIGHT_PERCENT: u16 = 70;
+/// Derived from: 85% maximises visible content while leaving a small margin for context.
+const PANEL_HEIGHT_PERCENT: u16 = 85;
 
 /// Width of the left (step list) pane as a percentage of the content area.
 ///
-/// Derived from: step list needs ~35% for comfortable title display at typical widths.
-const LEFT_PANE_PERCENT: u16 = 35;
+/// Derived from: step list never needs more than ~20 columns ("  ✓ Flutter SDK" = 15);
+/// 28% provides comfortable display at typical widths and gives the detail pane more room.
+const LEFT_PANE_PERCENT: u16 = 28;
 
 /// Height of the left pane in vertical (stacked) layout.
 ///
@@ -313,9 +314,9 @@ impl Widget for InstallWizardPanel<'_> {
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);
 
-        // 7. Layout: header(3) | separator(1) | panes(flex) | separator(1) | footer(1) | absorber(0)
+        // 7. Layout: header(2) | separator(1) | panes(flex) | separator(1) | footer(1) | absorber(0)
         let chunks = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Min(5),
             Constraint::Length(1),
@@ -523,6 +524,33 @@ mod tests {
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf); // must not panic
+    }
+
+    /// NEW (Phase 6): Verify the panel height constant is 85%.
+    #[test]
+    fn test_panel_height_percent_is_85() {
+        assert_eq!(
+            PANEL_HEIGHT_PERCENT, 85,
+            "PANEL_HEIGHT_PERCENT must be 85 after phase-6 resize"
+        );
+    }
+
+    /// NEW (Phase 6): Verify the left pane width constant is 28%.
+    #[test]
+    fn test_left_pane_percent_is_28() {
+        assert_eq!(
+            LEFT_PANE_PERCENT, 28,
+            "LEFT_PANE_PERCENT must be 28 after phase-6 resize"
+        );
+    }
+
+    /// NEW (Phase 6): Verify the minimum render height constant is 12 (reduced header).
+    #[test]
+    fn test_min_render_height_is_12() {
+        assert_eq!(
+            MIN_RENDER_HEIGHT, 12,
+            "MIN_RENDER_HEIGHT must be 12 after header shrank to 2 rows"
+        );
     }
 
     #[test]
