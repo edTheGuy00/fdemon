@@ -176,7 +176,7 @@ pub async fn check_prerequisites(platform: &HostPlatform) -> ComponentCheck {
 
 /// Required tools on Linux for Flutter development.
 ///
-/// Alias fallbacks (ninja-build, xz-utils, pkgconf) are handled separately
+/// Alias fallbacks (ninja-build, pkgconf) are handled separately
 /// in [`check_linux_prerequisites`].
 const LINUX_REQUIRED_TOOLS: &[&str] = &[
     "git",
@@ -203,7 +203,9 @@ pub const PREREQ_KEY_LIBSTDCPP: &str = "libstdc++";
 
 async fn check_linux_prerequisites() -> ComponentCheck {
     let mut missing_binaries: Vec<String> = Vec::new();
-    let mut pkg_config_found = false;
+    // When `pkg-config` is absent but `pkgconf` is present, record the alias
+    // binary name so the GTK/GLU probes spawn the correct binary.
+    let mut pkg_config_binary: Option<&str> = None;
     let mut cpp_compiler_found = false;
 
     // ── Binary probes (which::which) ─────────────────────────────────────────
@@ -213,10 +215,9 @@ async fn check_linux_prerequisites() -> ComponentCheck {
             let alias_found = match *tool {
                 // ninja may be called `ninja-build` on Debian/Ubuntu
                 "ninja" => which::which("ninja-build").is_ok(),
-                // xz binary may be absent when only `xz-utils` (the Debian
-                // package) is installed without creating the `xz` symlink
-                "xz" => which::which("xz-utils").is_ok(),
-                // pkg-config may be provided as `pkgconf` on Fedora / Arch
+                // pkg-config may be provided as `pkgconf` on Fedora / Arch.
+                // When the alias is found, record `pkgconf` as the binary to
+                // use for subsequent GTK/GLU `--exists` probes.
                 "pkg-config" => {
                     let alias_ok = which::which("pkgconf").is_ok();
                     if !alias_ok {
@@ -225,7 +226,7 @@ async fn check_linux_prerequisites() -> ComponentCheck {
                         missing_binaries.push(tool.to_string());
                         continue;
                     }
-                    pkg_config_found = true;
+                    pkg_config_binary = Some("pkgconf");
                     true // alias found — do not add to missing_binaries
                 }
                 _ => false,
@@ -235,7 +236,7 @@ async fn check_linux_prerequisites() -> ComponentCheck {
             }
         } else {
             if *tool == "pkg-config" {
-                pkg_config_found = true;
+                pkg_config_binary = Some("pkg-config");
             }
             // Track C++ compiler presence for libstdc++ heuristic.
             if *tool == "clang" {
@@ -253,11 +254,13 @@ async fn check_linux_prerequisites() -> ComponentCheck {
     // `which` cannot detect library dev-headers — only pkg-config can.
     // When pkg-config itself is absent the GTK probe cannot run; we skip it
     // rather than falsely asserting GTK missing (n1 — GTK double-report fix).
-    // Only probe GTK/GLU when pkg-config (or its pkgconf alias) is available.
-    let (gtk_missing, glu_missing) = if pkg_config_found {
+    // Use the resolved binary name (`pkg-config` or its `pkgconf` alias) so
+    // that Fedora/Arch minimal installs with only `pkgconf` are handled
+    // correctly.
+    let (gtk_missing, glu_missing) = if let Some(binary) = pkg_config_binary {
         let (gtk, glu) = tokio::join!(
-            probe_pkg_config_exists("gtk+-3.0"),
-            probe_pkg_config_exists("glu"),
+            probe_pkg_config_exists(binary, "gtk+-3.0"),
+            probe_pkg_config_exists(binary, "glu"),
         );
         (!gtk, !glu)
     } else {
@@ -330,6 +333,10 @@ async fn check_linux_prerequisites() -> ComponentCheck {
 ///
 /// Mirrors `check_linux_prerequisites` but takes pre-probed data so unit tests
 /// can exercise the aggregation logic without live filesystem I/O.
+///
+/// `pkg_config_available` is provided by the caller as a pre-resolved flag;
+/// it is `true` when either `pkg-config` or `pkgconf` is present in
+/// `found_binaries` (the live function records this via `pkg_config_binary`).
 #[cfg(test)]
 pub(crate) fn build_linux_check_from_candidates(
     found_binaries: &[&str],
@@ -338,6 +345,7 @@ pub(crate) fn build_linux_check_from_candidates(
     glu_present: bool,
 ) -> ComponentCheck {
     let mut missing_binaries: Vec<String> = Vec::new();
+    // Determine whether pkg-config (or its pkgconf alias) is resolvable.
     let mut pkg_config_found = pkg_config_available;
     let mut cpp_compiler_found = false;
 
@@ -346,7 +354,7 @@ pub(crate) fn build_linux_check_from_candidates(
         if !found {
             let alias_found = match *tool {
                 "ninja" => found_binaries.contains(&"ninja-build"),
-                "xz" => found_binaries.contains(&"xz-utils"),
+                // pkg-config may be provided as `pkgconf` on Fedora / Arch.
                 "pkg-config" => {
                     let alias_ok = found_binaries.contains(&"pkgconf");
                     if !alias_ok {
@@ -424,14 +432,19 @@ pub(crate) fn build_linux_check_from_candidates(
     }
 }
 
-/// Run `pkg-config --exists <package>` and return `true` when the exit code
-/// is zero (package found).
+/// Run `<binary> --exists <package>` and return `true` when the exit code is
+/// zero (package found).
+///
+/// `binary` must be either `"pkg-config"` or `"pkgconf"` — whichever was
+/// resolved during the binary-presence scan.  Passing the resolved name
+/// instead of hard-coding `"pkg-config"` ensures correct behaviour on
+/// Fedora/Arch minimal installs that provide only `pkgconf`.
 ///
 /// Uses [`PROBE_TIMEOUT`] and suppresses all output, mirroring the macOS
 /// `xcode-select` block.
-async fn probe_pkg_config_exists(package: &str) -> bool {
+async fn probe_pkg_config_exists(binary: &str, package: &str) -> bool {
     let result = tokio::time::timeout(PROBE_TIMEOUT, async {
-        Command::new("pkg-config")
+        Command::new(binary)
             .arg("--exists")
             .arg(package)
             .stdout(Stdio::null())
@@ -504,23 +517,44 @@ async fn probe_macos_cocoapods() -> MacOsProbeStatus {
     }
 }
 
-/// Probe Rosetta 2 via `pgrep oahd` — **only on Apple Silicon (aarch64)**.
+/// Probe Rosetta 2 installation — **only on Apple Silicon (aarch64)**.
 ///
 /// On `x86_64` this returns [`MacOsProbeStatus::NotApplicable`] immediately
 /// so that x86_64 Macs never appear to have Rosetta "missing".
 ///
-/// `pgrep` returns exit code 0 when a matching process is found, non-zero
-/// otherwise.  If `pgrep` itself is not found (unlikely on macOS) we return
-/// [`MacOsProbeStatus::Unknown`] rather than [`MacOsProbeStatus::Missing`].
+/// Detection strategy (installation, not running-process):
+///
+/// 1. Check for the Rosetta runtime library path
+///    `/Library/Apple/usr/libexec/oah/libRosettaRuntime` — present on all
+///    Rosetta-installed machines regardless of whether `oahd` is running.
+/// 2. Fall back to `pkgutil --pkg-info=com.apple.pkg.RosettaUpdateAuto` —
+///    the authoritative package record.
+///
+/// The old `pgrep oahd` approach was wrong: `oahd` is an on-demand daemon that
+/// does not run after a fresh boot or before any Intel binary launches.  A
+/// non-running `oahd` does **not** mean Rosetta is absent.
 async fn probe_macos_rosetta() -> MacOsProbeStatus {
     // Gate: only meaningful on Apple Silicon
     if std::env::consts::ARCH != "aarch64" {
         return MacOsProbeStatus::NotApplicable;
     }
 
+    // Fast path: check the well-known Rosetta runtime library path.
+    // This file is present on every machine with Rosetta installed,
+    // regardless of whether oahd is currently running.
+    if std::path::Path::new("/Library/Apple/usr/libexec/oah/libRosettaRuntime").exists() {
+        return MacOsProbeStatus::Present;
+    }
+
+    // Secondary check: also accept the broader Rosetta directory presence.
+    if std::path::Path::new("/Library/Apple/usr/libexec/oah").exists() {
+        return MacOsProbeStatus::Present;
+    }
+
+    // Fall back to pkgutil to check for the Rosetta package record.
     let result = tokio::time::timeout(PROBE_TIMEOUT, async {
-        Command::new("pgrep")
-            .arg("oahd")
+        Command::new("pkgutil")
+            .arg("--pkg-info=com.apple.pkg.RosettaUpdateAuto")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .stdin(Stdio::null())
@@ -531,10 +565,43 @@ async fn probe_macos_rosetta() -> MacOsProbeStatus {
 
     match result {
         Ok(Ok(status)) if status.success() => MacOsProbeStatus::Present,
+        // pkgutil exit non-zero → package not installed
         Ok(Ok(_)) => MacOsProbeStatus::Missing,
-        // `pgrep` not found → we cannot confirm missing; report Unknown
+        // pkgutil not found (extremely unlikely on macOS) → Unknown
         Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => MacOsProbeStatus::Unknown,
+        // Timeout or other spawn error → Unknown (cannot confirm absent)
         _ => MacOsProbeStatus::Unknown,
+    }
+}
+
+/// Pure helper that detects Rosetta installation from injected path-existence
+/// and pkgutil result booleans.
+///
+/// Extracted for unit-testability: the live [`probe_macos_rosetta`] cannot be
+/// called in unit tests because it performs real filesystem I/O.  This function
+/// encodes the same decision logic so the installed-but-idle case can be
+/// verified without spawning processes.
+///
+/// # Parameters
+/// - `runtime_path_exists`: whether
+///   `/Library/Apple/usr/libexec/oah/libRosettaRuntime` exists.
+/// - `oah_dir_exists`: whether `/Library/Apple/usr/libexec/oah` exists.
+/// - `pkgutil_installed`: `Some(true)` when `pkgutil --pkg-info=…` exits 0,
+///   `Some(false)` when it exits non-zero, `None` when `pkgutil` is absent or
+///   timed out.
+#[cfg(test)]
+pub(crate) fn rosetta_status_from_probes(
+    runtime_path_exists: bool,
+    oah_dir_exists: bool,
+    pkgutil_installed: Option<bool>,
+) -> MacOsProbeStatus {
+    if runtime_path_exists || oah_dir_exists {
+        return MacOsProbeStatus::Present;
+    }
+    match pkgutil_installed {
+        Some(true) => MacOsProbeStatus::Present,
+        Some(false) => MacOsProbeStatus::Missing,
+        None => MacOsProbeStatus::Unknown,
     }
 }
 
@@ -1587,5 +1654,181 @@ mod tests {
     fn test_prereq_key_glu_and_libstdcpp_constants_have_expected_values() {
         assert_eq!(PREREQ_KEY_GLU, "libglu1-mesa");
         assert_eq!(PREREQ_KEY_LIBSTDCPP, "libstdc++");
+    }
+
+    // ── (c) xz-utils alias is gone ───────────────────────────────────────────
+    // Regression guard: the LINUX_REQUIRED_TOOLS alias table must not contain
+    // "xz-utils" (a Debian package name — not a real binary).  The sole xz
+    // check must be `which::which("xz")`.
+
+    #[test]
+    fn test_linux_required_tools_alias_table_does_not_contain_xz_utils() {
+        // Verify that `build_linux_check_from_candidates` does NOT treat
+        // "xz-utils" as a valid alias for "xz".  If "xz" is absent and
+        // "xz-utils" is in found_binaries, the tool must still be missing.
+        let tools_with_xz_utils_only = [
+            "git",
+            "zip",
+            "curl",
+            "unzip",
+            "xz-utils", // dead alias — should NOT satisfy the xz requirement
+            "clang",
+            "cmake",
+            "ninja",
+            "pkg-config",
+        ];
+        let check = build_linux_check_from_candidates(&tools_with_xz_utils_only, true, true, true);
+        // xz is absent and xz-utils is not a valid alias → Missing
+        assert_eq!(
+            check.status,
+            ComponentStatus::Missing,
+            "xz-utils must not satisfy the xz binary requirement; detail: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("xz"),
+            "xz must appear in missing list; detail: {}",
+            check.detail
+        );
+    }
+
+    // ── (a) pkgconf alias passes the correct binary to GTK/GLU probes ────────
+    // The pure `build_linux_check_from_candidates` helper mirrors live logic.
+    // When `pkgconf` is in `found_binaries` (not `pkg-config`), the helper
+    // must still run GTK/GLU probes — verifiable via pkg_config_available=false
+    // (since `pkg-config` is not directly in the slice) combined with pkgconf.
+
+    #[test]
+    fn test_pkgconf_alias_enables_gtk_glu_probes_in_candidates_helper() {
+        // Simulate: pkg-config absent, pkgconf present (Fedora/Arch minimal).
+        // The `build_linux_check_from_candidates` helper is called with
+        // `pkgconf` in found_binaries; `pkg-config` is not present.
+        // pkg_config_available=false (pkg-config not directly found), but
+        // pkgconf alias in found_binaries sets pkg_config_found=true internally.
+        let tools_with_pkgconf = [
+            "git", "zip", "curl", "unzip", "xz", "clang", "cmake", "ninja",
+            // "pkg-config" absent — pkgconf alias takes over
+            "pkgconf",
+        ];
+        // gtk_present=true, glu_present=true → all headers found via pkgconf.
+        // pkg_config_available=false because pkg-config itself is not in the slice.
+        let check = build_linux_check_from_candidates(
+            &tools_with_pkgconf,
+            false, // pkg-config binary not directly found
+            true,  // gtk present (would be found via pkgconf probe)
+            true,  // glu present
+        );
+        // pkgconf alias recognised → pkg_config_found=true internally → headers
+        // probed → all present → Ok
+        assert_eq!(
+            check.status,
+            ComponentStatus::Ok,
+            "pkgconf alias should allow GTK/GLU probes to succeed; detail: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_pkgconf_alias_with_missing_gtk_yields_partial() {
+        // Same scenario but GTK headers are absent → Partial (not Ok).
+        let tools_with_pkgconf = [
+            "git", "zip", "curl", "unzip", "xz", "clang", "cmake", "ninja", "pkgconf",
+        ];
+        let check = build_linux_check_from_candidates(
+            &tools_with_pkgconf,
+            false, // pkg-config not directly found
+            false, // gtk absent
+            true,
+        );
+        assert_eq!(
+            check.status,
+            ComponentStatus::Partial,
+            "pkgconf present + GTK absent should yield Partial; detail: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains(GTK_ITEM_LABEL),
+            "GTK label missing from detail: {}",
+            check.detail
+        );
+    }
+
+    // ── (b) Rosetta installation probe (pure helper) ─────────────────────────
+    // Tests for `rosetta_status_from_probes`, which encodes the same logic as
+    // `probe_macos_rosetta` without live I/O.
+
+    #[test]
+    fn test_rosetta_installed_via_runtime_path() {
+        // Runtime library path exists → Present (regardless of pkgutil).
+        let status = rosetta_status_from_probes(true, false, Some(false));
+        assert_eq!(
+            status,
+            MacOsProbeStatus::Present,
+            "runtime path present must yield Present"
+        );
+    }
+
+    #[test]
+    fn test_rosetta_installed_via_oah_dir() {
+        // oah directory exists (but runtime lib absent) → Present.
+        let status = rosetta_status_from_probes(false, true, Some(false));
+        assert_eq!(
+            status,
+            MacOsProbeStatus::Present,
+            "oah dir must yield Present"
+        );
+    }
+
+    #[test]
+    fn test_rosetta_installed_via_pkgutil() {
+        // Neither path exists, but pkgutil reports installed → Present.
+        let status = rosetta_status_from_probes(false, false, Some(true));
+        assert_eq!(
+            status,
+            MacOsProbeStatus::Present,
+            "pkgutil installed=true must yield Present"
+        );
+    }
+
+    #[test]
+    fn test_rosetta_not_installed_via_pkgutil() {
+        // No paths, pkgutil says not installed → Missing.
+        let status = rosetta_status_from_probes(false, false, Some(false));
+        assert_eq!(
+            status,
+            MacOsProbeStatus::Missing,
+            "pkgutil not-found must yield Missing"
+        );
+    }
+
+    #[test]
+    fn test_rosetta_installed_but_oahd_idle_not_missing() {
+        // Key regression: Rosetta installed (runtime path present) but oahd
+        // is not running.  The old pgrep approach would have yielded Missing;
+        // the new installation-check approach must yield Present.
+        //
+        // Simulate: runtime path exists, pkgutil returns false (as if never
+        // checked because the path check short-circuits).
+        let status = rosetta_status_from_probes(
+            true,  // /Library/Apple/usr/libexec/oah/libRosettaRuntime present
+            false, // oah dir not checked (runtime path already matched)
+            None,  // pkgutil not consulted
+        );
+        assert_eq!(
+            status,
+            MacOsProbeStatus::Present,
+            "installed-but-idle Rosetta must be Present, not Missing"
+        );
+    }
+
+    #[test]
+    fn test_rosetta_pkgutil_unavailable_yields_unknown() {
+        // No paths, pkgutil absent/timed-out → Unknown (not Missing).
+        let status = rosetta_status_from_probes(false, false, None);
+        assert_eq!(
+            status,
+            MacOsProbeStatus::Unknown,
+            "pkgutil unavailable must yield Unknown, not Missing"
+        );
     }
 }
