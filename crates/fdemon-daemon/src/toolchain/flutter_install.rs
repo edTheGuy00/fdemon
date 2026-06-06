@@ -1676,6 +1676,19 @@ mod tests {
         std::fs::write(tmp.path().join("version"), "3.24.0\n").unwrap();
         std::fs::write(tmp.path().join("VERSION"), "old-version").unwrap();
 
+        // On case-insensitive filesystems (default on macOS and Windows) the two
+        // writes resolve to the same file, so the second clobbers the first and
+        // lowercase-vs-uppercase precedence cannot be exercised. Skip there — the
+        // preference is only observable when both files coexist (case-sensitive
+        // filesystems, e.g. Linux CI).
+        let case_sensitive_fs = std::fs::read_to_string(tmp.path().join("version"))
+            .unwrap()
+            .trim()
+            == "3.24.0";
+        if !case_sensitive_fs {
+            return;
+        }
+
         let v = read_installed_version(tmp.path(), "fallback");
         assert_eq!(v, "3.24.0");
     }

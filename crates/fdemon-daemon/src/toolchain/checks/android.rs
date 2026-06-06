@@ -508,7 +508,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let bin_dir = tmp.path().join("cmdline-tools").join("latest").join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
-        fs::write(bin_dir.join("sdkmanager"), "").unwrap();
+        // The check probes the platform-appropriate binary name (sdkmanager.bat
+        // on Windows), so write that exact name rather than a hardcoded one.
+        fs::write(bin_dir.join(sdkmanager_bin_name()), "").unwrap();
 
         let root = AndroidSdkRoot(tmp.path().to_path_buf());
         let check = check_android_cmdline_tools(Some(&root));
