@@ -10,7 +10,7 @@
 //! | bash        | `~/.bash_profile` (macOS) / `~/.bashrc` (Linux) | `export PATH="$PATH:<bin>"` |
 //! | zsh         | `~/.zshenv` (preferred) or `~/.zprofile`    | `export PATH="$PATH:<bin>"`   |
 //! | fish        | `~/.config/fish/config.fish`                | `fish_add_path '<bin>'`       |
-//! | Windows     | User registry `PATH` via PowerShell         | registry update               |
+//! | Windows     | User `HKCU:\Environment\PATH` via PowerShell | registry update (raw, type-preserving) |
 //!
 //! ## Idempotency
 //!
@@ -192,11 +192,15 @@ pub fn rc_file_for_shell(shell: HostShell, home: &Path) -> Option<PathBuf> {
 ///
 /// Validates `bin_dir` for shell injection characters before any I/O.
 ///
-/// On Windows, updates the user `PATH` via the registry using a PowerShell
-/// `[Environment]::SetEnvironmentVariable` call rather than editing an rc file.
-/// The value is passed out-of-band via the `FDEMON_NEW_PATH` environment
-/// variable — never interpolated into the PowerShell script string — to prevent
-/// code injection.
+/// On Windows, updates the user `PATH` via the **raw** registry key
+/// `HKCU:\Environment` using PowerShell `New-ItemProperty`, reading first with
+/// `GetValue(..., 'DoNotExpandEnvironmentNames')` to obtain the unexpanded value
+/// and its type. The write preserves `REG_EXPAND_SZ` when the existing PATH
+/// was `ExpandString` or contained `%VAR%` tokens — preventing silent flattening
+/// of entries like `%USERPROFILE%\bin` or `%JAVA_HOME%\bin`. New keys default
+/// to `ExpandString` (safe superset). The new value is passed out-of-band via
+/// `FDEMON_NEW_PATH` and the property type via `FDEMON_PATH_KIND` — neither is
+/// interpolated into the script string — to prevent code injection.
 ///
 /// On Unix, writes to the rc file selected by [`rc_file_for_shell`]. If no rc
 /// file can be determined (e.g. `HostShell::Unknown`), returns an error.
@@ -252,11 +256,12 @@ pub fn add_to_path(
 /// # <<< fdemon android env <<<
 /// ```
 ///
-/// Windows: sets `ANDROID_HOME` in the user registry and prepends the two bin
-/// dirs to the user `PATH`, both via PowerShell
-/// `[Environment]::SetEnvironmentVariable`. Values are passed out-of-band
-/// through environment variables (`FDEMON_NEW_ANDROID_HOME` / `FDEMON_NEW_PATH`)
-/// to prevent shell injection.
+/// Windows: writes `ANDROID_HOME` to `HKCU:\Environment` as `REG_SZ` and
+/// prepends the three bin dirs to the user `PATH` using the raw registry
+/// approach (`GetValue(..., 'DoNotExpandEnvironmentNames')` + `New-ItemProperty`)
+/// so that the existing `REG_EXPAND_SZ` type and any `%VAR%` tokens in `PATH`
+/// are preserved. Values are passed out-of-band via `FDEMON_NEW_ANDROID_HOME`,
+/// `FDEMON_NEW_PATH`, and `FDEMON_PATH_KIND` to prevent shell injection.
 ///
 /// # Returns
 ///
@@ -589,78 +594,207 @@ fn add_android_env_to_rc_file(rc_file: &Path, sdk_root: &Path) -> Result<PathCon
 
 // ── Windows PATH update ───────────────────────────────────────────────────────
 
-/// Update the Windows user `PATH` via PowerShell.
+// ── Windows PATH planning helpers (pure, cross-platform-testable) ────────────
+
+/// The registry value type to use when writing a Windows PATH entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRegKind {
+    /// `REG_SZ` — a plain string with no variable expansion.
+    String,
+    /// `REG_EXPAND_SZ` — a string with `%VAR%` expansion tokens.
+    ExpandString,
+}
+
+impl WindowsRegKind {
+    /// Returns the PowerShell `-PropertyType` argument string for this kind.
+    pub fn powershell_property_type(self) -> &'static str {
+        match self {
+            WindowsRegKind::String => "String",
+            WindowsRegKind::ExpandString => "ExpandString",
+        }
+    }
+}
+
+/// Determine the registry kind to use for a PATH value.
 ///
-/// Guards against the 1024-byte truncation caused by `setx` by using the
-/// `[Environment]::SetEnvironmentVariable` registry API instead, which has no
-/// length limit.
+/// If the existing raw value contains `%` (indicating `%VAR%` tokens), or if
+/// the existing kind is already `ExpandString`, we preserve `ExpandString`.
+/// Otherwise we keep `String`. When writing a brand-new key, we default to
+/// `ExpandString` (safe superset — it degrades gracefully when no `%VAR%`
+/// tokens are present).
+pub fn decide_reg_kind(raw_value: &str, existing_is_expand: bool) -> WindowsRegKind {
+    if existing_is_expand || raw_value.contains('%') {
+        WindowsRegKind::ExpandString
+    } else {
+        WindowsRegKind::String
+    }
+}
+
+/// Plan a Windows PATH update: decide what to write and which registry kind to use.
+///
+/// Returns `None` if `bin_dir` is already present in `raw_value` (case-insensitive
+/// semicolon-split comparison), meaning no write is needed.
+///
+/// Returns `Some((new_value, kind))` where `new_value` is the raw PATH string
+/// with `bin_dir` appended and `kind` is the registry type that should be used
+/// when writing back. The `kind` is derived from `existing_is_expand` and whether
+/// the raw value itself contains `%` tokens, so that a pre-existing
+/// `REG_EXPAND_SZ` value retains its type and literal `%VAR%` tokens are preserved.
+///
+/// # Idempotency
+///
+/// The already-present check is performed against the **raw** (unexpanded) value
+/// so that entries like `%USERPROFILE%\bin` are detected correctly without
+/// needing the environment to be expanded first.
+pub fn plan_windows_path_update(
+    raw_value: &str,
+    existing_is_expand: bool,
+    bin_dir: &str,
+) -> Option<(String, WindowsRegKind)> {
+    // Idempotency: check whether the literal bin_dir string is already present
+    // as a semicolon-delimited segment (case-insensitive).
+    let already_present = raw_value
+        .split(';')
+        .any(|segment| segment.trim().eq_ignore_ascii_case(bin_dir));
+
+    if already_present {
+        return None;
+    }
+
+    // Decide which registry kind to preserve.
+    // When the PATH key is absent (empty raw_value) we default to ExpandString
+    // — a safe superset that degrades gracefully when no %VAR% tokens are present.
+    let kind = if raw_value.is_empty() {
+        WindowsRegKind::ExpandString
+    } else {
+        decide_reg_kind(raw_value, existing_is_expand)
+    };
+
+    // Append the new bin_dir.
+    let new_value = if raw_value.is_empty() {
+        bin_dir.to_string()
+    } else if raw_value.ends_with(';') {
+        format!("{}{}", raw_value, bin_dir)
+    } else {
+        format!("{};{}", raw_value, bin_dir)
+    };
+
+    Some((new_value, kind))
+}
+
+/// PowerShell script that reads the **raw** (unexpanded) user PATH from the
+/// registry and its value type, emitting two lines:
+/// - Line 1: the raw PATH string (empty if key absent)
+/// - Line 2: `ExpandString` or `String`
+///
+/// Uses `GetValue(..., 'DoNotExpandEnvironmentNames')` to avoid flattening
+/// `%VAR%` tokens. No user-controlled values are interpolated.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const READ_RAW_PATH_SCRIPT: &str = r#"$key = Get-Item -LiteralPath 'HKCU:\Environment' -ErrorAction SilentlyContinue
+if ($key -eq $null) { ''; 'ExpandString'; exit }
+$raw = $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+$kind = $key.GetValueKind('Path')
+$raw
+if ($kind -eq 'ExpandString') { 'ExpandString' } else { 'String' }"#;
+
+/// PowerShell script that writes the user PATH to the registry using a specified
+/// property type. The new value is passed out-of-band via `$env:FDEMON_NEW_PATH`
+/// and the type via `$env:FDEMON_PATH_KIND` to prevent injection.
+///
+/// `New-ItemProperty -Force` creates the key if absent and overwrites if present.
+/// No user-controlled values are interpolated into the script string.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const WRITE_RAW_PATH_SCRIPT: &str = r#"New-ItemProperty -LiteralPath 'HKCU:\Environment' -Name 'Path' -Value $env:FDEMON_NEW_PATH -PropertyType $env:FDEMON_PATH_KIND -Force | Out-Null"#;
+
+/// PowerShell script that reads the **raw** (unexpanded) `ANDROID_HOME` user
+/// env var, emitting one line with the raw value (empty if absent).
+///
+/// No user-controlled values are interpolated.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const READ_RAW_ANDROID_HOME_SCRIPT: &str = r#"$key = Get-Item -LiteralPath 'HKCU:\Environment' -ErrorAction SilentlyContinue
+if ($key -eq $null) { ''; exit }
+$key.GetValue('ANDROID_HOME', '', 'DoNotExpandEnvironmentNames')"#;
+
+/// PowerShell script that writes `ANDROID_HOME` to the user registry as
+/// `REG_SZ`. The value is passed out-of-band via `$env:FDEMON_NEW_ANDROID_HOME`.
+///
+/// `ANDROID_HOME` is written as `String` (not `ExpandString`) because it is a
+/// concrete directory path, not a `%VAR%`-bearing template.
+///
+/// No user-controlled values are interpolated.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const WRITE_ANDROID_HOME_SCRIPT: &str = r#"New-ItemProperty -LiteralPath 'HKCU:\Environment' -Name 'ANDROID_HOME' -Value $env:FDEMON_NEW_ANDROID_HOME -PropertyType String -Force | Out-Null"#;
+
+/// Update the Windows user `PATH` via PowerShell, preserving the existing
+/// `REG_EXPAND_SZ` registry type and literal `%VAR%` tokens.
+///
+/// Reads the **raw** (unexpanded) PATH value from `HKCU:\Environment` using
+/// `GetValue(..., 'DoNotExpandEnvironmentNames')`, appends `bin_dir` to the
+/// raw value, then writes back using `New-ItemProperty -PropertyType ExpandString`
+/// (or `String` if the existing value had no `%` tokens and was not
+/// `REG_EXPAND_SZ`). This round-trip preserves entries such as
+/// `%USERPROFILE%\bin` and `%JAVA_HOME%\bin` that would otherwise be silently
+/// expanded and re-persisted as a flat string.
 ///
 /// **Injection safety:** The new PATH value is passed out-of-band via the
-/// `FDEMON_NEW_PATH` environment variable and referenced as `$env:FDEMON_NEW_PATH`
-/// inside the PowerShell script. The script string itself is a constant with no
-/// user-controlled interpolation, so PowerShell metacharacters in the path cannot
-/// execute arbitrary code.
+/// `FDEMON_NEW_PATH` environment variable and the registry type via
+/// `FDEMON_PATH_KIND`. Neither value is ever interpolated into the PowerShell
+/// script string, so PowerShell metacharacters in the path cannot execute code.
 ///
 /// The function is platform-gated so it compiles on all targets but only runs
 /// on Windows.
 fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
     let bin_str = bin_dir.to_string_lossy().into_owned();
 
-    // Read the current user PATH via PowerShell.
-    // This script is a constant — no user-controlled values are interpolated.
+    // Read the raw (unexpanded) user PATH and its registry kind via PowerShell.
+    // The script is a constant — no user-controlled values are interpolated.
     let read_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "[Environment]::GetEnvironmentVariable('PATH', 'User')",
+            READ_RAW_PATH_SCRIPT,
         ])
         .output()
         .map_err(|e| Error::config(format!("Failed to run PowerShell to read PATH: {}", e)))?;
 
-    let current_path = String::from_utf8_lossy(&read_output.stdout)
-        .trim()
-        .to_string();
+    let read_stdout = String::from_utf8_lossy(&read_output.stdout);
+    let mut lines = read_stdout.lines();
+    let raw_path = lines.next().unwrap_or("").trim().to_string();
+    let kind_str = lines.next().unwrap_or("ExpandString").trim();
+    let existing_is_expand = kind_str != "String";
 
-    // Check if the bin_dir is already present.
-    let already_present = current_path
-        .split(';')
-        .any(|segment| segment.trim().eq_ignore_ascii_case(bin_str.as_str()));
+    // Plan the update using the pure helper — operates on the raw value so
+    // that %VAR% tokens are compared literally (case-insensitive).
+    let (new_path, reg_kind) =
+        match plan_windows_path_update(&raw_path, existing_is_expand, &bin_str) {
+            None => {
+                return Ok(PathConfigOutcome::AlreadyPresent {
+                    rc_file: PathBuf::from("HKCU:\\Environment\\PATH"),
+                });
+            }
+            Some(pair) => pair,
+        };
 
-    if already_present {
-        return Ok(PathConfigOutcome::AlreadyPresent {
-            rc_file: PathBuf::from("HKCU:\\Environment\\PATH"),
-        });
-    }
-
-    // Append our bin_dir to form the new PATH value.
-    let new_path = if current_path.is_empty() {
-        bin_str.clone()
-    } else if current_path.ends_with(';') {
-        format!("{}{}", current_path, bin_str)
-    } else {
-        format!("{};{}", current_path, bin_str)
-    };
-
-    // Pass the new PATH value out-of-band via an environment variable so that
-    // it is never interpolated into the PowerShell script string.  This
-    // eliminates the injection surface entirely — PowerShell metacharacters
-    // (backtick, `$(...)`, etc.) in the path value cannot execute code.
+    // Write the new value back preserving the original (or defaulted) registry
+    // type. The value and type are passed out-of-band — never interpolated into
+    // the script string — so injection via path metacharacters is impossible.
     let set_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')",
+            WRITE_RAW_PATH_SCRIPT,
         ])
         .env("FDEMON_NEW_PATH", &new_path)
+        .env("FDEMON_PATH_KIND", reg_kind.powershell_property_type())
         .output()
         .map_err(|e| Error::config(format!("Failed to run PowerShell to set PATH: {}", e)))?;
 
     if !set_output.status.success() {
         let stderr = String::from_utf8_lossy(&set_output.stderr);
         return Err(Error::config(format!(
-            "PowerShell SetEnvironmentVariable failed: {}",
+            "PowerShell New-ItemProperty (PATH) failed: {}",
             stderr.trim()
         )));
     }
@@ -675,26 +809,33 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
     })
 }
 
-/// Update the Windows user `ANDROID_HOME` and `PATH` via PowerShell.
+/// Update the Windows user `ANDROID_HOME` and `PATH` via PowerShell, preserving
+/// the existing `REG_EXPAND_SZ` registry type and literal `%VAR%` tokens on PATH.
 ///
-/// Sets `ANDROID_HOME` to `sdk_root` and prepends
-/// `%ANDROID_HOME%\cmdline-tools\latest\bin`, `%ANDROID_HOME%\platform-tools`,
-/// and `%ANDROID_HOME%\emulator` to the user `PATH` if they are not already
-/// present (idempotent).
+/// Sets `ANDROID_HOME` to `sdk_root` (written as `REG_SZ` — a concrete path, not
+/// a `%VAR%` template) and prepends
+/// `<sdk_root>\cmdline-tools\latest\bin`, `<sdk_root>\platform-tools`,
+/// and `<sdk_root>\emulator` to the user `PATH` if they are not already present.
+///
+/// Reads the **raw** (unexpanded) PATH from `HKCU:\Environment` and writes it
+/// back via `New-ItemProperty -PropertyType ExpandString` (or `String` if no
+/// `%VAR%` tokens were present) to avoid silently flattening a `REG_EXPAND_SZ`
+/// value into a plain `REG_SZ` string.
 ///
 /// **Injection safety:** `sdk_root` is passed out-of-band via
-/// `FDEMON_NEW_ANDROID_HOME`; the new PATH value via `FDEMON_NEW_PATH`. Neither
-/// value is ever interpolated into the PowerShell script string.
+/// `FDEMON_NEW_ANDROID_HOME`; the new PATH value via `FDEMON_NEW_PATH`; the
+/// registry type via `FDEMON_PATH_KIND`. None of these values are ever
+/// interpolated into the PowerShell script strings.
 fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
     let sdk_str = sdk_root.to_string_lossy().into_owned();
 
-    // Read the current user ANDROID_HOME.
+    // Read the raw (unexpanded) user ANDROID_HOME from the registry.
     let read_home_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "[Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User')",
+            READ_RAW_ANDROID_HOME_SCRIPT,
         ])
         .output()
         .map_err(|e| {
@@ -708,20 +849,22 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
         .trim()
         .to_string();
 
-    // Read the current user PATH.
+    // Read the raw (unexpanded) user PATH and its registry kind.
     let read_path_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "[Environment]::GetEnvironmentVariable('PATH', 'User')",
+            READ_RAW_PATH_SCRIPT,
         ])
         .output()
         .map_err(|e| Error::config(format!("Failed to run PowerShell to read PATH: {}", e)))?;
 
-    let current_path = String::from_utf8_lossy(&read_path_output.stdout)
-        .trim()
-        .to_string();
+    let read_stdout = String::from_utf8_lossy(&read_path_output.stdout);
+    let mut lines = read_stdout.lines();
+    let raw_path = lines.next().unwrap_or("").trim().to_string();
+    let kind_str = lines.next().unwrap_or("ExpandString").trim();
+    let existing_is_expand = kind_str != "String";
 
     // Compute the three Android bin dirs to add.
     let cmdline_bin = format!("{}\\cmdline-tools\\latest\\bin", sdk_str);
@@ -729,16 +872,16 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
     let emulator = format!("{}\\emulator", sdk_str);
 
     // Check whether ANDROID_HOME already equals sdk_root and all three bin dirs
-    // are already in PATH — if so, the configuration is already complete.
+    // are already in the raw PATH — if so, the configuration is already complete.
     let home_matches = current_home.eq_ignore_ascii_case(&sdk_str);
-    let path_segments: Vec<&str> = current_path.split(';').map(str::trim).collect();
-    let cmdline_present = path_segments
+    let raw_path_segments: Vec<&str> = raw_path.split(';').map(str::trim).collect();
+    let cmdline_present = raw_path_segments
         .iter()
         .any(|s| s.eq_ignore_ascii_case(&cmdline_bin));
-    let platform_present = path_segments
+    let platform_present = raw_path_segments
         .iter()
         .any(|s| s.eq_ignore_ascii_case(&platform_tools));
-    let emulator_present = path_segments
+    let emulator_present = raw_path_segments
         .iter()
         .any(|s| s.eq_ignore_ascii_case(&emulator));
 
@@ -748,13 +891,14 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
         });
     }
 
-    // Set ANDROID_HOME — passed out-of-band to avoid injection.
+    // Set ANDROID_HOME — written as REG_SZ (a concrete path, not a %VAR% template).
+    // Value passed out-of-band via FDEMON_NEW_ANDROID_HOME to prevent injection.
     let set_home_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "[Environment]::SetEnvironmentVariable('ANDROID_HOME', $env:FDEMON_NEW_ANDROID_HOME, 'User')",
+            WRITE_ANDROID_HOME_SCRIPT,
         ])
         .env("FDEMON_NEW_ANDROID_HOME", &sdk_str)
         .output()
@@ -768,20 +912,21 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
     if !set_home_output.status.success() {
         let stderr = String::from_utf8_lossy(&set_home_output.stderr);
         return Err(Error::config(format!(
-            "PowerShell SetEnvironmentVariable(ANDROID_HOME) failed: {}",
+            "PowerShell New-ItemProperty (ANDROID_HOME) failed: {}",
             stderr.trim()
         )));
     }
 
-    // Prepend the two bin dirs to PATH (only if not already present).
-    let mut path_parts: Vec<String> = current_path
+    // Build the new raw PATH by prepending missing Android bin dirs to the
+    // existing raw value (preserving any %VAR% tokens already in the value).
+    // Prepend in reverse order so cmdline_bin ends up before platform_tools
+    // and emulator (ordering: cmdline-tools → platform-tools → emulator).
+    let mut path_parts: Vec<String> = raw_path
         .split(';')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
 
-    // Prepend in reverse order so cmdline_bin ends up before platform_tools
-    // and emulator (ordering: cmdline-tools → platform-tools → emulator).
     if !emulator_present {
         path_parts.insert(0, emulator);
     }
@@ -794,22 +939,28 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
 
     let new_path = path_parts.join(";");
 
-    // Pass the new PATH value out-of-band via an environment variable.
+    // Decide the registry kind: if the raw value contained %VAR% tokens or was
+    // already REG_EXPAND_SZ, keep ExpandString; otherwise keep String.
+    let reg_kind = decide_reg_kind(&raw_path, existing_is_expand);
+
+    // Write the new PATH back, preserving the original (or defaulted) registry
+    // type. Value and type are passed out-of-band — never interpolated.
     let set_path_output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')",
+            WRITE_RAW_PATH_SCRIPT,
         ])
         .env("FDEMON_NEW_PATH", &new_path)
+        .env("FDEMON_PATH_KIND", reg_kind.powershell_property_type())
         .output()
         .map_err(|e| Error::config(format!("Failed to run PowerShell to set PATH: {}", e)))?;
 
     if !set_path_output.status.success() {
         let stderr = String::from_utf8_lossy(&set_path_output.stderr);
         return Err(Error::config(format!(
-            "PowerShell SetEnvironmentVariable(PATH) failed: {}",
+            "PowerShell New-ItemProperty (PATH) failed: {}",
             stderr.trim()
         )));
     }
@@ -1349,15 +1500,208 @@ mod tests {
 
     // ── Windows PATH string/command construction tests (cross-platform) ───────
 
-    /// Verify that the Windows PowerShell set command uses the env-var reference
+    // ── plan_windows_path_update tests (pure, all platforms) ─────────────────
+
+    /// A `%VAR%`-bearing raw value must produce `ExpandString` kind.
+    #[test]
+    fn test_plan_windows_path_update_expand_sz_when_percent_tokens() {
+        let raw = r"%USERPROFILE%\bin;C:\Windows\System32";
+        let bin = r"C:\tools\flutter\bin";
+        let result = plan_windows_path_update(raw, false, bin);
+        let (new_val, kind) = result.expect("should need a write");
+        assert_eq!(kind, WindowsRegKind::ExpandString);
+        assert!(new_val.ends_with(bin));
+        assert!(new_val.contains(r"%USERPROFILE%\bin"));
+    }
+
+    /// An `existing_is_expand=true` flag must produce `ExpandString` even if the
+    /// raw value contains no `%` tokens.
+    #[test]
+    fn test_plan_windows_path_update_expand_sz_from_existing_flag() {
+        let raw = r"C:\Windows\System32";
+        let bin = r"C:\tools\flutter\bin";
+        let result = plan_windows_path_update(raw, true, bin);
+        let (_, kind) = result.expect("should need a write");
+        assert_eq!(kind, WindowsRegKind::ExpandString);
+    }
+
+    /// A plain value with `existing_is_expand=false` must produce `String` kind.
+    #[test]
+    fn test_plan_windows_path_update_string_when_plain_value() {
+        let raw = r"C:\Windows\System32;C:\Program Files\Git\bin";
+        let bin = r"C:\tools\flutter\bin";
+        let result = plan_windows_path_update(raw, false, bin);
+        let (new_val, kind) = result.expect("should need a write");
+        assert_eq!(kind, WindowsRegKind::String);
+        assert!(new_val.ends_with(bin));
+    }
+
+    /// Empty/absent PATH (empty string) must produce `ExpandString` (safe default).
+    #[test]
+    fn test_plan_windows_path_update_empty_path_defaults_to_expand_string() {
+        let bin = r"C:\tools\flutter\bin";
+        let result = plan_windows_path_update("", false, bin);
+        let (new_val, kind) = result.expect("should need a write");
+        assert_eq!(kind, WindowsRegKind::ExpandString);
+        assert_eq!(new_val, bin);
+    }
+
+    /// Already-present entry (case-insensitive) must return `None`.
+    #[test]
+    fn test_plan_windows_path_update_idempotent() {
+        let raw = r"C:\Windows\System32;C:\tools\flutter\bin";
+        let bin = r"C:\Tools\Flutter\Bin"; // different case
+        let result = plan_windows_path_update(raw, false, bin);
+        assert!(result.is_none(), "should detect already-present entry");
+    }
+
+    /// Trailing-semicolon raw value must not produce a double-semicolon.
+    #[test]
+    fn test_plan_windows_path_update_trailing_semicolon() {
+        let raw = r"C:\Windows\System32;";
+        let bin = r"C:\tools\flutter\bin";
+        let (new_val, _) = plan_windows_path_update(raw, false, bin).expect("should need a write");
+        assert_eq!(new_val, r"C:\Windows\System32;C:\tools\flutter\bin");
+        assert!(!new_val.contains(";;"), "no double semicolons");
+    }
+
+    /// `%VAR%` tokens in the raw value are preserved literally in the output.
+    #[test]
+    fn test_plan_windows_path_update_preserves_percent_tokens() {
+        let raw = r"%USERPROFILE%\bin;%JAVA_HOME%\bin";
+        let bin = r"C:\tools\flutter\bin";
+        let (new_val, kind) =
+            plan_windows_path_update(raw, false, bin).expect("should need a write");
+        assert_eq!(kind, WindowsRegKind::ExpandString);
+        // Raw tokens must be preserved verbatim in the output.
+        assert!(
+            new_val.contains(r"%USERPROFILE%\bin"),
+            "USERPROFILE token preserved"
+        );
+        assert!(
+            new_val.contains(r"%JAVA_HOME%\bin"),
+            "JAVA_HOME token preserved"
+        );
+        assert!(new_val.ends_with(bin));
+    }
+
+    /// `decide_reg_kind`: `%` in value → `ExpandString`.
+    #[test]
+    fn test_decide_reg_kind_percent_in_value() {
+        assert_eq!(
+            decide_reg_kind(r"%USERPROFILE%\bin", false),
+            WindowsRegKind::ExpandString
+        );
+    }
+
+    /// `decide_reg_kind`: `existing_is_expand=true` → `ExpandString`.
+    #[test]
+    fn test_decide_reg_kind_existing_flag() {
+        assert_eq!(
+            decide_reg_kind(r"C:\plain\path", true),
+            WindowsRegKind::ExpandString
+        );
+    }
+
+    /// `decide_reg_kind`: plain value, `existing_is_expand=false` → `String`.
+    #[test]
+    fn test_decide_reg_kind_plain_value() {
+        assert_eq!(
+            decide_reg_kind(r"C:\plain\path", false),
+            WindowsRegKind::String
+        );
+    }
+
+    /// `decide_reg_kind`: empty value, `existing_is_expand=false` → `String`.
+    /// Note: `plan_windows_path_update` overrides to `ExpandString` for new keys.
+    #[test]
+    fn test_decide_reg_kind_empty_no_flag_is_string() {
+        assert_eq!(decide_reg_kind("", false), WindowsRegKind::String);
+    }
+
+    /// The write script references `$env:FDEMON_NEW_PATH` and `$env:FDEMON_PATH_KIND`
+    /// out-of-band — no path value is interpolated into the script string.
+    #[test]
+    fn test_write_raw_path_script_uses_env_vars_not_interpolation() {
+        let script = WRITE_RAW_PATH_SCRIPT;
+        let tricky_path = "C:\\Users\\O'Brien\\flutter bin\\bin";
+
+        assert!(
+            !script.contains(tricky_path),
+            "script must not interpolate the path value"
+        );
+        assert!(
+            script.contains("$env:FDEMON_NEW_PATH"),
+            "script must reference FDEMON_NEW_PATH"
+        );
+        assert!(
+            script.contains("$env:FDEMON_PATH_KIND"),
+            "script must reference FDEMON_PATH_KIND"
+        );
+        assert!(
+            script.contains("New-ItemProperty"),
+            "script must use New-ItemProperty (not SetEnvironmentVariable)"
+        );
+    }
+
+    /// The read script uses `DoNotExpandEnvironmentNames` to get the raw value.
+    #[test]
+    fn test_read_raw_path_script_does_not_expand() {
+        let script = READ_RAW_PATH_SCRIPT;
+        assert!(
+            script.contains("DoNotExpandEnvironmentNames"),
+            "read script must use DoNotExpandEnvironmentNames"
+        );
+        assert!(
+            !script.contains("GetEnvironmentVariable"),
+            "read script must not use the expanding GetEnvironmentVariable"
+        );
+    }
+
+    /// The ANDROID_HOME write script uses `New-ItemProperty` with `String` type
+    /// and the out-of-band env var — not `SetEnvironmentVariable`.
+    #[test]
+    fn test_write_android_home_script_uses_env_var_not_interpolation() {
+        let script = WRITE_ANDROID_HOME_SCRIPT;
+        let tricky_sdk = "C:\\Users\\O'Brien\\android sdk";
+
+        assert!(
+            !script.contains(tricky_sdk),
+            "script must not interpolate the SDK root value"
+        );
+        assert!(
+            script.contains("$env:FDEMON_NEW_ANDROID_HOME"),
+            "script must reference FDEMON_NEW_ANDROID_HOME env var"
+        );
+        assert!(
+            script.contains("New-ItemProperty"),
+            "script must use New-ItemProperty"
+        );
+        assert!(
+            script.contains("String"),
+            "ANDROID_HOME must be written as REG_SZ (String)"
+        );
+    }
+
+    /// `WindowsRegKind::powershell_property_type` returns the correct strings.
+    #[test]
+    fn test_windows_reg_kind_property_type_strings() {
+        assert_eq!(WindowsRegKind::String.powershell_property_type(), "String");
+        assert_eq!(
+            WindowsRegKind::ExpandString.powershell_property_type(),
+            "ExpandString"
+        );
+    }
+
+    // ── Retained injection-safety shape tests (updated to use new scripts) ───
+
+    /// Verify that the Windows PATH write script uses the env-var reference
     /// form rather than interpolating the path into the script string.
-    /// This test validates the string we pass to powershell.args([...]) — it
-    /// must contain `$env:FDEMON_NEW_PATH` and must NOT contain the raw path.
+    /// Asserts against `WRITE_RAW_PATH_SCRIPT` — the actual constant shipped.
     #[test]
     fn test_windows_powershell_set_command_uses_env_var_not_interpolation() {
-        // The constant script string that must be passed to PowerShell.
-        let expected_script =
-            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+        // Assert against the shipped constant, not a re-typed snippet.
+        let script = WRITE_RAW_PATH_SCRIPT;
 
         // A path with a space and a single quote — the two characters that break
         // naïve PowerShell interpolation.
@@ -1365,13 +1709,13 @@ mod tests {
 
         // The script must NOT contain the raw path value.
         assert!(
-            !expected_script.contains(tricky_path),
+            !script.contains(tricky_path),
             "Script must not interpolate the path value"
         );
 
         // The script must reference the env var.
         assert!(
-            expected_script.contains("$env:FDEMON_NEW_PATH"),
+            script.contains("$env:FDEMON_NEW_PATH"),
             "Script must reference FDEMON_NEW_PATH env var"
         );
     }
@@ -1381,11 +1725,13 @@ mod tests {
         let current = "C:\\Windows\\System32;C:\\Program Files\\Git\\bin";
         let bin_str = "C:\\tools\\flutter\\bin";
 
-        let new_path = format!("{};{}", current, bin_str);
+        // Use plan_windows_path_update to validate the new-path logic.
+        let (new_path, _) =
+            plan_windows_path_update(current, false, bin_str).expect("should need a write");
         assert!(new_path.ends_with(bin_str));
         assert!(new_path.contains(';'));
         // Confirm value would be passed as env var, not interpolated into script.
-        let script = "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+        let script = WRITE_RAW_PATH_SCRIPT;
         assert!(!script.contains(bin_str));
         assert!(script.contains("$env:FDEMON_NEW_PATH"));
     }
@@ -1397,46 +1743,34 @@ mod tests {
         let current = "C:\\Windows\\System32";
         let bin_str = "C:\\Users\\O'Brien\\flutter bin\\bin";
 
-        let new_path = format!("{};{}", current, bin_str);
+        let (new_path, _) =
+            plan_windows_path_update(current, false, bin_str).expect("should need a write");
 
         // The path is assembled correctly.
         assert!(new_path.contains("O'Brien"));
         assert!(new_path.contains("flutter bin"));
 
         // The value goes in the env var, never in the script.
-        let script = "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
+        let script = WRITE_RAW_PATH_SCRIPT;
         assert!(!script.contains(bin_str));
     }
 
     #[test]
     fn test_windows_empty_current_path() {
-        let current_path = "";
         let bin_str = "C:\\tools\\flutter\\bin";
-
-        let new_path = if current_path.is_empty() {
-            bin_str.to_string()
-        } else if current_path.ends_with(';') {
-            format!("{}{}", current_path, bin_str)
-        } else {
-            format!("{};{}", current_path, bin_str)
-        };
-
+        let (new_path, kind) =
+            plan_windows_path_update("", false, bin_str).expect("empty path must need a write");
         assert_eq!(new_path, bin_str);
+        // Empty path → defaults to ExpandString.
+        assert_eq!(kind, WindowsRegKind::ExpandString);
     }
 
     #[test]
     fn test_windows_path_trailing_semicolon() {
         let current_path = "C:\\Windows\\System32;";
         let bin_str = "C:\\tools\\flutter\\bin";
-
-        let new_path = if current_path.is_empty() {
-            bin_str.to_string()
-        } else if current_path.ends_with(';') {
-            format!("{}{}", current_path, bin_str)
-        } else {
-            format!("{};{}", current_path, bin_str)
-        };
-
+        let (new_path, _) =
+            plan_windows_path_update(current_path, false, bin_str).expect("should need a write");
         assert_eq!(new_path, "C:\\Windows\\System32;C:\\tools\\flutter\\bin");
     }
 
@@ -1814,22 +2148,27 @@ mod tests {
         assert!(err_msg.contains("newline") || err_msg.contains("injection"));
     }
 
-    /// Verify that the Windows PowerShell script for setting ANDROID_HOME uses
-    /// the env-var out-of-band form and never interpolates the SDK root.
+    /// Verify that the Windows script for writing ANDROID_HOME uses
+    /// `New-ItemProperty` with the env-var out-of-band form and never interpolates
+    /// the SDK root. Asserts against `WRITE_ANDROID_HOME_SCRIPT` — the constant
+    /// shipped to production — so any drift is caught on Linux CI.
     #[test]
     fn test_windows_android_home_script_uses_env_var() {
-        let expected_script =
-            "[Environment]::SetEnvironmentVariable('ANDROID_HOME', $env:FDEMON_NEW_ANDROID_HOME, 'User')";
-
+        // Assert against the shipped constant, not a re-typed snippet.
+        let script = WRITE_ANDROID_HOME_SCRIPT;
         let tricky_sdk = "C:\\Users\\O'Brien\\android sdk";
 
         assert!(
-            !expected_script.contains(tricky_sdk),
+            !script.contains(tricky_sdk),
             "Script must not interpolate the SDK root value"
         );
         assert!(
-            expected_script.contains("$env:FDEMON_NEW_ANDROID_HOME"),
+            script.contains("$env:FDEMON_NEW_ANDROID_HOME"),
             "Script must reference FDEMON_NEW_ANDROID_HOME env var"
+        );
+        assert!(
+            script.contains("New-ItemProperty"),
+            "Script must use New-ItemProperty"
         );
     }
 
@@ -1943,20 +2282,23 @@ mod tests {
         );
     }
 
-    /// After a Windows PATH write, the set command references `$env:FDEMON_NEW_PATH`
+    /// After a Windows PATH write, the set script references `$env:FDEMON_NEW_PATH`
     /// out-of-band, and the broadcast does not re-introduce any path interpolation.
     ///
-    /// Asserts against `BROADCAST_WM_SETTINGCHANGE_SCRIPT` — the actual constant
-    /// shipped to production — so any accidental drift is caught on Linux CI.
+    /// Asserts against `WRITE_RAW_PATH_SCRIPT` and `BROADCAST_WM_SETTINGCHANGE_SCRIPT`
+    /// — the actual constants shipped to production — so any accidental drift is
+    /// caught on Linux CI.
     #[test]
     fn windows_path_set_and_broadcast_both_use_out_of_band_values() {
-        let set_script =
-            "[Environment]::SetEnvironmentVariable('PATH', $env:FDEMON_NEW_PATH, 'User')";
-        // Assert against the shared constant, not a re-typed snippet.
+        // Assert against the shipped constants, not re-typed snippets.
+        let set_script = WRITE_RAW_PATH_SCRIPT;
         let broadcast_script = BROADCAST_WM_SETTINGCHANGE_SCRIPT;
 
         // The set script must use the env-var reference form (out-of-band).
-        assert!(set_script.contains("$env:FDEMON_NEW_PATH"));
+        assert!(
+            set_script.contains("$env:FDEMON_NEW_PATH"),
+            "write script must reference FDEMON_NEW_PATH"
+        );
         // The broadcast lParam is the literal word "Environment" — not any path.
         assert!(
             broadcast_script.contains("\"Environment\""),
