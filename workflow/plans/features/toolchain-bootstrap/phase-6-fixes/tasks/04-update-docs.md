@@ -61,3 +61,27 @@ Update the existing toolchain / install-wizard entries to describe:
 - `CONFIGURATION.md` and `KEYBINDINGS.md` are intentionally **not** touched — Phase 6
   adds no config keys and no keybindings.
 - Keep the edits surgical; these are amendments to existing entries.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Four Phase 6 amendments: (1) install_wizard/mod.rs + step_detail.rs + doctor_view.rs layout/wrapping constants; (2) install_wizard/state.rs jdk_guided_command dispatch + linux_package_name filtered prerequisite commands; (3) toolchain/checks/ GLU + libstdc++ probes; (4) toolchain/path_config.rs emulator PATH entry + resolve_android_sdk_root_path fallback in PathConfig executor |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Wording verified against merged source**: All four entries were verified against the actual merged source files (`step_detail.rs`, `doctor_view.rs`, `mod.rs`, `state.rs`, `prerequisites.rs`, `path_config.rs`, `actions.rs`) rather than relying solely on the task description.
+2. **Project Structure tree vs Module Reference**: Detail-pane wrapping lives in both the Project Structure tree comment (terse) and the Module Reference widget table (not updated — the tree comment is the appropriate location for file-level design notes in the `fdemon-tui` section).
+3. **emulator ordering**: Confirmed the fence block writes paths in order `cmdline-tools/latest/bin`, `platform-tools`, `emulator` — all three listed in the ARCHITECTURE entry to match the actual output.

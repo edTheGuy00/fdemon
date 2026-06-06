@@ -75,10 +75,16 @@ All three implementation tasks are file-disjoint → safe to run in parallel wor
 
 | # | Task | Status | Depends On | Agent | Est. Hours | Modules |
 |---|------|--------|------------|-------|------------|---------|
-| 01 | [01-detail-pane-layout-wrapping](tasks/01-detail-pane-layout-wrapping.md) | ⬜ Todo | - | implementor | 4–6h | `widgets/install_wizard/{mod,step_detail,doctor_view}.rs` |
-| 02 | [02-os-accurate-filtered-commands](tasks/02-os-accurate-filtered-commands.md) | ⬜ Todo | - | implementor | 4–6h | `install_wizard/{state,types}.rs`, `toolchain/checks/prerequisites.rs` |
-| 03 | [03-android-home-path-fallback](tasks/03-android-home-path-fallback.md) | ⬜ Todo | - | implementor | 3–4h | `toolchain/path_config.rs`, `actions/mod.rs`, `handler/install_wizard/actions.rs` |
-| 04 | [04-update-docs](tasks/04-update-docs.md) | ⬜ Todo | 01,02,03 | doc_maintainer | 1–1.5h | `docs/ARCHITECTURE.md` |
+| 01 | [01-detail-pane-layout-wrapping](tasks/01-detail-pane-layout-wrapping.md) | ✅ Done | - | implementor | 4–6h | `widgets/install_wizard/{mod,step_detail,doctor_view}.rs` |
+| 02 | [02-os-accurate-filtered-commands](tasks/02-os-accurate-filtered-commands.md) | ✅ Done (concern) | - | implementor | 4–6h | `install_wizard/{state,types}.rs`, `toolchain/checks/prerequisites.rs` |
+| 03 | [03-android-home-path-fallback](tasks/03-android-home-path-fallback.md) | ✅ Done (concern) | - | implementor | 3–4h | `toolchain/path_config.rs`, `actions/mod.rs`, `handler/install_wizard/actions.rs` |
+| 04 | [04-update-docs](tasks/04-update-docs.md) | ✅ Done | 01,02,03 | doc_maintainer | 1–1.5h | `docs/ARCHITECTURE.md` |
+
+**Validation notes:**
+- Task 01 — PASS, all 5 acceptance criteria met.
+- Task 02 — CONCERN (non-breaking): `types.rs` test fixtures (~lines 179–186) still hardcode the old `sudo apt install openjdk-17-jdk` string rather than the new per-manager output. Assertions are loose (`contains("17")`/`is_some()`) so tests pass; functional criteria all met. Apt arm's JDK note mentions pacman as the alternative hint (cosmetic).
+- Task 03 — CONCERN (non-breaking): stale comment at `path_config.rs:776` ("Prepend the two bin dirs" — now three); `test_pathconfig_hints_when_android_sdk_root_absent` defensively gates its hint assertion behind `dispatched_sdk_root.is_none()` to stay robust on CI machines with an SDK at the platform default. Production code correct; all criteria met.
+- Integrated quality gate (combined 01+02+03): `cargo fmt --check`, `cargo check`, `cargo clippy -D warnings`, `cargo test --workspace` all PASS (0 failures).
 
 **Total Tasks:** 4
 **Estimated Hours:** 12–17.5 hours

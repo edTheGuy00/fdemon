@@ -137,3 +137,46 @@ case. These are independent test constructors — purely cosmetic, not load-bear
   tiny local `wrapped_height` helper over bumping the dependency in this task.
 - This task is the only writer of the three TUI wizard files — fully parallel with
   Tasks 02 and 03.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | `PANEL_HEIGHT_PERCENT` 70→85, `LEFT_PANE_PERCENT` 35→28, `MIN_RENDER_HEIGHT` 13→12, header constraint `Length(3)→Length(2)`, updated doc comments; added 3 new const-value tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | `Wrap` import; `render_component_row` now wrap-aware (returns height); added `wrapped_height` + `unicode_display_width` helpers; `command_block_height` accepts `width` for wrap-aware sizing; `guided_section_full_height` accepts `width`; `compute_guided_window` accepts `width`; `render_guided_commands` uses `wrapped_height` for cmd/note rows; cosmetic fixture `apt→pacman`; updated all test call-sites; 8 new tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/doctor_view.rs` | `Wrap` import; added local `wrapped_height` helper; `render_doctor_line` wrap-aware (returns height); `Widget::render` iterates with advancing `y`; 2 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`wrapped_height` helper instead of `Paragraph::line_count`**: `line_count` is behind `#[instability::unstable(feature = "rendered-line-info")]` in ratatui 0.30 and therefore inaccessible without opt-in. Implemented a local `wrapped_height` that uses Unicode display-width measurement (CJK/emoji = 2, control = 0, rest = 1) and ceil-divides by `width`. This is a standard and stable approach that handles all real-world install-wizard text correctly.
+
+2. **Item-based scroll model preserved**: wrapping makes one logical item occupy >1 row, but the existing component-list and doctor scroll use per-item offsets. As directed by the task, this was kept as-is — the per-item scroll model still works correctly; the visible-height hint written back to the handler will account for the fact that tall items reduce the number of items that fit.
+
+3. **`width=0` fallback in tests**: The `guided_section_full_height` and `compute_guided_window` unit tests that check exact row arithmetic pass `width=0` to use the pre-wrapping (1 row each) fallback, ensuring the arithmetic remains identical to the pre-wrapping implementation for short command strings.
+
+4. **Pre-existing flaky test**: `toolchain::jdk::tests::test_resolve_jdk_home_honors_java_home` in `fdemon-daemon` sets `JAVA_HOME` without test serialization and races with other tests in `--workspace` parallel runs. This pre-existing flakiness (noted in CLAUDE.md) is unrelated to this task's changes — the test passes cleanly when run in isolation.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-tui` — Passed (1476 tests)
+- `cargo test -p fdemon-daemon` — Passed (1071 tests)
+- `cargo test -p fdemon-app` — Passed (2849 tests)
+- `cargo test -p fdemon-core` — Passed (514 tests)
+- `cargo test -p flutter-demon` — Passed (all integration tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- New tests added: `test_panel_height_percent_is_85`, `test_left_pane_percent_is_28`, `test_min_render_height_is_12`, `test_long_guided_command_wraps_and_is_fully_visible`, `test_component_row_wraps_long_detail`, `test_doctor_lines_wrap_on_narrow_pane`, `test_doctor_view_long_line_wraps`, `test_wrapped_height_*` (4 unit tests each for both helpers) — all pass
+
+### Risks/Limitations
+
+1. **`wrapped_height` vs ratatui internals**: The helper correctly counts display widths and ceil-divides. For very short texts (≤ `width` chars) it always returns 1 — identical to ratatui. The main divergence is with multi-span lines where the copy-hint `"  [c] copy"` extends beyond the command text; since `wrapped_height` measures only the command text (as specified), the height estimate may be 1 row less than ratatui would render in edge cases. However since the rendered height is clamped to `remaining` rows, there is no overflow risk — worst case the copy hint is slightly truncated on a very narrow pane.
+
+2. **Scroll model accuracy**: With wrapping, component items may take >1 row, so the effective visible item count is somewhat overestimated by the item-based scroll. This is acceptable as the task explicitly directed keeping the item-based model.

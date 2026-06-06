@@ -136,3 +136,36 @@ actually do.
 - `adb` is in `platform-tools` (already on PATH); this task's PATH addition is
   specifically the `emulator` binary plus the `ANDROID_HOME`-out-of-band fallback.
 - File-disjoint from Tasks 01/02 — fully parallel.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Added `$ANDROID_HOME/emulator` to POSIX and fish Android PATH blocks; updated Windows `add_android_env_windows` to check/add all 3 dirs (cmdline-tools, platform-tools, emulator); updated module doc comment; updated existing golden tests to assert emulator present; added 3 new tests (idempotency-requires-three-dirs, prepend-order, changed-sdk-root-includes-emulator) |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `or_else(resolve_android_sdk_root_path(None) filtered by is_dir())` fallback before the `add_android_env` guard in the PathConfig executor; added 2 new async executor tests (writes-android-env-from-resolver-when-settings-none, skips-android-env-when-no-sdk-anywhere) |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Mirrored the resolver fallback at dispatch time so the ordering tip fires only when no Android SDK exists anywhere; updated `test_pathconfig_hints_when_android_sdk_root_absent` to clear env vars + be robust to platform defaults; added `test_pathconfig_no_hint_when_android_home_env_set_to_existing_dir` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Scope guard respected**: Did not persist the resolved `android_sdk_root` into `settings.toolchain.android_sdk_root` — the resolver is only called at use-time in both the executor and dispatch. This avoids changing the `PersistSettings` flow and `AlreadyPresent` semantics.
+2. **Windows emulator dir prepend order**: Reversed insertion order (`emulator` first, then `platform_tools`, then `cmdline_bin`) so the final PATH is `cmdline-tools → platform-tools → emulator ...`, matching the POSIX block ordering.
+3. **Idempotency preserved**: The Windows `AlreadyPresent` guard now requires all 3 dirs to be present; if only 2 were previously written, the function will update the PATH to add the missing `emulator` dir.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS (fixed 2 `useless_vec` lints)
+- `cargo test --workspace` — PASS (6862 tests across all crates, 0 failures)
+
+### Risks/Limitations
+
+1. **Non-existent emulator dir is harmless**: The `emulator/` dir may not exist for SDK-only installs; shells silently ignore non-existent PATH entries, so this is safe as documented.
+2. **Serial test env-var isolation**: The two new async tests in `actions/mod.rs` and the updated dispatch test in `actions.rs` use `#[serial_test::serial]` to prevent ANDROID_HOME races — consistent with existing pattern in the codebase.

@@ -171,3 +171,38 @@ made manager-parametric. Do not change production types.
   dependency.
 - Prefer pure, table-driven helpers for the key→package mapping and the
   manager→verb mapping so they unit-test without I/O.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a533c1e8383d3321b
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Bug 2: `jdk_guided_command` signature changed to take `&ToolchainReport`; per-manager JDK commands for all 6 Linux variants. Bug 3: Linux prereq branch replaced with `parse_missing_prereq_keys`-filtered command via `linux_package_name` table and `linux_install_verb` helper. Added ~35 new tests; updated 3 existing tests to use proper `missing:` detail strings. |
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | Added `PREREQ_KEY_GLU` and `PREREQ_KEY_LIBSTDCPP` consts; added GLU pkg-config probe and libstdc++ compiler-presence heuristic to `check_linux_prerequisites`; concurrent GLU+GTK probe via `tokio::join!`; updated `build_linux_check_from_missing` as a wrapper; added `build_linux_check_from_missing_full` and `build_linux_check_from_candidates` test helpers; ~40 new tests. |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Re-export `PREREQ_KEY_GLU` and `PREREQ_KEY_LIBSTDCPP`. |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Re-export `PREREQ_KEY_GLU` and `PREREQ_KEY_LIBSTDCPP`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **libstdc++ heuristic**: Presence inferred from C++ compiler on PATH (clang or g++), consistent with task spec. Since `clang` is in `LINUX_REQUIRED_TOOLS`, the Partial path for `libstdc++` is effectively only reachable via `build_linux_check_from_missing_full`; in the live probe, clang absent → Missing status (with libstdc++ in the binary-missing list). Tests reflect actual behavior.
+2. **`build_linux_check_from_missing` backward compatibility**: Kept the 2-arg signature as a wrapper delegating to `build_linux_check_from_missing_full` (glu=present, cpp=present defaults), so all existing tests continue to pass without modification.
+3. **`linux_package_name` table**: Pure `const TABLE` approach with `(key, apt, dnf_yum, pacman, zypper)` columns; dnf and yum share package names per spec. Returns `None` for unknown keys — callers filter them out.
+4. **Pre-existing flaky test**: `jdk::tests::test_resolve_jdk_home_honors_java_home` fails intermittently when run in parallel with other tests that mutate `JAVA_HOME`. This is unrelated to the changes; runs fine in isolation and with `--test-threads=1`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace --lib -- --test-threads=1` — Passed (0 failures across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **libstdc++ Partial path**: Unreachable from the live `check_linux_prerequisites` (clang absent → Missing, not Partial). If a future distro ships clang but not libstdc++ separately, the probe would incorrectly report Ok. Documented as acceptable per task spec ("if this proves noisy, fall back to always-included base package").
+2. **GLU package names**: `Mesa-libGLU1` for zypper and `glu` for pacman are best-effort; consult distro docs if not found (noted in the generated command's note field).
