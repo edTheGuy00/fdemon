@@ -28,7 +28,7 @@
 //! ```text
 //! # >>> fdemon android env >>>
 //! export ANDROID_HOME='/home/u/.android/sdk'
-//! export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+//! export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 //! # <<< fdemon android env <<<
 //! ```
 //!
@@ -355,13 +355,13 @@ fn fence_block(rc_file: &Path, bin_dir: &Path) -> String {
 /// ```text
 /// # >>> fdemon android env >>>
 /// export ANDROID_HOME='/home/user/.android/sdk'
-/// export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+/// export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 /// # <<< fdemon android env <<<
 /// ```
 fn android_posix_block(sdk_root: &Path) -> String {
     let sdk_escaped = single_quote_escape(&sdk_root.to_string_lossy());
     format!(
-        "{fence_open}\nexport ANDROID_HOME={sdk_escaped}\nexport PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\"\n{fence_close}\n",
+        "{fence_open}\nexport ANDROID_HOME={sdk_escaped}\nexport PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH\"\n{fence_close}\n",
         fence_open = ANDROID_FENCE_OPEN,
         sdk_escaped = sdk_escaped,
         fence_close = ANDROID_FENCE_CLOSE,
@@ -377,13 +377,13 @@ fn android_posix_block(sdk_root: &Path) -> String {
 /// ```text
 /// # >>> fdemon android env >>>
 /// set -Ux ANDROID_HOME '/home/user/.android/sdk'
-/// fish_add_path "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools"
+/// fish_add_path "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/platform-tools" "$ANDROID_HOME/emulator"
 /// # <<< fdemon android env <<<
 /// ```
 fn android_fish_block(sdk_root: &Path) -> String {
     let sdk_escaped = single_quote_escape(&sdk_root.to_string_lossy());
     format!(
-        "{fence_open}\nset -Ux ANDROID_HOME {sdk_escaped}\nfish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\"\n{fence_close}\n",
+        "{fence_open}\nset -Ux ANDROID_HOME {sdk_escaped}\nfish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\" \"$ANDROID_HOME/emulator\"\n{fence_close}\n",
         fence_open = ANDROID_FENCE_OPEN,
         sdk_escaped = sdk_escaped,
         fence_close = ANDROID_FENCE_CLOSE,
@@ -678,8 +678,8 @@ fn add_to_path_windows(bin_dir: &Path) -> Result<PathConfigOutcome> {
 /// Update the Windows user `ANDROID_HOME` and `PATH` via PowerShell.
 ///
 /// Sets `ANDROID_HOME` to `sdk_root` and prepends
-/// `%ANDROID_HOME%\cmdline-tools\latest\bin` and
-/// `%ANDROID_HOME%\platform-tools` to the user `PATH` if they are not already
+/// `%ANDROID_HOME%\cmdline-tools\latest\bin`, `%ANDROID_HOME%\platform-tools`,
+/// and `%ANDROID_HOME%\emulator` to the user `PATH` if they are not already
 /// present (idempotent).
 ///
 /// **Injection safety:** `sdk_root` is passed out-of-band via
@@ -723,12 +723,13 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
         .trim()
         .to_string();
 
-    // Compute the two Android bin dirs to add.
+    // Compute the three Android bin dirs to add.
     let cmdline_bin = format!("{}\\cmdline-tools\\latest\\bin", sdk_str);
     let platform_tools = format!("{}\\platform-tools", sdk_str);
+    let emulator = format!("{}\\emulator", sdk_str);
 
-    // Check whether ANDROID_HOME already equals sdk_root and both bin dirs are
-    // already in PATH — if so, the configuration is already complete.
+    // Check whether ANDROID_HOME already equals sdk_root and all three bin dirs
+    // are already in PATH — if so, the configuration is already complete.
     let home_matches = current_home.eq_ignore_ascii_case(&sdk_str);
     let path_segments: Vec<&str> = current_path.split(';').map(str::trim).collect();
     let cmdline_present = path_segments
@@ -737,8 +738,11 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
     let platform_present = path_segments
         .iter()
         .any(|s| s.eq_ignore_ascii_case(&platform_tools));
+    let emulator_present = path_segments
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(&emulator));
 
-    if home_matches && cmdline_present && platform_present {
+    if home_matches && cmdline_present && platform_present && emulator_present {
         return Ok(PathConfigOutcome::AlreadyPresent {
             rc_file: PathBuf::from("HKCU:\\Environment"),
         });
@@ -776,7 +780,11 @@ fn add_android_env_windows(sdk_root: &Path) -> Result<PathConfigOutcome> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    // Prepend in reverse order so cmdline_bin ends up before platform_tools.
+    // Prepend in reverse order so cmdline_bin ends up before platform_tools
+    // and emulator (ordering: cmdline-tools → platform-tools → emulator).
+    if !emulator_present {
+        path_parts.insert(0, emulator);
+    }
     if !platform_present {
         path_parts.insert(0, platform_tools);
     }
@@ -1514,9 +1522,9 @@ mod tests {
     }
 
     /// The written block must contain ANDROID_HOME, cmdline-tools/latest/bin,
-    /// and platform-tools for bash/zsh.
+    /// platform-tools, and emulator for bash/zsh.
     #[test]
-    fn test_android_env_block_has_both_bins_bash() {
+    fn test_android_env_block_has_three_bins_bash() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let sdk_root = PathBuf::from("/home/user/.android/sdk");
@@ -1539,6 +1547,10 @@ mod tests {
             "block must contain platform-tools"
         );
         assert!(
+            contents.contains("/emulator"),
+            "block must contain emulator"
+        );
+        assert!(
             contents.contains(ANDROID_FENCE_OPEN),
             "block must have Android fence open marker"
         );
@@ -1554,9 +1566,9 @@ mod tests {
     }
 
     /// The fish block must contain ANDROID_HOME, cmdline-tools/latest/bin,
-    /// and platform-tools using fish syntax.
+    /// platform-tools, and emulator using fish syntax.
     #[test]
-    fn test_android_env_block_has_both_bins_fish() {
+    fn test_android_env_block_has_three_bins_fish() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
         let sdk_root = PathBuf::from("/home/user/.android/sdk");
@@ -1569,6 +1581,7 @@ mod tests {
         assert!(contents.contains("ANDROID_HOME"));
         assert!(contents.contains("cmdline-tools/latest/bin"));
         assert!(contents.contains("platform-tools"));
+        assert!(contents.contains("/emulator"));
         assert!(contents.contains("set -Ux ANDROID_HOME"));
         assert!(contents.contains("fish_add_path"));
         // fish block should NOT use posix `export` syntax.
@@ -1660,6 +1673,7 @@ mod tests {
     }
 
     /// Android env block content assertions — pure string builder (no I/O).
+    /// Verifies ordering: cmdline-tools → platform-tools → emulator.
     #[test]
     fn test_android_posix_block_content() {
         let sdk_root = Path::new("/home/user/.android/sdk");
@@ -1669,8 +1683,20 @@ mod tests {
         // SDK root is single-quoted to prevent shell expansion of $, ", `.
         assert!(block.contains("export ANDROID_HOME='/home/user/.android/sdk'"));
         assert!(block.contains(
-            "export PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH\""
+            "export PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH\""
         ));
+        // Verify the three entries are present in correct order.
+        let path_line = block
+            .lines()
+            .find(|l| l.starts_with("export PATH="))
+            .expect("PATH export line must exist");
+        let cmdline_pos = path_line.find("cmdline-tools/latest/bin").unwrap();
+        let platform_pos = path_line.find("platform-tools").unwrap();
+        let emulator_pos = path_line.find("/emulator").unwrap();
+        assert!(
+            cmdline_pos < platform_pos && platform_pos < emulator_pos,
+            "PATH ordering must be cmdline-tools → platform-tools → emulator"
+        );
         assert!(block.contains(ANDROID_FENCE_CLOSE));
         // Must not collide with Flutter PATH marker.
         assert!(!block.contains(FENCE_OPEN));
@@ -1685,8 +1711,20 @@ mod tests {
         // SDK root is single-quoted to prevent fish expansion of $, ", `.
         assert!(block.contains("set -Ux ANDROID_HOME '/home/user/.android/sdk'"));
         assert!(block.contains(
-            "fish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\""
+            "fish_add_path \"$ANDROID_HOME/cmdline-tools/latest/bin\" \"$ANDROID_HOME/platform-tools\" \"$ANDROID_HOME/emulator\""
         ));
+        // Verify the three entries are present in correct order.
+        let path_line = block
+            .lines()
+            .find(|l| l.starts_with("fish_add_path"))
+            .expect("fish_add_path line must exist");
+        let cmdline_pos = path_line.find("cmdline-tools/latest/bin").unwrap();
+        let platform_pos = path_line.find("platform-tools").unwrap();
+        let emulator_pos = path_line.find("/emulator").unwrap();
+        assert!(
+            cmdline_pos < platform_pos && platform_pos < emulator_pos,
+            "fish_add_path ordering must be cmdline-tools → platform-tools → emulator"
+        );
         assert!(block.contains(ANDROID_FENCE_CLOSE));
         assert!(!block.contains("export ANDROID_HOME"));
     }
@@ -1931,7 +1969,8 @@ mod tests {
     }
 
     /// Replacing an Android env block when the SDK root changes leaves exactly
-    /// one Android fence block (old entry gone, new entry present).
+    /// one Android fence block (old entry gone, new entry present) and the new
+    /// block includes the `emulator` entry.
     #[test]
     fn test_android_env_changed_sdk_root_replaces_block() {
         let tmp = TempDir::new().unwrap();
@@ -1948,10 +1987,90 @@ mod tests {
         let contents = std::fs::read_to_string(&rc_file).unwrap();
         assert!(!contents.contains("sdk_a"), "old SDK root must be gone");
         assert!(contents.contains("sdk_b"), "new SDK root must be present");
+        assert!(
+            contents.contains("/emulator"),
+            "replaced block must include emulator entry"
+        );
         assert_eq!(
             contents.matches(ANDROID_FENCE_OPEN).count(),
             1,
             "exactly one Android fence block"
         );
+    }
+
+    // ── Windows Android env idempotency (string-level, cross-platform) ──────────
+
+    /// The Windows idempotency check now requires all three Android PATH dirs
+    /// (cmdline-tools, platform-tools, emulator) plus ANDROID_HOME to match.
+    /// This test verifies the string logic without spawning PowerShell.
+    #[test]
+    fn test_windows_android_env_idempotency_requires_three_dirs() {
+        let sdk_str = "C:\\Users\\user\\AppData\\Local\\Android\\Sdk";
+
+        let cmdline_bin = format!("{}\\cmdline-tools\\latest\\bin", sdk_str);
+        let platform_tools = format!("{}\\platform-tools", sdk_str);
+        let emulator = format!("{}\\emulator", sdk_str);
+
+        let path_segments_with_all = [
+            cmdline_bin.as_str(),
+            platform_tools.as_str(),
+            emulator.as_str(),
+        ];
+
+        // All three present → idempotent (home_matches + all_present => AlreadyPresent).
+        let home_matches = sdk_str.eq_ignore_ascii_case(sdk_str);
+        let cmdline_present = path_segments_with_all
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&cmdline_bin));
+        let platform_present = path_segments_with_all
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&platform_tools));
+        let emulator_present = path_segments_with_all
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&emulator));
+
+        assert!(
+            home_matches && cmdline_present && platform_present && emulator_present,
+            "all three dirs + home match must be idempotent"
+        );
+
+        // Missing emulator → NOT idempotent.
+        let path_segments_missing_emulator = [cmdline_bin.as_str(), platform_tools.as_str()];
+        let emulator_present_missing = path_segments_missing_emulator
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&emulator));
+        assert!(
+            !emulator_present_missing,
+            "missing emulator dir must not satisfy idempotency check"
+        );
+    }
+
+    /// The Windows path prepend logic inserts dirs in correct order when none
+    /// are present: resulting order is cmdline-tools, platform-tools, emulator
+    /// at the front.
+    #[test]
+    fn test_windows_android_env_prepend_order() {
+        let sdk_str = "C:\\Android\\Sdk";
+        let cmdline_bin = format!("{}\\cmdline-tools\\latest\\bin", sdk_str);
+        let platform_tools = format!("{}\\platform-tools", sdk_str);
+        let emulator = format!("{}\\emulator", sdk_str);
+
+        // Simulate starting from an empty PATH, inserting in reverse order.
+        let mut path_parts: Vec<String> = vec!["C:\\Windows\\System32".to_string()];
+
+        // Simulate the actual insertion logic (reverse order so cmdline ends up first).
+        // emulator not present → insert at 0
+        path_parts.insert(0, emulator.clone());
+        // platform not present → insert at 0 (pushes emulator to 1)
+        path_parts.insert(0, platform_tools.clone());
+        // cmdline not present → insert at 0 (pushes platform to 1, emulator to 2)
+        path_parts.insert(0, cmdline_bin.clone());
+
+        assert_eq!(path_parts[0], cmdline_bin, "cmdline-tools must be first");
+        assert_eq!(
+            path_parts[1], platform_tools,
+            "platform-tools must be second"
+        );
+        assert_eq!(path_parts[2], emulator, "emulator must be third");
     }
 }

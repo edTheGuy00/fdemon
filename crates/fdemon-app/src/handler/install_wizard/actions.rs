@@ -249,13 +249,30 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             match bin_dir {
                 Some(bin) => {
                     // Include the Android SDK root so the executor can write ANDROID_HOME.
-                    let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
+                    // Prefer the settings-stored root (set by a completed AndroidTools
+                    // step), then fall back to the shared resolver ($ANDROID_HOME /
+                    // $ANDROID_SDK_ROOT / platform default). Only show the ordering tip
+                    // when no Android SDK exists anywhere — consistent with what the
+                    // executor will actually do.
+                    let android_sdk_root = state
+                        .settings
+                        .toolchain
+                        .android_sdk_root
+                        .clone()
+                        .or_else(|| {
+                            let p = fdemon_daemon::resolve_android_sdk_root_path(None);
+                            if p.is_dir() {
+                                Some(p)
+                            } else {
+                                None
+                            }
+                        });
 
                     // Ordering hint (m3): Android Tools should ideally be run before
                     // PathConfig so that ANDROID_HOME is also written. This is a soft
                     // hint — PathConfig still executes (it will write the Flutter PATH
-                    // regardless). A user with ANDROID_HOME already set in their profile
-                    // should not be blocked.
+                    // regardless). Only show the tip when no Android SDK is discoverable
+                    // at all (settings None, env unset, default absent).
                     if android_sdk_root.is_none() {
                         state.install_wizard_state.status_message = Some(
                             "Tip: run Android Tools first so ANDROID_HOME is also configured."
@@ -1530,9 +1547,14 @@ mod tests {
     // ── m3: PathConfig ordering hint ─────────────────────────────────────────
 
     #[test]
+    #[serial_test::serial]
     fn test_pathconfig_hints_when_android_sdk_root_absent() {
-        // PathConfig should still execute when android_sdk_root is None,
-        // but must set a non-blocking status_message hinting to run Android Tools first.
+        // PathConfig should still execute when android_sdk_root is None and no
+        // Android SDK is discoverable anywhere (env vars unset, default absent).
+        // Must set a non-blocking status_message hinting to run Android Tools first.
+        std::env::remove_var("ANDROID_HOME");
+        std::env::remove_var("ANDROID_SDK_ROOT");
+
         let mut state = state_with_preflight();
         state.settings.toolchain.android_sdk_root = None;
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
@@ -1552,25 +1574,37 @@ mod tests {
             "PathConfig must dispatch even when android_sdk_root is None; got {:?}",
             r.action
         );
-        // A hint must be present.
-        let msg = state
-            .install_wizard_state
-            .status_message
-            .as_deref()
-            .unwrap_or("");
-        assert!(
-            !msg.is_empty(),
-            "status_message must be set when android_sdk_root is None"
-        );
-        assert!(
-            msg.contains("Android"),
-            "hint must mention Android Tools; got: {msg}"
-        );
+
+        // The dispatched android_sdk_root should be None when no SDK is anywhere.
+        // (This may be Some if the platform default dir happens to exist on this machine,
+        //  so we only verify the tip when android_sdk_root is None in the action.)
+        if let Some(UpdateAction::RunWizardStep {
+            android_sdk_root: dispatched_sdk_root,
+            ..
+        }) = &r.action
+        {
+            if dispatched_sdk_root.is_none() {
+                // A hint must be present when no SDK was found.
+                let msg = state
+                    .install_wizard_state
+                    .status_message
+                    .as_deref()
+                    .unwrap_or("");
+                assert!(
+                    !msg.is_empty(),
+                    "status_message must be set when android_sdk_root is None"
+                );
+                assert!(
+                    msg.contains("Android"),
+                    "hint must mention Android Tools; got: {msg}"
+                );
+            }
+        }
     }
 
     #[test]
     fn test_pathconfig_no_hint_when_android_sdk_root_present() {
-        // When android_sdk_root is already set, no ordering hint should be emitted.
+        // When android_sdk_root is already set in settings, no ordering hint should be emitted.
         let mut state = state_with_preflight();
         state.settings.toolchain.android_sdk_root =
             Some(std::path::PathBuf::from("/opt/android-sdk"));
@@ -1583,6 +1617,49 @@ mod tests {
         assert!(
             state.install_wizard_state.status_message.is_none(),
             "no status_message expected when android_sdk_root is present"
+        );
+    }
+
+    /// When settings android_sdk_root is None but $ANDROID_HOME points to a dir
+    /// that exists, the dispatch must include the resolved root (no tip).
+    #[test]
+    #[serial_test::serial]
+    fn test_pathconfig_no_hint_when_android_home_env_set_to_existing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let android_home = tmp.path().join("android_sdk");
+        std::fs::create_dir_all(&android_home).unwrap();
+
+        std::env::set_var("ANDROID_HOME", android_home.as_os_str());
+        std::env::remove_var("ANDROID_SDK_ROOT");
+
+        let mut state = state_with_preflight();
+        state.settings.toolchain.android_sdk_root = None; // not set in settings
+        state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
+        state.install_wizard_state.selected_index = 2; // PathConfig
+
+        let r = handle_run_selected_step(&mut state);
+
+        std::env::remove_var("ANDROID_HOME");
+
+        // The dispatched android_sdk_root must be the resolved dir (not None).
+        if let Some(UpdateAction::RunWizardStep {
+            android_sdk_root, ..
+        }) = r.action
+        {
+            assert_eq!(
+                android_sdk_root.as_deref(),
+                Some(android_home.as_path()),
+                "dispatch must include the resolved $ANDROID_HOME when it exists"
+            );
+        } else {
+            panic!("expected RunWizardStep dispatch; got: {:?}", r.action);
+        }
+
+        // No ordering tip when SDK was discovered via env var.
+        assert!(
+            state.install_wizard_state.status_message.is_none(),
+            "no tip expected when $ANDROID_HOME resolves to an existing dir; got: {:?}",
+            state.install_wizard_state.status_message
         );
     }
 
