@@ -35,8 +35,8 @@ pub use android_install::{
 };
 pub use checks::{
     detect_linux_package_manager, parse_missing_prereq_keys, resolve_android_sdk_root_path,
-    LinuxPackageManager, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA,
-    PREREQ_KEY_XCODE_CLT,
+    LinuxPackageManager, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
+    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 pub use download::{download_to_file, extract_archive, extract_tar_xz, extract_zip, verify_sha256};
 pub use flutter_install::{

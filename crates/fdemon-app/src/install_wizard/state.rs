@@ -8,8 +8,8 @@ use std::cell::Cell;
 
 use fdemon_daemon::toolchain::{
     parse_missing_prereq_keys, ComponentCheck, ComponentKind, ComponentStatus, HostPlatform,
-    LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA,
-    PREREQ_KEY_XCODE_CLT,
+    LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
+    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -414,20 +414,157 @@ fn rollup_status(components: &[ComponentCheck]) -> StepStatus {
 /// to the user to copy/paste. Lives in app-land (display concern) rather than
 /// in the daemon's `jdk.rs` (which only handles `resolve_jdk_home` /
 /// `configure_flutter_jdk_dir`).
-fn jdk_guided_command(platform: HostPlatform) -> GuidedCommand {
-    let (command, note) = match platform {
-        HostPlatform::Linux => (
-            "sudo apt install openjdk-17-jdk",
-            Some("or: sudo dnf install java-17-openjdk-devel"),
-        ),
+///
+/// For Linux the correct install command is chosen from the pre-detected
+/// `report.linux_package_manager` so that the displayed command matches the
+/// user's actual package manager — not a hardcoded `apt` fallback.
+fn jdk_guided_command(report: &ToolchainReport) -> GuidedCommand {
+    let (command, note) = match report.platform {
+        HostPlatform::Linux => {
+            let pm = report
+                .linux_package_manager
+                .unwrap_or(LinuxPackageManager::Unknown);
+            match pm {
+                LinuxPackageManager::Apt => (
+                    "sudo apt install openjdk-17-jdk",
+                    Some("or: sudo pacman -S jdk17-openjdk"),
+                ),
+                LinuxPackageManager::Dnf => (
+                    "sudo dnf install java-17-openjdk-devel",
+                    Some("or: sudo apt install openjdk-17-jdk"),
+                ),
+                LinuxPackageManager::Yum => (
+                    "sudo yum install java-17-openjdk-devel",
+                    Some("or: sudo apt install openjdk-17-jdk"),
+                ),
+                LinuxPackageManager::Pacman => (
+                    "sudo pacman -S jdk17-openjdk",
+                    Some("or: sudo pacman -S jre17-openjdk (runtime only)"),
+                ),
+                LinuxPackageManager::Zypper => (
+                    "sudo zypper install java-17-openjdk-devel",
+                    Some("or: sudo apt install openjdk-17-jdk"),
+                ),
+                LinuxPackageManager::Unknown => ("Install JDK 17 from https://adoptium.net", None),
+            }
+        }
         HostPlatform::MacOs => ("brew install openjdk@17", None),
         HostPlatform::Windows => ("winget install --id EclipseAdoptium.Temurin.17.JDK", None),
-        HostPlatform::Unknown => ("Install a JDK 17 from https://adoptium.net", None),
+        HostPlatform::Unknown => ("Install JDK 17 from https://adoptium.net", None),
     };
     GuidedCommand {
         label: "Install JDK 17".into(),
         command: command.into(),
         note: note.map(Into::into),
+    }
+}
+
+/// Map a probe key (from `parse_missing_prereq_keys`) to the package name for
+/// the given Linux package manager.
+///
+/// Returns `None` for keys that have no known mapping — callers should filter
+/// those out rather than emitting an empty package name.
+///
+/// The mapping follows the table documented in the phase-6 task spec:
+///
+/// | key            | apt               | dnf/yum          | pacman   | zypper           |
+/// |----------------|-------------------|------------------|----------|------------------|
+/// | git            | git               | git              | git      | git              |
+/// | zip            | zip               | zip              | zip      | zip              |
+/// | curl           | curl              | curl             | curl     | curl             |
+/// | unzip          | unzip             | unzip            | unzip    | unzip            |
+/// | xz             | xz-utils          | xz               | xz       | xz               |
+/// | clang          | clang             | clang            | clang    | clang            |
+/// | cmake          | cmake             | cmake            | cmake    | cmake            |
+/// | ninja          | ninja-build       | ninja-build      | ninja    | ninja            |
+/// | pkg-config     | pkg-config        | pkgconf          | pkgconf  | pkg-config       |
+/// | libgtk-3-dev   | libgtk-3-dev      | gtk3-devel       | gtk3     | gtk3-devel       |
+/// | libglu1-mesa   | libglu1-mesa      | mesa-libGLU      | glu      | Mesa-libGLU1     |
+/// | libstdc++      | libstdc++-12-dev  | libstdc++-devel  | gcc      | libstdc++-devel  |
+pub(crate) fn linux_package_name(key: &str, pm: LinuxPackageManager) -> Option<&'static str> {
+    // Table: (key, apt, dnf, yum, pacman, zypper)
+    // dnf and yum share the same package names.
+    const TABLE: &[(&str, &str, &str, &str, &str)] = &[
+        //          key             apt                  dnf/yum              pacman     zypper
+        ("git", "git", "git", "git", "git"),
+        ("zip", "zip", "zip", "zip", "zip"),
+        ("curl", "curl", "curl", "curl", "curl"),
+        ("unzip", "unzip", "unzip", "unzip", "unzip"),
+        ("xz", "xz-utils", "xz", "xz", "xz"),
+        ("clang", "clang", "clang", "clang", "clang"),
+        ("cmake", "cmake", "cmake", "cmake", "cmake"),
+        ("ninja", "ninja-build", "ninja-build", "ninja", "ninja"),
+        (
+            "pkg-config",
+            "pkg-config",
+            "pkgconf",
+            "pkgconf",
+            "pkg-config",
+        ),
+        (
+            PREREQ_KEY_GTK_INTERNAL,
+            "libgtk-3-dev",
+            "gtk3-devel",
+            "gtk3",
+            "gtk3-devel",
+        ),
+        (
+            PREREQ_KEY_GLU,
+            "libglu1-mesa",
+            "mesa-libGLU",
+            "glu",
+            "Mesa-libGLU1",
+        ),
+        (
+            PREREQ_KEY_LIBSTDCPP,
+            "libstdc++-12-dev",
+            "libstdc++-devel",
+            "gcc",
+            "libstdc++-devel",
+        ),
+    ];
+
+    for (row_key, apt, dnf_yum, pacman, zypper) in TABLE {
+        if *row_key == key {
+            return Some(match pm {
+                LinuxPackageManager::Apt => apt,
+                LinuxPackageManager::Dnf | LinuxPackageManager::Yum => dnf_yum,
+                LinuxPackageManager::Pacman => pacman,
+                LinuxPackageManager::Zypper => zypper,
+                LinuxPackageManager::Unknown => return None,
+            });
+        }
+    }
+    None
+}
+
+/// The GTK dev-header key as it appears in the `missing:` detail on Linux.
+///
+/// The daemon encodes it as `"libgtk-3-dev"` (the apt package name).
+const PREREQ_KEY_GTK_INTERNAL: &str = "libgtk-3-dev";
+
+/// Return the install-command label and verb prefix for the given Linux package
+/// manager.
+///
+/// The returned prefix is the full `sudo <pm> install …` prefix without
+/// trailing space. Callers append `" <packages>"`.
+fn linux_install_verb(pm: LinuxPackageManager) -> (&'static str, &'static str) {
+    match pm {
+        LinuxPackageManager::Apt => (
+            "Install Linux prerequisites (apt)",
+            "sudo apt-get install -y",
+        ),
+        LinuxPackageManager::Dnf => ("Install Linux prerequisites (dnf)", "sudo dnf install -y"),
+        LinuxPackageManager::Yum => ("Install Linux prerequisites (yum)", "sudo yum install -y"),
+        LinuxPackageManager::Pacman => (
+            "Install Linux prerequisites (pacman)",
+            "sudo pacman -S --needed",
+        ),
+        LinuxPackageManager::Zypper => ("Install Linux prerequisites (zypper)", "sudo zypper in"),
+        LinuxPackageManager::Unknown => (
+            "Install Linux prerequisites",
+            "https://docs.flutter.dev/get-started/install/linux",
+        ),
     }
 }
 
@@ -482,42 +619,48 @@ fn prerequisites_guided_commands(
             let pm = report
                 .linux_package_manager
                 .unwrap_or(LinuxPackageManager::Unknown);
-            let (label, command, note): (&str, &str, Option<&str>) = match pm {
-                LinuxPackageManager::Apt => (
-                    "Install Linux prerequisites (apt)",
-                    "sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev",
-                    Some("or: sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel"),
-                ),
-                LinuxPackageManager::Dnf => (
-                    "Install Linux prerequisites (dnf)",
-                    "sudo dnf install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
-                    Some("Package names are best-effort; consult your distro docs if a package is not found. or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
-                ),
-                LinuxPackageManager::Yum => (
-                    "Install Linux prerequisites (yum)",
-                    "sudo yum install -y curl git unzip xz zip mesa-libGLU clang cmake ninja-build pkgconf gtk3-devel",
-                    Some("Package names are best-effort for RHEL7/CentOS7; consult your distro docs if a package is not found."),
-                ),
-                LinuxPackageManager::Pacman => (
-                    "Install Linux prerequisites (pacman)",
-                    "sudo pacman -S --needed curl git unzip xz zip glu clang cmake ninja pkgconf gtk3",
-                    Some("Package names are best-effort; consult your distro docs if a package is not found. or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
-                ),
-                LinuxPackageManager::Zypper => (
-                    "Install Linux prerequisites (zypper)",
-                    "sudo zypper in curl git unzip xz zip Mesa-libGLU1 clang gcc cmake ninja pkg-config gtk3-devel",
-                    Some("Package names are best-effort; consult your distro docs if a package is not found. or: sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev"),
-                ),
-                LinuxPackageManager::Unknown => (
-                    "Install Linux prerequisites",
-                    "https://docs.flutter.dev/get-started/install/linux",
-                    None,
-                ),
-            };
+
+            // Unknown manager: fall back to the Flutter docs URL.
+            if pm == LinuxPackageManager::Unknown {
+                return vec![GuidedCommand {
+                    label: "Install Linux prerequisites".into(),
+                    command: "https://docs.flutter.dev/get-started/install/linux".into(),
+                    note: None,
+                }];
+            }
+
+            // Extract only the keys that are actually missing from the
+            // Prerequisites component detail.  This mirrors the macOS/Windows
+            // arms and avoids listing already-installed packages.
+            let detail = components
+                .iter()
+                .find(|c| c.kind == ComponentKind::Prerequisites)
+                .map(|c| c.detail.as_str())
+                .unwrap_or("");
+            let missing_keys = parse_missing_prereq_keys(detail);
+
+            // If no missing keys are listed (all-Ok detail) return empty.
+            if missing_keys.is_empty() {
+                return Vec::new();
+            }
+
+            // Map each missing probe-key to the distro package name for this pm.
+            let packages: Vec<&str> = missing_keys
+                .iter()
+                .filter_map(|key| linux_package_name(key, pm))
+                .collect();
+
+            if packages.is_empty() {
+                return Vec::new();
+            }
+
+            let (label, install_prefix) = linux_install_verb(pm);
+            let command = format!("{} {}", install_prefix, packages.join(" "));
+
             vec![GuidedCommand {
                 label: label.into(),
-                command: command.into(),
-                note: note.map(Into::into),
+                command,
+                note: Some("Package names are best-effort; consult your distro docs if a package is not found.".into()),
             }]
         }
 
@@ -692,7 +835,7 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
     // - Jdk non-Ok    → actionable (show command + block executor)
     // - Jdk Ok        → not actionable (no command, executor allowed)
     let android_guided: Vec<GuidedCommand> = if is_jdk_actionable(&android_tools) {
-        vec![jdk_guided_command(report.platform.clone())]
+        vec![jdk_guided_command(report)]
     } else {
         Vec::new()
     };
@@ -1222,8 +1365,20 @@ mod tests {
     }
 
     #[test]
-    fn test_jdk_command_linux_contains_apt() {
-        let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+    fn test_jdk_command_linux_apt_uses_apt() {
+        // Verify the Apt arm specifically — inject Apt as the package manager.
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Jdk,
+                status: ComponentStatus::Missing,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Apt),
+            winget_available: false,
+        };
         let steps = build_steps(&report);
         let android = steps
             .iter()
@@ -1231,8 +1386,20 @@ mod tests {
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert_eq!(cmd.label, "Install JDK 17");
-        assert!(cmd.command.contains("apt"));
-        assert!(cmd.note.is_some(), "Linux should have an alternative note");
+        assert!(
+            cmd.command.contains("apt"),
+            "Apt manager must use apt; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.command.contains("openjdk-17-jdk"),
+            "Apt arm must install openjdk-17-jdk; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.note.is_some(),
+            "Apt arm should have an alternative note"
+        );
     }
 
     #[test]
@@ -1677,10 +1844,15 @@ mod tests {
 
     #[test]
     fn test_prereq_guided_linux_apt_returns_one_command() {
-        // Simulate: prerequisites partial (some missing) on Linux.
+        // Simulate: prerequisites partial (curl + git missing) on Linux.
         // Use the live-detected package manager to match the host environment.
         let pm = fdemon_daemon::toolchain::detect_linux_package_manager();
-        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+        // Provide a proper missing-key detail so the filter returns a non-empty list.
+        let detail = "missing: curl, git";
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Partial,
+            detail,
+        )];
         let report = ToolchainReport {
             platform: HostPlatform::Linux,
             shell: HostShell::Bash,
@@ -1690,13 +1862,13 @@ mod tests {
             winget_available: false,
         };
         let cmds = prerequisites_guided_commands(&report, &components);
+        // Unknown PM returns the docs URL (1 command), known PMs return install commands.
         assert_eq!(cmds.len(), 1, "Linux must return exactly one command");
         assert!(
             !cmds[0].command.is_empty(),
             "command must not be empty on Linux"
         );
-        // The command must mention common Flutter Linux prerequisites.
-        // We accept any package manager output here (CI may have any PM).
+        // The command must mention the missing packages or Flutter docs URL.
         assert!(
             cmds[0].command.contains("curl")
                 || cmds[0].command.contains("flutter")
@@ -1708,10 +1880,15 @@ mod tests {
 
     #[test]
     fn test_prereq_guided_linux_apt_command_content() {
-        // Test the apt command string directly by constructing the expected output.
+        // Test the command string by providing known-missing keys.
         // The report carries the pre-computed PM — no live detection inside the function.
         let pm = fdemon_daemon::toolchain::detect_linux_package_manager();
-        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+        // Detail with libgtk-3-dev missing so we can assert its package name.
+        let detail = "missing: curl, libgtk-3-dev";
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Partial,
+            detail,
+        )];
         let report = ToolchainReport {
             platform: HostPlatform::Linux,
             shell: HostShell::Bash,
@@ -1733,7 +1910,8 @@ mod tests {
                 );
                 assert!(
                     cmds[0].command.contains("libgtk-3-dev"),
-                    "apt command must include libgtk-3-dev"
+                    "apt command must include libgtk-3-dev; got: {}",
+                    cmds[0].command
                 );
                 assert!(
                     cmds[0].note.is_some(),
@@ -1760,7 +1938,7 @@ mod tests {
                 );
                 assert!(
                     !cmds[0].command.contains("dnf"),
-                    "yum arm must not invoke dnf (dnf is absent on yum-only systems); got: {}",
+                    "yum arm must not invoke dnf; got: {}",
                     cmds[0].command
                 );
                 assert!(
@@ -1799,7 +1977,13 @@ mod tests {
     /// This tests the pure dispatch logic without depending on the host environment.
     #[test]
     fn test_prereq_guided_linux_pm_dispatch_pure() {
-        let components = vec![make_prereq_check(ComponentStatus::Partial)];
+        // Use a detail with known missing keys so the filter is non-empty.
+        // libgtk-3-dev and curl are in the mapping table for all managers.
+        let detail = "missing: curl, libgtk-3-dev";
+        let components = vec![make_prereq_check_with_detail(
+            ComponentStatus::Partial,
+            detail,
+        )];
 
         // Test Apt arm
         let report_apt = ToolchainReport {
@@ -1814,11 +1998,13 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert!(
             cmds[0].command.contains("apt-get"),
-            "Apt arm must use apt-get"
+            "Apt arm must use apt-get; got: {}",
+            cmds[0].command
         );
         assert!(
             cmds[0].command.contains("libgtk-3-dev"),
-            "Apt arm must include libgtk-3-dev"
+            "Apt arm must include libgtk-3-dev; got: {}",
+            cmds[0].command
         );
         assert!(
             cmds[0].note.is_some(),
@@ -1836,7 +2022,16 @@ mod tests {
         };
         let cmds = prerequisites_guided_commands(&report_dnf, &components);
         assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].command.contains("dnf"), "Dnf arm must use dnf");
+        assert!(
+            cmds[0].command.contains("dnf"),
+            "Dnf arm must use dnf; got: {}",
+            cmds[0].command
+        );
+        assert!(
+            cmds[0].command.contains("gtk3-devel"),
+            "Dnf arm must map libgtk-3-dev → gtk3-devel; got: {}",
+            cmds[0].command
+        );
         {
             let note = cmds[0].note.as_deref().unwrap_or("");
             assert!(
@@ -1856,10 +2051,15 @@ mod tests {
         };
         let cmds = prerequisites_guided_commands(&report_yum, &components);
         assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].command.contains("yum"), "Yum arm must use yum");
+        assert!(
+            cmds[0].command.contains("yum"),
+            "Yum arm must use yum; got: {}",
+            cmds[0].command
+        );
         assert!(
             !cmds[0].command.contains("dnf"),
-            "Yum arm must not call dnf"
+            "Yum arm must not call dnf; got: {}",
+            cmds[0].command
         );
         assert!(cmds[0].note.is_some(), "Yum arm must have a caveat note");
 
@@ -1876,11 +2076,18 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert!(
             cmds[0].command.contains("pacman"),
-            "Pacman arm must use pacman"
+            "Pacman arm must use pacman; got: {}",
+            cmds[0].command
         );
         assert!(
             cmds[0].command.contains("--needed"),
-            "Pacman arm must use --needed"
+            "Pacman arm must use --needed; got: {}",
+            cmds[0].command
+        );
+        assert!(
+            cmds[0].command.contains("gtk3"),
+            "Pacman arm must map libgtk-3-dev → gtk3; got: {}",
+            cmds[0].command
         );
         {
             let note = cmds[0].note.as_deref().unwrap_or("");
@@ -1903,7 +2110,13 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert!(
             cmds[0].command.contains("zypper"),
-            "Zypper arm must use zypper"
+            "Zypper arm must use zypper; got: {}",
+            cmds[0].command
+        );
+        assert!(
+            cmds[0].command.contains("gtk3-devel"),
+            "Zypper arm must map libgtk-3-dev → gtk3-devel; got: {}",
+            cmds[0].command
         );
         {
             let note = cmds[0].note.as_deref().unwrap_or("");
@@ -1926,7 +2139,8 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert!(
             cmds[0].command.contains("https://"),
-            "Unknown PM arm must use docs URL"
+            "Unknown PM arm must use docs URL; got: {}",
+            cmds[0].command
         );
         assert!(cmds[0].note.is_none(), "Unknown PM arm must have no note");
     }
@@ -2412,5 +2626,499 @@ mod tests {
 
         s.begin_step(WizardStepKind::PathConfig);
         assert_eq!(s.run_seq, 2, "second begin_step bumps to 2");
+    }
+
+    // ── Bug 2: per-manager JDK guided command ─────────────────────────────────
+
+    /// Helper: build a report with JDK missing on Linux with a specific PM.
+    fn report_with_jdk_and_pm(pm: LinuxPackageManager) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::Jdk,
+                status: ComponentStatus::Missing,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: Some(pm),
+            winget_available: false,
+        }
+    }
+
+    #[test]
+    fn test_jdk_command_uses_pacman_on_arch() {
+        let report = report_with_jdk_and_pm(LinuxPackageManager::Pacman);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert_eq!(cmd.label, "Install JDK 17");
+        assert!(
+            cmd.command.contains("pacman"),
+            "Pacman arm must use pacman; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.command.contains("jdk17-openjdk"),
+            "Pacman arm must install jdk17-openjdk; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.note.is_some(),
+            "Pacman arm must have a note (jre alternative)"
+        );
+    }
+
+    #[test]
+    fn test_jdk_command_uses_dnf_on_fedora() {
+        let report = report_with_jdk_and_pm(LinuxPackageManager::Dnf);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert!(
+            cmd.command.contains("dnf"),
+            "Dnf arm must use dnf; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.command.contains("java-17-openjdk-devel"),
+            "Dnf arm must install java-17-openjdk-devel; got: {}",
+            cmd.command
+        );
+    }
+
+    #[test]
+    fn test_jdk_command_uses_yum_on_rhel7() {
+        let report = report_with_jdk_and_pm(LinuxPackageManager::Yum);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert!(
+            cmd.command.contains("yum"),
+            "Yum arm must use yum; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.command.contains("java-17-openjdk-devel"),
+            "Yum arm must install java-17-openjdk-devel; got: {}",
+            cmd.command
+        );
+        assert!(
+            !cmd.command.contains("dnf"),
+            "Yum arm must not use dnf; got: {}",
+            cmd.command
+        );
+    }
+
+    #[test]
+    fn test_jdk_command_uses_zypper_on_opensuse() {
+        let report = report_with_jdk_and_pm(LinuxPackageManager::Zypper);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert!(
+            cmd.command.contains("zypper"),
+            "Zypper arm must use zypper; got: {}",
+            cmd.command
+        );
+        assert!(
+            cmd.command.contains("java-17-openjdk-devel"),
+            "Zypper arm must install java-17-openjdk-devel; got: {}",
+            cmd.command
+        );
+    }
+
+    #[test]
+    fn test_jdk_command_linux_unknown_pm_uses_adoptium_url() {
+        let report = report_with_jdk_and_pm(LinuxPackageManager::Unknown);
+        let steps = build_steps(&report);
+        let android = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap();
+        let cmd = &android.guided_commands[0];
+        assert!(
+            cmd.command.contains("adoptium.net"),
+            "Unknown PM must fall back to adoptium URL; got: {}",
+            cmd.command
+        );
+        assert!(cmd.note.is_none(), "Unknown PM arm must have no note");
+    }
+
+    #[test]
+    fn test_jdk_command_macos_windows_unchanged() {
+        // macOS and Windows arms must not be affected by the Linux per-manager change.
+        let mac_report = report_with_jdk(ComponentStatus::Missing, HostPlatform::MacOs);
+        let steps = build_steps(&mac_report);
+        let cmd = &steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap()
+            .guided_commands[0];
+        assert!(
+            cmd.command.contains("brew"),
+            "macOS arm must still use brew; got: {}",
+            cmd.command
+        );
+
+        let win_report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Windows);
+        let steps = build_steps(&win_report);
+        let cmd = &steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .unwrap()
+            .guided_commands[0];
+        assert!(
+            cmd.command.contains("winget"),
+            "Windows arm must still use winget; got: {}",
+            cmd.command
+        );
+    }
+
+    // ── Bug 3: filtered Linux prerequisites command ───────────────────────────
+
+    fn make_linux_report_with_pm_and_detail(
+        pm: LinuxPackageManager,
+        detail: &str,
+        status: ComponentStatus,
+    ) -> (ToolchainReport, Vec<ComponentCheck>) {
+        let components = vec![ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status,
+            detail: detail.to_string(),
+        }];
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: components.clone(),
+            doctor: None,
+            linux_package_manager: Some(pm),
+            winget_available: false,
+        };
+        (report, components)
+    }
+
+    #[test]
+    fn test_linux_prereq_command_excludes_present_packages() {
+        // detail says only clang and cmake are missing; curl and git should NOT appear.
+        let (report, components) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Apt,
+            "missing: clang, cmake",
+            ComponentStatus::Partial,
+        );
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        let command = &cmds[0].command;
+        assert!(
+            command.contains("clang"),
+            "clang must be in command; got: {command}"
+        );
+        assert!(
+            command.contains("cmake"),
+            "cmake must be in command; got: {command}"
+        );
+        assert!(
+            !command.contains("curl"),
+            "curl must NOT be in command (it is present); got: {command}"
+        );
+        assert!(
+            !command.contains("git"),
+            "git must NOT be in command (it is present); got: {command}"
+        );
+    }
+
+    #[test]
+    fn test_linux_prereq_command_empty_when_all_present() {
+        // detail has no "missing:" prefix → all present → empty commands.
+        let (report, components) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Apt,
+            "All required Linux tools present",
+            ComponentStatus::Ok,
+        );
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert!(
+            cmds.is_empty(),
+            "must return Vec::new() when no packages are missing; got: {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn test_linux_prereq_package_names_mapped_per_manager_apt() {
+        let (report, components) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Apt,
+            "missing: ninja, pkg-config, libgtk-3-dev, libglu1-mesa, libstdc++",
+            ComponentStatus::Missing,
+        );
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        let command = &cmds[0].command;
+        assert!(
+            command.contains("ninja-build"),
+            "apt: ninja → ninja-build; got: {command}"
+        );
+        assert!(
+            command.contains("pkg-config"),
+            "apt: pkg-config stays; got: {command}"
+        );
+        assert!(
+            command.contains("libgtk-3-dev"),
+            "apt: gtk stays; got: {command}"
+        );
+        assert!(
+            command.contains("libglu1-mesa"),
+            "apt: glu stays; got: {command}"
+        );
+        assert!(
+            command.contains("libstdc++-12-dev"),
+            "apt: libstdc++ → libstdc++-12-dev; got: {command}"
+        );
+    }
+
+    #[test]
+    fn test_linux_prereq_package_names_mapped_per_manager_dnf() {
+        let (report, components) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Dnf,
+            "missing: ninja, pkg-config, libgtk-3-dev, libglu1-mesa, libstdc++",
+            ComponentStatus::Missing,
+        );
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        let command = &cmds[0].command;
+        assert!(
+            command.contains("ninja-build"),
+            "dnf: ninja → ninja-build; got: {command}"
+        );
+        assert!(
+            command.contains("pkgconf"),
+            "dnf: pkg-config → pkgconf; got: {command}"
+        );
+        assert!(
+            command.contains("gtk3-devel"),
+            "dnf: gtk → gtk3-devel; got: {command}"
+        );
+        assert!(
+            command.contains("mesa-libGLU"),
+            "dnf: glu → mesa-libGLU; got: {command}"
+        );
+        assert!(
+            command.contains("libstdc++-devel"),
+            "dnf: libstdc++ → libstdc++-devel; got: {command}"
+        );
+    }
+
+    #[test]
+    fn test_linux_prereq_package_names_mapped_per_manager_pacman() {
+        let (report, components) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Pacman,
+            "missing: ninja, pkg-config, libgtk-3-dev, libglu1-mesa, libstdc++",
+            ComponentStatus::Missing,
+        );
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        let command = &cmds[0].command;
+        assert!(
+            command.contains("ninja"),
+            "pacman: ninja stays; got: {command}"
+        );
+        // ninja-build must NOT appear (pacman uses 'ninja', not 'ninja-build')
+        assert!(
+            !command.contains("ninja-build"),
+            "pacman must not use ninja-build; got: {command}"
+        );
+        assert!(
+            command.contains("pkgconf"),
+            "pacman: pkg-config → pkgconf; got: {command}"
+        );
+        assert!(
+            command.contains("gtk3"),
+            "pacman: gtk → gtk3; got: {command}"
+        );
+        assert!(
+            command.contains("glu"),
+            "pacman: glu stays as glu; got: {command}"
+        );
+        assert!(
+            command.contains("gcc"),
+            "pacman: libstdc++ → gcc; got: {command}"
+        );
+    }
+
+    #[test]
+    fn test_linux_prereq_xz_mapped_correctly_per_manager() {
+        // xz maps to "xz-utils" on apt but "xz" on others.
+        let (report_apt, comps_apt) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Apt,
+            "missing: xz",
+            ComponentStatus::Partial,
+        );
+        let cmds = prerequisites_guided_commands(&report_apt, &comps_apt);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains("xz-utils"),
+            "apt: xz → xz-utils; got: {}",
+            cmds[0].command
+        );
+
+        let (report_pacman, comps_pacman) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Pacman,
+            "missing: xz",
+            ComponentStatus::Partial,
+        );
+        let cmds = prerequisites_guided_commands(&report_pacman, &comps_pacman);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].command.contains(" xz"),
+            "pacman: xz stays as xz; got: {}",
+            cmds[0].command
+        );
+        assert!(
+            !cmds[0].command.contains("xz-utils"),
+            "pacman must not use xz-utils; got: {}",
+            cmds[0].command
+        );
+    }
+
+    #[test]
+    fn test_linux_prereq_glu_and_libstdcpp_filtered_correctly() {
+        // Both GLU and libstdc++ missing: both must appear in the command.
+        let (report, components) = make_linux_report_with_pm_and_detail(
+            LinuxPackageManager::Apt,
+            "missing: libglu1-mesa, libstdc++",
+            ComponentStatus::Partial,
+        );
+        let cmds = prerequisites_guided_commands(&report, &components);
+        assert_eq!(cmds.len(), 1);
+        let command = &cmds[0].command;
+        assert!(
+            command.contains("libglu1-mesa"),
+            "libglu1-mesa must appear; got: {command}"
+        );
+        assert!(
+            command.contains("libstdc++-12-dev"),
+            "libstdc++ → libstdc++-12-dev must appear; got: {command}"
+        );
+        // curl and git are NOT in the missing list — must not appear.
+        assert!(
+            !command.contains("curl"),
+            "curl must not appear; got: {command}"
+        );
+        assert!(
+            !command.contains("git"),
+            "git must not appear; got: {command}"
+        );
+    }
+
+    // ── linux_package_name pure table tests ───────────────────────────────────
+
+    #[test]
+    fn test_linux_package_name_apt_mapping() {
+        assert_eq!(
+            linux_package_name("git", LinuxPackageManager::Apt),
+            Some("git")
+        );
+        assert_eq!(
+            linux_package_name("xz", LinuxPackageManager::Apt),
+            Some("xz-utils")
+        );
+        assert_eq!(
+            linux_package_name("ninja", LinuxPackageManager::Apt),
+            Some("ninja-build")
+        );
+        assert_eq!(
+            linux_package_name("pkg-config", LinuxPackageManager::Apt),
+            Some("pkg-config")
+        );
+        assert_eq!(
+            linux_package_name("libgtk-3-dev", LinuxPackageManager::Apt),
+            Some("libgtk-3-dev")
+        );
+        assert_eq!(
+            linux_package_name(PREREQ_KEY_GLU, LinuxPackageManager::Apt),
+            Some("libglu1-mesa")
+        );
+        assert_eq!(
+            linux_package_name(PREREQ_KEY_LIBSTDCPP, LinuxPackageManager::Apt),
+            Some("libstdc++-12-dev")
+        );
+    }
+
+    #[test]
+    fn test_linux_package_name_dnf_mapping() {
+        assert_eq!(
+            linux_package_name("xz", LinuxPackageManager::Dnf),
+            Some("xz")
+        );
+        assert_eq!(
+            linux_package_name("ninja", LinuxPackageManager::Dnf),
+            Some("ninja-build")
+        );
+        assert_eq!(
+            linux_package_name("pkg-config", LinuxPackageManager::Dnf),
+            Some("pkgconf")
+        );
+        assert_eq!(
+            linux_package_name("libgtk-3-dev", LinuxPackageManager::Dnf),
+            Some("gtk3-devel")
+        );
+        assert_eq!(
+            linux_package_name(PREREQ_KEY_GLU, LinuxPackageManager::Dnf),
+            Some("mesa-libGLU")
+        );
+        assert_eq!(
+            linux_package_name(PREREQ_KEY_LIBSTDCPP, LinuxPackageManager::Dnf),
+            Some("libstdc++-devel")
+        );
+    }
+
+    #[test]
+    fn test_linux_package_name_pacman_mapping() {
+        assert_eq!(
+            linux_package_name("xz", LinuxPackageManager::Pacman),
+            Some("xz")
+        );
+        assert_eq!(
+            linux_package_name("ninja", LinuxPackageManager::Pacman),
+            Some("ninja")
+        );
+        assert_eq!(
+            linux_package_name("pkg-config", LinuxPackageManager::Pacman),
+            Some("pkgconf")
+        );
+        assert_eq!(
+            linux_package_name("libgtk-3-dev", LinuxPackageManager::Pacman),
+            Some("gtk3")
+        );
+        assert_eq!(
+            linux_package_name(PREREQ_KEY_GLU, LinuxPackageManager::Pacman),
+            Some("glu")
+        );
+        assert_eq!(
+            linux_package_name(PREREQ_KEY_LIBSTDCPP, LinuxPackageManager::Pacman),
+            Some("gcc")
+        );
+    }
+
+    #[test]
+    fn test_linux_package_name_unknown_returns_none() {
+        assert_eq!(
+            linux_package_name("git", LinuxPackageManager::Unknown),
+            None
+        );
+        assert_eq!(
+            linux_package_name("unknown-pkg", LinuxPackageManager::Apt),
+            None
+        );
     }
 }

@@ -192,10 +192,19 @@ const LINUX_REQUIRED_TOOLS: &[&str] = &[
 
 /// Label used in the `detail` string for missing GTK dev-headers.
 const GTK_ITEM_LABEL: &str = "libgtk-3-dev";
+/// Key used in the `detail` string for missing GLU dev-headers.
+pub const PREREQ_KEY_GLU: &str = "libglu1-mesa";
+/// Key used in the `detail` string for missing C++ stdlib dev-headers.
+///
+/// Presence is inferred from C++ compiler availability: the dev-headers ship
+/// alongside the compiler on every supported distro, so if `clang` or `g++`
+/// is on PATH the package is treated as present.
+pub const PREREQ_KEY_LIBSTDCPP: &str = "libstdc++";
 
 async fn check_linux_prerequisites() -> ComponentCheck {
     let mut missing_binaries: Vec<String> = Vec::new();
     let mut pkg_config_found = false;
+    let mut cpp_compiler_found = false;
 
     // ── Binary probes (which::which) ─────────────────────────────────────────
     for tool in LINUX_REQUIRED_TOOLS {
@@ -211,7 +220,7 @@ async fn check_linux_prerequisites() -> ComponentCheck {
                 "pkg-config" => {
                     let alias_ok = which::which("pkgconf").is_ok();
                     if !alias_ok {
-                        // Neither pkg-config nor pkgconf found; GTK probe
+                        // Neither pkg-config nor pkgconf found; GTK/GLU probes
                         // cannot run, so track this separately.
                         missing_binaries.push(tool.to_string());
                         continue;
@@ -228,28 +237,50 @@ async fn check_linux_prerequisites() -> ComponentCheck {
             if *tool == "pkg-config" {
                 pkg_config_found = true;
             }
+            // Track C++ compiler presence for libstdc++ heuristic.
+            if *tool == "clang" {
+                cpp_compiler_found = true;
+            }
         }
+    }
+
+    // Also check g++ as a C++ compiler fallback (not in LINUX_REQUIRED_TOOLS).
+    if !cpp_compiler_found && which::which("g++").is_ok() {
+        cpp_compiler_found = true;
     }
 
     // ── GTK dev-headers probe (pkg-config --exists gtk+-3.0) ─────────────────
     // `which` cannot detect library dev-headers — only pkg-config can.
     // When pkg-config itself is absent the GTK probe cannot run; we skip it
     // rather than falsely asserting GTK missing (n1 — GTK double-report fix).
-    // Only probe GTK when pkg-config (or its pkgconf alias) is available.
-    let gtk_missing = if pkg_config_found {
-        !probe_pkg_config_exists("gtk+-3.0").await
+    // Only probe GTK/GLU when pkg-config (or its pkgconf alias) is available.
+    let (gtk_missing, glu_missing) = if pkg_config_found {
+        let (gtk, glu) = tokio::join!(
+            probe_pkg_config_exists("gtk+-3.0"),
+            probe_pkg_config_exists("glu"),
+        );
+        (!gtk, !glu)
     } else {
-        false // undetermined — do not assert missing
+        (false, false) // undetermined — do not assert missing
     };
+
+    // ── libstdc++ dev-headers heuristic ──────────────────────────────────────
+    // The C++ stdlib dev-headers ship with the compiler on every supported
+    // distro. We infer presence from `clang` or `g++` being on PATH.
+    // This avoids per-distro `dpkg -l`/`pacman -Q` shelling.
+    let libstdcpp_missing = !cpp_compiler_found;
 
     // ── Aggregate result ──────────────────────────────────────────────────────
     //
     // Status semantics (consistent with macOS/Windows):
     //   - Any absent required binary → `Missing` (the component is not present)
-    //   - GTK headers absent but all binaries present → `Partial` (present but
-    //     degraded: binaries work, but GTK header build path will fail)
+    //   - Dev-headers absent but all binaries present → `Partial` (present but
+    //     degraded: binaries work, but GUI/build paths will fail)
     //   - All present → `Ok`
-    if missing_binaries.is_empty() && !gtk_missing {
+    //
+    // Header-only items (GTK, GLU, libstdc++) contribute to the missing-key
+    // list only in the Partial branch (all binaries present).
+    if missing_binaries.is_empty() && !gtk_missing && !glu_missing && !libstdcpp_missing {
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Ok,
@@ -262,18 +293,133 @@ async fn check_linux_prerequisites() -> ComponentCheck {
         if gtk_missing {
             all_missing.push(GTK_ITEM_LABEL.to_string());
         }
+        if glu_missing {
+            all_missing.push(PREREQ_KEY_GLU.to_string());
+        }
+        if libstdcpp_missing {
+            all_missing.push(PREREQ_KEY_LIBSTDCPP.to_string());
+        }
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Missing,
             detail: format!("{}{}", MISSING_PREFIX, all_missing.join(", ")),
         }
     } else {
-        // Only GTK headers are absent; all required binaries are present.
-        // Partial = "present but degraded": tools work, GTK dev-headers missing.
+        // All required binaries are present; only dev-headers are absent.
+        // Partial = "present but degraded": tools work, headers missing.
+        let mut partial_missing: Vec<&str> = Vec::new();
+        if gtk_missing {
+            partial_missing.push(GTK_ITEM_LABEL);
+        }
+        if glu_missing {
+            partial_missing.push(PREREQ_KEY_GLU);
+        }
+        if libstdcpp_missing {
+            partial_missing.push(PREREQ_KEY_LIBSTDCPP);
+        }
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Partial,
-            detail: format!("{}{}", MISSING_PREFIX, GTK_ITEM_LABEL),
+            detail: format!("{}{}", MISSING_PREFIX, partial_missing.join(", ")),
+        }
+    }
+}
+
+/// Pure helper for testing: derive the linux prerequisites check result from
+/// the sets of found binaries and pkg-config package presence flags.
+///
+/// Mirrors `check_linux_prerequisites` but takes pre-probed data so unit tests
+/// can exercise the aggregation logic without live filesystem I/O.
+#[cfg(test)]
+pub(crate) fn build_linux_check_from_candidates(
+    found_binaries: &[&str],
+    pkg_config_available: bool,
+    gtk_present: bool,
+    glu_present: bool,
+) -> ComponentCheck {
+    let mut missing_binaries: Vec<String> = Vec::new();
+    let mut pkg_config_found = pkg_config_available;
+    let mut cpp_compiler_found = false;
+
+    for tool in LINUX_REQUIRED_TOOLS {
+        let found = found_binaries.contains(tool);
+        if !found {
+            let alias_found = match *tool {
+                "ninja" => found_binaries.contains(&"ninja-build"),
+                "xz" => found_binaries.contains(&"xz-utils"),
+                "pkg-config" => {
+                    let alias_ok = found_binaries.contains(&"pkgconf");
+                    if !alias_ok {
+                        missing_binaries.push(tool.to_string());
+                        continue;
+                    }
+                    pkg_config_found = true;
+                    true
+                }
+                _ => false,
+            };
+            if !alias_found {
+                missing_binaries.push(tool.to_string());
+            }
+        } else {
+            if *tool == "pkg-config" {
+                pkg_config_found = true;
+            }
+            if *tool == "clang" {
+                cpp_compiler_found = true;
+            }
+        }
+    }
+
+    if !cpp_compiler_found && found_binaries.contains(&"g++") {
+        cpp_compiler_found = true;
+    }
+
+    let (gtk_missing, glu_missing) = if pkg_config_found {
+        (!gtk_present, !glu_present)
+    } else {
+        (false, false)
+    };
+
+    let libstdcpp_missing = !cpp_compiler_found;
+
+    if missing_binaries.is_empty() && !gtk_missing && !glu_missing && !libstdcpp_missing {
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status: ComponentStatus::Ok,
+            detail: "All required Linux tools present".to_string(),
+        }
+    } else if !missing_binaries.is_empty() {
+        let mut all_missing = missing_binaries;
+        if gtk_missing {
+            all_missing.push(GTK_ITEM_LABEL.to_string());
+        }
+        if glu_missing {
+            all_missing.push(PREREQ_KEY_GLU.to_string());
+        }
+        if libstdcpp_missing {
+            all_missing.push(PREREQ_KEY_LIBSTDCPP.to_string());
+        }
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status: ComponentStatus::Missing,
+            detail: format!("{}{}", MISSING_PREFIX, all_missing.join(", ")),
+        }
+    } else {
+        let mut partial_missing: Vec<&str> = Vec::new();
+        if gtk_missing {
+            partial_missing.push(GTK_ITEM_LABEL);
+        }
+        if glu_missing {
+            partial_missing.push(PREREQ_KEY_GLU);
+        }
+        if libstdcpp_missing {
+            partial_missing.push(PREREQ_KEY_LIBSTDCPP);
+        }
+        ComponentCheck {
+            kind: ComponentKind::Prerequisites,
+            status: ComponentStatus::Partial,
+            detail: format!("{}{}", MISSING_PREFIX, partial_missing.join(", ")),
         }
     }
 }
@@ -528,26 +674,44 @@ pub(crate) fn build_windows_check_from_presence(
 
 // ─── Pure helpers exposed for unit testing ───────────────────────────────────
 
-/// Map a set of missing binary tools and a GTK-present flag into a
+/// Map a set of missing binary tools and dev-header presence flags into a
 /// [`ComponentCheck`].
 ///
 /// This pure function mirrors the status-mapping logic of
 /// [`check_linux_prerequisites`] without spawning processes.
 ///
+/// `glu_present` and `cpp_compiler_present` default to `true` for callers that
+/// only need to test binary-tool and GTK behaviour (which is the bulk of the
+/// existing test suite).  Pass `false` to exercise GLU or libstdc++ absence.
+///
 /// # Status semantics
 ///
-/// - `missing_tools` is empty **and** `gtk_present` → `Ok`
+/// - `missing_tools` is empty **and** all dev-headers present → `Ok`
 /// - `missing_tools` is non-empty → `Missing` (required binaries absent, detail
-///   uses `MISSING_PREFIX`; GTK is also appended when `!gtk_present`)
-/// - `missing_tools` is empty **and** `!gtk_present` → `Partial` (binaries
-///   present but GTK dev-headers absent — "present but degraded"; uses
-///   `MISSING_PREFIX`)
+///   uses `MISSING_PREFIX`; missing dev-headers are also appended)
+/// - `missing_tools` is empty **and** any dev-header absent → `Partial`
 #[cfg(test)]
 pub(crate) fn build_linux_check_from_missing(
     missing_tools: &[&str],
     gtk_present: bool,
 ) -> ComponentCheck {
-    if missing_tools.is_empty() && gtk_present {
+    build_linux_check_from_missing_full(missing_tools, gtk_present, true, true)
+}
+
+/// Extended version of `build_linux_check_from_missing` that also accepts
+/// GLU and C++-compiler presence flags.
+#[cfg(test)]
+pub(crate) fn build_linux_check_from_missing_full(
+    missing_tools: &[&str],
+    gtk_present: bool,
+    glu_present: bool,
+    cpp_compiler_present: bool,
+) -> ComponentCheck {
+    let gtk_missing = !gtk_present;
+    let glu_missing = !glu_present;
+    let libstdcpp_missing = !cpp_compiler_present;
+
+    if missing_tools.is_empty() && !gtk_missing && !glu_missing && !libstdcpp_missing {
         return ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Ok,
@@ -558,8 +722,14 @@ pub(crate) fn build_linux_check_from_missing(
     if !missing_tools.is_empty() {
         // Required binaries absent → Missing (consistent with macOS/Windows).
         let mut all_missing: Vec<String> = missing_tools.iter().map(|s| s.to_string()).collect();
-        if !gtk_present {
+        if gtk_missing {
             all_missing.push(GTK_ITEM_LABEL.to_string());
+        }
+        if glu_missing {
+            all_missing.push(PREREQ_KEY_GLU.to_string());
+        }
+        if libstdcpp_missing {
+            all_missing.push(PREREQ_KEY_LIBSTDCPP.to_string());
         }
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
@@ -567,11 +737,21 @@ pub(crate) fn build_linux_check_from_missing(
             detail: format!("{}{}", MISSING_PREFIX, all_missing.join(", ")),
         }
     } else {
-        // Only GTK headers absent — binaries OK, dev-headers degraded.
+        // All required binaries present; only dev-headers degraded.
+        let mut partial_missing: Vec<&str> = Vec::new();
+        if gtk_missing {
+            partial_missing.push(GTK_ITEM_LABEL);
+        }
+        if glu_missing {
+            partial_missing.push(PREREQ_KEY_GLU);
+        }
+        if libstdcpp_missing {
+            partial_missing.push(PREREQ_KEY_LIBSTDCPP);
+        }
         ComponentCheck {
             kind: ComponentKind::Prerequisites,
             status: ComponentStatus::Partial,
-            detail: format!("{}{}", MISSING_PREFIX, GTK_ITEM_LABEL),
+            detail: format!("{}{}", MISSING_PREFIX, partial_missing.join(", ")),
         }
     }
 }
@@ -1186,5 +1366,226 @@ mod tests {
         assert_eq!(PREREQ_KEY_COCOAPODS, "cocoapods");
         assert_eq!(PREREQ_KEY_ROSETTA, "rosetta");
         assert_eq!(PREREQ_KEY_GIT, "git");
+    }
+
+    // ── GLU dev-headers probe ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_glu_missing_yields_partial_when_binaries_present() {
+        // GLU headers absent but all binaries present → Partial.
+        let check = build_linux_check_from_missing_full(&[], true, false, true);
+        assert_eq!(
+            check.status,
+            ComponentStatus::Partial,
+            "GLU-only absence must yield Partial, got: {:?}",
+            check.status
+        );
+        assert!(
+            check.detail.contains(PREREQ_KEY_GLU),
+            "detail should mention '{}', got: {}",
+            PREREQ_KEY_GLU,
+            check.detail
+        );
+        assert!(
+            check.detail.starts_with(MISSING_PREFIX),
+            "detail must use MISSING_PREFIX, got: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_glu_missing_plus_missing_binary_yields_missing() {
+        let check = build_linux_check_from_missing_full(&["curl"], true, false, true);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(check.detail.contains(PREREQ_KEY_GLU));
+        assert!(check.detail.contains("curl"));
+    }
+
+    #[test]
+    fn test_glu_and_gtk_both_absent_with_all_binaries_yields_partial() {
+        // Both GLU and GTK absent, binaries present → Partial (both appear in detail).
+        let check = build_linux_check_from_missing_full(&[], false, false, true);
+        assert_eq!(check.status, ComponentStatus::Partial);
+        assert!(
+            check.detail.contains(GTK_ITEM_LABEL),
+            "GTK missing from detail: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains(PREREQ_KEY_GLU),
+            "GLU missing from detail: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_glu_present_does_not_appear_in_ok_detail() {
+        let check = build_linux_check_from_missing_full(&[], true, true, true);
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(!check.detail.contains(PREREQ_KEY_GLU));
+    }
+
+    // ── libstdc++ heuristic (C++ compiler presence) ───────────────────────────
+
+    #[test]
+    fn test_libstdcpp_missing_when_no_cpp_compiler_yields_partial() {
+        // No C++ compiler → libstdc++ treated as missing → Partial when binaries present.
+        let check = build_linux_check_from_missing_full(&[], true, true, false);
+        assert_eq!(
+            check.status,
+            ComponentStatus::Partial,
+            "libstdc++-only absence must yield Partial, got: {:?}",
+            check.status
+        );
+        assert!(
+            check.detail.contains(PREREQ_KEY_LIBSTDCPP),
+            "detail should mention '{}', got: {}",
+            PREREQ_KEY_LIBSTDCPP,
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_libstdcpp_present_when_cpp_compiler_found_does_not_appear_in_detail() {
+        let check = build_linux_check_from_missing_full(&[], true, true, true);
+        assert_eq!(check.status, ComponentStatus::Ok);
+        assert!(!check.detail.contains(PREREQ_KEY_LIBSTDCPP));
+    }
+
+    #[test]
+    fn test_libstdcpp_and_binary_missing_yields_missing() {
+        let check = build_linux_check_from_missing_full(&["cmake"], true, true, false);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(check.detail.contains("cmake"));
+        assert!(check.detail.contains(PREREQ_KEY_LIBSTDCPP));
+    }
+
+    #[test]
+    fn test_all_three_headers_missing_yields_partial_with_all_keys() {
+        // All dev-headers absent (GTK + GLU + libstdc++), binaries present → Partial.
+        let check = build_linux_check_from_missing_full(&[], false, false, false);
+        assert_eq!(check.status, ComponentStatus::Partial);
+        assert!(check.detail.contains(GTK_ITEM_LABEL));
+        assert!(check.detail.contains(PREREQ_KEY_GLU));
+        assert!(check.detail.contains(PREREQ_KEY_LIBSTDCPP));
+    }
+
+    // ── build_linux_check_from_candidates (full pure helper) ─────────────────
+
+    #[test]
+    fn test_candidates_helper_all_present_yields_ok() {
+        // Provide all required tools + clang (for libstdc++ heuristic).
+        let all_tools = [
+            "git",
+            "zip",
+            "curl",
+            "unzip",
+            "xz",
+            "clang",
+            "cmake",
+            "ninja",
+            "pkg-config",
+        ];
+        let check = build_linux_check_from_candidates(&all_tools, true, true, true);
+        assert_eq!(check.status, ComponentStatus::Ok);
+    }
+
+    #[test]
+    fn test_candidates_helper_missing_git_yields_missing() {
+        let tools_without_git = [
+            "zip",
+            "curl",
+            "unzip",
+            "xz",
+            "clang",
+            "cmake",
+            "ninja",
+            "pkg-config",
+        ];
+        let check = build_linux_check_from_candidates(&tools_without_git, true, true, true);
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(check.detail.contains("git"));
+    }
+
+    #[test]
+    fn test_candidates_helper_glu_absent_when_clang_present_yields_partial() {
+        let all_tools = [
+            "git",
+            "zip",
+            "curl",
+            "unzip",
+            "xz",
+            "clang",
+            "cmake",
+            "ninja",
+            "pkg-config",
+        ];
+        let check = build_linux_check_from_candidates(&all_tools, true, true, false);
+        assert_eq!(check.status, ComponentStatus::Partial);
+        assert!(check.detail.contains(PREREQ_KEY_GLU));
+    }
+
+    #[test]
+    fn test_candidates_helper_libstdcpp_absent_when_clang_absent_yields_missing() {
+        // clang absent (required binary) and g++ absent → libstdc++ in missing list.
+        // The status is Missing (not Partial) because clang is a required binary.
+        let tools_no_compiler = [
+            "git",
+            "zip",
+            "curl",
+            "unzip",
+            "xz",
+            "cmake",
+            "ninja",
+            "pkg-config",
+        ];
+        let check = build_linux_check_from_candidates(&tools_no_compiler, true, true, true);
+        // clang is in LINUX_REQUIRED_TOOLS → absent → Missing
+        assert_eq!(check.status, ComponentStatus::Missing);
+        // libstdc++ also appears because cpp_compiler_found = false
+        assert!(
+            check.detail.contains(PREREQ_KEY_LIBSTDCPP),
+            "libstdc++ must appear when no C++ compiler found; detail: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("clang"),
+            "clang must appear as missing binary; detail: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_candidates_helper_gplus_suppresses_libstdcpp_when_clang_missing() {
+        // g++ in found_binaries → cpp_compiler_found = true → libstdc++ not missing.
+        // clang is still absent → Missing status, but libstdc++ not in the list.
+        let tools_with_gplus = [
+            "git",
+            "zip",
+            "curl",
+            "unzip",
+            "xz",
+            "cmake",
+            "ninja",
+            "pkg-config",
+            "g++",
+        ];
+        let check = build_linux_check_from_candidates(&tools_with_gplus, true, true, true);
+        // clang missing → Missing
+        assert_eq!(check.status, ComponentStatus::Missing);
+        // g++ found → cpp_compiler_found = true → libstdc++ NOT missing
+        assert!(
+            !check.detail.contains(PREREQ_KEY_LIBSTDCPP),
+            "libstdc++ must not appear when g++ is present; detail: {}",
+            check.detail
+        );
+    }
+
+    // ── New PREREQ_KEY constants ──────────────────────────────────────────────
+
+    #[test]
+    fn test_prereq_key_glu_and_libstdcpp_constants_have_expected_values() {
+        assert_eq!(PREREQ_KEY_GLU, "libglu1-mesa");
+        assert_eq!(PREREQ_KEY_LIBSTDCPP, "libstdc++");
     }
 }
