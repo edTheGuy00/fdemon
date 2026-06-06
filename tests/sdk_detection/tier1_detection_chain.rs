@@ -22,7 +22,7 @@ use super::assertions::{assert_sdk_not_found, assert_sdk_root, assert_sdk_source
 use super::fixtures::{
     create_asdf_layout, create_flutter_project, create_flutter_wrapper_layout, create_fvm_layout,
     create_fvm_legacy_layout, create_mise_layout, create_proto_layout, create_puro_layout,
-    EnvGuard, MockSdkBuilder,
+    isolate_fvm_cache, EnvGuard, MockSdkBuilder,
 };
 use fdemon_daemon::flutter_sdk::{find_flutter_sdk, validate_sdk_path, SdkSource};
 use serial_test::serial;
@@ -696,7 +696,8 @@ fn test_all_strategies_fail_returns_flutter_not_found() {
 
     // Isolate all env vars and set PATH to empty tempdir (no flutter binary)
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
-    let _fvm_guard = EnvGuard::remove("FVM_CACHE_PATH");
+    // Isolate the global fvm cache so a host SDK in ~/fvm/versions can't be found.
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _puro_guard = EnvGuard::remove("PURO_ROOT");
     let _asdf_guard = EnvGuard::remove("ASDF_DATA_DIR");
     let _mise_guard = EnvGuard::remove("MISE_DATA_DIR");

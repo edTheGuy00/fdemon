@@ -9,7 +9,7 @@
 use super::assertions::{assert_sdk_not_found, assert_sdk_root, assert_sdk_source};
 use super::fixtures::{
     create_asdf_layout, create_flutter_project, create_fvm_layout, create_mise_layout,
-    create_puro_layout, EnvGuard, MockSdkBuilder,
+    create_puro_layout, isolate_fvm_cache, EnvGuard, MockSdkBuilder,
 };
 use fdemon_daemon::flutter_sdk::{
     find_flutter_sdk, read_version_file, validate_sdk_path, SdkSource,
@@ -84,6 +84,7 @@ fn test_fvm_legacy_circular_symlink() {
     std::os::unix::fs::symlink(&symlink_path, &symlink_path).unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     // Must not hang or panic.
@@ -160,6 +161,7 @@ fn test_fvmrc_empty_file() {
     fs::write(project.join(".fvmrc"), "").unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(&project, None);
@@ -186,6 +188,7 @@ fn test_fvmrc_invalid_json() {
     fs::write(project.join(".fvmrc"), "not json at all {").unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(&project, None);
@@ -211,6 +214,7 @@ fn test_fvmrc_missing_flutter_field() {
     fs::write(project.join(".fvmrc"), r#"{"dart": "3.0.0"}"#).unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(&project, None);
@@ -236,6 +240,7 @@ fn test_fvmrc_flutter_field_is_null() {
     fs::write(project.join(".fvmrc"), r#"{"flutter": null}"#).unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(&project, None);
@@ -261,6 +266,7 @@ fn test_fvmrc_flutter_field_is_number() {
     fs::write(project.join(".fvmrc"), r#"{"flutter": 3.22}"#).unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(&project, None);
@@ -742,6 +748,7 @@ fn test_config_file_not_readable() {
     fs::set_permissions(&fvmrc_path, fs::Permissions::from_mode(0o000)).unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(&project, None);
@@ -991,6 +998,7 @@ fn test_explicit_config_path_does_not_exist() {
         std::path::PathBuf::from("/nonexistent/path/to/flutter/sdk/that/does/not/exist");
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     // Isolate PATH so no flutter is found anywhere else.
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
@@ -1014,6 +1022,7 @@ fn test_explicit_config_path_exists_but_invalid_sdk() {
     fs::create_dir_all(&empty_dir).unwrap();
 
     let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+    let _fvm_guard = isolate_fvm_cache(tmp.path());
     let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
 
     let result = find_flutter_sdk(tmp.path(), Some(&empty_dir));

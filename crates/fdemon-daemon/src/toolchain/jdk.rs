@@ -149,6 +149,7 @@ mod tests {
     /// When `JAVA_HOME` is set to a valid directory, `resolve_jdk_home` must
     /// return that directory.
     #[test]
+    #[serial_test::serial]
     fn test_resolve_jdk_home_honors_java_home() {
         let tmp = tempfile::TempDir::new().unwrap();
 
@@ -169,6 +170,7 @@ mod tests {
     /// When `JAVA_HOME` points to a non-existent directory, the variable is
     /// ignored and we fall through to the next strategy.
     #[test]
+    #[serial_test::serial]
     fn test_resolve_jdk_home_ignores_nonexistent_java_home() {
         let nonexistent = "/this/path/does/not/exist/fdemon_test";
         std::env::set_var("JAVA_HOME", nonexistent);
@@ -180,6 +182,7 @@ mod tests {
 
     /// `resolve_jdk_home` must not panic even when no JDK is configured.
     #[test]
+    #[serial_test::serial]
     fn test_resolve_jdk_home_does_not_panic_when_absent() {
         // Remove JAVA_HOME if set; if `which java` also fails, we get None.
         std::env::remove_var("JAVA_HOME");

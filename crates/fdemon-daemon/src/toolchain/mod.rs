@@ -215,12 +215,28 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_run_preflight_nonexistent_sdk_path_does_not_panic() {
         let tmp = tempfile::TempDir::new().unwrap();
+        // Point the fvm versions cache (Strategy 13) at an empty dir so the
+        // host's real ~/fvm/versions cannot satisfy detection via fall-through.
+        // (PATH is intentionally left untouched — mutating it globally would
+        // race parallel tests that spawn child processes.)
+        let saved_fvm = std::env::var_os("FVM_CACHE_PATH");
+        let empty_cache = tmp.path().join("empty_fvm");
+        std::fs::create_dir_all(&empty_cache).unwrap();
+        std::env::set_var("FVM_CACHE_PATH", &empty_cache);
+
         let fake_sdk = PathBuf::from("/nonexistent/flutter/sdk");
         let report = run_preflight(tmp.path(), Some(&fake_sdk), None).await;
 
-        // With a non-existent explicit SDK path, Flutter check should be Partial or Missing
+        match saved_fvm {
+            Some(v) => std::env::set_var("FVM_CACHE_PATH", v),
+            None => std::env::remove_var("FVM_CACHE_PATH"),
+        }
+
+        // With a non-existent explicit SDK path and no fallback SDK reachable,
+        // the Flutter check should be Partial or Missing (never Ok).
         let flutter = &report.components[0];
         assert_eq!(flutter.kind, ComponentKind::FlutterSdk);
         assert_ne!(flutter.status, ComponentStatus::Ok);

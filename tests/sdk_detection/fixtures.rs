@@ -197,6 +197,19 @@ impl Drop for EnvGuard {
     }
 }
 
+/// Point `FVM_CACHE_PATH` at a guaranteed-empty (non-existent) directory under
+/// `tmp`, isolating the global-fvm-cache detection strategy (locator Strategy 13)
+/// from the host's real `~/fvm/versions`.
+///
+/// Tests that assert "no SDK found" or "result is not FVM-sourced" must use this
+/// — otherwise a Flutter SDK present in the developer's/CI's fvm cache would be
+/// discovered via fall-through and break the assertion. The returned guard
+/// restores the previous value on drop.
+pub fn isolate_fvm_cache(tmp: &std::path::Path) -> EnvGuard {
+    let isolated = tmp.join("isolated_empty_fvm_cache");
+    EnvGuard::set("FVM_CACHE_PATH", isolated.to_str().unwrap())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Flutter Project Helper
 // ─────────────────────────────────────────────────────────────────────────────

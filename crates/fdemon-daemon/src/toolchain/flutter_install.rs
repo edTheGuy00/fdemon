@@ -1233,6 +1233,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_resolve_install_dir_fvm_cache_path_env() {
         // Temporarily override HOME so the fallback path is predictable and
         // independent of the real home directory.
@@ -1256,6 +1257,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_resolve_install_dir_ignores_relative_fvm_cache_path() {
         // A relative FVM_CACHE_PATH must be ignored with a warning and fall
         // through to the default ~/fvm/versions path.
@@ -1287,6 +1289,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_resolve_install_dir_default_creates_under_home() {
         // Remove FVM_CACHE_PATH so the default path is used.
         let orig_fvm = std::env::var("FVM_CACHE_PATH").ok();

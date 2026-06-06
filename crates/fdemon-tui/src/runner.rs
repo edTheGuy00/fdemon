@@ -766,15 +766,16 @@ mod tests {
     /// enqueue `ShowInstallWizard` for the `Ready` startup path and, after
     /// `drain_pending_messages`, transition to `UiMode::InstallWizard`.
     ///
-    /// In test environments the engine has no resolved SDK, so
-    /// `flutter_executable()` is always `None`, making this test deterministic
-    /// without mocking.
+    /// The no-SDK precondition is forced explicitly (`resolved_sdk = None`) so the
+    /// test is deterministic on hosts where SDK detection would otherwise resolve
+    /// a real Flutter (e.g. an SDK in the fvm versions cache).
     #[tokio::test]
     async fn test_dispatch_startup_ready_no_sdk_opens_wizard() {
         use fdemon_app::state::UiMode;
 
         let mut engine = dummy_engine();
-        // Precondition: no SDK resolved in test environment
+        // Force the no-SDK precondition regardless of the host environment.
+        engine.state.resolved_sdk = None;
         assert!(
             engine.state.flutter_executable().is_none(),
             "test engine must have no resolved SDK"
@@ -803,6 +804,8 @@ mod tests {
         use fdemon_app::state::UiMode;
 
         let mut engine = dummy_engine();
+        // Force the no-SDK precondition regardless of the host environment.
+        engine.state.resolved_sdk = None;
         assert!(
             engine.state.flutter_executable().is_none(),
             "test engine must have no resolved SDK"
