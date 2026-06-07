@@ -342,87 +342,22 @@ where
     //
     // After the relocate step, cmdline-tools/latest/bin/sdkmanager[.bat] must be
     // present. If it's missing (e.g. due to a layout change in a future
-    // cmdline-tools release), surface a diagnostic listing the actual directory
-    // contents instead of letting the OS emit the cryptic "path specified" error.
-    if !sdkmanager.is_file() {
-        let bin_dir = sdkmanager
-            .parent()
-            .expect("sdkmanager path always has a parent dir");
-        let listing = list_dir_contents(bin_dir);
-        return Err(Error::process(format!(
-            "sdkmanager not found at '{}' after cmdline-tools installation. \
-             Contents of '{}': [{}]. \
-             This may indicate a cmdline-tools layout change — please file a bug \
-             or update the fdemon cmdline-tools build number.",
-            sdkmanager.display(),
-            bin_dir.display(),
-            listing,
-        )));
-    }
+    // cmdline-tools release), `check_sdkmanager_guard` surfaces a diagnostic
+    // listing the actual directory contents instead of letting the OS emit the
+    // cryptic "path specified" error.
+    check_sdkmanager_guard(&target.sdk_root)?;
 
     // ── Resolve and validate a JDK home for sdkmanager ──────────────────────
     //
-    // sdkmanager.bat (Windows) and sdkmanager (POSIX) both require a valid
-    // JAVA_HOME. Resolution precedence:
-    //   1. target.jdk_path — explicit user configuration ([toolchain] jdk_path)
-    //   2. resolve_jdk_home() — JAVA_HOME env / walk from `which java`
-    //
-    // The resolved home is validated (bin/java + bin/javac) before use. A
-    // missing or invalid JDK fails the step with an actionable error rather than
-    // letting sdkmanager emit the cryptic "The system cannot find the path
-    // specified" message.
-    let raw_jdk_home: Option<PathBuf> = target.jdk_path.clone().or_else(resolve_jdk_home);
-
-    let jdk_home: PathBuf = match raw_jdk_home {
-        Some(candidate) => validate_jdk_home(&candidate).map_err(|e| {
-            Error::process(format!(
-                "Android install: JDK validation failed — {e}. \
-                 Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
-                 in .fdemon/config.toml, or fix the JAVA_HOME environment variable."
-            ))
-        })?,
-        None => {
-            return Err(Error::process(
-                "Android install: no JDK home could be resolved. \
-                 sdkmanager requires a valid Java Development Kit. \
-                 Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
-                 in .fdemon/config.toml, or fix the JAVA_HOME environment variable."
-                    .to_string(),
-            ));
-        }
-    };
-
+    // Delegate to `build_sdkmanager_env` which handles the resolution /
+    // validation / env-pair assembly in one pure step (also unit-testable).
     tracing::debug!(
-        jdk_home = %jdk_home.display(),
         explicit = target.jdk_path.is_some(),
-        "Android install: using validated JDK home for sdkmanager"
+        "Android install: resolving JDK home for sdkmanager"
     );
-
-    let java_home_str = jdk_home.to_string_lossy().into_owned();
+    let env_pairs = build_sdkmanager_env(&target.sdk_root, target.jdk_path.clone())?;
 
     let license_stdin = "y\n".repeat(LICENSE_YES_COUNT);
-
-    // Build env pairs for sdkmanager invocations.
-    // Always set JAVA_HOME and prepend <jdk_home>/bin to PATH so sdkmanager.bat
-    // (Windows) and sdkmanager (POSIX) find the correct JDK regardless of the
-    // ambient environment.
-    let jdk_bin = jdk_home.join("bin");
-    let existing_path = std::env::var("PATH").unwrap_or_default();
-    // Build an OS-correct PATH by prepending `jdk_bin` to the existing PATH
-    // entries.  `split_paths`/`join_paths` handles the platform separator
-    // (`:` on POSIX, `;` on Windows) and correct quoting for paths with
-    // spaces — avoiding the POSIX-only `format!("{jdk_bin}:{existing}")` bug.
-    let existing_entries = std::env::split_paths(&existing_path);
-    let new_entries: Vec<_> = std::iter::once(jdk_bin).chain(existing_entries).collect();
-    let new_path = std::env::join_paths(new_entries)
-        .unwrap_or_else(|_| existing_path.clone().into())
-        .to_string_lossy()
-        .into_owned();
-
-    let mut env_pairs: Vec<(String, String)> =
-        vec![("ANDROID_HOME".to_string(), sdk_root_str.clone())];
-    env_pairs.push(("JAVA_HOME".to_string(), java_home_str));
-    env_pairs.push(("PATH".to_string(), new_path));
 
     // Convert to Vec<(&str, &str)> for run_streaming_with_input.
     let env_refs: Vec<(&str, &str)> = env_pairs
@@ -662,6 +597,100 @@ fn list_dir_contents(dir: &Path) -> String {
         }
         Err(_) => "<directory does not exist>".to_string(),
     }
+}
+
+/// Guard: verify that the `sdkmanager` binary exists at its expected path inside
+/// `sdk_root/cmdline-tools/latest/bin/`. If absent, returns an error that lists
+/// the actual contents of the bin directory so a layout-change regression yields
+/// a precise diagnostic message.
+///
+/// This is the same check that fires inside `install_android_tools_inner` before
+/// spawning sdkmanager; it is extracted as a standalone helper so unit tests can
+/// exercise the guard without going through the full async install flow.
+pub(crate) fn check_sdkmanager_guard(sdk_root: &Path) -> Result<()> {
+    let sdkmanager = sdkmanager_path(sdk_root);
+    if !sdkmanager.is_file() {
+        let bin_dir = sdkmanager
+            .parent()
+            .expect("sdkmanager path always has a parent dir");
+        let listing = list_dir_contents(bin_dir);
+        return Err(Error::process(format!(
+            "sdkmanager not found at '{}' after cmdline-tools installation. \
+             Contents of '{}': [{}]. \
+             This may indicate a cmdline-tools layout change — please file a bug \
+             or update the fdemon cmdline-tools build number.",
+            sdkmanager.display(),
+            bin_dir.display(),
+            listing,
+        )));
+    }
+    Ok(())
+}
+
+/// Build the environment variable pairs required for `sdkmanager` child processes.
+///
+/// This is a pure, synchronous helper that:
+/// 1. Resolves the JDK home: uses `jdk_path` if `Some`, otherwise falls back to
+///    [`resolve_jdk_home`] (reads `JAVA_HOME` env / walks from `which java`).
+/// 2. Validates the resolved home with [`validate_jdk_home`] (requires
+///    `bin/java[.exe]` + `bin/javac[.exe]`).
+/// 3. Assembles the env-pair vector:
+///    - `ANDROID_HOME` = `sdk_root`
+///    - `JAVA_HOME` = validated JDK home
+///    - `PATH` = `<jdk_home>/bin` prepended to the current process `PATH`
+///
+/// Both the `--licenses` call and the package-install call use the same env
+/// pairs returned by this function.
+///
+/// # Errors
+///
+/// Returns `Err` when no valid JDK home can be resolved or when the resolved home
+/// fails validation. The error message names the remedies so the user can act
+/// without reading docs.
+pub(crate) fn build_sdkmanager_env(
+    sdk_root: &Path,
+    jdk_path: Option<PathBuf>,
+) -> Result<Vec<(String, String)>> {
+    let raw_jdk_home: Option<PathBuf> = jdk_path.or_else(resolve_jdk_home);
+
+    let jdk_home: PathBuf = match raw_jdk_home {
+        Some(candidate) => validate_jdk_home(&candidate).map_err(|e| {
+            Error::process(format!(
+                "Android install: JDK validation failed — {e}. \
+                 Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
+                 in .fdemon/config.toml, or fix the JAVA_HOME environment variable."
+            ))
+        })?,
+        None => {
+            return Err(Error::process(
+                "Android install: no JDK home could be resolved. \
+                 sdkmanager requires a valid Java Development Kit. \
+                 Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
+                 in .fdemon/config.toml, or fix the JAVA_HOME environment variable."
+                    .to_string(),
+            ));
+        }
+    };
+
+    let sdk_root_str = sdk_root.to_string_lossy().into_owned();
+    let java_home_str = jdk_home.to_string_lossy().into_owned();
+
+    // Build an OS-correct PATH by prepending `<jdk_home>/bin` to the existing PATH
+    // entries.  `split_paths`/`join_paths` handles the platform separator
+    // (`:` on POSIX, `;` on Windows) and correct quoting for paths with spaces.
+    let jdk_bin = jdk_home.join("bin");
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let existing_entries = std::env::split_paths(&existing_path);
+    let new_entries: Vec<_> = std::iter::once(jdk_bin).chain(existing_entries).collect();
+    let new_path = std::env::join_paths(new_entries)
+        .unwrap_or_else(|_| existing_path.clone().into())
+        .to_string_lossy()
+        .into_owned();
+
+    let mut env_pairs: Vec<(String, String)> = vec![("ANDROID_HOME".to_string(), sdk_root_str)];
+    env_pairs.push(("JAVA_HOME".to_string(), java_home_str));
+    env_pairs.push(("PATH".to_string(), new_path));
+    Ok(env_pairs)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1257,6 +1286,248 @@ mod tests {
         assert!(
             !err.to_string().contains("SHA-256") && !err.to_string().contains("mismatch"),
             "error must not be a SHA-256 mismatch (sha check must have passed): {err}"
+        );
+    }
+
+    // ── build_sdkmanager_env: JDK-home precedence ─────────────────────────────
+
+    /// Helper: create a minimal JDK fixture (bin/java + bin/javac) in `dir`.
+    fn make_jdk_fixture(dir: &std::path::Path) {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        #[cfg(windows)]
+        let (java_name, javac_name) = ("java.exe", "javac.exe");
+        #[cfg(not(windows))]
+        let (java_name, javac_name) = ("java", "javac");
+
+        std::fs::write(bin.join(java_name), b"#!/bin/sh\nexec java").unwrap();
+        std::fs::write(bin.join(javac_name), b"#!/bin/sh\nexec javac").unwrap();
+    }
+
+    /// Helper: create the sdkmanager binary at `sdk_root/cmdline-tools/latest/bin/`.
+    fn make_sdkmanager_fixture(sdk_root: &std::path::Path) {
+        let bin = sdk_root.join("cmdline-tools").join("latest").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // Create the platform-correct binary name.
+        std::fs::write(
+            bin.join(sdkmanager_bin_name()),
+            b"#!/bin/sh\necho sdkmanager",
+        )
+        .unwrap();
+    }
+
+    /// When `jdk_path` is `Some(valid_jdk)`, `build_sdkmanager_env` uses that
+    /// explicit path and does NOT fall back to `resolve_jdk_home()`. We verify
+    /// this by supplying a valid JDK fixture and confirming JAVA_HOME in the
+    /// returned env pairs matches the fixture path.
+    #[test]
+    fn test_build_sdkmanager_env_explicit_jdk_path_wins() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+        let jdk_tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(jdk_tmp.path());
+
+        let env_pairs = build_sdkmanager_env(sdk_tmp.path(), Some(jdk_tmp.path().to_owned()))
+            .expect("explicit valid jdk_path must succeed");
+
+        let java_home = env_pairs
+            .iter()
+            .find(|(k, _)| k == "JAVA_HOME")
+            .map(|(_, v)| v.as_str())
+            .expect("JAVA_HOME must be present in env_pairs");
+
+        // The returned JAVA_HOME must be (a normalisation of) the fixture path.
+        assert_eq!(
+            PathBuf::from(java_home),
+            jdk_tmp.path(),
+            "JAVA_HOME must match the explicit jdk_path fixture, got: {java_home}"
+        );
+    }
+
+    // ── build_sdkmanager_env: env-pair contents ───────────────────────────────
+
+    /// The assembled env pairs must contain ANDROID_HOME, JAVA_HOME, and PATH,
+    /// with PATH's first entry being `<jdk_home>/bin`.
+    #[test]
+    fn test_build_sdkmanager_env_contains_required_vars() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+        let jdk_tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(jdk_tmp.path());
+
+        let env_pairs = build_sdkmanager_env(sdk_tmp.path(), Some(jdk_tmp.path().to_owned()))
+            .expect("must succeed with valid JDK fixture");
+
+        // ANDROID_HOME must be set to sdk_root.
+        let android_home = env_pairs
+            .iter()
+            .find(|(k, _)| k == "ANDROID_HOME")
+            .map(|(_, v)| v.as_str())
+            .expect("ANDROID_HOME must be present");
+        assert_eq!(
+            PathBuf::from(android_home),
+            sdk_tmp.path(),
+            "ANDROID_HOME must equal sdk_root"
+        );
+
+        // JAVA_HOME must be set to the validated JDK home.
+        let java_home = env_pairs
+            .iter()
+            .find(|(k, _)| k == "JAVA_HOME")
+            .map(|(_, v)| PathBuf::from(v))
+            .expect("JAVA_HOME must be present");
+        assert_eq!(
+            java_home,
+            jdk_tmp.path(),
+            "JAVA_HOME must equal the jdk fixture path"
+        );
+
+        // PATH must be present and its first entry must be <jdk_home>/bin.
+        let path_val = env_pairs
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone())
+            .expect("PATH must be present");
+
+        let path_entries: Vec<PathBuf> = std::env::split_paths(&path_val).collect();
+        assert!(
+            !path_entries.is_empty(),
+            "PATH must have at least one entry"
+        );
+        assert_eq!(
+            path_entries[0],
+            jdk_tmp.path().join("bin"),
+            "first PATH entry must be <jdk_home>/bin, got: {:?}",
+            path_entries[0]
+        );
+    }
+
+    // ── build_sdkmanager_env: missing / invalid JDK yields actionable error ───
+
+    /// When `jdk_path` points to a non-existent directory and `resolve_jdk_home()`
+    /// also fails (because the provided path is explicitly invalid), the function
+    /// must return `Err` whose message names the remedies.
+    #[test]
+    fn test_build_sdkmanager_env_invalid_jdk_path_yields_actionable_error() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+        let nonexistent_jdk = PathBuf::from("/this/path/does/not/exist/fdemon_jdk_test");
+
+        let err = build_sdkmanager_env(sdk_tmp.path(), Some(nonexistent_jdk))
+            .expect_err("invalid jdk_path must return Err");
+
+        let msg = err.to_string();
+        // The error must name at least one remedy so the user can act.
+        assert!(
+            msg.contains("jdk_path") || msg.contains("JAVA_HOME") || msg.contains("JDK"),
+            "error must name a remedy (jdk_path / JAVA_HOME / JDK): {msg}"
+        );
+        assert!(
+            msg.contains("Install") || msg.contains("fix") || msg.contains("set"),
+            "error must be actionable (install / fix / set): {msg}"
+        );
+    }
+
+    /// When `jdk_path` is `Some` pointing to a JRE-only directory (bin/java but
+    /// no bin/javac), the function must return `Err` mentioning the missing
+    /// javac and the sdkmanager requirement.
+    #[test]
+    fn test_build_sdkmanager_env_jre_only_dir_yields_error() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+        let jre_tmp = tempfile::TempDir::new().unwrap();
+
+        // Plant only java, not javac — simulates a JRE install.
+        let bin = jre_tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        #[cfg(windows)]
+        let java_name = "java.exe";
+        #[cfg(not(windows))]
+        let java_name = "java";
+        std::fs::write(bin.join(java_name), b"#!/bin/sh\nexec java").unwrap();
+
+        let err = build_sdkmanager_env(sdk_tmp.path(), Some(jre_tmp.path().to_owned()))
+            .expect_err("JRE-only dir must return Err");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("javac") || msg.contains("JRE") || msg.contains("JDK"),
+            "error must mention javac / JRE / JDK: {msg}"
+        );
+    }
+
+    // ── check_sdkmanager_guard: pre-spawn guard ───────────────────────────────
+
+    /// When `sdkmanager` binary is present at the expected path, the guard
+    /// returns `Ok(())`.
+    #[test]
+    fn test_check_sdkmanager_guard_present_returns_ok() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+        make_sdkmanager_fixture(sdk_tmp.path());
+
+        let result = check_sdkmanager_guard(sdk_tmp.path());
+        assert!(
+            result.is_ok(),
+            "guard must return Ok when sdkmanager is present: {:?}",
+            result
+        );
+    }
+
+    /// When `sdkmanager` is absent (empty bin dir), the guard must return `Err`
+    /// whose message includes the expected path AND a listing of the bin dir
+    /// contents.
+    #[test]
+    fn test_check_sdkmanager_guard_absent_returns_err_with_listing() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+
+        // Create the bin dir with a decoy file, but NOT sdkmanager.
+        let bin_dir = sdk_tmp
+            .path()
+            .join("cmdline-tools")
+            .join("latest")
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join("not_sdkmanager.sh"), b"#!/bin/sh").unwrap();
+
+        let err = check_sdkmanager_guard(sdk_tmp.path())
+            .expect_err("guard must return Err when sdkmanager is absent");
+
+        let msg = err.to_string();
+
+        // Error must mention the expected path.
+        assert!(
+            msg.contains("sdkmanager"),
+            "error must mention sdkmanager: {msg}"
+        );
+        // Error must include a listing (the decoy file name).
+        assert!(
+            msg.contains("not_sdkmanager.sh"),
+            "error must list bin dir contents (decoy file): {msg}"
+        );
+        // Error must mention the bin dir path.
+        assert!(
+            msg.contains("cmdline-tools"),
+            "error must mention cmdline-tools path: {msg}"
+        );
+    }
+
+    /// When `sdkmanager` is absent and the bin dir itself is also absent
+    /// (e.g. fresh SDK root), the guard must return `Err` indicating the dir
+    /// does not exist.
+    #[test]
+    fn test_check_sdkmanager_guard_absent_bin_dir_returns_err() {
+        let sdk_tmp = tempfile::TempDir::new().unwrap();
+        // Do NOT create cmdline-tools/latest/bin/ at all.
+
+        let err = check_sdkmanager_guard(sdk_tmp.path())
+            .expect_err("guard must return Err when bin dir is absent");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sdkmanager"),
+            "error must mention sdkmanager: {msg}"
+        );
+        // list_dir_contents returns "<directory does not exist>" for absent dirs.
+        assert!(
+            msg.contains("does not exist") || msg.contains("not found"),
+            "error must indicate directory absence: {msg}"
         );
     }
 }
