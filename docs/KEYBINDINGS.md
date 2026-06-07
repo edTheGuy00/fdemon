@@ -200,7 +200,7 @@ Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls
 | Key | Action | Description |
 |-----|--------|-------------|
 | `V` | Open Flutter Version Panel | Open the Flutter SDK version manager panel |
-| `I` | Open Install Wizard | Open the toolchain install wizard (runs a preflight check) |
+| `I` | Open Install Wizard | Open the toolchain install wizard (runs a preflight check). When the toolchain is already healthy, opens as a read-only informational view (all components shown green); `Esc` returns directly to Normal mode without triggering device discovery. |
 
 Once in Flutter Version mode, see [Flutter Version Mode](#flutter-version-mode) for detailed controls.
 
@@ -643,7 +643,7 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Esc` | Cancel Step / Close Panel | **Context-dependent:** when an install step is currently Running, cancels the in-flight step by firing the synchronously-stored `CancellationToken` and stays in the wizard. If the cancel token fires the running task before `Esc` is processed, the step ends in `StepExecStatus::Cancelled` (neutral, no red badge — distinct from `Failed`); if `Esc` fires before the daemon confirmation arrives, execution resets to Idle immediately. Either way the step is retriable via Enter. When no step is running (idle, succeeded, cancelled, or failed), closes the Install Wizard. If Flutter is live when closing, the wizard triggers device discovery and transitions to `UiMode::Startup` so the new-session dialog is populated. |
+| `Esc` | Cancel Step / Close Panel | **Context-dependent:** when an install step is currently Running, cancels the in-flight step by firing the synchronously-stored `CancellationToken` and stays in the wizard. If the cancel token fires the running task before `Esc` is processed, the step ends in `StepExecStatus::Cancelled` (neutral, no red badge — distinct from `Failed`); if `Esc` fires before the daemon confirmation arrives, execution resets to Idle immediately. Either way the step is retriable via Enter. When no step is running (idle, succeeded, cancelled, or failed), closes the Install Wizard. **Close behaviour depends on how the wizard was opened (`WizardOrigin`):** a Bootstrap-origin wizard (auto-opened at startup because the toolchain was missing or broken) with no running session triggers device discovery and transitions to `UiMode::Startup` so the new-session dialog is populated. A user-invoked (`I`-key) wizard always returns directly to `UiMode::Normal` on close, regardless of Flutter state. |
 | `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
 
 ### Pane Navigation
