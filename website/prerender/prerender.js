@@ -46,6 +46,7 @@ const ROUTES = [
   '/',
   '/docs',
   '/docs/installation',
+  '/docs/toolchain',
   '/docs/keybindings',
   '/docs/mouse',
   '/docs/devtools',

@@ -19,6 +19,7 @@ use pages::docs::introduction::Introduction;
 use pages::docs::keybindings::Keybindings;
 use pages::docs::mouse::Mouse;
 use pages::docs::native_logs::NativeLogs;
+use pages::docs::toolchain::Toolchain;
 use pages::docs::DocsLayout;
 use pages::home::Home;
 
@@ -37,6 +38,7 @@ pub fn App() -> impl IntoView {
                     <ParentRoute path=path!("/docs") view=DocsLayout>
                         <Route path=path!("/") view=Introduction />
                         <Route path=path!("/installation") view=Installation />
+                        <Route path=path!("/toolchain") view=Toolchain />
                         <Route path=path!("/keybindings") view=Keybindings />
                         <Route path=path!("/mouse") view=Mouse />
                         <Route path=path!("/devtools") view=Devtools />

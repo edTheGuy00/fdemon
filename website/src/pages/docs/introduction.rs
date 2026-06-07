@@ -244,6 +244,10 @@ pub fn Introduction() -> impl IntoView {
                         <h4 class="font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">"Installation \u{2192}"</h4>
                         <p class="text-sm text-slate-400">"Build from source and get running in minutes."</p>
                     </A>
+                    <A href="/docs/toolchain" attr:class="block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-slate-700 transition-colors group">
+                        <h4 class="font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">"Install Wizard \u{2192}"</h4>
+                        <p class="text-sm text-slate-400">"Let fdemon diagnose and install a missing Flutter toolchain for you."</p>
+                    </A>
                     <A href="/docs/keybindings" attr:class="block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-slate-700 transition-colors group">
                         <h4 class="font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">"Keybindings \u{2192}"</h4>
                         <p class="text-sm text-slate-400">"Complete reference for all keyboard controls."</p>
