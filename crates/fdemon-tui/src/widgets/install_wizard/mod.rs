@@ -134,13 +134,17 @@ impl<'a> InstallWizardPanel<'a> {
             .render(title_area, buf);
 
         // Row 1: subtitle (dimmed)
+        // When the wizard is opened informally (UserInvoked) and every component is
+        // healthy, show a reassuring "All set" hint instead of the generic subtitle.
         if area.height >= 2 {
+            let subtitle_text = if !self.state.is_bootstrap() && self.state.all_components_ok() {
+                "All set \u{2014} press Esc to return" // — (em dash)
+            } else {
+                "Flutter toolchain setup"
+            };
             let subtitle = Line::from(vec![
                 Span::raw("  "),
-                Span::styled(
-                    "Flutter toolchain setup",
-                    Style::default().fg(palette::TEXT_SECONDARY),
-                ),
+                Span::styled(subtitle_text, Style::default().fg(palette::TEXT_MUTED)),
             ]);
             let subtitle_area = Rect::new(area.x, area.y + 1, area.width, 1);
             Paragraph::new(subtitle).render(subtitle_area, buf);
@@ -738,5 +742,125 @@ mod tests {
                 || content.contains('…'),
             "step list should show status glyphs"
         );
+    }
+
+    /// When the wizard is opened via `UserInvoked` and every component is `Ok`,
+    /// the header subtitle must show the "All set" hint.
+    #[test]
+    fn informational_all_ok_shows_all_set_hint() {
+        // Build a report where every component is Ok
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![
+                ComponentCheck {
+                    kind: ComponentKind::FlutterSdk,
+                    status: ComponentStatus::Ok,
+                    detail: "3.19.0".to_string(),
+                },
+                ComponentCheck {
+                    kind: ComponentKind::Git,
+                    status: ComponentStatus::Ok,
+                    detail: "2.43.0".to_string(),
+                },
+            ],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        state.apply_report(report);
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("All set"),
+            "informational all-Ok wizard must show 'All set' hint in header; content: {content:?}"
+        );
+    }
+
+    /// When the wizard is opened via `Bootstrap`, or any component is non-Ok,
+    /// or while loading, the "All set" hint must NOT appear.
+    #[test]
+    fn bootstrap_or_partial_does_not_show_all_set_hint() {
+        let all_ok_report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: "3.19.0".to_string(),
+            }],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+
+        // Case 1: Bootstrap origin even with all-Ok report → no "All set"
+        {
+            let mut state = InstallWizardState::opening(WizardOrigin::Bootstrap);
+            state.apply_report(all_ok_report.clone());
+            let widget = InstallWizardPanel::new(&state, 0);
+            let area = Rect::new(0, 0, 120, 50);
+            let mut buf = Buffer::empty(area);
+            widget.render(area, &mut buf);
+            let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+            assert!(
+                !content.contains("All set"),
+                "Bootstrap origin must NOT show 'All set' hint; content: {content:?}"
+            );
+        }
+
+        // Case 2: UserInvoked but a component is missing → no "All set"
+        {
+            let partial_report = ToolchainReport {
+                platform: HostPlatform::Linux,
+                shell: HostShell::Bash,
+                components: vec![
+                    ComponentCheck {
+                        kind: ComponentKind::FlutterSdk,
+                        status: ComponentStatus::Ok,
+                        detail: "3.19.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::AndroidCmdlineTools,
+                        status: ComponentStatus::Missing,
+                        detail: "not found".to_string(),
+                    },
+                ],
+                doctor: None,
+                linux_package_manager: None,
+                winget_available: false,
+            };
+            let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+            state.apply_report(partial_report);
+            let widget = InstallWizardPanel::new(&state, 0);
+            let area = Rect::new(0, 0, 120, 50);
+            let mut buf = Buffer::empty(area);
+            widget.render(area, &mut buf);
+            let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+            assert!(
+                !content.contains("All set"),
+                "Partial report must NOT show 'All set' hint; content: {content:?}"
+            );
+        }
+
+        // Case 3: UserInvoked but still loading (no report) → no "All set"
+        {
+            let state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+            let widget = InstallWizardPanel::new(&state, 0);
+            let area = Rect::new(0, 0, 120, 50);
+            let mut buf = Buffer::empty(area);
+            widget.render(area, &mut buf);
+            let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+            assert!(
+                !content.contains("All set"),
+                "Loading state must NOT show 'All set' hint; content: {content:?}"
+            );
+        }
     }
 }
