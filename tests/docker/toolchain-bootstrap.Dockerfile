@@ -26,19 +26,19 @@
 #                             → Prerequisites step lists them with guided apt cmds
 #
 # ── Build all three shell variants (from the repo root, NOT this dir) ──────────
-#   docker build --build-arg TEST_SHELL=zsh  -t fdemon-bootstrap-zsh  -f tests/docker/toolchain-bootstrap.Dockerfile .
-#   docker build --build-arg TEST_SHELL=bash -t fdemon-bootstrap-bash -f tests/docker/toolchain-bootstrap.Dockerfile .
-#   docker build --build-arg TEST_SHELL=fish -t fdemon-bootstrap-fish -f tests/docker/toolchain-bootstrap.Dockerfile .
+#   docker build --build-arg TEST_SHELL=zsh  -t fdemon-bootstrap-debian-zsh  -f tests/docker/toolchain-bootstrap.Dockerfile .
+#   docker build --build-arg TEST_SHELL=bash -t fdemon-bootstrap-debian-bash -f tests/docker/toolchain-bootstrap.Dockerfile .
+#   docker build --build-arg TEST_SHELL=fish -t fdemon-bootstrap-debian-fish -f tests/docker/toolchain-bootstrap.Dockerfile .
 #   # or just: tests/docker/build-bootstrap.sh
 #   # The Rust build layer is compiled once and reused across all three (same context).
 #
 # ── A) Non-interactive detection smoke test (proves from-scratch preflight) ────
-#   docker run --rm fdemon-bootstrap-zsh fdemon doctor /test-project
+#   docker run --rm fdemon-bootstrap-debian-zsh fdemon doctor /test-project
 #   # prints the structured "what's installed / missing" report; exit code:
 #   #   0 = healthy for a non-Android project, 1 = a required component degraded.
 #
 # ── B) Interactive wizard walk-through (the real end-to-end test) ──────────────
-#   docker run -it --rm fdemon-bootstrap-zsh        # or -bash / -fish
+#   docker run -it --rm fdemon-bootstrap-debian-zsh        # or -bash / -fish
 #   # then inside the container shell:
 #   fdemon /test-project
 #   #   • wizard opens (no Flutter SDK found)
@@ -52,12 +52,12 @@
 #
 # ── Two panes (run the wizard + commands side by side) ─────────────────────────
 #   Option 1 — tmux (single window):
-#     docker run -it --rm fdemon-bootstrap-zsh
+#     docker run -it --rm fdemon-bootstrap-debian-zsh
 #     tmux                 # then Ctrl-b " (split) ; run fdemon in one pane,
 #                          # commands in the other ; Ctrl-b <arrow> to switch
 #   Option 2 — two host terminals via docker exec (shared container state):
 #     # terminal 1:
-#     docker run -it --name fdemon-test fdemon-bootstrap-zsh   # then: fdemon
+#     docker run -it --name fdemon-test fdemon-bootstrap-debian-zsh   # then: fdemon
 #     # terminal 2:
 #     docker exec -it fdemon-test "$SHELL"                     # run commands here
 #     # cleanup: docker rm -f fdemon-test
