@@ -2,6 +2,18 @@
 
 use std::collections::VecDeque;
 
+/// Why the Install Wizard was opened. Gates the post-install handback to device discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WizardOrigin {
+    /// Auto-opened at startup because the toolchain was missing/broken. After the toolchain
+    /// becomes healthy, the wizard hands back to device discovery (new-session dialog).
+    Bootstrap,
+    /// User-invoked (`I`) informational view of a (typically healthy) toolchain.
+    /// Never hands back; `Esc` returns to the previous mode.
+    #[default]
+    UserInvoked,
+}
+
 /// A copy-paste command shown for a guided (privileged/GUI) step the wizard cannot
 /// auto-run. Rendered in the detail pane and copyable with `c`.
 ///
@@ -115,6 +127,16 @@ pub struct StepExecution {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_default_is_user_invoked() {
+        assert_eq!(WizardOrigin::default(), WizardOrigin::UserInvoked);
+    }
+
+    #[test]
+    fn wizard_origin_variants_are_distinct() {
+        assert_ne!(WizardOrigin::Bootstrap, WizardOrigin::UserInvoked);
+    }
 
     #[test]
     fn test_wizard_pane_default_is_step_list() {

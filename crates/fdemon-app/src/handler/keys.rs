@@ -1,6 +1,7 @@
 //! Key event handlers for different UI modes
 
 use crate::input_key::InputKey;
+use crate::install_wizard::WizardOrigin;
 use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::session::performance::{PerfSection, SelectionDirection};
 use crate::session::NetworkDetailTab;
@@ -360,7 +361,9 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         // ─────────────────────────────────────────────────────────
         // 'I' - Open Install Wizard panel (uppercase; lowercase 'i' is used
         // in FlutterVersion for Install)
-        InputKey::Char('I') => Some(Message::ShowInstallWizard),
+        InputKey::Char('I') => Some(Message::ShowInstallWizard {
+            origin: WizardOrigin::UserInvoked,
+        }),
 
         _ => None,
     }

@@ -14,8 +14,8 @@ use fdemon_daemon::toolchain::{
 use tokio_util::sync::CancellationToken;
 
 use super::types::{
-    GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind,
-    MAX_LOG_TAIL,
+    GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardOrigin, WizardPane,
+    WizardStepKind, MAX_LOG_TAIL,
 };
 
 /// A running install task: a `JoinHandle` paired with a `CancellationToken`.
@@ -68,7 +68,7 @@ pub struct WizardStep {
 
 /// Top-level state for the Install Wizard panel.
 ///
-/// Owned by `AppState`, initialized via `InstallWizardState::opening()` when
+/// Owned by `AppState`, initialized via `InstallWizardState::opening(WizardOrigin::UserInvoked)` when
 /// the wizard is opened, and reset to `default()` when closed.
 #[derive(Default)]
 pub struct InstallWizardState {
@@ -141,19 +141,46 @@ pub struct InstallWizardState {
     ///
     /// Reset to `false` only when the wizard is fully re-opened via `opening()`.
     pub handback_done: bool,
+
+    /// Why the wizard was opened. Gates the handback (see `close_wizard_and_dispatch_discovery`).
+    ///
+    /// `Bootstrap` — opened at startup because the toolchain was missing/broken;
+    /// auto-advances to device discovery when healthy.
+    /// `UserInvoked` — opened by the `I` key; informational only, never hands back.
+    pub origin: WizardOrigin,
 }
 
 impl InstallWizardState {
     /// Fresh state for opening the wizard; preflight has not completed yet.
     ///
     /// Sets `visible = true` and `loading = true` so the TUI can show a
-    /// spinner while the preflight task runs.
-    pub fn opening() -> Self {
+    /// spinner while the preflight task runs.  The `origin` parameter records
+    /// why the wizard was opened, which gates the post-install handback.
+    pub fn opening(origin: WizardOrigin) -> Self {
         Self {
             visible: true,
             loading: true,
+            origin,
             ..Self::default()
         }
+    }
+
+    /// `true` when the wizard was opened to bootstrap a missing/broken toolchain.
+    ///
+    /// Only a `Bootstrap` origin auto-advances to device discovery after the
+    /// toolchain becomes healthy.  A `UserInvoked` open never hands back.
+    pub fn is_bootstrap(&self) -> bool {
+        self.origin == WizardOrigin::Bootstrap
+    }
+
+    /// `true` when a report is present and every component is `Ok`.
+    ///
+    /// Drives the "All set" hint in the TUI header (task 02).  Returns `false`
+    /// when no report has been applied yet.
+    pub fn all_components_ok(&self) -> bool {
+        self.report.as_ref().is_some_and(|r| {
+            !r.components.is_empty() && r.components.iter().all(|c| c.status == ComponentStatus::Ok)
+        })
     }
 
     /// Populate steps from a completed preflight report.
@@ -388,6 +415,7 @@ impl std::fmt::Debug for InstallWizardState {
             )
             .field("run_seq", &self.run_seq)
             .field("handback_done", &self.handback_done)
+            .field("origin", &self.origin)
             .finish()
     }
 }
@@ -958,7 +986,7 @@ mod tests {
 
     #[test]
     fn test_opening_state_is_visible_and_loading() {
-        let s = InstallWizardState::opening();
+        let s = InstallWizardState::opening(WizardOrigin::UserInvoked);
         assert!(s.visible);
         assert!(s.loading);
         assert!(s.steps.is_empty());
@@ -1058,7 +1086,7 @@ mod tests {
 
     #[test]
     fn test_apply_report_clears_loading_and_builds_steps() {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         assert!(state.loading);
 
         let report = make_report(vec![make_check(
@@ -1096,7 +1124,7 @@ mod tests {
     /// Failed/Cancelled/Succeeded view.
     #[test]
     fn test_apply_report_resets_execution() {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
         // Simulate a completed (failed) step.
         state.begin_step(WizardStepKind::FlutterSdk);
@@ -1131,7 +1159,7 @@ mod tests {
     /// stale `Cancelled` execution so the component list renders.
     #[test]
     fn test_apply_report_resets_cancelled_execution() {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
         state.begin_step(WizardStepKind::AndroidTools);
         state.finish_step(
@@ -1159,7 +1187,7 @@ mod tests {
     /// `Succeeded` execution.
     #[test]
     fn test_apply_report_resets_succeeded_execution() {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
         state.begin_step(WizardStepKind::AndroidTools);
         state.finish_step(
@@ -2605,7 +2633,7 @@ mod tests {
     #[test]
     fn test_opening_resets_handback_done() {
         // `opening()` must reset handback_done so a re-opened wizard can hand back again.
-        let state = InstallWizardState::opening();
+        let state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         assert!(
             !state.handback_done,
             "opening() must reset handback_done to false"

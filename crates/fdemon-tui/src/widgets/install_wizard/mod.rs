@@ -423,7 +423,7 @@ mod tests {
     use super::*;
     use fdemon_app::install_wizard::{
         ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, HostPlatform,
-        HostShell, InstallWizardState, LinuxPackageManager, ToolchainReport,
+        HostShell, InstallWizardState, LinuxPackageManager, ToolchainReport, WizardOrigin,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 
@@ -466,13 +466,13 @@ mod tests {
     }
 
     fn populated_state() -> InstallWizardState {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(make_report());
         state
     }
 
     fn loading_state() -> InstallWizardState {
-        InstallWizardState::opening()
+        InstallWizardState::opening(WizardOrigin::UserInvoked)
     }
 
     fn empty_steps_state() -> InstallWizardState {

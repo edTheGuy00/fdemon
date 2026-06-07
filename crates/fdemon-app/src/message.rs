@@ -3,7 +3,7 @@
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
-use crate::install_wizard::WizardStepKind;
+use crate::install_wizard::{WizardOrigin, WizardStepKind};
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::memory::MemorySection;
 use crate::session::performance::{PerfSection, SelectionDirection, TimelineEventCursor};
@@ -1707,8 +1707,13 @@ pub enum Message {
     FlutterVersionUpdate,
 
     // ── Install Wizard ────────────────────────────────────────────────────────
-    /// Open the Install Wizard panel (I key in Normal mode)
-    ShowInstallWizard,
+    /// Open the Install Wizard panel.
+    ///
+    /// `origin` records why the wizard was opened so the post-install handback
+    /// can be gated: only `Bootstrap` auto-advances to device discovery;
+    /// `UserInvoked` (the `I` key) is an informational view that returns to
+    /// `UiMode::Normal` on close.
+    ShowInstallWizard { origin: WizardOrigin },
 
     /// Close the Install Wizard panel
     HideInstallWizard,

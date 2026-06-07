@@ -4,7 +4,7 @@
 //! for the Install Wizard panel.
 
 use crate::handler::{UpdateAction, UpdateResult};
-use crate::install_wizard::WizardPane;
+use crate::install_wizard::{WizardOrigin, WizardPane};
 use crate::state::AppState;
 
 /// Handle `ShowInstallWizard` — opens the Install Wizard panel.
@@ -12,8 +12,13 @@ use crate::state::AppState;
 /// Resets the wizard to a fresh loading state, transitions to
 /// `UiMode::InstallWizard`, and triggers a toolchain preflight task.
 /// The wizard shows `loading = true` until `ToolchainPreflightCompleted` arrives.
-pub fn handle_show(state: &mut AppState) -> UpdateResult {
-    state.show_install_wizard();
+///
+/// The `origin` is stored on `InstallWizardState` and gates the post-install
+/// handback: only `Bootstrap` auto-advances to device discovery on close.
+/// A `UserInvoked` open (the `I` key) is informational only — `Esc` returns
+/// to `UiMode::Normal` without dispatching `DiscoverDevices`.
+pub fn handle_show(state: &mut AppState, origin: WizardOrigin) -> UpdateResult {
+    state.show_install_wizard(origin);
 
     let project_path = state.project_path.clone();
     let explicit_sdk_path = state.settings.flutter.sdk_path.clone();
@@ -185,7 +190,7 @@ mod tests {
 
     fn state_with_wizard_open() -> AppState {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(make_report());
         state
     }
@@ -193,7 +198,7 @@ mod tests {
     #[test]
     fn test_show_install_wizard_sets_mode_and_loading() {
         let mut state = AppState::new();
-        let result = handle_show(&mut state);
+        let result = handle_show(&mut state, WizardOrigin::UserInvoked);
         assert_eq!(state.ui_mode, UiMode::InstallWizard);
         assert!(state.install_wizard_state.visible);
         assert!(state.install_wizard_state.loading);
@@ -207,7 +212,7 @@ mod tests {
     #[test]
     fn test_show_passes_project_path_to_action() {
         let mut state = AppState::new();
-        let result = handle_show(&mut state);
+        let result = handle_show(&mut state, WizardOrigin::UserInvoked);
         if let Some(UpdateAction::RunToolchainPreflight { project_path, .. }) = result.action {
             // project_path comes from state.project_path (empty PathBuf in test state)
             assert_eq!(project_path, state.project_path);
@@ -394,7 +399,7 @@ mod tests {
             winget_available: false,
         };
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(report);
         // Select Prerequisites (index 0) which has 3 commands.
         state.install_wizard_state.selected_index = 0;
@@ -488,7 +493,7 @@ mod tests {
         use fdemon_daemon::{FlutterExecutable, FlutterSdk, SdkSource};
 
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         state.install_wizard_state.apply_report(make_report());
         // Inject a minimal resolved_sdk so flutter_executable() returns Some.
         state.resolved_sdk = Some(FlutterSdk {
@@ -600,6 +605,57 @@ mod tests {
         assert!(
             state.install_wizard_state.handback_done,
             "handback_done must be true after handle_hide with live SDK"
+        );
+    }
+
+    // ── WizardOrigin gating tests ─────────────────────────────────────────────
+
+    /// A `UserInvoked` Esc must return to `UiMode::Normal` without dispatching
+    /// `DiscoverDevices` — even when a live SDK is present.
+    ///
+    /// Acceptance criterion 5: `close_wizard_and_dispatch_discovery` gates the
+    /// handback on `is_bootstrap()`.  With `UserInvoked`, the function hides the
+    /// wizard to `Normal` and returns `None`.
+    #[test]
+    fn user_invoked_escape_returns_to_normal() {
+        let mut state = AppState::new();
+        // Open with UserInvoked (the `I` key path).
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.apply_report(make_report());
+        // Inject a live SDK so the only gate is the origin.
+        state.resolved_sdk = Some(fdemon_daemon::FlutterSdk {
+            root: std::path::PathBuf::from("/opt/flutter"),
+            executable: fdemon_daemon::FlutterExecutable::Direct(std::path::PathBuf::from(
+                "/opt/flutter/bin/flutter",
+            )),
+            source: fdemon_daemon::SdkSource::ExplicitConfig,
+            version: "3.27.0".to_string(),
+            channel: Some("stable".to_string()),
+        });
+        assert!(
+            state.flutter_executable().is_some(),
+            "precondition: SDK must be live"
+        );
+        assert!(!state.install_wizard_state.is_bootstrap());
+
+        let result = handle_escape(&mut state);
+
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "UserInvoked Esc must return to Normal, not Startup"
+        );
+        assert!(
+            !state.install_wizard_state.visible,
+            "wizard must be hidden after UserInvoked Esc"
+        );
+        let actions = result.actions();
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, crate::handler::UpdateAction::DiscoverDevices { .. })),
+            "UserInvoked Esc must not dispatch DiscoverDevices; got {:?}",
+            actions
         );
     }
 }

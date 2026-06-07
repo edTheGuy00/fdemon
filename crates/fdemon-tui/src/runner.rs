@@ -11,6 +11,7 @@ use std::path::Path;
 use tracing::{error, warn};
 
 use fdemon_app::config::should_auto_start_dap;
+use fdemon_app::install_wizard::WizardOrigin;
 use fdemon_app::message::Message;
 use fdemon_app::services::{Clipboard, NullClipboard, SystemClipboard};
 use fdemon_app::spawn;
@@ -294,7 +295,9 @@ fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) 
     // instead of a dead-end (Ready) or a silent no-op (AutoStart).
     // Use try_send so a saturated channel does not block startup.
     if engine.state.flutter_executable().is_none() {
-        let _ = engine.msg_sender().try_send(Message::ShowInstallWizard);
+        let _ = engine.msg_sender().try_send(Message::ShowInstallWizard {
+            origin: WizardOrigin::Bootstrap,
+        });
         return;
     }
 

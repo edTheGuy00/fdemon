@@ -3231,7 +3231,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ── Install Wizard ─────────────────────────────────────────────────────
-        Message::ShowInstallWizard => install_wizard::handle_show(state),
+        Message::ShowInstallWizard { origin } => install_wizard::handle_show(state, origin),
 
         Message::HideInstallWizard => install_wizard::handle_hide(state),
 

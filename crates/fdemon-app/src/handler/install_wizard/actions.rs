@@ -57,8 +57,12 @@ pub fn handle_preflight_completed(state: &mut AppState, report: ToolchainReport)
     let scan_action = UpdateAction::ScanInstalledSdks { active_sdk_root };
 
     // Handback: auto-close the wizard and dispatch device discovery when
-    // Flutter is now live and the guard has not already fired.
-    if state.install_wizard_state.flutter_now_live() && !state.install_wizard_state.handback_done {
+    // Flutter is now live, the wizard was opened for bootstrap (not user-invoked),
+    // and the guard has not already fired.
+    if state.install_wizard_state.is_bootstrap()
+        && state.install_wizard_state.flutter_now_live()
+        && !state.install_wizard_state.handback_done
+    {
         if let Some(discover) = close_wizard_and_dispatch_discovery(state) {
             return UpdateResult::actions_vec(vec![scan_action, discover]);
         }
@@ -68,35 +72,43 @@ pub fn handle_preflight_completed(state: &mut AppState, report: ToolchainReport)
 }
 
 /// Shared handback helper: close the wizard, transition to the correct mode,
-/// set the one-shot guard, and return a `DiscoverDevices` action when a live
-/// SDK is available.
+/// set the one-shot guard, and return a `DiscoverDevices` action when all
+/// conditions are met.
 ///
-/// Always closes the wizard (sets `visible = false`). When a live Flutter
-/// executable exists, transitions to `UiMode::Startup` and returns
-/// `Some(DiscoverDevices)`; otherwise transitions to `UiMode::Normal` and
-/// returns `None`.
+/// Always closes the wizard (sets `visible = false`). Dispatches
+/// `DiscoverDevices` + transitions to `UiMode::Startup` **only** when:
+/// - The wizard was opened for `Bootstrap` (not `UserInvoked`), **and**
+/// - No session is currently running (defensive guard), **and**
+/// - A live Flutter executable is available.
+///
+/// Otherwise hides to `UiMode::Normal` and returns `None`.  This means a
+/// `UserInvoked` open always returns to `Normal` on close, even if the user
+/// happened to install Flutter during that session.
 ///
 /// This function is the **single source of truth** for the post-install
 /// handback transition. Both the auto-close path (`handle_preflight_completed`)
 /// and the manual-close path (`maybe_dispatch_discovery_on_close` in
 /// `navigation.rs`) delegate here so the two paths cannot drift.
 ///
-/// **Critical invariant:** when a live SDK is present, `ui_mode` is set to
-/// `UiMode::Startup` (not `Normal`) so the subsequent `DevicesDiscovered`
-/// message populates `new_session_dialog_state.target_selector` (the handler
-/// guards on `UiMode::Startup | UiMode::NewSessionDialog`).
+/// **Critical invariant:** when a live SDK is present and origin is Bootstrap,
+/// `ui_mode` is set to `UiMode::Startup` (not `Normal`) so the subsequent
+/// `DevicesDiscovered` message populates `new_session_dialog_state.target_selector`
+/// (the handler guards on `UiMode::Startup | UiMode::NewSessionDialog`).
 pub(super) fn close_wizard_and_dispatch_discovery(state: &mut AppState) -> Option<UpdateAction> {
-    if let Some(flutter) = state.flutter_executable() {
-        state.install_wizard_state.handback_done = true;
-        state.hide_install_wizard();
-        // Override the Normal mode set by hide_install_wizard() with Startup,
-        // so the subsequent DevicesDiscovered message populates the selector.
-        state.ui_mode = crate::state::UiMode::Startup;
-        Some(UpdateAction::DiscoverDevices { flutter })
-    } else {
-        state.hide_install_wizard();
-        None
+    let should_handback =
+        state.install_wizard_state.is_bootstrap() && !state.session_manager.has_running_sessions();
+    if should_handback {
+        if let Some(flutter) = state.flutter_executable() {
+            state.install_wizard_state.handback_done = true;
+            state.hide_install_wizard();
+            // Override the Normal mode set by hide_install_wizard() with Startup,
+            // so the subsequent DevicesDiscovered message populates the selector.
+            state.ui_mode = crate::state::UiMode::Startup;
+            return Some(UpdateAction::DiscoverDevices { flutter });
+        }
     }
+    state.hide_install_wizard(); // → UiMode::Normal
+    None
 }
 
 /// Handle `InstallWizardRerunPreflight` — re-run the preflight check.
@@ -840,6 +852,7 @@ fn map_install_method(method: InstallMethod) -> fdemon_daemon::toolchain::Instal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::install_wizard::WizardOrigin;
     use crate::state::AppState;
     use fdemon_daemon::toolchain::{
         ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, HostShell, ToolchainReport,
@@ -863,7 +876,7 @@ mod tests {
     #[test]
     fn test_preflight_completed_populates_steps_clears_loading() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         assert!(state.install_wizard_state.loading);
 
         handle_preflight_completed(&mut state, make_report());
@@ -876,7 +889,7 @@ mod tests {
     #[test]
     fn test_preflight_completed_clears_status_message() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.status_message = Some("old error".into());
 
         handle_preflight_completed(&mut state, make_report());
@@ -887,7 +900,7 @@ mod tests {
     #[test]
     fn test_rerun_preflight_sets_loading_and_returns_action() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(make_report());
         assert!(!state.install_wizard_state.loading);
 
@@ -903,7 +916,7 @@ mod tests {
     #[test]
     fn test_rerun_preflight_noops_when_already_loading() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         // loading is already true after show_install_wizard()
         assert!(state.install_wizard_state.loading);
 
@@ -917,7 +930,7 @@ mod tests {
     #[test]
     fn test_rerun_preflight_spawns_when_idle() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         // Simulate preflight completed (loading = false)
         state.install_wizard_state.apply_report(make_report());
         assert!(!state.install_wizard_state.loading);
@@ -934,7 +947,7 @@ mod tests {
     #[test]
     fn test_rerun_clears_status_message() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         // Apply a report to bring loading back to false (idle state), then
         // add a status_message to verify it is cleared on re-run.
         state.install_wizard_state.apply_report(make_report());
@@ -960,7 +973,7 @@ mod tests {
     #[test]
     fn test_preflight_completed_triggers_scan_installed_sdks() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
 
         let result = handle_preflight_completed(&mut state, make_report());
 
@@ -980,7 +993,7 @@ mod tests {
     #[test]
     fn test_preflight_completed_after_failed_step_clears_execution() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(make_report());
 
         // Simulate a failed step run.
@@ -1014,7 +1027,7 @@ mod tests {
     #[test]
     fn test_preflight_completed_after_cancelled_step_clears_execution() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(make_report());
 
         state
@@ -1043,7 +1056,7 @@ mod tests {
     #[test]
     fn test_preflight_completed_handback_still_fires_after_execution_reset() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         state.install_wizard_state.apply_report(make_report());
 
         // Simulate a successful step run that leaves execution = Succeeded.
@@ -1088,7 +1101,7 @@ mod tests {
     /// Helper: build a fresh state with the wizard open and a completed preflight.
     fn state_with_preflight() -> AppState {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(make_report());
         state
     }
@@ -1645,7 +1658,7 @@ mod tests {
     /// Build a fresh state with the wizard open and a JDK at the given status.
     fn wizard_state_with_jdk(jdk_status: ComponentStatus) -> AppState {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state
             .install_wizard_state
             .apply_report(make_report_with_jdk(jdk_status));
@@ -1703,7 +1716,7 @@ mod tests {
     #[test]
     fn test_android_step_gated_when_no_report() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         // No report applied — loading is true, report is None.
         // Apply an empty report so steps exist but JDK entry is absent.
         state.install_wizard_state.apply_report(ToolchainReport {
@@ -2135,7 +2148,7 @@ mod tests {
         // action so the re-check finds a just-installed SDK even when the
         // running process's $ANDROID_HOME is stale.
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         state.install_wizard_state.apply_report(make_report()); // loading = false
         let root = std::path::PathBuf::from("/home/user/Android/Sdk");
         state.settings.toolchain.android_sdk_root = Some(root.clone());
@@ -2386,7 +2399,7 @@ mod tests {
         // executor AND the guided command must be shown in the step (both derive
         // from `is_jdk_actionable`).
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
         // Report with android tools but no Jdk entry.
         state.install_wizard_state.apply_report(ToolchainReport {
             platform: HostPlatform::Linux,
@@ -2679,7 +2692,7 @@ mod tests {
         use crate::state::UiMode;
 
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         inject_live_sdk(&mut state);
         assert_eq!(state.ui_mode, UiMode::InstallWizard, "precondition");
         assert!(!state.install_wizard_state.handback_done, "precondition");
@@ -2719,7 +2732,7 @@ mod tests {
         use fdemon_daemon::Device;
 
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         inject_live_sdk(&mut state);
 
         // Trigger the auto-close handback.
@@ -2766,7 +2779,7 @@ mod tests {
     #[test]
     fn handback_does_not_fire_twice() {
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         inject_live_sdk(&mut state);
         // Pre-set the guard as if auto-close already fired once.
         state.install_wizard_state.handback_done = true;
@@ -2788,7 +2801,7 @@ mod tests {
         use crate::state::UiMode;
 
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         inject_live_sdk(&mut state); // resolved_sdk is Some, but report says Missing
 
         let result = handle_preflight_completed(&mut state, make_dead_flutter_report());
@@ -3105,7 +3118,7 @@ mod tests {
         };
 
         let mut state = AppState::new();
-        state.show_install_wizard();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
         inject_live_sdk(&mut state);
 
         let result = handle_preflight_completed(&mut state, report);
@@ -3215,6 +3228,129 @@ mod tests {
         assert!(
             msg.contains("Cancelled") || msg.contains("retry"),
             "status_message must mention 'Cancelled' or 'retry'; got: {msg}"
+        );
+    }
+
+    // ── WizardOrigin gating tests ─────────────────────────────────────────────
+
+    /// A `UserInvoked` open must NOT auto-handback when the toolchain is healthy.
+    ///
+    /// Acceptance criterion 4: the handback gate is `is_bootstrap() &&
+    /// flutter_now_live() && !handback_done`.  With `UserInvoked`, `is_bootstrap()`
+    /// is false, so the wizard remains open and no `DiscoverDevices` is dispatched.
+    #[test]
+    fn user_invoked_open_does_not_handback_on_healthy_toolchain() {
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        inject_live_sdk(&mut state);
+        assert!(!state.install_wizard_state.handback_done, "precondition");
+
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        // Wizard must remain open.
+        assert_eq!(
+            state.ui_mode,
+            crate::state::UiMode::InstallWizard,
+            "UserInvoked wizard must stay open even when toolchain is healthy"
+        );
+        assert!(
+            state.install_wizard_state.visible,
+            "install_wizard_state.visible must remain true for UserInvoked"
+        );
+        // No DiscoverDevices action.
+        let actions = result.actions();
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "UserInvoked open must not dispatch DiscoverDevices; got {:?}",
+            actions
+        );
+    }
+
+    /// A `Bootstrap` open must still auto-handback when Flutter becomes live.
+    ///
+    /// Regression guard: ensures the `is_bootstrap()` gate does not accidentally
+    /// block the legitimate bootstrap path.
+    #[test]
+    fn bootstrap_open_still_handbacks() {
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
+        inject_live_sdk(&mut state);
+        assert!(!state.install_wizard_state.handback_done, "precondition");
+
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        assert_eq!(
+            state.ui_mode,
+            crate::state::UiMode::Startup,
+            "Bootstrap wizard must auto-close to Startup when Flutter is live"
+        );
+        assert!(
+            state.install_wizard_state.handback_done,
+            "handback_done must be set after Bootstrap auto-close"
+        );
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "Bootstrap open must dispatch DiscoverDevices; got {:?}",
+            actions
+        );
+    }
+
+    /// When a Bootstrap wizard has a running session, `close_wizard_and_dispatch_discovery`
+    /// must not dispatch `DiscoverDevices` (defensive session guard).
+    #[test]
+    fn bootstrap_handback_skipped_when_session_running() {
+        use fdemon_daemon::Device;
+
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
+        inject_live_sdk(&mut state);
+
+        // Add a running session to the session manager.
+        let device = Device {
+            id: "emulator-5554".to_string(),
+            name: "Pixel 6 Emulator".to_string(),
+            platform: "android-x86".to_string(),
+            emulator: true,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: true,
+            capabilities: None,
+        };
+        let session_id = state
+            .session_manager
+            .create_session(&device)
+            .expect("create_session must succeed");
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.session.mark_started("app-1".to_string());
+            handle.session.mark_running();
+        }
+        assert!(
+            state.session_manager.has_running_sessions(),
+            "precondition: session_manager must report a running session"
+        );
+
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        // Handback must be skipped: wizard stays open or closes to Normal (not Startup).
+        assert_ne!(
+            state.ui_mode,
+            crate::state::UiMode::Startup,
+            "Bootstrap with a running session must not transition to Startup"
+        );
+        assert!(
+            !result
+                .actions()
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "Bootstrap with a running session must not dispatch DiscoverDevices"
         );
     }
 }

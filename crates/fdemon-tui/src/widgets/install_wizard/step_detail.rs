@@ -874,7 +874,7 @@ mod tests {
     use fdemon_app::install_wizard::{
         ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, GuidedCommand,
         HostPlatform, HostShell, InstallWizardState, LinuxPackageManager, StepExecStatus,
-        StepExecution, ToolchainReport, WizardStep, WizardStepKind,
+        StepExecution, ToolchainReport, WizardOrigin, WizardStep, WizardStepKind,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 
@@ -924,7 +924,7 @@ mod tests {
     }
 
     fn make_state_with_doctor_step_selected() -> InstallWizardState {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(make_report_with_doctor());
         // Select the Doctor step (index 4 in the 5-step list)
         state.selected_index = 4;
@@ -932,14 +932,14 @@ mod tests {
     }
 
     fn make_state_no_doctor() -> InstallWizardState {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(make_report_no_doctor());
         state.selected_index = 4; // Doctor step
         state
     }
 
     fn make_state_components() -> InstallWizardState {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(make_report_with_doctor());
         state.selected_index = 3; // FlutterSdk step (has components)
         state
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn test_no_panic_loading_state() {
-        let state = InstallWizardState::opening(); // loading=true, steps empty
+        let state = InstallWizardState::opening(WizardOrigin::UserInvoked); // loading=true, steps empty
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -2386,7 +2386,7 @@ mod tests {
     /// NEW (Phase 6): Doctor lines also wrap on a narrow pane.
     #[test]
     fn test_doctor_lines_wrap_on_narrow_pane() {
-        let mut state = InstallWizardState::opening();
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(fdemon_app::install_wizard::ToolchainReport {
             platform: fdemon_app::install_wizard::HostPlatform::Linux,
             shell: fdemon_app::install_wizard::HostShell::Bash,

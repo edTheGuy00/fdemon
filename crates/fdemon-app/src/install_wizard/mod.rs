@@ -13,8 +13,8 @@ mod types;
 pub(crate) use state::is_jdk_actionable;
 pub use state::*;
 pub use types::{
-    GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardPane, WizardStepKind,
-    MAX_LOG_TAIL,
+    GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardOrigin, WizardPane,
+    WizardStepKind, MAX_LOG_TAIL,
 };
 
 // Re-export the daemon toolchain *display* types so presentation-layer widgets can

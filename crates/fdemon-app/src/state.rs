@@ -10,7 +10,7 @@ use rand::Rng;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::flutter_version::FlutterVersionState;
-use crate::install_wizard::InstallWizardState;
+use crate::install_wizard::{InstallWizardState, WizardOrigin};
 use crate::mouse_regions::{MouseRegions, MouseRegionsCell};
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
@@ -1724,8 +1724,12 @@ impl AppState {
     /// Resets the wizard to a fresh loading state and transitions to
     /// `UiMode::InstallWizard`. The caller is responsible for also dispatching
     /// `UpdateAction::RunToolchainPreflight` to populate the report.
-    pub fn show_install_wizard(&mut self) {
-        self.install_wizard_state = InstallWizardState::opening();
+    ///
+    /// The `origin` parameter records why the wizard was opened so that
+    /// `close_wizard_and_dispatch_discovery` can gate the post-install handback:
+    /// only a `Bootstrap` origin auto-advances to device discovery.
+    pub fn show_install_wizard(&mut self, origin: WizardOrigin) {
+        self.install_wizard_state = InstallWizardState::opening(origin);
         self.ui_mode = UiMode::InstallWizard;
     }
 

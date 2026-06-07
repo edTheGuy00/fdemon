@@ -1275,7 +1275,9 @@ fn install_wizard_mode_renders_panel_without_panic() {
     let mut state = AppState::new();
     // Set the mode as the handler does (show_install_wizard + UiMode::InstallWizard).
     state.ui_mode = UiMode::InstallWizard;
-    state.install_wizard_state = fdemon_app::install_wizard::InstallWizardState::opening();
+    state.install_wizard_state = fdemon_app::install_wizard::InstallWizardState::opening(
+        fdemon_app::install_wizard::WizardOrigin::UserInvoked,
+    );
 
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -1306,7 +1308,9 @@ fn install_wizard_mode_suppresses_base_ui_header_regions() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::InstallWizard;
-    state.install_wizard_state = fdemon_app::install_wizard::InstallWizardState::opening();
+    state.install_wizard_state = fdemon_app::install_wizard::InstallWizardState::opening(
+        fdemon_app::install_wizard::WizardOrigin::UserInvoked,
+    );
 
     // Wide terminal so that, if the modal gate were absent, the header WOULD
     // register shortcut regions (as verified by the Phase-3 tests above).
