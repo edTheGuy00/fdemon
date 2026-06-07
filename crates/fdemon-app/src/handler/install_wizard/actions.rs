@@ -11,9 +11,17 @@
 //!
 //! On `WizardStepCompleted { kind: FlutterSdk, sdk_path: Some(p) }`:
 //!   - action  → `PersistSettings`
-//!   - message → `InstallWizardRerunPreflight`
+//!   - message → `InstallWizardAutoConfigurePath { FlutterSdk }`
+//!   - `handle_auto_configure_path` starts PathConfig (`RunWizardStep{PathConfig}`)
+//!   - `WizardStepCompleted { PathConfig }` → `InstallWizardRerunPreflight`
 //!   - `handle_rerun_preflight` fires `RunToolchainPreflight`
 //!   - `handle_preflight_completed` fires `ScanInstalledSdks` (FVM cache refresh)
+//!
+//! On `WizardStepCompleted { kind: AndroidTools, sdk_path: Some(root) }`:
+//!   - action  → `PersistSettings`
+//!   - message → `InstallWizardAutoConfigurePath { AndroidTools }`
+//!   - `handle_auto_configure_path` starts PathConfig with ANDROID_HOME
+//!   - PathConfig completion / failure → `InstallWizardRerunPreflight`
 
 use crate::config::types::InstallMethod;
 use crate::handler::{AndroidStepParams, FlutterStepParams, UpdateAction, UpdateResult};
@@ -116,6 +124,127 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
         project_path,
         explicit_sdk_path,
         android_sdk_root,
+    })
+}
+
+/// Handle `InstallWizardAutoConfigurePath` — auto-run PathConfig after a
+/// successful managed install.
+///
+/// Dispatched by `handle_step_completed` after a successful `FlutterSdk` or
+/// `AndroidTools` install.  Reuses the same `RunWizardStep { PathConfig }`
+/// action path as `handle_run_selected_step` so the executor logic is shared.
+///
+/// ## Scope per origin
+///
+/// - **FlutterSdk origin:** writes the Flutter `<sdk>/bin` PATH entry only.
+///   `android_sdk_root` is passed as `None` so the Android block is not
+///   touched — each step's side effects stay scoped to what it installed.
+/// - **AndroidTools origin:** writes both the Flutter PATH (if a Flutter SDK
+///   is resolvable) and the `ANDROID_HOME` / Android PATH entries.
+///
+/// ## Fallback
+///
+/// If no Flutter bin dir can be resolved (no stash, no settings path, no
+/// resolved SDK), the auto-config cannot proceed.  In that case the handler
+/// falls back to `InstallWizardRerunPreflight` so the step list still refreshes.
+///
+/// ## Seq-guard compliance
+///
+/// The function calls `begin_step(PathConfig)` and mints a fresh `run_seq`
+/// before dispatching `RunWizardStep`, following the same protocol as
+/// `handle_run_selected_step`.  Late `WizardStepStarted` messages from any
+/// prior superseded run are therefore rejected by the seq-guard in
+/// `handle_step_started`.
+///
+/// ## No-loop guarantee
+///
+/// PathConfig completion → `InstallWizardRerunPreflight` (existing).
+/// PathConfig completion does NOT re-trigger `FlutterSdk` or `AndroidTools`,
+/// and `handle_preflight_completed` does not emit `AutoConfigurePath`.
+pub fn handle_auto_configure_path(state: &mut AppState, kind: WizardStepKind) -> UpdateResult {
+    // Guard: only one step at a time.  If a step is already running (e.g. the
+    // user somehow triggered two completions), skip the auto-config and fall
+    // through to preflight so the step list is at least refreshed.
+    if state.install_wizard_state.is_step_running() {
+        return UpdateResult::message(Message::InstallWizardRerunPreflight);
+    }
+
+    // Resolve the Flutter bin dir.  Priority mirrors the PathConfig arm of
+    // `handle_run_selected_step`:
+    //   1. installed_sdk_path stashed by the just-completed FlutterSdk step
+    //   2. settings.flutter.sdk_path (user-configured explicit path)
+    //   3. resolved_sdk from the last preflight run
+    let bin_dir: Option<std::path::PathBuf> = state
+        .install_wizard_state
+        .installed_sdk_path
+        .as_ref()
+        .map(|p| p.join("bin"))
+        .or_else(|| {
+            state
+                .settings
+                .flutter
+                .sdk_path
+                .as_ref()
+                .map(|p| p.join("bin"))
+        })
+        .or_else(|| state.resolved_sdk.as_ref().map(|sdk| sdk.root.join("bin")));
+
+    let Some(bin) = bin_dir else {
+        // No Flutter SDK available — fall back to preflight so the step list
+        // refreshes without hanging.  The install itself was still successful.
+        tracing::warn!(
+            "InstallWizardAutoConfigurePath({:?}): no Flutter bin dir resolvable — \
+             skipping PathConfig auto-run, falling back to preflight",
+            kind
+        );
+        return UpdateResult::message(Message::InstallWizardRerunPreflight);
+    };
+
+    // Scope the Android SDK root per origin:
+    // - FlutterSdk: None  (don't touch Android block for a Flutter-only install)
+    // - AndroidTools: include the root so ANDROID_HOME is written
+    let android_sdk_root: Option<std::path::PathBuf> =
+        match kind {
+            WizardStepKind::FlutterSdk => None,
+            WizardStepKind::AndroidTools => state
+                .settings
+                .toolchain
+                .android_sdk_root
+                .clone()
+                .or_else(|| {
+                    let p = fdemon_daemon::resolve_android_sdk_root_path(None);
+                    if p.is_dir() {
+                        Some(p)
+                    } else {
+                        None
+                    }
+                }),
+            // Other kinds cannot trigger auto-config; treat as Flutter-only.
+            _ => None,
+        };
+
+    // Flip UI to Running immediately (same pattern as handle_run_selected_step).
+    state
+        .install_wizard_state
+        .begin_step(WizardStepKind::PathConfig);
+
+    // Mint the cancellation token synchronously so Esc can fire it even before
+    // the WizardInstallTaskReady message arrives.
+    let cancel_token = CancellationToken::new();
+    let run_seq = state.install_wizard_state.run_seq;
+    state.install_wizard_state.install_task = Some(InstallTaskHandle {
+        cancel: cancel_token.clone(),
+        join: None,
+    });
+
+    UpdateResult::action(UpdateAction::RunWizardStep {
+        kind: WizardStepKind::PathConfig,
+        run_seq,
+        cancel_token,
+        install: None,
+        path_bin_dir: Some(bin),
+        android_sdk_root,
+        android: None,
     })
 }
 
@@ -445,17 +574,25 @@ pub fn handle_step_completed(
 
     if kind == WizardStepKind::FlutterSdk {
         if let Some(path) = sdk_path {
-            // Stash for the subsequent PathConfig step.
+            // Stash for the subsequent PathConfig auto-config and for any
+            // manual PathConfig step the user may run later.
             state.install_wizard_state.installed_sdk_path = Some(path.clone());
 
             // Update the settings sdk_path so the new SDK is recognised
             // on the next preflight run and SDK re-resolution.
             state.settings.flutter.sdk_path = Some(path);
 
-            // Chain: persist settings → re-run preflight (→ ScanInstalledSdks).
+            // Chain: persist settings → auto-configure PATH.
+            // `InstallWizardAutoConfigurePath` will dispatch `RunWizardStep {
+            // PathConfig }` using the stashed SDK root, and PathConfig
+            // completion will re-run preflight.  This replaces the previous
+            // direct `InstallWizardRerunPreflight` hop so the rc file is
+            // written without a manual step.
             let project_path = state.project_path.clone();
             return UpdateResult::message_and_action(
-                Message::InstallWizardRerunPreflight,
+                Message::InstallWizardAutoConfigurePath {
+                    kind: WizardStepKind::FlutterSdk,
+                },
                 UpdateAction::PersistSettings {
                     settings: Box::new(state.settings.clone()),
                     project_path,
@@ -467,14 +604,17 @@ pub fn handle_step_completed(
     if kind == WizardStepKind::AndroidTools {
         // The executor passes the resolved Android SDK root via `sdk_path` so that
         // `settings.toolchain.android_sdk_root` can be updated and persisted.
-        // Re-run preflight afterwards so the Android checks flip to Ok.
         if let Some(root) = sdk_path {
             state.settings.toolchain.android_sdk_root = Some(root);
 
-            // Chain: persist settings → re-run preflight.
+            // Chain: persist settings → auto-configure PATH (writes both
+            // ANDROID_HOME and Flutter PATH if a Flutter SDK is available).
+            // PathConfig completion will re-run preflight.
             let project_path = state.project_path.clone();
             return UpdateResult::message_and_action(
-                Message::InstallWizardRerunPreflight,
+                Message::InstallWizardAutoConfigurePath {
+                    kind: WizardStepKind::AndroidTools,
+                },
                 UpdateAction::PersistSettings {
                     settings: Box::new(state.settings.clone()),
                     project_path,
@@ -516,6 +656,14 @@ pub fn handle_step_completed(
 pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult {
     use crate::install_wizard::StepExecStatus;
 
+    // Capture the running step kind before finish_step is called.
+    // For PathConfig failures we re-run preflight so the step list is still
+    // refreshed even when the auto-configured PATH write fails (e.g. unknown
+    // shell).  The FlutterSdk / AndroidTools installs themselves were already
+    // recorded as Succeeded before the auto-config was dispatched, so the
+    // step list update is still useful.
+    let failing_kind = state.install_wizard_state.execution.kind;
+
     // Always clear the task handle on any terminal path.
     let _ = state.install_wizard_state.install_task.take();
 
@@ -535,6 +683,14 @@ pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult 
         state.install_wizard_state.status_message =
             Some("Failed \u{2014} press Enter to retry or r to re-check".to_string());
     }
+
+    // Re-run preflight after a PathConfig failure so the step list reflects
+    // the current toolchain state (the Flutter install is still live even if
+    // PATH config failed).
+    if failing_kind == Some(WizardStepKind::PathConfig) {
+        return UpdateResult::message(Message::InstallWizardRerunPreflight);
+    }
+
     UpdateResult::none()
 }
 
@@ -1049,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn test_completed_flutter_persists_sdk_path_and_reruns_preflight() {
+    fn test_completed_flutter_persists_sdk_path_and_auto_configures_path() {
         let mut state = state_with_preflight();
         let sdk = std::path::PathBuf::from("/home/user/flutter");
 
@@ -1081,10 +1237,16 @@ mod tests {
             result.action
         );
 
-        // Follow-up message must be InstallWizardRerunPreflight.
+        // Follow-up message must be InstallWizardAutoConfigurePath{FlutterSdk}.
+        // (PathConfig completion will subsequently re-run preflight.)
         assert!(
-            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
-            "must return InstallWizardRerunPreflight follow-up; got {:?}",
+            matches!(
+                result.message,
+                Some(Message::InstallWizardAutoConfigurePath {
+                    kind: WizardStepKind::FlutterSdk
+                })
+            ),
+            "must return InstallWizardAutoConfigurePath{{FlutterSdk}} follow-up; got {:?}",
             result.message
         );
     }
@@ -1617,7 +1779,7 @@ mod tests {
     }
 
     #[test]
-    fn test_completed_android_persists_sdk_root_and_reruns_preflight() {
+    fn test_completed_android_persists_sdk_root_and_auto_configures_path() {
         let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
         state
             .install_wizard_state
@@ -1643,10 +1805,16 @@ mod tests {
             "must return PersistSettings action; got {:?}",
             result.action
         );
-        // Follow-up message must be InstallWizardRerunPreflight.
+        // Follow-up message must be InstallWizardAutoConfigurePath{AndroidTools}.
+        // (PathConfig completion will subsequently re-run preflight.)
         assert!(
-            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
-            "must return InstallWizardRerunPreflight follow-up; got {:?}",
+            matches!(
+                result.message,
+                Some(Message::InstallWizardAutoConfigurePath {
+                    kind: WizardStepKind::AndroidTools
+                })
+            ),
+            "must return InstallWizardAutoConfigurePath{{AndroidTools}} follow-up; got {:?}",
             result.message
         );
     }
@@ -1703,6 +1871,262 @@ mod tests {
         );
         // The session stash is still cleared.
         assert!(state.install_wizard_state.installed_sdk_path.is_none());
+    }
+
+    // ── handle_auto_configure_path tests ─────────────────────────────────────
+
+    /// After a FlutterSdk install, auto-config must start PathConfig with the
+    /// stashed SDK bin dir and no Android SDK root.
+    #[test]
+    fn test_auto_configure_path_flutter_dispatches_pathconfig_flutter_only() {
+        let mut state = state_with_preflight();
+        let sdk = std::path::PathBuf::from("/home/user/flutter");
+        // Simulate the stash left by a completed FlutterSdk step.
+        state.install_wizard_state.installed_sdk_path = Some(sdk.clone());
+        // Also set an Android SDK root to confirm it is NOT included for FlutterSdk origin.
+        state.settings.toolchain.android_sdk_root =
+            Some(std::path::PathBuf::from("/home/user/Android/Sdk"));
+
+        let result = handle_auto_configure_path(&mut state, WizardStepKind::FlutterSdk);
+
+        // Must dispatch RunWizardStep{PathConfig}.
+        assert!(
+            matches!(
+                result.action,
+                Some(UpdateAction::RunWizardStep {
+                    kind: WizardStepKind::PathConfig,
+                    path_bin_dir: Some(_),
+                    android_sdk_root: None,
+                    ..
+                })
+            ),
+            "FlutterSdk auto-config must dispatch PathConfig with Flutter bin only; got {:?}",
+            result.action
+        );
+        // The bin dir must be <sdk>/bin.
+        if let Some(UpdateAction::RunWizardStep {
+            path_bin_dir: Some(bin),
+            ..
+        }) = &result.action
+        {
+            assert_eq!(
+                bin,
+                &sdk.join("bin"),
+                "bin_dir must equal installed_sdk_path/bin"
+            );
+        }
+        // Must be running.
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "begin_step must have been called"
+        );
+        assert_eq!(
+            state.install_wizard_state.execution.kind,
+            Some(WizardStepKind::PathConfig),
+            "execution.kind must be PathConfig"
+        );
+    }
+
+    /// After an AndroidTools install, auto-config must start PathConfig with
+    /// both the Flutter bin dir (from stash / settings) AND the Android SDK root.
+    #[test]
+    fn test_auto_configure_path_android_dispatches_pathconfig_with_android_root() {
+        let mut state = state_with_preflight();
+        let sdk = std::path::PathBuf::from("/home/user/flutter");
+        let android_root = std::path::PathBuf::from("/home/user/Android/Sdk");
+        // Flutter bin dir comes from settings (stash is None here).
+        state.settings.flutter.sdk_path = Some(sdk.clone());
+        // Android SDK root was just persisted by handle_step_completed.
+        state.settings.toolchain.android_sdk_root = Some(android_root.clone());
+
+        let result = handle_auto_configure_path(&mut state, WizardStepKind::AndroidTools);
+
+        // Must dispatch RunWizardStep{PathConfig} with both dirs.
+        assert!(
+            matches!(
+                result.action,
+                Some(UpdateAction::RunWizardStep {
+                    kind: WizardStepKind::PathConfig,
+                    path_bin_dir: Some(_),
+                    android_sdk_root: Some(_),
+                    ..
+                })
+            ),
+            "AndroidTools auto-config must dispatch PathConfig with both dirs; got {:?}",
+            result.action
+        );
+        if let Some(UpdateAction::RunWizardStep {
+            path_bin_dir: Some(bin),
+            android_sdk_root: Some(asr),
+            ..
+        }) = &result.action
+        {
+            assert_eq!(bin, &sdk.join("bin"), "bin_dir must equal sdk_path/bin");
+            assert_eq!(asr, &android_root, "android_sdk_root must match settings");
+        }
+    }
+
+    /// When no Flutter SDK is resolvable, auto-config must fall back to
+    /// InstallWizardRerunPreflight (the install itself was still successful).
+    #[test]
+    fn test_auto_configure_path_fallback_when_no_flutter_sdk() {
+        let mut state = state_with_preflight();
+        state.settings.flutter.sdk_path = None;
+        state.resolved_sdk = None;
+        state.install_wizard_state.installed_sdk_path = None;
+
+        let result = handle_auto_configure_path(&mut state, WizardStepKind::FlutterSdk);
+
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "auto-config with no Flutter SDK must fall back to preflight; got {:?}",
+            result.message
+        );
+        assert!(
+            result.action.is_none(),
+            "must not dispatch RunWizardStep when no bin dir; got {:?}",
+            result.action
+        );
+        // Must not start a step.
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "must not call begin_step when falling back"
+        );
+    }
+
+    /// When a step is already running, auto-config must not clobber it and must
+    /// fall back to preflight.
+    #[test]
+    fn test_auto_configure_path_noop_when_step_running() {
+        let mut state = state_with_preflight();
+        let sdk = std::path::PathBuf::from("/home/user/flutter");
+        state.install_wizard_state.installed_sdk_path = Some(sdk.clone());
+        // Simulate a step already in progress.
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+        assert!(state.install_wizard_state.is_step_running());
+
+        let result = handle_auto_configure_path(&mut state, WizardStepKind::FlutterSdk);
+
+        // Must not dispatch RunWizardStep.
+        assert!(
+            result.action.is_none(),
+            "must not dispatch when a step is already running; got {:?}",
+            result.action
+        );
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "must fall back to preflight when step is running; got {:?}",
+            result.message
+        );
+        // The running step must not be clobbered.
+        assert_eq!(
+            state.install_wizard_state.execution.kind,
+            Some(WizardStepKind::FlutterSdk),
+            "execution.kind must remain FlutterSdk (not clobbered)"
+        );
+    }
+
+    /// PathConfig completion must NOT re-trigger FlutterSdk or AndroidTools.
+    /// This is the no-loop guard.
+    #[test]
+    fn test_pathconfig_completion_does_not_retrigger_installer() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::PathConfig);
+
+        let result = handle_step_completed(
+            &mut state,
+            WizardStepKind::PathConfig,
+            "PATH configured".into(),
+            None,
+        );
+
+        // Must be RerunPreflight — not AutoConfigurePath.
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "PathConfig completion must only re-run preflight (no loop); got {:?}",
+            result.message
+        );
+        assert!(
+            !matches!(
+                result.message,
+                Some(Message::InstallWizardAutoConfigurePath { .. })
+            ),
+            "PathConfig completion must NOT emit AutoConfigurePath"
+        );
+    }
+
+    /// A PathConfig failure (e.g. unknown shell) must still re-run preflight
+    /// so the step list reflects the current toolchain state after the Flutter
+    /// install.
+    #[test]
+    fn test_step_failed_pathconfig_reruns_preflight() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::PathConfig);
+        assert!(state.install_wizard_state.is_step_running());
+
+        let result = handle_step_failed(&mut state, "unknown shell — cannot write rc file".into());
+
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "step must no longer be running"
+        );
+        assert!(
+            matches!(result.message, Some(Message::InstallWizardRerunPreflight)),
+            "PathConfig failure must re-run preflight; got {:?}",
+            result.message
+        );
+    }
+
+    /// A non-PathConfig failure must NOT re-run preflight automatically.
+    #[test]
+    fn test_step_failed_flutter_does_not_rerun_preflight() {
+        let mut state = state_with_preflight();
+        state
+            .install_wizard_state
+            .begin_step(WizardStepKind::FlutterSdk);
+
+        let result = handle_step_failed(&mut state, "network timeout".into());
+
+        assert!(
+            result.message.is_none(),
+            "non-PathConfig failure must not emit a follow-up message; got {:?}",
+            result.message
+        );
+    }
+
+    /// Stale seq-guard: auto-configured PathConfig `WizardStepStarted` with an
+    /// old run_seq must be a no-op and must not clobber the live run.
+    #[test]
+    fn test_auto_configure_path_stale_started_is_noop() {
+        let mut state = state_with_preflight();
+        let sdk = std::path::PathBuf::from("/home/user/flutter");
+        state.install_wizard_state.installed_sdk_path = Some(sdk);
+
+        // Fire auto-config → bumps run_seq and begins PathConfig.
+        handle_auto_configure_path(&mut state, WizardStepKind::FlutterSdk);
+        let live_seq = state.install_wizard_state.run_seq;
+        assert!(state.install_wizard_state.is_step_running());
+
+        // A stale WizardStepStarted from run_seq - 1 must be discarded.
+        let stale_seq = live_seq.wrapping_sub(1);
+        handle_step_started(&mut state, WizardStepKind::PathConfig, stale_seq);
+
+        // The live PathConfig run must survive.
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "stale Started must not clobber the live auto-configured run"
+        );
+        assert_eq!(
+            state.install_wizard_state.execution.kind,
+            Some(WizardStepKind::PathConfig),
+            "execution kind must remain PathConfig"
+        );
     }
 
     #[test]

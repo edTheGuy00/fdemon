@@ -3285,6 +3285,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         } => install_wizard::handle_install_task_ready(state, kind, run_seq, handle),
         Message::InstallWizardCancelStep => install_wizard::handle_cancel_step(state),
 
+        Message::InstallWizardAutoConfigurePath { kind } => {
+            install_wizard::handle_auto_configure_path(state, kind)
+        }
+
         // ── Mouse Capture (log-text-selection-broken fix) ──────────────────────
         Message::CopyLogEntryToClipboard { entry_id } => {
             let entry_text = resolve_entry_text(state, entry_id);

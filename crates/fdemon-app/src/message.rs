@@ -1860,6 +1860,27 @@ pub enum Message {
     /// (close the wizard).
     InstallWizardCancelStep,
 
+    /// Auto-configure PATH after a successful managed install.
+    ///
+    /// Emitted by `handle_step_completed` when `FlutterSdk` or `AndroidTools`
+    /// completes with a resolved SDK path.  The handler dispatches
+    /// `RunWizardStep { kind: PathConfig, .. }` using the freshly-stashed SDK
+    /// root so the shell rc file is updated without a manual step.
+    ///
+    /// - For `FlutterSdk` origin: writes the Flutter `<sdk>/bin` PATH entry
+    ///   only (`android_sdk_root: None`), keeping FlutterSdk side-effects scoped
+    ///   to what was installed.
+    /// - For `AndroidTools` origin: writes both the Flutter PATH (if a Flutter
+    ///   SDK is known) and the Android `ANDROID_HOME` + PATH entries.
+    ///
+    /// If no Flutter bin dir can be resolved (unlikely but possible on a fresh
+    /// machine with no prior SDK), the handler falls back to
+    /// `InstallWizardRerunPreflight` so the step list still refreshes.
+    InstallWizardAutoConfigurePath {
+        /// Which installer step triggered this auto-config.
+        kind: WizardStepKind,
+    },
+
     // ── Mouse Click Messages (Phase 5) ────────────────────────────────────────
     /// Click on a device row inside the NewSessionDialog Connected/Bootable list.
     ///
