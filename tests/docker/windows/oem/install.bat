@@ -16,6 +16,7 @@ REM run the wizard as the Docker user instead.
 REM 1. Install fdemon.exe and put it on the machine PATH.
 mkdir C:\fdemon 2>nul
 copy /Y C:\OEM\fdemon.exe C:\fdemon\fdemon.exe
+copy /Y C:\OEM\reset-toolchain.ps1 C:\fdemon\reset-toolchain.ps1 2>nul
 setx /M PATH "%PATH%;C:\fdemon" >nul 2>&1
 
 REM 2. Create a minimal runnable Flutter project. On Windows, a runnable project
