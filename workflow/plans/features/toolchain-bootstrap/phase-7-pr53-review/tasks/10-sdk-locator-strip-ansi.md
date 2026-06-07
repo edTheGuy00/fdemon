@@ -81,3 +81,36 @@ error-text cleanup only (not on the detection path).
 - File-disjoint from all other tasks → Wave 1 parallel worktree candidate.
 - All three are low-severity edge cases; bundled because they share the
   `flutter_sdk/` module and none alters the primary detection chain.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a9de6e8f0db7b2e26
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/types.rs` | (a) `read_version_file`: blank legacy file falls through to JSON; (b) added `read_channel_from_version_json` pub(crate) helper; tests for both |
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | Imported `read_channel_from_version_json`; `try_resolve_sdk` and strategy-11 lenient fallback now use `.or_else(|| read_channel_from_version_json(...))` after `detect_channel`; added `create_mock_sdk_gitless` helper and `test_channel_from_version_json_for_gitless_install` test |
+| `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs` | (c) `strip_ansi`: peek before consuming the char after inner ESC in OSC — only consume when it is `\`; two new tests |
+| `tests/sdk_detection/tier1_edge_cases.rs` | Updated `test_sdk_version_file_empty` to assert `is_err()` (the old `Ok("")` expectation was the bug) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`read_version_file` borrow fix**: Changing the `let version_file = if … { lowercase } else { uppercase }` move to borrow-based `let version_file: &Path = if … { &lowercase } else { &uppercase }` lets us reference both `lowercase` and `uppercase` in the final error message without cloning. Zero cost.
+2. **Separate `read_channel_from_version_json` function**: Rather than extending `read_framework_version_json` to return both fields (changing its return type), a sibling function with the same JSON-reading pattern was added. This keeps each function focused and avoids any risk of changing the version-reading contract.
+3. **Integration test update**: `test_sdk_version_file_empty` previously asserted the buggy `Ok("")` outcome. The test was updated to assert `is_err()` when no JSON fallback exists, matching the corrected behavior described in the task.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (6,963 tests: 0 failed, 98 ignored)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Blank legacy file + no JSON = Err**: Previously a blank legacy file returned `Ok("")` (silent); now it returns `Err`. This is the correct behavior per the task but could surface as a validation failure for installs that have a blank-but-present `VERSION` file with no `flutter.version.json`. In practice this is limited to corrupted or incomplete SDK trees — valid SDK roots always have at least one of the two version sources.

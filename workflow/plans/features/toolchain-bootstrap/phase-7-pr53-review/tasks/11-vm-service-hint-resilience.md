@@ -78,3 +78,36 @@ only triggers when the parser is mid-block).
 - File-disjoint from all other tasks → Wave 1 parallel worktree candidate.
 - Lowest-priority item; purely a UX-polish fix since the actionable guidance log
   survives regardless.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a35f9207b8b276582
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Added guard on `clear_progress()` in the `AppProgress` handler: the `(_, true)` arm now only clears when `!vm_service_unavailable`; added `vm_failure_hint_survives_late_finished_progress` regression test. |
+| `crates/fdemon-app/src/session/session.rs` | In `detect_vm_service_failure`, added `flush_exception_buffer()` call before `flush_batched_logs()` so any mid-block partial exception is committed before guidance entries. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard placement**: The guard is placed on the `(_, true)` arm only (the `clear_progress` path), not the `(Some(m), false)` arm. A late `app.progress` message that carries an actual progress string while `vm_service_unavailable` is set is theoretically possible but practically impossible — the Flutter build would have to emit a new progress message after the VM-service failure. Guarding the `finished:true` arm is sufficient and minimal.
+
+2. **`flush_exception_buffer` ordering**: Called before `flush_batched_logs()` — if the parser was mid-block when the failure marker arrived, the partial exception block is emitted first, then queued raw lines, then the four guidance entries. This matches the intended "error appears immediately before guidance" invariant for all cases.
+
+3. **No dedicated field**: The task proposed either guarding `clear_progress` or adding a dedicated field. Guarding is simpler and avoids a new TUI render path.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all existing tests + new regression test)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Exception buffer corner case**: The `flush_exception_buffer` call is defensive — the VM-service marker ("Could not start Dart VM service") does not start an exception block, so in practice the parser is never mid-block when the marker arrives. The flush is a correctness safeguard for the documented narrow corner case.

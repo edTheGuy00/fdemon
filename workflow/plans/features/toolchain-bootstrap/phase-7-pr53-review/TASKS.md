@@ -114,18 +114,18 @@ Parallel disjoint (no shared files with chains A/B/C or each other)
 
 | # | Task | Status | Depends On | Sev (max) | Est. Hours | Modules |
 |---|------|--------|------------|-----------|------------|---------|
-| 01 | [01-wizard-step-started-seq-aware](tasks/01-wizard-step-started-seq-aware.md) | ⬜ Todo | - | HIGH | 4-6h | `handler/install_wizard/actions.rs`, `install_wizard/state.rs`, `message.rs`, `actions/mod.rs` |
-| 02 | [02-windows-path-reg-expand-sz](tasks/02-windows-path-reg-expand-sz.md) | ⬜ Todo | - | HIGH | 4-6h | `toolchain/path_config.rs` |
-| 03 | [03-download-transport-integrity](tasks/03-download-transport-integrity.md) | ⬜ Todo | - | MEDIUM | 4-6h | `toolchain/download.rs`, `toolchain/android_install.rs` |
-| 04 | [04-flutter-install-cancel-tempdir](tasks/04-flutter-install-cancel-tempdir.md) | ⬜ Todo | 03 | MEDIUM | 4-6h | `toolchain/flutter_install.rs`, `toolchain/download.rs` |
-| 05 | [05-android-jdk-cross-platform](tasks/05-android-jdk-cross-platform.md) | ⬜ Todo | 03 | MEDIUM | 3-4h | `toolchain/android_install.rs`, `toolchain/jdk.rs` |
-| 06 | [06-reset-execution-on-apply-report](tasks/06-reset-execution-on-apply-report.md) | ⬜ Todo | 01 | MEDIUM | 2-3h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs` |
-| 07 | [07-rc-file-perms-temp-name](tasks/07-rc-file-perms-temp-name.md) | ⬜ Todo | 02 | MEDIUM | 2-3h | `toolchain/path_config.rs` |
-| 08 | [08-prereq-probe-fixes](tasks/08-prereq-probe-fixes.md) | ⬜ Todo | - | MEDIUM | 2-3h | `toolchain/checks/prerequisites.rs` |
-| 09 | [09-doctor-cli-fixes](tasks/09-doctor-cli-fixes.md) | ⬜ Todo | - | MEDIUM | 3-4h | `src/doctor.rs`, `src/main.rs`, `toolchain/doctor.rs`, `toolchain/mod.rs` |
-| 10 | [10-sdk-locator-strip-ansi](tasks/10-sdk-locator-strip-ansi.md) | ⬜ Todo | - | LOW | 2-3h | `flutter_sdk/types.rs`, `flutter_sdk/locator.rs`, `flutter_sdk/diagnostics.rs` |
-| 11 | [11-vm-service-hint-resilience](tasks/11-vm-service-hint-resilience.md) | ⬜ Todo | - | LOW | 1.5-2h | `session/session.rs`, `handler/session.rs` |
-| 12 | [12-update-docs](tasks/12-update-docs.md) | ⬜ Todo | 01-11 | — | 1-1.5h | `docs/ARCHITECTURE.md` |
+| 01 | [01-wizard-step-started-seq-aware](tasks/01-wizard-step-started-seq-aware.md) | ✅ Done | - | HIGH | 4-6h | `handler/install_wizard/actions.rs`, `install_wizard/state.rs`, `message.rs`, `actions/mod.rs` |
+| 02 | [02-windows-path-reg-expand-sz](tasks/02-windows-path-reg-expand-sz.md) | ✅ Done | - | HIGH | 4-6h | `toolchain/path_config.rs` |
+| 03 | [03-download-transport-integrity](tasks/03-download-transport-integrity.md) | ✅ Done (CONCERN: redirect-bound test gap, non-blocking) | - | MEDIUM | 4-6h | `toolchain/download.rs`, `toolchain/android_install.rs` |
+| 04 | [04-flutter-install-cancel-tempdir](tasks/04-flutter-install-cancel-tempdir.md) | ✅ Done (CONCERN: is_multiple_of MSRV note, non-blocking) | 03 | MEDIUM | 4-6h | `toolchain/flutter_install.rs`, `toolchain/download.rs`, `toolchain/android_install.rs` (sig adapt) |
+| 05 | [05-android-jdk-cross-platform](tasks/05-android-jdk-cross-platform.md) | ✅ Done (CONCERN: AC3 backup-restore test gap, non-blocking) | 03 | MEDIUM | 3-4h | `toolchain/android_install.rs`, `toolchain/jdk.rs` |
+| 06 | [06-reset-execution-on-apply-report](tasks/06-reset-execution-on-apply-report.md) | ✅ Done | 01 | MEDIUM | 2-3h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs` |
+| 07 | [07-rc-file-perms-temp-name](tasks/07-rc-file-perms-temp-name.md) | ✅ Done | 02 | MEDIUM | 2-3h | `toolchain/path_config.rs` |
+| 08 | [08-prereq-probe-fixes](tasks/08-prereq-probe-fixes.md) | ✅ Done | - | MEDIUM | 2-3h | `toolchain/checks/prerequisites.rs` |
+| 09 | [09-doctor-cli-fixes](tasks/09-doctor-cli-fixes.md) | ✅ Done | - | MEDIUM | 3-4h | `src/doctor.rs`, `src/main.rs`, `toolchain/doctor.rs`, `toolchain/mod.rs` |
+| 10 | [10-sdk-locator-strip-ansi](tasks/10-sdk-locator-strip-ansi.md) | ✅ Done | - | LOW | 2-3h | `flutter_sdk/types.rs`, `flutter_sdk/locator.rs`, `flutter_sdk/diagnostics.rs` |
+| 11 | [11-vm-service-hint-resilience](tasks/11-vm-service-hint-resilience.md) | ✅ Done | - | LOW | 1.5-2h | `session/session.rs`, `handler/session.rs` |
+| 12 | [12-update-docs](tasks/12-update-docs.md) | ✅ Done | 01-11 | — | 1-1.5h | `docs/ARCHITECTURE.md` |
 
 **Total Tasks:** 12
 **Estimated Hours:** 33–48 hours

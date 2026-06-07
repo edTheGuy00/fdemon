@@ -94,3 +94,56 @@ registry value under `HKCU:\Environment`:
 - Requires a Windows runner or VM to truly verify; gate the registry-touching
   test behind `#[cfg(windows)]` and keep the planning logic in a pure,
   cross-platform-testable helper.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Replaced `[Environment]::GetEnvironmentVariable/SetEnvironmentVariable` round-trip with raw registry access via `GetValue(..., 'DoNotExpandEnvironmentNames')` + `New-ItemProperty -PropertyType`. Added `WindowsRegKind` enum, `decide_reg_kind()` pure fn, `plan_windows_path_update()` pure fn, 4 new PowerShell script constants. Updated `add_to_path_windows` and `add_android_env_windows`. Updated doc comments. Added 16 new unit tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`plan_windows_path_update` empty-path override**: `decide_reg_kind("", false)` returns `String` by design (that function is a pure classifier). The override to `ExpandString` for new/absent keys lives in `plan_windows_path_update` itself, which is the correct place — the caller that knows context (no key exists yet) makes the defaulting decision. The test `test_decide_reg_kind_empty_no_flag_is_string` explicitly documents this separation.
+
+2. **`ANDROID_HOME` written as `REG_SZ` (`String`)**: The task spec says ANDROID_HOME gets written as `REG_SZ` (a concrete path, not a `%VAR%` template). Only PATH needs type-preservation since existing PATH entries may contain `%USERPROFILE%\bin` etc. This is consistent with the task spec ("ANDROID_HOME" is a concrete dir that the user specifies, not a template).
+
+3. **Out-of-band env vars extended to include `FDEMON_PATH_KIND`**: The property type is also passed as an env var to the write script, keeping the script entirely constant with no user-controlled interpolation surface.
+
+4. **Idempotency checks on raw value**: The already-present check in `plan_windows_path_update` operates on the raw (unexpanded) value, meaning a literal `%JAVA_HOME%\bin` entry in PATH will be detected correctly without requiring the env to be expanded.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (1109 fdemon-daemon unit tests, 0 failed; 5069+ total)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 errors)
+- 16 new pure unit tests added (cross-platform, no PowerShell required):
+  - `test_plan_windows_path_update_expand_sz_when_percent_tokens`
+  - `test_plan_windows_path_update_expand_sz_from_existing_flag`
+  - `test_plan_windows_path_update_string_when_plain_value`
+  - `test_plan_windows_path_update_empty_path_defaults_to_expand_string`
+  - `test_plan_windows_path_update_idempotent`
+  - `test_plan_windows_path_update_trailing_semicolon`
+  - `test_plan_windows_path_update_preserves_percent_tokens`
+  - `test_decide_reg_kind_percent_in_value`
+  - `test_decide_reg_kind_existing_flag`
+  - `test_decide_reg_kind_plain_value`
+  - `test_decide_reg_kind_empty_no_flag_is_string`
+  - `test_write_raw_path_script_uses_env_vars_not_interpolation`
+  - `test_read_raw_path_script_does_not_expand`
+  - `test_write_android_home_script_uses_env_var_not_interpolation`
+  - `test_windows_reg_kind_property_type_strings`
+  - Updated 3 existing tests to reference new script constants
+
+### Risks/Limitations
+
+1. **Windows-only path**: The fix can only be fully verified on a Windows runner. The PowerShell scripts (`READ_RAW_PATH_SCRIPT`, `WRITE_RAW_PATH_SCRIPT`, `READ_RAW_ANDROID_HOME_SCRIPT`, `WRITE_ANDROID_HOME_SCRIPT`) are `allow(dead_code)` on non-Windows and are validated purely by script-content assertions on all platforms.
+
+2. **`GetValueKind` availability**: `GetValueKind` is available in PowerShell 5.1+ and PowerShell Core 6+, which covers all modern Windows versions. On Windows 7 (EOL), this may not be available — but Flutter itself dropped Windows 7 support years ago.

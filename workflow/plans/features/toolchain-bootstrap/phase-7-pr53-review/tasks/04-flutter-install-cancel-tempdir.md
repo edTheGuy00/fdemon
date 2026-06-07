@@ -97,3 +97,58 @@ but should not leak in the first place.)
   findings are intentionally **out of scope** (both were adversarially rejected:
   the budget is documented/correct, and `handle_cancel_step` already
   abort()+kill_on_drop kills sdkmanager).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/download.rs` | Added `CancellationToken` parameter to `extract_zip`, `extract_tar_xz`, `extract_archive`; added `CANCEL_CHECK_INTERVAL` constant; added 3 extraction cancellation tests |
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | Fixed `archive_install` to clone token before download and check it before verify/extract; wrapped `spawn_blocking` verify and extract calls in `tokio::select!` against `cancel.cancelled()`; moved `tmp_guard.disarm()` to after successful rename; added outer wrapper cleanup for archive path; added 4 new tests |
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | Updated `extract_zip` call to pass `&CancellationToken::new()` to satisfy updated function signature |
+
+### Notable Decisions/Tradeoffs
+
+1. **Cooperative cancellation via token threading**: Rather than select+abort without awaiting the blocking thread, we pass the `CancellationToken` into `extract_archive`/`extract_zip`/`extract_tar_xz` so the blocking thread exits cooperatively. For `extract_tar_xz`, dropping the `ReceiverReader` propagates `BrokenPipe` to the XZ decode thread so it also self-terminates. This eliminates the write/delete race without needing to await the blocking thread after abort.
+
+2. **`select!` with `&mut handle` pattern**: Used `let mut verify_handle = ...; tokio::select! { _ = cancel.cancelled() => { verify_handle.abort(); ... } result = &mut verify_handle => { ... } }` to avoid double-move errors. The `mut` binding and `&mut` poll reference in the non-cancel arm enables calling `abort()` in the cancel arm.
+
+3. **Disarm-after-rename ordering**: Moved `tmp_guard.disarm()` to after `std::fs::rename(...)` succeeds. Previously disarming before the rename meant a rename failure leaked the extracted SDK. Now the guard fires on any failure path.
+
+4. **Outer wrapper cleanup**: For the archive path, `sdk_root_in_tmp` is `tmp_dir/flutter` (not `tmp_dir`). After renaming the inner dir to `final_dir`, the outer `.fdemon-install-tmp-<pid>` wrapper is now explicitly removed. `reclaim_stale_flutter_tmps` continues to serve as a cross-run backstop.
+
+5. **android_install.rs minimal change**: The cancel token is consumed by `download_to_file` in the android path, so `extract_zip` receives `CancellationToken::new()` (non-cancellable). This maintains existing behavior for the android path and is noted in a comment.
+
+6. **Check interval at entry 0**: Since `i.is_multiple_of(256)` is true for `i == 0`, a pre-cancelled token is caught on the very first iteration — satisfying the "stops extraction promptly" acceptance criterion.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (all tests pass, 7 new tests added)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
+### New Tests Added
+
+**download.rs:**
+- `extract_zip_cancelled_token_stops_extraction` — pre-cancelled token stops zip extraction
+- `extract_tar_xz_cancelled_token_stops_extraction` — pre-cancelled token stops tar.xz extraction
+- `extract_archive_cancelled_token_stops_extraction` — pre-cancelled token stops archive dispatch
+
+**flutter_install.rs:**
+- `temp_dir_guard_fires_on_cancelled_return` — guard fires when cancel causes early return (AC1)
+- `temp_dir_guard_not_disarmed_on_rename_failure_simulated` — guard removes dir when rename fails (AC2)
+- `temp_dir_guard_disarmed_after_rename_does_not_remove_final_dir` — disarm-after-rename correctness (AC3)
+- `outer_tmp_wrapper_removed_after_archive_rename` — no wrapper dir remains after archive install (AC4)
+
+### Risks/Limitations
+
+1. **`spawn_blocking` abort semantics**: Calling `abort()` on a `spawn_blocking` `JoinHandle` does not kill the underlying OS thread — the thread runs to completion. For `verify_sha256` (the cancel branch), we abort and immediately return; the thread completes its SHA-256 computation independently. This is safe since `verify_sha256` only reads (no write/delete race). For `extract_archive`, the cooperative token check ensures the thread terminates without writing after the token fires.
+
+2. **CANCEL_CHECK_INTERVAL granularity**: Cancellation is checked every 256 entries. The Flutter SDK tar.xz has ~80k entries, so the maximum additional work after a cancel is bounded by ~256 entries. This is well under a second in practice.

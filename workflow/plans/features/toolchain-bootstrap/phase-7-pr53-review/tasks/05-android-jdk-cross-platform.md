@@ -92,3 +92,40 @@ install destroyed, with no backup.
   from task 04, so 04 and 05 may run in parallel worktrees after 03.
 - Most impact is platform-specific (Windows / macOS); ensure the pure helpers are
   testable on the CI host (Linux) and gate any OS-specific integration behind cfg.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/android_install.rs` | (a) PATH separator fixed via `join_paths`/`split_paths`; (c) `relocate_cmdline_tools` backup-restore pattern; new tests for PATH separator and backup-restore |
+| `crates/fdemon-daemon/src/toolchain/jdk.rs` | (b) `java_home_from_which` tightened: added `NON_JDK_PREFIXES` constant, reject `/usr`/`/usr/local`, require `release` file or `bin/javac` (not bare `lib/`); new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **PATH separator (a)**: Used `std::env::split_paths` + `std::env::join_paths` which handles both `:` (POSIX) and `;` (Windows) automatically and correctly quotes paths with spaces. No `cfg!(windows)` branching needed.
+
+2. **JDK prefix rejection (b)**: Added a `NON_JDK_PREFIXES: &[&str]` constant (`/usr`, `/usr/local`) that is checked before the JDK marker test. The marker check was tightened from `release file OR lib/` to `release file OR bin/javac` — the old `lib/` check was the root cause of the `/usr` false positive since `/usr/lib` exists everywhere. All new tests are pure (no `which` invocation needed) and run on Linux CI.
+
+3. **Backup-restore (c)**: The `relocate_cmdline_tools` function now renames an existing `latest/` to `latest.bak-<pid>` before attempting the new rename. On success, the backup is removed (best-effort, with a warning log if removal fails). On rename failure, the backup is restored via `rename`, preserving the pre-existing working install. On catastrophic restore failure (both renames fail), an `error!` log is emitted with enough context for manual recovery.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test -p fdemon-daemon --lib -- toolchain::android_install::tests` - PASS (20 tests)
+- `cargo test -p fdemon-daemon --lib -- toolchain::jdk::tests` - PASS (13 tests)
+- `cargo test --workspace` - PASS (all test suites green)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
+### Risks/Limitations
+
+1. **`join_paths` fallback**: If `join_paths` fails (unusual characters in PATH entries), the code falls back to the original existing PATH unchanged. The fallback is logged implicitly via the `unwrap_or_else` — adding explicit tracing would be marginal since this case is exceedingly rare in practice.
+
+2. **Non-JDK prefix list is POSIX-only**: `NON_JDK_PREFIXES` only covers `/usr` and `/usr/local`. On Windows the equivalent would be `C:\Windows\System32`, but the `which` heuristic is less likely to fire incorrectly there since Windows JDK installs always have `bin\javac.exe`. No Windows-specific prefix was added since it would require `#[cfg(windows)]` gating and there are no Windows CI hosts to verify against.

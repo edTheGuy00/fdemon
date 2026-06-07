@@ -78,3 +78,41 @@ name removes any safety margin).
   (chain C: 02 → 07), not parallel worktrees.
 - If `tempfile` is promoted from dev-dep to dep, note it in the task 12 docs update
   (DEVELOPMENT.md/ARCHITECTURE.md dependency mention if warranted).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/Cargo.toml` | Promoted `tempfile` from `[dev-dependencies]` to `[dependencies]` |
+| `crates/fdemon-daemon/src/toolchain/path_config.rs` | Added `#[cfg(unix)] use std::os::unix::fs::PermissionsExt`; rewrote `write_rc_atomically` to use `tempfile::Builder::new().prefix(".fdemon-rc-tmp-").tempfile_in(parent)` for unique temp name and `persist()` for atomic rename; added Unix permission preservation (reads existing mode, applies to temp file before rename; defaults to 0600 for new files); added 3 new tests: `test_write_rc_preserves_mode` (#[cfg(unix)]), `test_write_rc_new_file_is_0600` (#[cfg(unix)]), `test_write_rc_temp_name_is_not_deterministic_fdemon_tmp` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Using `tempfile::Builder::new().tempfile_in(parent).persist()`**: This is the idiomatic `tempfile` API for unique atomic writes. `persist()` consumes the `NamedTempFile` and renames it to the destination, preventing the Drop impl from deleting it. Error on `persist` returns a `PersistError` with both the error and the original file accessible.
+2. **Permission preservation via snapshot**: Reading metadata before writing and applying after, rather than using `O_CREAT` flags, is the only portable approach on stable Rust without unsafe code. The read-then-apply window is minimal (same process, same thread).
+3. **Best-effort permission application**: If `set_permissions` fails (e.g., no ownership), a debug trace is logged but the write proceeds. The rename still completes — the content is correct even if the mode restore failed.
+4. **`parent` fallback to `.`**: When `rc_file.parent()` returns `None` or an empty path (e.g., bare filename), we fall back to `"."`. This is consistent with the existing `create_dir_all` logic.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-daemon --lib -- toolchain::path_config` - Passed (85 tests, 3 new)
+- `cargo test --workspace` - Passed (all test results ok, no failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Cross-process race still possible**: The task notes this is optional. No advisory lock is taken across the read-modify-write window. Two concurrent fdemon processes can still produce a lost-update if they both read at the same time. The unique temp name eliminates the temp-clobber hazard but not the logical race. Documented as single-writer assumption in the doc comment.
+2. **Non-Unix platforms**: Permission handling is a no-op on non-Unix platforms (Windows uses registry, not rc files). This is correct behavior — `write_rc_atomically` is only called for Unix rc files.
+
+### Doc Updates Needed
+
+- `docs/ARCHITECTURE.md` `fdemon-daemon` dependency list: `tempfile` promoted from dev-dep to regular dep (used in non-test code for unique temp file creation in `toolchain/path_config.rs`). Task 12 should note this.

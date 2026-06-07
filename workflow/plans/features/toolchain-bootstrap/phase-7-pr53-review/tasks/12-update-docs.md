@@ -66,3 +66,28 @@ data flow, invariants) — do not duplicate task-file detail.
 - Runs last (Wave 3), after the implementation tasks land, so the descriptions match
   the merged behaviour. Routed to `doc_maintainer` (the only agent permitted to edit
   the core docs).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Updated toolchain/install-wizard sections with post-Phase-7 invariants for all 8 areas (tasks 01-11) |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: NO (N/A — no violations found)
+
+### Notable Decisions/Tradeoffs
+
+1. **task 10 (strip_ansi / version.json) scope**: The strip_ansi fix and VERSION fallback were documented under `flutter_sdk/diagnostics.rs` and `flutter_sdk/locator.rs`/`channel.rs` respectively, as architectural invariants of those modules — within ARCHITECTURE.md scope.
+2. **task 11 (VM-service-unavailable hint)**: Documented as a guard invariant in the Session Launch Lifecycle section (the `Running` phase row) rather than as a separate subsection, since it describes a single conditional in the phase-transition logic.
+3. **DEVELOPMENT.md not modified**: `tempfile` promotion (task 07) is noted in ARCHITECTURE.md's `fdemon-daemon` Dependencies line. DEVELOPMENT.md does not enumerate per-crate runtime dependency lists at that granularity, so no change was needed there.
+4. **CONFIGURATION.md not modified**: task 09 did not add any new CLI flags or configuration keys — it corrected exit-code semantics and rejected incompatible flag combinations. No CONFIGURATION.md entry was warranted.

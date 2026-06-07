@@ -85,3 +85,41 @@ reset in `handle_preflight_completed` after `apply_report` — prefer doing it i
 
 - Shares both files with task 01 — run serially on the same branch (chain A:
   01 → 06), not parallel worktrees.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `self.execution = StepExecution::default();` in `apply_report`; added 3 new unit tests covering Failed/Cancelled/Succeeded reset |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added 3 new tests: `test_preflight_completed_after_failed_step_clears_execution`, `test_preflight_completed_after_cancelled_step_clears_execution`, and `test_preflight_completed_handback_still_fires_after_execution_reset` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fix location in `apply_report` not `handle_preflight_completed`**: The task explicitly preferred fixing it in `apply_report` so every report-application path is covered, not just the `handle_preflight_completed` call site. This is the correct choice since `apply_report` is also called directly (e.g. in tests and via `handle_rerun_preflight` → `handle_preflight_completed`).
+2. **`installed_sdk_path` not cleared**: The task said to leave it unless it visibly leaks across re-checks. Since `installed_sdk_path` is used by the PathConfig step to resolve the Flutter bin dir, clearing it on a re-check would break the PathConfig step after a FlutterSdk success. Left untouched.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all results ok, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+New tests added:
+- `state::tests::test_apply_report_resets_execution` - verifies Failed execution cleared
+- `state::tests::test_apply_report_resets_cancelled_execution` - verifies Cancelled execution cleared
+- `state::tests::test_apply_report_resets_succeeded_execution` - verifies Succeeded execution cleared
+- `actions::tests::test_preflight_completed_after_failed_step_clears_execution` - integration path: Failed → apply_report → Idle
+- `actions::tests::test_preflight_completed_after_cancelled_step_clears_execution` - integration path: Cancelled → apply_report → Idle
+- `actions::tests::test_preflight_completed_handback_still_fires_after_execution_reset` - regression: handback auto-close still fires after execution reset
+
+### Risks/Limitations
+
+1. **None identified**: The change is minimal (one line in `apply_report`) and the handback predicate `flutter_now_live()` reads `report.components`, not `execution`, confirming no regression risk to the auto-close path.

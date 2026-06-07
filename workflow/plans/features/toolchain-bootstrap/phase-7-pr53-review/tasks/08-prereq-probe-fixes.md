@@ -85,3 +85,35 @@ is dead and its comment describes a nonexistent situation.
 - File-disjoint from all other tasks → Wave 1 parallel worktree candidate.
 - All three are "misleading guidance" defects, not crashes; the value is correct
   diagnostics for real-world minimal Linux installs and Apple Silicon machines.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aa95ead3cdc4536a3
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/prerequisites.rs` | Fixed all three probe defects; added 10 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **pkgconf alias fix**: Changed `pkg_config_found: bool` to `pkg_config_binary: Option<&str>` so the exact resolved binary name (`"pkg-config"` or `"pkgconf"`) is passed through to `probe_pkg_config_exists(binary, package)`. The probe function signature gained a leading `binary` parameter. `build_linux_check_from_candidates` test helper retains its `pkg_config_available: bool` parameter but now uses a separate internal variable (`pkg_config_found`) to mirror the live function's alias-scanning logic.
+
+2. **Rosetta installation check**: Replaced `pgrep oahd` (running-process) with a two-stage installation check: (1) filesystem presence of `/Library/Apple/usr/libexec/oah/libRosettaRuntime`, (2) `/Library/Apple/usr/libexec/oah` directory, (3) `pkgutil --pkg-info=com.apple.pkg.RosettaUpdateAuto` as final fallback. A `rosetta_status_from_probes(runtime_path_exists, oah_dir_exists, pkgutil_installed)` pure helper was added under `#[cfg(test)]` so the installed-but-idle case can be verified in unit tests without live filesystem I/O. `pkgutil` not found now maps to `Unknown` (not `Missing`).
+
+3. **xz-utils dead alias removed**: Deleted the `"xz" => which::which("xz-utils").is_ok()` arm from both the live function and the `build_linux_check_from_candidates` test helper. Added a regression guard test `test_linux_required_tools_alias_table_does_not_contain_xz_utils` that verifies `xz-utils` in `found_binaries` does NOT satisfy the `xz` requirement.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (1103 daemon tests + all workspace tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Rosetta pkgutil fallback**: On aarch64 machines with Rosetta installed via path `/Library/Apple/usr/libexec/oah` but not the package `com.apple.pkg.RosettaUpdateAuto` (possible edge case with enterprise or non-standard installs), the directory check provides a reliable fallback. Both path checks cover the vast majority of real installs.

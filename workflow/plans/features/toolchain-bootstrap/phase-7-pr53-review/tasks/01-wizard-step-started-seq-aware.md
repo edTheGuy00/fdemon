@@ -115,3 +115,40 @@ Make `WizardStepStarted` self-validating (mirror `WizardInstallTaskReady`):
   fallback" for the smallest, least surprising surface.
 - Shares `handler/install_wizard/actions.rs` + `install_wizard/state.rs` with
   task 06 — run them serially on the same branch (chain A), not parallel worktrees.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `run_seq: u64` field to `WizardStepStarted` variant with doc comment explaining seq-guard purpose |
+| `crates/fdemon-app/src/actions/mod.rs` | Capture `run_seq` before spawn; pass `run_seq: run_seq_for_task` to `WizardStepStarted`; updated 3 test `matches!` patterns to add `..` wildcard |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Rewrote `handle_step_started` to seq-guard (stale → no-op); dropped defensive `begin_step` fallback; updated 2 existing tests to pass `run_seq`; added 2 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Destructure `run_seq` from `WizardStepStarted` and pass to handler |
+
+### Notable Decisions/Tradeoffs
+
+1. **Dropped the `begin_step` fallback (option 4 from task)**: The task explicitly preferred "drop the fallback entirely" as the smallest surface. `handle_run_selected_step` is the only code path that calls `begin_step`, so a current-seq Started is always already Running. The `_kind` parameter is retained in the function signature (prefixed `_`) since it is provided by the message destructure and may be useful for future defensive logging without requiring a signature change.
+
+2. **`run_seq_for_task` captured before spawn**: `run_seq` is moved into `RunWizardStep`'s match arm but needs to be accessible both for the spawned task and for the subsequent `WizardInstallTaskReady` send. A local capture before the spawn avoids any move/borrow issue.
+
+3. **Test pattern updates**: The 3 `matches!` patterns in `actions/mod.rs` that matched `WizardStepStarted { kind: ... }` without `..` were updated to add `..`, since the struct now has two fields.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (2889+ tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- New tests: `test_stale_cross_kind_step_started_is_noop`, `test_step_started_with_current_seq_same_kind_preserves_task`
+- Regression tests preserved: `test_step_started_is_idempotent_with_begin_step`, `test_step_started_preserves_install_task_and_run_seq`
+
+### Risks/Limitations
+
+1. **`_kind` parameter retained**: The `kind` field is no longer used in `handle_step_started`'s body. It is kept for API stability and potential future logging, prefixed `_kind` to silence the unused-variable warning cleanly.
