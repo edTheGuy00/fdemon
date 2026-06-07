@@ -28,9 +28,9 @@ Approved scope:
 
 | # | Task | Status | Depends On | Sev | Crate | Files Modified (Write) |
 |---|---|---|---|---|---|---|
-| 01 | [01-auto-configure-path-after-install](tasks/01-auto-configure-path-after-install.md) | ⬜ Todo | — | MAJOR | fdemon-app | `handler/install_wizard/actions.rs`, `message.rs`, `handler/update.rs`, `install_wizard/state.rs` |
-| 02 | [02-rc-writer-test-isolation](tasks/02-rc-writer-test-isolation.md) | ⬜ Todo | — | MAJOR | fdemon-daemon | `toolchain/path_config.rs`, `toolchain/android_install.rs` |
-| 03 | [03-update-docs](tasks/03-update-docs.md) | ⬜ Todo | 01, 02 | MINOR | docs | `docs/ARCHITECTURE.md` |
+| 01 | [01-auto-configure-path-after-install](tasks/01-auto-configure-path-after-install.md) | ✅ Done | — | MAJOR | fdemon-app | `handler/install_wizard/actions.rs`, `message.rs`, `handler/update.rs` (Approach 2; state.rs not needed) |
+| 02 | [02-rc-writer-test-isolation](tasks/02-rc-writer-test-isolation.md) | ✅ Done | — | MAJOR | fdemon-daemon | `toolchain/path_config.rs`, `lib.rs`, `toolchain/mod.rs`, `actions/mod.rs` (test-only $HOME sandbox) |
+| 03 | [03-update-docs](tasks/03-update-docs.md) | ✅ Done | 01, 02 | MINOR | docs | `docs/ARCHITECTURE.md` |
 
 **Total Tasks:** 3
 

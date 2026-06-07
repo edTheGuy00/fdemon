@@ -104,3 +104,60 @@ installed; if you do, that touches `actions/mod.rs` — keep it minimal.
   messages/actions are emitted.
 - Headless mode: confirm the auto-config either runs correctly or is intentionally
   inert; do not panic or hang.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `InstallWizardAutoConfigurePath { kind: WizardStepKind }` variant with full doc-comment |
+| `crates/fdemon-app/src/handler/update.rs` | Wired `InstallWizardAutoConfigurePath` → `install_wizard::handle_auto_configure_path` |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | (1) New `handle_auto_configure_path` function; (2) `handle_step_completed` for FlutterSdk/AndroidTools now emits `AutoConfigurePath` instead of `RerunPreflight`; (3) `handle_step_failed` re-runs preflight when PathConfig fails; (4) Updated 2 existing tests; (5) Added 8 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Approach 2 (dedicated message) chosen over Approach 1 (one-shot flag):** The dedicated `InstallWizardAutoConfigurePath { kind }` message keeps the TEA chain purely functional — no state mutation needed between preflight and PathConfig dispatch. It also makes the chain explicit in the message sequence rather than hidden in a flag check inside `handle_preflight_completed`.
+
+2. **FlutterSdk auto-config scoped to Flutter PATH only (`android_sdk_root: None`):** Each step's side effects stay scoped to what it installed. An AndroidTools completion will include the Android SDK root, but a FlutterSdk completion won't touch the Android block — consistent with the BUG.md recommendation.
+
+3. **PathConfig failure now triggers preflight re-run:** `handle_step_failed` checks `execution.kind` (captured before `finish_step`) and emits `InstallWizardRerunPreflight` when PathConfig fails. This means the step list still refreshes even if `HostShell::Unknown` prevents the rc-file write, satisfying the "preflight must run even if auto PathConfig fails" criterion.
+
+4. **No change to `actions/mod.rs`:** The blocking rc-file I/O stays in `spawn_blocking`. Only messages/actions are changed.
+
+5. **Seq-guard compliance:** `handle_auto_configure_path` calls `begin_step(PathConfig)` and mints a new `CancellationToken` + bumps `run_seq` before dispatching, exactly like `handle_run_selected_step`. Stale `WizardStepStarted` messages from any previous run are rejected by the existing seq-guard in `handle_step_started`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - PASS
+- `cargo check --workspace --all-targets` - PASS
+- `cargo test --workspace` - PASS (2904 fdemon-app + all workspace tests, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+
+### New Tests Added
+
+1. `test_completed_flutter_persists_sdk_path_and_auto_configures_path` — replaces old RerunPreflight assertion, verifies AutoConfigurePath{FlutterSdk} is emitted
+2. `test_completed_android_persists_sdk_root_and_auto_configures_path` — replaces old RerunPreflight assertion, verifies AutoConfigurePath{AndroidTools} is emitted
+3. `test_auto_configure_path_flutter_dispatches_pathconfig_flutter_only` — FlutterSdk origin: android_sdk_root is None
+4. `test_auto_configure_path_android_dispatches_pathconfig_with_android_root` — AndroidTools origin: both flutter bin + android root
+5. `test_auto_configure_path_fallback_when_no_flutter_sdk` — no bin dir → falls back to RerunPreflight
+6. `test_auto_configure_path_noop_when_step_running` — step-in-flight guard
+7. `test_pathconfig_completion_does_not_retrigger_installer` — no-loop guard
+8. `test_step_failed_pathconfig_reruns_preflight` — PathConfig failure → RerunPreflight
+9. `test_step_failed_flutter_does_not_rerun_preflight` — non-PathConfig failure → no follow-up message
+10. `test_auto_configure_path_stale_started_is_noop` — seq-guard test
+
+### Risks/Limitations
+
+1. **End-to-end integration:** The full chain (FlutterSdk install → PersistSettings → AutoConfigurePath → RunWizardStep{PathConfig} → rc write) is tested via unit tests at the handler level. The actual rc-file write is covered by existing daemon-layer tests; the integration between them is not tested by a single end-to-end test (acceptable per project testing patterns).
+
+2. **AndroidTools fallback when no Flutter SDK:** If AndroidTools installs successfully but no Flutter SDK is resolvable, `handle_auto_configure_path` falls back to `RerunPreflight` without writing a Flutter PATH entry. This is intentional — there's nothing to write. The Android block is also not written in this fallback scenario. The user can run PathConfig manually once Flutter is installed.
+
+### Doc Updates Needed
+
+- `docs/ARCHITECTURE.md`: The install wizard message chain description should be updated to document the new `InstallWizardAutoConfigurePath` → `RunWizardStep{PathConfig}` auto-chain that replaces the previous manual-only PathConfig step trigger.
