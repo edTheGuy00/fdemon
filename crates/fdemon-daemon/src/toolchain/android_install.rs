@@ -27,8 +27,12 @@
 //!   already-licensed SDK is harmless.
 //! - **`spawn_blocking` for sync extract**: [`extract_zip`] is synchronous;
 //!   it is wrapped in [`tokio::task::spawn_blocking`].
-//! - **JDK path**: when `target.jdk_path` is `Some`, `JAVA_HOME` is set for
-//!   `sdkmanager` child processes so they find the correct JDK.
+//! - **JDK path**: the installer resolves the JDK home via `target.jdk_path`
+//!   (explicit config) falling back to [`super::jdk::resolve_jdk_home`] (env
+//!   `JAVA_HOME` / `which java`). The resolved home is validated with
+//!   [`super::jdk::validate_jdk_home`] (requires `bin/javac`) before being set
+//!   as `JAVA_HOME` for sdkmanager child processes. A missing or invalid JDK
+//!   home fails the step with a clear, actionable error.
 //!
 //! ## Public API
 //!
@@ -43,6 +47,7 @@ use tokio_util::sync::CancellationToken;
 use super::checks::sdkmanager_bin_name;
 use super::download::{download_to_file, ensure_disk_space, extract_zip, verify_sha256};
 use super::flutter_install::InstallEvent;
+use super::jdk::{resolve_jdk_home, validate_jdk_home};
 use super::process_stream::run_streaming_with_input;
 use super::types::{
     cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,
@@ -333,36 +338,91 @@ where
     let sdkmanager = sdkmanager_path(&target.sdk_root);
     let sdk_root_str = target.sdk_root.to_string_lossy().to_string();
 
-    // Build JAVA_HOME env slice if a JDK path was provided.
-    let java_home_str: Option<String> = target
-        .jdk_path
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned());
+    // ── Pre-spawn guard: verify sdkmanager exists before invoking it ─────────
+    //
+    // After the relocate step, cmdline-tools/latest/bin/sdkmanager[.bat] must be
+    // present. If it's missing (e.g. due to a layout change in a future
+    // cmdline-tools release), surface a diagnostic listing the actual directory
+    // contents instead of letting the OS emit the cryptic "path specified" error.
+    if !sdkmanager.is_file() {
+        let bin_dir = sdkmanager
+            .parent()
+            .expect("sdkmanager path always has a parent dir");
+        let listing = list_dir_contents(bin_dir);
+        return Err(Error::process(format!(
+            "sdkmanager not found at '{}' after cmdline-tools installation. \
+             Contents of '{}': [{}]. \
+             This may indicate a cmdline-tools layout change — please file a bug \
+             or update the fdemon cmdline-tools build number.",
+            sdkmanager.display(),
+            bin_dir.display(),
+            listing,
+        )));
+    }
+
+    // ── Resolve and validate a JDK home for sdkmanager ──────────────────────
+    //
+    // sdkmanager.bat (Windows) and sdkmanager (POSIX) both require a valid
+    // JAVA_HOME. Resolution precedence:
+    //   1. target.jdk_path — explicit user configuration ([toolchain] jdk_path)
+    //   2. resolve_jdk_home() — JAVA_HOME env / walk from `which java`
+    //
+    // The resolved home is validated (bin/java + bin/javac) before use. A
+    // missing or invalid JDK fails the step with an actionable error rather than
+    // letting sdkmanager emit the cryptic "The system cannot find the path
+    // specified" message.
+    let raw_jdk_home: Option<PathBuf> = target.jdk_path.clone().or_else(resolve_jdk_home);
+
+    let jdk_home: PathBuf = match raw_jdk_home {
+        Some(candidate) => validate_jdk_home(&candidate).map_err(|e| {
+            Error::process(format!(
+                "Android install: JDK validation failed — {e}. \
+                 Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
+                 in .fdemon/config.toml, or fix the JAVA_HOME environment variable."
+            ))
+        })?,
+        None => {
+            return Err(Error::process(
+                "Android install: no JDK home could be resolved. \
+                 sdkmanager requires a valid Java Development Kit. \
+                 Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
+                 in .fdemon/config.toml, or fix the JAVA_HOME environment variable."
+                    .to_string(),
+            ));
+        }
+    };
+
+    tracing::debug!(
+        jdk_home = %jdk_home.display(),
+        explicit = target.jdk_path.is_some(),
+        "Android install: using validated JDK home for sdkmanager"
+    );
+
+    let java_home_str = jdk_home.to_string_lossy().into_owned();
 
     let license_stdin = "y\n".repeat(LICENSE_YES_COUNT);
 
     // Build env pairs for sdkmanager invocations.
+    // Always set JAVA_HOME and prepend <jdk_home>/bin to PATH so sdkmanager.bat
+    // (Windows) and sdkmanager (POSIX) find the correct JDK regardless of the
+    // ambient environment.
+    let jdk_bin = jdk_home.join("bin");
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    // Build an OS-correct PATH by prepending `jdk_bin` to the existing PATH
+    // entries.  `split_paths`/`join_paths` handles the platform separator
+    // (`:` on POSIX, `;` on Windows) and correct quoting for paths with
+    // spaces — avoiding the POSIX-only `format!("{jdk_bin}:{existing}")` bug.
+    let existing_entries = std::env::split_paths(&existing_path);
+    let new_entries: Vec<_> = std::iter::once(jdk_bin).chain(existing_entries).collect();
+    let new_path = std::env::join_paths(new_entries)
+        .unwrap_or_else(|_| existing_path.clone().into())
+        .to_string_lossy()
+        .into_owned();
+
     let mut env_pairs: Vec<(String, String)> =
         vec![("ANDROID_HOME".to_string(), sdk_root_str.clone())];
-    if let Some(ref java_home) = java_home_str {
-        env_pairs.push(("JAVA_HOME".to_string(), java_home.clone()));
-        // Prepend the JDK bin dir to PATH so sdkmanager finds `java`.
-        // Use Path::join to avoid producing `//bin` when java_home has a
-        // trailing slash.
-        let jdk_bin = std::path::Path::new(java_home.as_str()).join("bin");
-        let existing_path = std::env::var("PATH").unwrap_or_default();
-        // Build an OS-correct PATH by prepending `jdk_bin` to the existing PATH
-        // entries.  `split_paths`/`join_paths` handles the platform separator
-        // (`:` on POSIX, `;` on Windows) and correct quoting for paths with
-        // spaces — avoiding the POSIX-only `format!("{jdk_bin}:{existing}")` bug.
-        let existing_entries = std::env::split_paths(&existing_path);
-        let new_entries: Vec<_> = std::iter::once(jdk_bin).chain(existing_entries).collect();
-        let new_path = std::env::join_paths(new_entries)
-            .unwrap_or_else(|_| existing_path.clone().into())
-            .to_string_lossy()
-            .into_owned();
-        env_pairs.push(("PATH".to_string(), new_path));
-    }
+    env_pairs.push(("JAVA_HOME".to_string(), java_home_str));
+    env_pairs.push(("PATH".to_string(), new_path));
 
     // Convert to Vec<(&str, &str)> for run_streaming_with_input.
     let env_refs: Vec<(&str, &str)> = env_pairs
@@ -579,6 +639,29 @@ fn sdkmanager_path(sdk_root: &Path) -> PathBuf {
         .join("latest")
         .join("bin")
         .join(sdkmanager_bin_name())
+}
+
+/// List the file-system entries in `dir` and return them as a comma-separated
+/// string for use in diagnostic error messages.
+///
+/// Returns `"<directory does not exist>"` when `dir` is absent, and
+/// `"<empty>"` when `dir` exists but has no entries. Any entry whose name
+/// cannot be decoded as UTF-8 is shown with a `?` placeholder.
+fn list_dir_contents(dir: &Path) -> String {
+    match std::fs::read_dir(dir) {
+        Ok(rd) => {
+            let names: Vec<String> = rd
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            if names.is_empty() {
+                "<empty>".to_string()
+            } else {
+                names.join(", ")
+            }
+        }
+        Err(_) => "<directory does not exist>".to_string(),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

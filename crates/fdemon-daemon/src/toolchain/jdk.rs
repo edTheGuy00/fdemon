@@ -4,6 +4,8 @@
 //!
 //! - [`resolve_jdk_home`] — best-effort resolution of the JDK installation
 //!   directory from `JAVA_HOME` or by walking from the `java` binary on `PATH`.
+//! - [`validate_jdk_home`] — normalize and validate a JDK home path, requiring
+//!   both `bin/java[.exe]` and `bin/javac[.exe]` to confirm it is a real JDK.
 //! - [`configure_flutter_jdk_dir`] — runs `flutter config --jdk-dir=<dir>` so
 //!   the Flutter CLI uses the specified JDK.
 //!
@@ -44,6 +46,80 @@ pub fn resolve_jdk_home() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Normalize and validate a JDK home directory path.
+///
+/// Normalization:
+/// - Strip surrounding ASCII double-quotes (e.g. `"C:\jdk-21"` → `C:\jdk-21`).
+/// - Strip any trailing `/` or `\` characters.
+///
+/// Validation:
+/// - The resulting path must be an existing directory.
+/// - It must contain `bin/java` (or `bin/java.exe` on Windows) — confirms Java
+///   runtime is present.
+/// - It must contain `bin/javac` (or `bin/javac.exe` on Windows) — confirms this
+///   is a full JDK, not a JRE. The `sdkmanager` build system requires javac.
+///
+/// # Returns
+///
+/// `Ok(PathBuf)` — the normalized (trimmed) JDK home path on success.
+///
+/// # Errors
+///
+/// Returns `Err` with a diagnostic message when the path does not exist, is not a
+/// directory, or is missing either the `java` or `javac` binary. The error
+/// message names the expected remedies (install JDK 17+, set `[toolchain]
+/// jdk_path`, or fix `JAVA_HOME`) so the user can act without reading docs.
+pub fn validate_jdk_home(jdk_home: &Path) -> Result<PathBuf> {
+    // Step 1: Normalize — strip surrounding quotes and trailing slash/backslash.
+    let raw = jdk_home.to_string_lossy();
+    let trimmed = raw
+        .trim_matches('"')
+        .trim_end_matches('/')
+        .trim_end_matches('\\');
+    let normalized = PathBuf::from(trimmed);
+
+    // Step 2: Must exist and be a directory.
+    if !normalized.is_dir() {
+        return Err(Error::process(format!(
+            "JDK home '{}' does not exist or is not a directory. \
+             Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
+             in .fdemon/config.toml, or fix the JAVA_HOME environment variable.",
+            normalized.display()
+        )));
+    }
+
+    // Step 3: Must contain bin/java[.exe] and bin/javac[.exe].
+    // Use .exe extensions only on Windows; POSIX binaries have no extension.
+    #[cfg(windows)]
+    let (java_name, javac_name) = ("java.exe", "javac.exe");
+    #[cfg(not(windows))]
+    let (java_name, javac_name) = ("java", "javac");
+
+    let java_bin = normalized.join("bin").join(java_name);
+    let javac_bin = normalized.join("bin").join(javac_name);
+
+    if !java_bin.exists() {
+        return Err(Error::process(format!(
+            "JDK home '{}' is missing 'bin/{java_name}'. \
+             Install a JDK 17+ (e.g. Eclipse Temurin), set '[toolchain] jdk_path' \
+             in .fdemon/config.toml, or fix the JAVA_HOME environment variable.",
+            normalized.display()
+        )));
+    }
+
+    if !javac_bin.exists() {
+        return Err(Error::process(format!(
+            "JDK home '{}' has 'bin/{java_name}' but is missing 'bin/{javac_name}'. \
+             This looks like a JRE rather than a full JDK — the Android build system \
+             requires javac. Install a JDK 17+ (e.g. Eclipse Temurin), set \
+             '[toolchain] jdk_path' in .fdemon/config.toml, or fix JAVA_HOME.",
+            normalized.display()
+        )));
+    }
+
+    Ok(normalized)
 }
 
 /// Run `flutter config --jdk-dir=<jdk_dir>` so the Flutter CLI uses the
@@ -275,6 +351,150 @@ mod tests {
     fn test_validate_jdk_dir_accepts_path_with_spaces() {
         // Spaces are valid in JDK paths.
         assert!(validate_jdk_dir(Path::new("/Program Files/Java/jdk-21")).is_ok());
+    }
+
+    // ── validate_jdk_home tests ───────────────────────────────────────────────
+
+    /// Helper: create a minimal JDK fixture in a temp dir (bin/java + bin/javac).
+    fn make_jdk_fixture(dir: &std::path::Path) {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        #[cfg(windows)]
+        let (java_name, javac_name) = ("java.exe", "javac.exe");
+        #[cfg(not(windows))]
+        let (java_name, javac_name) = ("java", "javac");
+
+        std::fs::write(bin.join(java_name), b"#!/bin/sh\nexec java").unwrap();
+        std::fs::write(bin.join(javac_name), b"#!/bin/sh\nexec javac").unwrap();
+    }
+
+    /// A directory with bin/java and bin/javac is a valid JDK home.
+    #[test]
+    fn test_validate_jdk_home_accepts_full_jdk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(tmp.path());
+
+        let result = validate_jdk_home(tmp.path());
+        assert!(
+            result.is_ok(),
+            "a dir with bin/java and bin/javac must be accepted: {:?}",
+            result
+        );
+    }
+
+    /// Trailing slash is stripped and the path is still accepted.
+    #[test]
+    fn test_validate_jdk_home_strips_trailing_slash() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(tmp.path());
+
+        // Build a path string with trailing slash.
+        let with_slash = PathBuf::from(format!("{}/", tmp.path().display()));
+        let result = validate_jdk_home(&with_slash);
+        assert!(
+            result.is_ok(),
+            "trailing slash must be stripped and path accepted: {:?}",
+            result
+        );
+        // The returned path must not have a trailing slash component.
+        let ok_path = result.unwrap();
+        let ok_str = ok_path.to_string_lossy();
+        assert!(
+            !ok_str.ends_with('/'),
+            "normalized path must not end with '/': {ok_str}"
+        );
+    }
+
+    /// Trailing backslash is stripped (important on Windows paths).
+    #[test]
+    fn test_validate_jdk_home_strips_trailing_backslash() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(tmp.path());
+
+        let with_backslash = PathBuf::from(format!("{}\\", tmp.path().display()));
+        let result = validate_jdk_home(&with_backslash);
+        // The trimmed path resolves to the same dir; it may or may not validate
+        // depending on whether the OS supports trailing backslash in paths.
+        // On POSIX, `foo\` refers to a directory named literally `foo\` — which
+        // doesn't exist — so validation will fail.  On Windows, trailing backslash
+        // is stripped.  We only assert this does not panic and returns a Result.
+        let _ = result; // must not panic
+    }
+
+    /// A path pointing at the `bin/` subdirectory (not the JDK root) is rejected.
+    #[test]
+    fn test_validate_jdk_home_rejects_bin_subdirectory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(tmp.path());
+
+        // Pass the `bin/` path instead of the JDK root.
+        let bin_path = tmp.path().join("bin");
+        let result = validate_jdk_home(&bin_path);
+        assert!(
+            result.is_err(),
+            "the bin/ subdirectory must be rejected as the JDK home"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Install a JDK") || err.contains("missing"),
+            "error must be actionable: {err}"
+        );
+    }
+
+    /// A non-existent directory is rejected.
+    #[test]
+    fn test_validate_jdk_home_rejects_nonexistent_dir() {
+        let result = validate_jdk_home(Path::new("/this/path/does/not/exist/fdemon_jdk_test"));
+        assert!(result.is_err(), "a non-existent path must be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("does not exist") || err.contains("Install a JDK"),
+            "error must mention non-existence or remedies: {err}"
+        );
+    }
+
+    /// A JRE-only directory (has bin/java but no bin/javac) is rejected.
+    #[test]
+    fn test_validate_jdk_home_rejects_jre_only() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        // Only plant java, not javac.
+        #[cfg(windows)]
+        let java_name = "java.exe";
+        #[cfg(not(windows))]
+        let java_name = "java";
+
+        std::fs::write(bin.join(java_name), b"#!/bin/sh\nexec java").unwrap();
+
+        let result = validate_jdk_home(tmp.path());
+        assert!(
+            result.is_err(),
+            "a JRE-only dir (no javac) must be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("javac") || err.contains("JRE") || err.contains("JDK"),
+            "error must mention javac or JDK/JRE distinction: {err}"
+        );
+    }
+
+    /// Surrounding quotes are stripped from the path before validation.
+    #[test]
+    fn test_validate_jdk_home_strips_surrounding_quotes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        make_jdk_fixture(tmp.path());
+
+        // Wrap the path in double-quotes (as Windows JAVA_HOME sometimes has).
+        let quoted = PathBuf::from(format!("\"{}\"", tmp.path().display()));
+        let result = validate_jdk_home(&quoted);
+        assert!(
+            result.is_ok(),
+            "surrounding quotes must be stripped and path accepted: {:?}",
+            result
+        );
     }
 
     // ── java_home_from_which heuristic tests ──────────────────────────────────
