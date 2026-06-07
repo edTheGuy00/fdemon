@@ -1077,6 +1077,144 @@ fn broadcast_wm_settingchange() {
     }
 }
 
+// ── Windows process-PATH refresh ─────────────────────────────────────────────
+
+/// PowerShell script that reads the **expanded** Machine and User `Path`
+/// entries from the registry, printing them as two lines (Machine first, then
+/// User). `[Environment]::GetEnvironmentVariable` expands `REG_EXPAND_SZ`
+/// entries, so the returned value is ready for use as a process-level `PATH`.
+///
+/// No user-controlled values are interpolated — this is a constant script.
+///
+/// Referenced by `refresh_process_path_from_registry` (Windows) and by
+/// cross-platform shape tests so CI catches accidental script drift.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const READ_EXPANDED_MACHINE_USER_PATH_SCRIPT: &str = r#"$m = [Environment]::GetEnvironmentVariable('Path','Machine')
+$u = [Environment]::GetEnvironmentVariable('Path','User')
+if ($m -eq $null) { $m = '' }
+if ($u -eq $null) { $u = '' }
+Write-Output $m
+Write-Output $u"#;
+
+/// Merge Machine and User PATH strings into a single semicolon-joined PATH.
+///
+/// Rules:
+/// - Each input is split on `;`.
+/// - Empty segments (from leading/trailing/double semicolons or null values)
+///   are silently dropped.
+/// - The segments from `machine` come before those from `user` (matching the
+///   effective order a new shell sees on Windows).
+/// - The result is a single `;`-joined string. Returns an empty string when
+///   both inputs are empty.
+///
+/// This pure helper is unit-testable without any OS I/O.
+pub fn merge_machine_user_path(machine: &str, user: &str) -> String {
+    let parts: Vec<&str> = machine
+        .split(';')
+        .chain(user.split(';'))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    parts.join(";")
+}
+
+/// Refresh the process `PATH` from the Windows registry at the start of every
+/// preflight run.
+///
+/// Reads the **expanded** Machine `Path` and User `Path` from the registry via
+/// PowerShell (`[Environment]::GetEnvironmentVariable('Path','Machine/User')`),
+/// merges them (Machine first, then User), drops empty segments, and calls
+/// `std::env::set_var("PATH", merged)`.
+///
+/// ## Why Windows-only
+///
+/// On Linux/macOS, guided installs (`apt`, `brew`, etc.) drop binaries into
+/// directories already on the process PATH, so `which::which` finds the new
+/// tool on the next call without any env change. On Windows, `winget` and
+/// GUI installers add *new* directories to the registry PATH, which a live
+/// process cannot see until it re-reads the registry.
+///
+/// ## Process-global caveat
+///
+/// `std::env::set_var` is process-global. This function should be called
+/// **once, up front in `run_preflight`**, before fanning out probe tasks —
+/// never from a concurrent async task. This matches the calling convention
+/// used by shells and installers' "refreshenv" utilities.
+///
+/// In Rust 2024 edition `set_var` becomes `unsafe` due to potential data
+/// races with concurrent `getenv` (POSIX restriction). Even in edition 2021
+/// it is technically unsound when called concurrently with other env reads.
+/// The up-front, single-call pattern in `run_preflight` avoids concurrent
+/// access with the probes that follow.
+///
+/// ## Errors
+///
+/// Errors are logged at `warn!` level and silently swallowed — a failed
+/// registry read is non-fatal (the process PATH remains at its current value
+/// and the preflight continues). This mirrors `broadcast_wm_settingchange`.
+///
+/// On non-Windows targets this function is a **no-op** (no subprocess, no
+/// env change, no log line).
+pub fn refresh_process_path_from_registry() {
+    #[cfg(target_os = "windows")]
+    {
+        let output = match std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                READ_EXPANDED_MACHINE_USER_PATH_SCRIPT,
+            ])
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(
+                    "refresh_process_path_from_registry: failed to spawn PowerShell: {}",
+                    e
+                );
+                return;
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(
+                "refresh_process_path_from_registry: PowerShell exited non-zero: {}",
+                stderr.trim()
+            );
+            return;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines();
+        let machine = lines.next().unwrap_or("").trim();
+        let user = lines.next().unwrap_or("").trim();
+
+        let merged = merge_machine_user_path(machine, user);
+        if merged.is_empty() {
+            tracing::debug!(
+                "refresh_process_path_from_registry: merged PATH is empty — skipping set_var"
+            );
+            return;
+        }
+
+        // SAFETY NOTE: set_var is process-global. This call is made once,
+        // up front in run_preflight, before any probe tasks are spawned —
+        // so there are no concurrent env reads at this point. See the
+        // function-level doc comment for the full rationale.
+        std::env::set_var("PATH", &merged);
+        tracing::debug!(
+            "refresh_process_path_from_registry: updated process PATH ({} bytes)",
+            merged.len()
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // No-op on Linux/macOS — guided installs land in already-on-PATH dirs.
+    }
+}
+
 // ── Platform helpers ──────────────────────────────────────────────────────────
 
 /// Resolve the current user's home directory.
@@ -2719,6 +2857,92 @@ mod tests {
         assert!(
             !emulator_present_missing,
             "missing emulator dir must not satisfy idempotency check"
+        );
+    }
+
+    // ── merge_machine_user_path unit tests (pure, all platforms) ─────────────
+
+    #[test]
+    fn test_merge_machine_user_path_basic() {
+        let machine = r"C:\Windows\System32;C:\Windows";
+        let user = r"C:\Users\test\bin";
+        let merged = merge_machine_user_path(machine, user);
+        // Machine entries come first, then user entries.
+        assert_eq!(merged, r"C:\Windows\System32;C:\Windows;C:\Users\test\bin");
+    }
+
+    #[test]
+    fn test_merge_machine_user_path_drops_empty_segments() {
+        // Leading, trailing, and double semicolons produce empty segments that
+        // must be silently dropped.
+        let machine = r";C:\Windows\System32;;C:\Windows;";
+        let user = r";C:\Users\test\bin;";
+        let merged = merge_machine_user_path(machine, user);
+        assert_eq!(merged, r"C:\Windows\System32;C:\Windows;C:\Users\test\bin");
+    }
+
+    #[test]
+    fn test_merge_machine_user_path_both_empty() {
+        let merged = merge_machine_user_path("", "");
+        assert_eq!(merged, "");
+    }
+
+    #[test]
+    fn test_merge_machine_user_path_only_machine() {
+        let machine = r"C:\Windows\System32";
+        let merged = merge_machine_user_path(machine, "");
+        assert_eq!(merged, r"C:\Windows\System32");
+    }
+
+    #[test]
+    fn test_merge_machine_user_path_only_user() {
+        let user = r"C:\Users\test\bin";
+        let merged = merge_machine_user_path("", user);
+        assert_eq!(merged, r"C:\Users\test\bin");
+    }
+
+    #[test]
+    fn test_merge_machine_user_path_machine_first_order() {
+        // Machine entries must always precede user entries.
+        let machine = r"C:\Machine\bin";
+        let user = r"C:\User\bin";
+        let merged = merge_machine_user_path(machine, user);
+        let parts: Vec<&str> = merged.split(';').collect();
+        assert_eq!(parts[0], r"C:\Machine\bin");
+        assert_eq!(parts[1], r"C:\User\bin");
+    }
+
+    #[test]
+    fn test_merge_machine_user_path_trims_whitespace() {
+        // Segments with leading/trailing whitespace are trimmed.
+        let machine = "  C:\\Windows\\System32  ;  C:\\Windows  ";
+        let user = "  C:\\Users\\test\\bin  ";
+        let merged = merge_machine_user_path(machine, user);
+        assert_eq!(merged, r"C:\Windows\System32;C:\Windows;C:\Users\test\bin");
+    }
+
+    /// The new expanded-path read script references the correct .NET API and
+    /// uses Write-Output for both Machine and User lines.
+    #[test]
+    fn test_read_expanded_machine_user_path_script_shape() {
+        let script = READ_EXPANDED_MACHINE_USER_PATH_SCRIPT;
+        assert!(
+            script.contains("GetEnvironmentVariable"),
+            "script must call GetEnvironmentVariable"
+        );
+        assert!(
+            script.contains("'Machine'"),
+            "script must read Machine scope"
+        );
+        assert!(script.contains("'User'"), "script must read User scope");
+        assert!(
+            script.contains("Write-Output"),
+            "script must emit output via Write-Output"
+        );
+        // Confirm no DoNotExpandEnvironmentNames — we want the expanded value here.
+        assert!(
+            !script.contains("DoNotExpandEnvironmentNames"),
+            "refresh script must NOT use DoNotExpandEnvironmentNames (we want expanded values)"
         );
     }
 

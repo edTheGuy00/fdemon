@@ -44,7 +44,10 @@ pub use flutter_install::{
     InstallEvent,
 };
 pub use jdk::{configure_flutter_jdk_dir, resolve_jdk_home};
-pub use path_config::{add_android_env, add_to_path, rc_file_for_shell, PathConfigOutcome};
+pub use path_config::{
+    add_android_env, add_to_path, merge_machine_user_path, rc_file_for_shell,
+    refresh_process_path_from_registry, PathConfigOutcome,
+};
 #[cfg(test)]
 pub use path_config::{clear_test_home_override, set_test_home_override, with_test_home};
 pub use process_stream::{run_streaming, run_streaming_with_input};
@@ -88,6 +91,20 @@ pub async fn run_preflight(
     explicit_sdk_path: Option<&Path>,
     override_android_root: Option<&Path>,
 ) -> ToolchainReport {
+    // ── Windows: refresh process PATH from registry ───────────────────────────
+    // On Windows, winget/installer-GUI writes new bin dirs into the registry
+    // PATH (HKLM Machine and/or HKCU User) after fdemon launched. A running
+    // process never sees those changes unless it re-reads the registry — so
+    // pressing `r` to re-check would still report a newly-installed tool as
+    // missing. We refresh once, up front, before fanning out probe tasks.
+    //
+    // This is process-global (std::env::set_var) so it MUST run before any
+    // concurrent probe tasks are spawned (tokio::join! below). The refresh is
+    // a no-op on Linux/macOS. See path_config::refresh_process_path_from_registry
+    // for the full rationale and safety discussion.
+    #[cfg(target_os = "windows")]
+    path_config::refresh_process_path_from_registry();
+
     let platform = HostPlatform::detect();
     let shell = HostShell::detect();
 

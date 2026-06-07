@@ -733,18 +733,30 @@ fn prerequisites_guided_commands(
 
             // Git is missing — use pre-computed winget availability from preflight.
             // (No which::which call here — pure function of the report.)
+            //
+            // After installing, the user should press `r` to re-check. fdemon
+            // refreshes its process PATH from the registry at the start of every
+            // preflight, so the re-check will find the newly-installed git without
+            // restarting fdemon. Their own already-open terminals still need a
+            // new window to inherit the updated PATH.
             if report.winget_available {
                 vec![GuidedCommand {
                     label: "Install Git for Windows".into(),
                     command: "winget install Git.Git".into(),
-                    note: None,
+                    note: Some(
+                        "After installing, press r to re-check. \
+                         Your own already-open terminals still need a new window."
+                            .into(),
+                    ),
                 }]
             } else {
                 vec![GuidedCommand {
                     label: "Install Git for Windows".into(),
                     command: "https://git-scm.com/downloads/win".into(),
                     note: Some(
-                        "Download and run the Git for Windows installer from the URL above.".into(),
+                        "Download and run the installer, then press r to re-check. \
+                         Your own already-open terminals still need a new window."
+                            .into(),
                     ),
                 }]
             }
@@ -2269,7 +2281,18 @@ mod tests {
             cmds[0].command, "winget install Git.Git",
             "must use winget when available"
         );
-        assert!(cmds[0].note.is_none());
+        // The note now instructs users to press `r` to re-check (works in-process
+        // on Windows after the registry PATH refresh) and notes that their own
+        // already-open terminals still need a new window.
+        assert!(
+            cmds[0].note.is_some(),
+            "winget arm must include a note about pressing r and new terminal windows"
+        );
+        let note = cmds[0].note.as_deref().unwrap();
+        assert!(
+            note.contains('r') || note.contains("re-check"),
+            "note must mention re-check; got: {note}"
+        );
     }
 
     /// Verify that winget_available=false from the report falls back to the URL.
