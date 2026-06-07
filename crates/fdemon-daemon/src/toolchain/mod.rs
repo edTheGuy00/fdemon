@@ -45,6 +45,8 @@ pub use flutter_install::{
 };
 pub use jdk::{configure_flutter_jdk_dir, resolve_jdk_home};
 pub use path_config::{add_android_env, add_to_path, rc_file_for_shell, PathConfigOutcome};
+#[cfg(test)]
+pub use path_config::{clear_test_home_override, set_test_home_override, with_test_home};
 pub use process_stream::{run_streaming, run_streaming_with_input};
 pub use types::{
     cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,

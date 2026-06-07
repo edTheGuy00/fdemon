@@ -2227,14 +2227,32 @@ mod tests {
 
     /// `PathConfig` step with a valid `path_bin_dir` runs `add_to_path` and
     /// produces either `WizardStepCompleted` or `WizardStepFailed` (never hangs).
-    /// We use a temp directory as the home-dir override is not trivially injectable,
-    /// so `add_to_path` may succeed (writes the rc file) or fail (Unknown shell).
-    /// Either outcome is acceptable — what matters is that the executor terminates.
+    ///
+    /// `$HOME` is redirected to a `TempDir` for the duration of this test so that
+    /// the PathConfig executor cannot write to the developer's real `~/.zshenv` /
+    /// `~/.bashrc`. The test is serialised (via `serial_test::serial`) because it
+    /// mutates the process-wide `$HOME` environment variable.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_run_wizard_step_pathconfig_terminates() {
         use crate::install_wizard::WizardStepKind;
 
+        // Redirect $HOME to a sandboxed TempDir so add_to_path never reaches the
+        // developer's real shell rc files.  Restore on exit (guard via Drop).
         let tmp = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        struct HomeGuard(Option<std::ffi::OsString>);
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _home_guard = HomeGuard(saved_home);
+
         let bin_dir = tmp.path().join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
 
@@ -2369,11 +2387,28 @@ mod tests {
     /// `PathConfig` step without `android_sdk_root` still writes the Flutter
     /// PATH entry and produces `WizardStepCompleted` or `WizardStepFailed` — it
     /// must never hang or attempt to write `ANDROID_HOME`.
+    ///
+    /// `$HOME` is redirected to a `TempDir` so the executor cannot reach the
+    /// developer's real shell rc files. Serialised to prevent `$HOME` races.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_pathconfig_without_android_root_still_writes_flutter() {
         use crate::install_wizard::WizardStepKind;
 
         let tmp = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        struct HomeGuard(Option<std::ffi::OsString>);
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _home_guard = HomeGuard(saved_home);
+
         let bin_dir = tmp.path().join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
 
@@ -2414,6 +2449,9 @@ mod tests {
     /// (i.e. not skip the Android block). We verify this by checking that the
     /// executor resolves to Completed or Failed (not a panic) and that the env var
     /// fallback logic itself works correctly.
+    ///
+    /// `$HOME` is redirected to a `TempDir` so neither `add_to_path` nor
+    /// `add_android_env` can reach the developer's real shell rc files.
     #[tokio::test]
     #[serial_test::serial]
     async fn test_pathconfig_writes_android_env_from_resolver_when_settings_none() {
@@ -2421,6 +2459,22 @@ mod tests {
 
         // Create a temp dir to serve as both the bin dir and the "Android SDK root".
         let tmp = tempfile::tempdir().unwrap();
+
+        // Redirect $HOME to the sandbox so add_to_path / add_android_env write
+        // to the TempDir, not the developer's real home directory.
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        struct HomeGuard(Option<std::ffi::OsString>);
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _home_guard = HomeGuard(saved_home);
+
         let bin_dir = tmp.path().join("flutter_bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let android_home = tmp.path().join("android_sdk");
@@ -2466,12 +2520,30 @@ mod tests {
     /// When `android_sdk_root` is `None` and the resolver returns a path that
     /// does not exist on disk, the Android block must be silently skipped and
     /// the executor must still complete (Flutter PATH is written regardless).
+    ///
+    /// `$HOME` is redirected to a `TempDir` so the Flutter PATH write cannot
+    /// reach the developer's real shell rc files.
     #[tokio::test]
     #[serial_test::serial]
     async fn test_pathconfig_skips_android_env_when_no_sdk_anywhere() {
         use crate::install_wizard::WizardStepKind;
 
         let tmp = tempfile::tempdir().unwrap();
+
+        // Redirect $HOME to the sandbox so add_to_path writes to the TempDir.
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        struct HomeGuard(Option<std::ffi::OsString>);
+        impl Drop for HomeGuard {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _home_guard = HomeGuard(saved_home);
+
         let bin_dir = tmp.path().join("flutter_bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
 
