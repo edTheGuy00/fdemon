@@ -13,7 +13,7 @@
 #   tests/docker/build-bootstrap.sh --distro fedora bash  # fedora, subset
 #
 # Resulting images:
-#   debian:  fdemon-bootstrap-{zsh,bash,fish}
+#   debian:  fdemon-bootstrap-debian-{zsh,bash,fish}
 #   fedora:  fdemon-bootstrap-fedora-{zsh,bash,fish}
 set -euo pipefail
 
@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
 done
 
 case "$distro" in
-  debian) dockerfile="tests/docker/toolchain-bootstrap.Dockerfile";        prefix="fdemon-bootstrap" ;;
+  debian) dockerfile="tests/docker/toolchain-bootstrap.Dockerfile";        prefix="fdemon-bootstrap-debian" ;;
   fedora) dockerfile="tests/docker/toolchain-bootstrap-fedora.Dockerfile"; prefix="fdemon-bootstrap-fedora" ;;
   *) echo "unknown distro '$distro' (use debian|fedora)" >&2; exit 1 ;;
 esac
