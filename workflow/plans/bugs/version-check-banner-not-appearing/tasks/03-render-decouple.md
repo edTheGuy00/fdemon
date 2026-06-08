@@ -73,3 +73,41 @@ copy is identical to the dialog's.
 
 - Do not edit `state.rs` (Task 02 owns it). Read the `StartupNotice` type only.
 - Do not change the notice's lifecycle/clearing (Task 02 handles dismiss-on-keypress).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a5705de4ecb1e0074
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `pub(crate) fn startup_notice_line(notice: &StartupNotice) -> Line<'_>` shared formatter; updated `render_startup_notice` to call it instead of inlining the text |
+| `crates/fdemon-tui/src/render/mod.rs` | Imported `StartupNotice`; added `BANNER_MIN_HEIGHT` constant, `should_render_banner_outside_dialog()`, and `render_banner()` helpers; computed `content_area` in `view()` — when notice is `Some` and mode is not `Startup|NewSessionDialog`, reserves top row for banner and shifts all layout by 1; updated all modal `area` references to use `content_area` |
+| `crates/fdemon-tui/src/render/tests.rs` | Added 4 tests: `startup_notice_renders_on_normal_screen`, `startup_notice_renders_on_loading_screen`, `no_banner_when_notice_absent`, `no_double_render_in_dialog` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Shared helper approach**: Chose `pub(crate) fn startup_notice_line` over making `render_startup_notice` pub(crate), so the formatting is shared via a `Line`-returning function rather than duplicating the full render logic. Both callers wrap it in a `Paragraph` with the same `STATUS_YELLOW` style and `Alignment::Center`.
+
+2. **`content_area` layout shift**: Rather than rendering the banner as a pure overlay (which would partially obscure the header), we compute a `content_area` that is shrunk by 1 row from the top when the banner is shown. All modal renders (`NewSessionDialog`, `Loading`, `ConfirmDialog`, `Settings`, `FlutterVersion`, `InstallWizard`) use `content_area`. This keeps modals fully within the non-banner area. Toast notifications intentionally still use `area` (full screen) since they render on top of everything.
+
+3. **Double-render prevention**: `should_render_banner_outside_dialog` returns `false` for `Startup | NewSessionDialog`, so the banner is never rendered as a top-row overlay in those modes — the dialog widget renders it internally via the same `startup_notice_line` helper.
+
+4. **`state.rs` untouched**: `StartupNotice` was only read (via `use fdemon_app::state::StartupNotice`). No changes to `state.rs`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites green, zero failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-tui -- startup_notice no_banner no_double` - All 5 banner-related tests pass
+
+### Risks/Limitations
+
+1. **`content_area` shift applies to all modes with a notice**: If a future mode sets `startup_notice` while in (e.g.) `Settings` mode, the settings panel will be shifted down by 1 row. This is intentional and consistent — the banner always occupies row 0.
+2. **`LoadingState::new` ignores its argument**: The test creates a `LoadingState` for the Loading-screen test but the message is random; the test only checks for banner text, which is independent of the loading message.

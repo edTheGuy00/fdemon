@@ -80,3 +80,34 @@ stored notice actually surfaces for auto-launch users.)
 - Do not add the render site here (Task 03).
 - Do not modify the `StartupNotice` enum definition unless strictly required; if you do, note it
   for Task 03 (which reads the type).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/version-check-banner-not-appearing
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Removed visibility gate from `Message::NewVersionAvailable`; stores notice unconditionally. Added `state.dismiss_startup_notice_on_interaction()` call at top of `Message::Key` arm. Replaced old `new_version_available_dropped_when_dialog_not_visible` test with four new tests covering Normal mode set, Loading mode set, keypress-clears-in-Normal, keypress-does-not-clear-in-dialog. |
+| `crates/fdemon-app/src/state.rs` | Added `dismiss_startup_notice_on_interaction(&mut self)` helper method. Added three unit tests for the helper covering Normal (clears), NewSessionDialog (no-op), and no-notice (no-op). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Call site for dismiss**: The dismiss call is placed at the very top of the `Message::Key` arm in `update.rs`, before `handle_key` is dispatched. This means the banner is cleared on the first keypress regardless of which key was pressed or what mode-specific action it triggers. This is the minimal, correct behavior per the task spec.
+2. **No changes to `StartupNotice` enum**: The enum definition was left untouched — Task 03 can consume it as-is.
+3. **Old test renamed**: `new_version_available_dropped_when_dialog_not_visible` was replaced with `new_version_available_sets_notice_in_normal_mode` since the behavior it was testing is now the opposite.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — Passed (2935 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Render site not yet wired**: This task stores the notice unconditionally but Task 03 must add the render site for auto-launch users (`UiMode::Normal`/`UiMode::Loading`) to actually see the banner. Without Task 03 the fix is latent.

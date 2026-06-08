@@ -35,11 +35,15 @@ Wave 2 (parallel — docs)
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Modules |
 |---|------|--------|------------|------------|-------|---------|
-| 1 | [01-cache-rework](tasks/01-cache-rework.md) | Todo | - | 2-3h | implementor | `fdemon-app/version_check.rs` |
-| 2 | [02-handler-state-dismiss](tasks/02-handler-state-dismiss.md) | Todo | - | 1-2h | implementor | `fdemon-app/handler/update.rs`, `fdemon-app/state.rs` |
-| 3 | [03-render-decouple](tasks/03-render-decouple.md) | Todo | - | 1.5-2h | implementor | `fdemon-tui/render/mod.rs`, `fdemon-tui/widgets/new_session_dialog/mod.rs` |
-| 4 | [04a-config-docs](tasks/04a-config-docs.md) | Todo | 1,2,3 | 0.5h | implementor | `docs/CONFIGURATION.md` |
-| 5 | [04b-architecture-doc](tasks/04b-architecture-doc.md) | Todo | 1,2,3 | 0.5h | doc_maintainer | `docs/ARCHITECTURE.md` |
+| 1 | [01-cache-rework](tasks/01-cache-rework.md) | ✅ Done | - | 2-3h | implementor | `fdemon-app/version_check.rs` |
+| 2 | [02-handler-state-dismiss](tasks/02-handler-state-dismiss.md) | ✅ Done | - | 1-2h | implementor | `fdemon-app/handler/update.rs`, `fdemon-app/state.rs` |
+| 3 | [03-render-decouple](tasks/03-render-decouple.md) | ✅ Done | - | 1.5-2h | implementor | `fdemon-tui/render/mod.rs`, `fdemon-tui/widgets/new_session_dialog/mod.rs` |
+| 4 | [04a-config-docs](tasks/04a-config-docs.md) | ✅ Done | 1,2,3 | 0.5h | implementor | `docs/CONFIGURATION.md` |
+| 5 | [04b-architecture-doc](tasks/04b-architecture-doc.md) | ✅ Done | 1,2,3 | 0.5h | doc_maintainer | `docs/ARCHITECTURE.md` |
+
+> **04b validation CONCERN (resolved):** ARCHITECTURE.md described a non-existent
+> "drops `NewVersionAvailable` on late arrival" handler gate. Corrected post-merge in
+> commit `f6b15ab` — the handler stores `startup_notice` unconditionally.
 
 ## File Overlap Analysis
 

@@ -117,3 +117,35 @@ A `0.5.7` build writes `latest: null`; a `0.5.6` build then reads it fresh and s
 - Do not change the TTL, endpoint, HTTP client, or `Message`/spawn wiring.
 - Do not touch the strict `>` comparison semantics (a binary equal to latest correctly shows no
   banner; the only behavioral change is what gets persisted).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/version-check-banner-not-appearing
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/version_check.rs` | Extended `CacheEntry` with `current_version` field; cache write stores raw normalized tag (always `Some` on success); cache read validates freshness + binary version match; updated module doc; updated existing tests; added 5 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Old-format cache as deserialize-miss**: No `#[serde(deny_unknown_fields)]` was added. Since `current_version` is required by serde (no `#[serde(default)]`), any old cache file missing that field fails to deserialize → `read_cache_at` returns `None` → cache miss. This is the simplest migration path with no special handling needed.
+2. **`latest: Some(normalized)` always on successful fetch**: The cache now always writes `Some(normalized)` after a successful parse, never the filtered result. This is explicit in the code with a comment explaining the rationale (avoids cross-version poisoning).
+3. **Version-mismatch path is debug-logged but does not error**: Consistent with the existing pattern of silent degradation — this is a best-effort developer tool feature.
+4. **`write_stores_raw_tag_not_result` test structure**: Uses the `fetch_latest_tag` + `write_cache_at` path directly (rather than `check_for_newer_release` which needs real network) to verify the raw-tag storage behavior in isolation. This avoids needing to intercept the canonical cache path.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app version_check::tests` - Passed (27 tests: 22 existing + 5 new)
+- `cargo test --workspace` - Passed (all crates green)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **None**: The change is strictly additive (new field, new tests). Old cache files are transparently treated as misses on first run after upgrade — no data corruption, no panic path.
