@@ -81,8 +81,8 @@ pub fn Toolchain() -> impl IntoView {
 \u{2502} Steps                 \u{2502} Flutter SDK                            \u{2502}
 \u{2502} \u{2714} Prerequisites      \u{2502}   [\u{2714}] flutter 3.x \u{00b7} stable             \u{2502}
 \u{2502} \u{2716} Android Tools      \u{2502}   ~/fvm/versions/stable/bin/flutter    \u{2502}
-\u{2502} \u{25cb} PATH Config        \u{2502}                                        \u{2502}
-\u{2502} \u{2714} Flutter SDK        \u{2502}   Enter: run \u{00b7} r: re-check             \u{2502}
+\u{2502} \u{2714} Flutter SDK        \u{2502}                                        \u{2502}
+\u{2502} \u{25cb} PATH Config        \u{2502}   Enter: run \u{00b7} r: re-check             \u{2502}
 \u{2502} \u{25cb} Doctor             \u{2502}                                        \u{2502}
 \u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2534}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}"}</pre>
                 </div>
@@ -115,19 +115,19 @@ pub fn Toolchain() -> impl IntoView {
                                 </td>
                             </tr>
                             <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"3. PATH Config"</td>
-                                <td class="p-4 text-green-300 whitespace-nowrap">"Auto"</td>
-                                <td class="p-4 text-slate-300 hidden md:table-cell">
-                                    "Writes marker-fenced PATH and "<code>"ANDROID_HOME"</code>" exports to your \
-                                     shell rc files (idempotent). Runs after a successful install."
-                                </td>
-                            </tr>
-                            <tr class="hover:bg-slate-900/50">
-                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"4. Flutter SDK"</td>
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"3. Flutter SDK"</td>
                                 <td class="p-4 text-green-300 whitespace-nowrap">"Auto"</td>
                                 <td class="p-4 text-slate-300 hidden md:table-cell">
                                     "Installs a managed Flutter SDK via "<code>"git clone"</code>" (default) with an \
                                      archive-download fallback, then runs "<code>"flutter precache"</code>"."
+                                </td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/50">
+                                <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"4. PATH Config"</td>
+                                <td class="p-4 text-green-300 whitespace-nowrap">"Auto"</td>
+                                <td class="p-4 text-slate-300 hidden md:table-cell">
+                                    "Writes marker-fenced PATH and "<code>"ANDROID_HOME"</code>" exports to your \
+                                     shell rc files (idempotent). Runs after a successful install."
                                 </td>
                             </tr>
                             <tr class="hover:bg-slate-900/50">
@@ -144,9 +144,9 @@ pub fn Toolchain() -> impl IntoView {
 
                 <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm mt-4">
                     <strong>"Step order vs. install order:"</strong>
-                    " the steps are numbered in a familiar reading order, but the wizard installs in \
-                     dependency order (prerequisites \u{2192} Flutter SDK \u{2192} Android tools, which need a JDK \u{2192} \
-                     PATH \u{2192} doctor) and skips anything the preflight already found satisfied."
+                    " the UI order mirrors the dependency order (prerequisites \u{2192} Android tools \u{2192} \
+                     Flutter SDK \u{2192} PATH \u{2192} doctor). The wizard skips any step the preflight already \
+                     found satisfied."
                 </div>
             </Section>
 
