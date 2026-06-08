@@ -134,10 +134,14 @@ impl<'a> InstallWizardPanel<'a> {
             .render(title_area, buf);
 
         // Row 1: subtitle (dimmed)
-        // When the wizard is opened informationally (UserInvoked) and every component is
-        // healthy, show a reassuring "All set" hint instead of the generic subtitle.
+        // Three cases (evaluated in priority order):
+        //   1. UserInvoked + was broken + now all-Ok → "Flutter installed" hint with new-session key.
+        //   2. UserInvoked + all-Ok throughout (never broken) → "All set" reassurance.
+        //   3. Otherwise (Bootstrap, loading, or any non-Ok component) → generic title.
         if area.height >= 2 {
-            let subtitle_text = if !self.state.is_bootstrap() && self.state.all_components_ok() {
+            let subtitle_text = if self.state.show_installed_hint() {
+                "Flutter installed \u{2014} press + to start a session" // — (em dash)
+            } else if !self.state.is_bootstrap() && self.state.all_components_ok() {
                 "All set \u{2014} press Esc to return" // — (em dash)
             } else {
                 "Flutter toolchain setup"
@@ -862,5 +866,97 @@ mod tests {
                 "Loading state must NOT show 'All set' hint; content: {content:?}"
             );
         }
+    }
+
+    /// When a `UserInvoked` wizard was broken at open but is now all-Ok,
+    /// the header must show the "Flutter installed" hint (not "All set").
+    #[test]
+    fn installed_hint_shown_when_user_invoked_was_broken_now_ok() {
+        let broken_report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Missing,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let ok_report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: "3.22.0".to_string(),
+            }],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        state.apply_report(broken_report); // latches observed_unhealthy
+        state.apply_report(ok_report); // now all-Ok
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Flutter installed"),
+            "must show 'Flutter installed' hint when UserInvoked was broken then fixed; content: {content:?}"
+        );
+        // The "+" key should appear in the hint text.
+        // (The hint contains "press + to start a session")
+        assert!(
+            content.contains('+'),
+            "hint must include the '+' session-start keybinding; content: {content:?}"
+        );
+        // Must NOT show the "All set" subtitle for this scenario.
+        assert!(
+            !content.contains("All set"),
+            "must NOT show 'All set' when showing 'Flutter installed'; content: {content:?}"
+        );
+    }
+
+    /// When a `UserInvoked` wizard was healthy throughout, the header must show
+    /// "All set" (not "Flutter installed").
+    #[test]
+    fn all_set_hint_shown_when_healthy_throughout() {
+        let ok_report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: "3.22.0".to_string(),
+            }],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        state.apply_report(ok_report); // never observed unhealthy
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("All set"),
+            "must show 'All set' when healthy throughout; content: {content:?}"
+        );
+        assert!(
+            !content.contains("Flutter installed"),
+            "must NOT show 'Flutter installed' when healthy throughout; content: {content:?}"
+        );
     }
 }

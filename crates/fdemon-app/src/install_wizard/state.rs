@@ -148,6 +148,18 @@ pub struct InstallWizardState {
     /// auto-advances to device discovery when healthy.
     /// `UserInvoked` — opened by the `I` key; informational only, never hands back.
     pub origin: WizardOrigin,
+
+    /// Latched flag: `true` once any `apply_report` call has seen a non-Ok component.
+    ///
+    /// Set to `true` the first time `apply_report` processes a report containing
+    /// any component whose status is not `ComponentStatus::Ok`. Never cleared within
+    /// a wizard session — it records that the toolchain was broken at some point.
+    /// Reset to `false` only when the wizard is re-opened via `opening()` (which
+    /// uses `..Self::default()`).
+    ///
+    /// Used by [`show_installed_hint`][Self::show_installed_hint] to distinguish
+    /// "was broken, now fixed" from "was healthy throughout".
+    pub observed_unhealthy: bool,
 }
 
 impl InstallWizardState {
@@ -183,6 +195,20 @@ impl InstallWizardState {
         })
     }
 
+    /// `true` when the TUI should show the "Flutter installed — press + to start a session" hint.
+    ///
+    /// Triggers only when all three conditions hold:
+    /// - The wizard was opened via `UserInvoked` (not a startup Bootstrap).
+    /// - The current report shows all components `Ok` (`all_components_ok`).
+    /// - At least one previous report was unhealthy (`observed_unhealthy`), meaning
+    ///   the user installed Flutter (or fixed something) during this wizard session.
+    ///
+    /// This distinguishes "was broken, now fixed — go start a session" from
+    /// "was healthy throughout — just confirming" (which shows "All set").
+    pub fn show_installed_hint(&self) -> bool {
+        !self.is_bootstrap() && self.all_components_ok() && self.observed_unhealthy
+    }
+
     /// Populate steps from a completed preflight report.
     ///
     /// Replaces any existing steps, clears `loading`, and clamps
@@ -196,6 +222,16 @@ impl InstallWizardState {
     /// `report.components`, not `execution`, so clearing execution here does
     /// not affect auto-close behaviour.
     pub fn apply_report(&mut self, report: ToolchainReport) {
+        // Latch `observed_unhealthy` if any component is non-Ok.
+        // Once latched, it is never cleared within a wizard session — it records
+        // that the toolchain was broken at some point this session.
+        if report
+            .components
+            .iter()
+            .any(|c| c.status != ComponentStatus::Ok)
+        {
+            self.observed_unhealthy = true;
+        }
         self.steps = build_steps(&report);
         self.report = Some(report);
         self.loading = false;
@@ -416,6 +452,7 @@ impl std::fmt::Debug for InstallWizardState {
             .field("run_seq", &self.run_seq)
             .field("handback_done", &self.handback_done)
             .field("origin", &self.origin)
+            .field("observed_unhealthy", &self.observed_unhealthy)
             .finish()
     }
 }
@@ -3271,6 +3308,187 @@ mod tests {
         assert_eq!(
             linux_package_name("unknown-pkg", LinuxPackageManager::Apt),
             None
+        );
+    }
+
+    // --- observed_unhealthy latch + show_installed_hint tests ---
+
+    /// `observed_unhealthy` starts false (default) and latches to true when a
+    /// report with any non-Ok component is applied. It does NOT revert to false
+    /// when a subsequent all-Ok report is applied.
+    #[test]
+    fn observed_unhealthy_latches_on_non_ok_report() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        assert!(!state.observed_unhealthy, "must start false");
+
+        // Apply a report with a non-Ok component — should latch.
+        let partial_report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Missing,
+        )]);
+        state.apply_report(partial_report);
+        assert!(state.observed_unhealthy, "must latch on non-Ok component");
+
+        // Apply an all-Ok report — latch must NOT revert.
+        let ok_report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(ok_report);
+        assert!(
+            state.observed_unhealthy,
+            "latch must stay true after subsequent all-Ok report"
+        );
+    }
+
+    /// `observed_unhealthy` stays false when only all-Ok reports are applied.
+    #[test]
+    fn observed_unhealthy_false_when_healthy_throughout() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        let ok_report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+        ]);
+        state.apply_report(ok_report);
+
+        assert!(
+            !state.observed_unhealthy,
+            "must remain false when all reports are all-Ok"
+        );
+    }
+
+    /// Re-opening via `opening()` resets `observed_unhealthy` to false (via `..Self::default()`).
+    #[test]
+    fn opening_resets_observed_unhealthy() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        // Latch it true.
+        let partial_report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Missing,
+        )]);
+        state.apply_report(partial_report);
+        assert!(state.observed_unhealthy, "precondition: latch is true");
+
+        // Re-open.
+        state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        assert!(
+            !state.observed_unhealthy,
+            "opening() must reset observed_unhealthy to false"
+        );
+    }
+
+    /// `show_installed_hint` returns true only when UserInvoked + all-Ok + observed_unhealthy.
+    #[test]
+    fn show_installed_hint_true_when_user_invoked_was_broken_now_ok() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        // Apply a broken report first (latches observed_unhealthy).
+        let broken = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Missing,
+        )]);
+        state.apply_report(broken);
+
+        // Now apply an all-Ok report.
+        let fixed = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(fixed);
+
+        assert!(
+            state.show_installed_hint(),
+            "UserInvoked + observed_unhealthy + all-Ok must return true"
+        );
+    }
+
+    /// `show_installed_hint` returns false when healthy throughout (no previous broken report).
+    #[test]
+    fn show_installed_hint_false_when_healthy_throughout() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        let ok = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(ok);
+
+        assert!(
+            !state.show_installed_hint(),
+            "UserInvoked + all-Ok but observed_unhealthy=false must return false"
+        );
+    }
+
+    /// `show_installed_hint` returns false for Bootstrap origin even when broken-then-fixed.
+    #[test]
+    fn show_installed_hint_false_for_bootstrap_origin() {
+        let mut state = InstallWizardState::opening(WizardOrigin::Bootstrap);
+
+        let broken = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Missing,
+        )]);
+        state.apply_report(broken);
+        let fixed = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        state.apply_report(fixed);
+
+        assert!(
+            !state.show_installed_hint(),
+            "Bootstrap origin must never show the installed hint"
+        );
+    }
+
+    /// `show_installed_hint` returns false when still unhealthy (even if UserInvoked).
+    #[test]
+    fn show_installed_hint_false_when_still_unhealthy() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        let broken = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Missing,
+        )]);
+        state.apply_report(broken);
+
+        // observed_unhealthy is true, but all_components_ok is false.
+        assert!(
+            !state.show_installed_hint(),
+            "must return false when not all components are Ok yet"
+        );
+    }
+
+    /// `observed_unhealthy` latches on `ComponentStatus::Partial` as well.
+    #[test]
+    fn observed_unhealthy_latches_on_partial_status() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        let partial = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Partial,
+        )]);
+        state.apply_report(partial);
+
+        assert!(
+            state.observed_unhealthy,
+            "Partial status must latch observed_unhealthy"
+        );
+    }
+
+    /// `observed_unhealthy` latches on `ComponentStatus::Error` as well.
+    #[test]
+    fn observed_unhealthy_latches_on_error_status() {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+
+        let error = make_report(vec![make_check(ComponentKind::Git, ComponentStatus::Error)]);
+        state.apply_report(error);
+
+        assert!(
+            state.observed_unhealthy,
+            "Error status must latch observed_unhealthy"
         );
     }
 }
