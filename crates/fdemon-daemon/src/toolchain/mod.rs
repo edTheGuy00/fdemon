@@ -2,20 +2,23 @@
 //!
 //! Provides a single entry point [`run_preflight`] that runs a **read-only**
 //! structured diagnosis of the Flutter toolchain and returns a
-//! [`ToolchainReport`].
+//! [`PreflightOutcome`] bundling the [`ToolchainReport`] with the optionally
+//! resolved [`crate::flutter_sdk::FlutterSdk`].
 //!
 //! ## Design Principles
 //!
 //! - **Read-only**: no installs, downloads, or file mutations.
-//! - **Never fails**: `run_preflight` returns `ToolchainReport`, never `Err`.
+//! - **Never fails**: `run_preflight` returns `PreflightOutcome`, never `Err`.
 //!   Failures are encoded as `ComponentStatus::Error` or `ComponentStatus::Missing`.
 //! - **Concurrent**: independent checks run with `tokio::join!`.
 //! - **Reuses existing SDK detection**: calls the same `find_flutter_sdk` used
-//!   by the Flutter process spawner.
+//!   by the Flutter process spawner, and returns the resolved SDK so callers
+//!   never need to call `find_flutter_sdk` a second time.
 //!
 //! ## Public API
 //!
 //! - [`run_preflight`] — top-level orchestrator
+//! - [`PreflightOutcome`] — combined outcome: report + optionally-resolved SDK
 //! - [`ToolchainReport`], [`ComponentCheck`], [`ComponentStatus`], [`ComponentKind`]
 //! - [`HostPlatform`], [`HostShell`]
 //! - [`DoctorLine`], [`DoctorMarker`]
@@ -60,6 +63,25 @@ pub use types::{
 
 use std::path::Path;
 
+/// The combined outcome of [`run_preflight`].
+///
+/// Bundles the structured [`ToolchainReport`] with the optionally-resolved
+/// [`crate::flutter_sdk::FlutterSdk`] so callers never need a second
+/// `find_flutter_sdk` call to obtain the executable after a successful
+/// preflight.
+///
+/// `flutter_sdk` is `None` when no live Flutter SDK was found during the
+/// preflight — i.e. the `FlutterSdk` component status is not `Ok`.  When it
+/// is `Some`, `report.components[0].status == ComponentStatus::Ok` holds by
+/// construction.
+#[derive(Debug)]
+pub struct PreflightOutcome {
+    /// Structured per-component status report, always fully populated.
+    pub report: ToolchainReport,
+    /// The resolved Flutter SDK, or `None` when Flutter was not found.
+    pub flutter_sdk: Option<crate::flutter_sdk::FlutterSdk>,
+}
+
 /// Run a full read-only toolchain preflight diagnostic.
 ///
 /// Detects the host platform and shell, probes each toolchain component
@@ -82,15 +104,16 @@ use std::path::Path;
 ///
 /// # Returns
 ///
-/// A [`ToolchainReport`] that is always populated — this function **never
+/// A [`PreflightOutcome`] that is always populated — this function **never
 /// panics** and never returns `Err`. All probe failures are encoded as
 /// [`ComponentStatus::Error`] or [`ComponentStatus::Missing`] inside the
-/// returned report.
+/// returned report. The `flutter_sdk` field is `Some` when the Flutter SDK
+/// component resolved successfully, and `None` otherwise.
 pub async fn run_preflight(
     project_path: &Path,
     explicit_sdk_path: Option<&Path>,
     override_android_root: Option<&Path>,
-) -> ToolchainReport {
+) -> PreflightOutcome {
     // ── Windows: refresh process PATH from registry ───────────────────────────
     // On Windows, winget/installer-GUI writes new bin dirs into the registry
     // PATH (HKLM Machine and/or HKCU User) after fdemon launched. A running
@@ -116,7 +139,15 @@ pub async fn run_preflight(
 
     // Step 1: Flutter SDK check — sequential first because other checks may
     //         branch on whether we have a usable executable.
-    let (flutter_check, maybe_exe) = checks::check_flutter(project_path, explicit_sdk_path).await;
+    //
+    //         `check_flutter` now returns the full `FlutterSdk` (not just the
+    //         executable) so we can thread it through to `PreflightOutcome`
+    //         without a second `find_flutter_sdk` call.
+    let (flutter_check, maybe_sdk) = checks::check_flutter(project_path, explicit_sdk_path).await;
+
+    // Derive the executable reference needed by `capture_doctor_if_available`
+    // from the resolved SDK (avoids duplicating the `find_flutter_sdk` call).
+    let maybe_exe = maybe_sdk.as_ref().map(|sdk| sdk.executable.clone());
 
     // Step 2: If Flutter was found, capture `flutter doctor -v` concurrently
     //         with the remaining component probes.
@@ -183,7 +214,10 @@ pub async fn run_preflight(
         report.doctor.as_ref().map_or(0, |d| d.len()),
     );
 
-    report
+    PreflightOutcome {
+        report,
+        flutter_sdk: maybe_sdk,
+    }
 }
 
 /// Run `flutter doctor -v` if an executable is available and parse the output.
@@ -212,7 +246,8 @@ mod tests {
         // Use a temp directory as the project path so the locator does not
         // accidentally pick up the actual repo's Flutter configuration.
         let tmp = tempfile::TempDir::new().unwrap();
-        let report = run_preflight(tmp.path(), None, None).await;
+        let outcome = run_preflight(tmp.path(), None, None).await;
+        let report = &outcome.report;
 
         // Must always have 9 components in the defined order
         assert_eq!(report.components.len(), 9);
@@ -247,7 +282,8 @@ mod tests {
         std::env::set_var("FVM_CACHE_PATH", &empty_cache);
 
         let fake_sdk = PathBuf::from("/nonexistent/flutter/sdk");
-        let report = run_preflight(tmp.path(), Some(&fake_sdk), None).await;
+        let outcome = run_preflight(tmp.path(), Some(&fake_sdk), None).await;
+        let report = &outcome.report;
 
         match saved_fvm {
             Some(v) => std::env::set_var("FVM_CACHE_PATH", v),
@@ -261,6 +297,11 @@ mod tests {
         assert_ne!(flutter.status, ComponentStatus::Ok);
         // Doctor must be None when Flutter is missing
         assert!(report.doctor.is_none());
+        // flutter_sdk must be None when the component is not Ok
+        assert!(
+            outcome.flutter_sdk.is_none(),
+            "flutter_sdk must be None when Flutter check is not Ok"
+        );
     }
 
     #[test]
@@ -287,7 +328,8 @@ mod tests {
         // We accept any LinuxPackageManager variant — the exact result depends
         // on what is installed on the test host.
         let tmp = tempfile::TempDir::new().unwrap();
-        let report = run_preflight(tmp.path(), None, None).await;
+        let outcome = run_preflight(tmp.path(), None, None).await;
+        let report = &outcome.report;
 
         if cfg!(target_os = "linux") {
             assert!(
@@ -307,7 +349,8 @@ mod tests {
         // On non-Windows hosts winget must always be false (binary not present).
         // On Windows we accept any bool — winget may or may not be installed.
         let tmp = tempfile::TempDir::new().unwrap();
-        let report = run_preflight(tmp.path(), None, None).await;
+        let outcome = run_preflight(tmp.path(), None, None).await;
+        let report = &outcome.report;
 
         if !cfg!(target_os = "windows") {
             assert!(

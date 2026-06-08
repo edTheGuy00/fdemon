@@ -110,8 +110,8 @@ pub use toolchain::{clear_test_home_override, set_test_home_override, with_test_
 pub use toolchain::{
     detect_linux_package_manager, parse_missing_prereq_keys, resolve_android_sdk_root_path,
     run_preflight, ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker,
-    HostPlatform, HostShell, LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS,
-    PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+    HostPlatform, HostShell, LinuxPackageManager, PreflightOutcome, ToolchainReport,
+    PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 
 use fdemon_core::prelude::*;

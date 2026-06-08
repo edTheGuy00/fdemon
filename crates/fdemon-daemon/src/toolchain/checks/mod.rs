@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use crate::flutter_sdk::{diagnostics::strip_ansi, find_flutter_sdk};
+use crate::flutter_sdk::{diagnostics::strip_ansi, find_flutter_sdk, FlutterSdk};
 
 use super::types::{ComponentCheck, ComponentKind, ComponentStatus};
 
@@ -72,15 +72,14 @@ const JDK_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Check for the Flutter SDK.
 ///
 /// Runs the full 12-strategy SDK locator. On success, returns `Ok` with a
-/// detail string containing the version and discovery source. On failure,
-/// classifies as `Missing` or `Partial` depending on the error.
+/// detail string containing the version and discovery source, and the resolved
+/// [`FlutterSdk`] so callers can thread it forward without a second call to
+/// `find_flutter_sdk`. On failure, classifies as `Missing` or `Partial`
+/// depending on the error.
 pub async fn check_flutter(
     project_path: &Path,
     explicit_path: Option<&Path>,
-) -> (
-    ComponentCheck,
-    Option<crate::flutter_sdk::FlutterExecutable>,
-) {
+) -> (ComponentCheck, Option<FlutterSdk>) {
     match find_flutter_sdk(project_path, explicit_path) {
         Ok(sdk) => {
             let detail = format!("{} ({})", sdk.version, sdk.source);
@@ -90,7 +89,7 @@ pub async fn check_flutter(
                     status: ComponentStatus::Ok,
                     detail,
                 },
-                Some(sdk.executable),
+                Some(sdk),
             )
         }
         Err(e) => {

@@ -3353,4 +3353,52 @@ mod tests {
             "Bootstrap with a running session must not dispatch DiscoverDevices"
         );
     }
+
+    // ── Task 01: run_preflight resolved-SDK threading regression ─────────────
+
+    /// Regression test for Finding 1 (harden-handback-sdk-resolution):
+    /// A Bootstrap wizard must hand back (dispatch DiscoverDevices and
+    /// transition to UiMode::Startup) when the post-install preflight report
+    /// shows FlutterSdk Ok AND resolved_sdk is already set from the SdkResolved
+    /// message that run_preflight now emits before ToolchainPreflightCompleted.
+    ///
+    /// Previously the executor called find_flutter_sdk a second time which could
+    /// fail silently, leaving resolved_sdk None and blocking the handback.
+    /// This test guards that the handler-level path works end-to-end once
+    /// resolved_sdk is populated.
+    #[test]
+    fn bootstrap_handback_fires_when_report_live_and_sdk_resolved() {
+        use crate::state::UiMode;
+
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::Bootstrap);
+        // Simulate the SdkResolved message having been processed before
+        // ToolchainPreflightCompleted arrives (the ordering guaranteed by
+        // the updated RunToolchainPreflight executor).
+        inject_live_sdk(&mut state);
+
+        let result = handle_preflight_completed(&mut state, make_live_flutter_report());
+
+        // Wizard must auto-close to Startup (not Normal).
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Startup,
+            "wizard auto-close must leave UiMode::Startup so DevicesDiscovered \
+             populates the new-session dialog selector"
+        );
+        // One-shot guard must be armed.
+        assert!(
+            state.install_wizard_state.handback_done,
+            "handback_done must be true after auto-close"
+        );
+        // DiscoverDevices must be among the returned actions.
+        let actions = result.actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, UpdateAction::DiscoverDevices { .. })),
+            "DiscoverDevices action must be returned; got {:?}",
+            actions
+        );
+    }
 }
