@@ -37,6 +37,12 @@ const GITHUB_RELEASES_LATEST: &str =
 /// from consuming unbounded memory.
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
+/// Maximum allowed on-disk cache file size. A well-formed entry is a few
+/// hundred bytes; this cap mirrors the network-side `MAX_RESPONSE_BYTES` guard
+/// and prevents a corrupt or hostile cache file from causing a large
+/// allocation at startup. (1 MiB — generous vs. the real ~200-byte payload.)
+const MAX_CACHE_BYTES: u64 = 1024 * 1024;
+
 /// Cache TTL in seconds (24 hours).
 const CACHE_TTL_SECS: u64 = 86_400;
 
@@ -86,6 +92,16 @@ fn cache_path() -> Option<PathBuf> {
 /// This function is public within the crate to allow tests to inject an
 /// arbitrary path without relying on `dirs::cache_dir()`.
 pub(crate) fn read_cache_at(path: &Path) -> Option<CacheEntry> {
+    // Reject oversized files before reading them into memory.
+    let len = std::fs::metadata(path).ok()?.len();
+    if len > MAX_CACHE_BYTES {
+        tracing::debug!(
+            "Version check: cache file too large ({} bytes) at {:?}, treating as miss",
+            len,
+            path
+        );
+        return None;
+    }
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
@@ -126,7 +142,10 @@ pub(crate) fn write_cache_at(path: &Path, entry: &CacheEntry) {
         }
     }
 
-    let tmp_path = path.with_extension("tmp");
+    // Derive a per-process-unique temp path so concurrent or stale writers cannot
+    // collide on a fixed `.tmp` name. The temp file is renamed over `path` on
+    // success and removed on failure, so it never lingers.
+    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
     if let Err(e) = std::fs::write(&tmp_path, &json) {
         tracing::debug!("Version check: failed to write cache tmp file: {}", e);
         return;
@@ -438,6 +457,18 @@ mod tests {
     }
 
     #[test]
+    fn read_cache_at_rejects_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        // Write a file larger than MAX_CACHE_BYTES.
+        std::fs::write(&path, vec![b'{'; (MAX_CACHE_BYTES as usize) + 1]).unwrap();
+        assert!(
+            read_cache_at(&path).is_none(),
+            "oversized cache file must be treated as a cache miss"
+        );
+    }
+
+    #[test]
     fn cache_corrupt_file_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("version_check.json");
@@ -463,11 +494,21 @@ mod tests {
         };
         write_cache_at(&path, &entry);
 
-        // The .tmp file should NOT exist after a successful write.
-        let tmp_path = path.with_extension("tmp");
+        // No per-process or legacy `.tmp` file should remain after a successful
+        // atomic write. The temp file is renamed over `path`; on failure it is
+        // removed. Check that no file in the temp dir ends with ".tmp".
+        let leftover_tmp = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "tmp")
+                    .unwrap_or(false)
+            });
         assert!(
-            !tmp_path.exists(),
-            ".tmp file must not exist after successful atomic write"
+            !leftover_tmp,
+            "no .tmp file must remain after a successful atomic write"
         );
 
         // The final file should contain the correct JSON.
@@ -552,6 +593,26 @@ mod tests {
             .await;
         let result = fetch_latest_tag(&mock.uri(), Duration::from_secs(3)).await;
         assert!(result.is_none(), "oversized response must return None");
+    }
+
+    #[tokio::test]
+    async fn fetch_latest_tag_rejects_redirect() {
+        // The HTTP client is built with `redirect::Policy::none()`. Verify that
+        // a 301/302 response is treated as a non-success status and returns None,
+        // locking in the no-follow defense.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("Location", "https://evil.example/"),
+            )
+            .mount(&server)
+            .await;
+        let result = fetch_latest_tag(&server.uri(), Duration::from_secs(3)).await;
+        assert!(
+            result.is_none(),
+            "redirect response must return None (no-follow policy)"
+        );
     }
 
     #[tokio::test]
@@ -732,7 +793,7 @@ mod tests {
     /// When the network returns a tag equal to the current version the cache must
     /// still store `latest: Some(current)` (the raw tag), not `None`.
     #[tokio::test]
-    async fn write_stores_raw_tag_not_result() {
+    async fn cache_always_stores_raw_tag_on_successful_fetch() {
         let dir = tempfile::tempdir().unwrap();
         let cache_path = dir.path().join("version_check.json");
 
