@@ -9,7 +9,7 @@ pub enum WizardOrigin {
     /// becomes healthy, the wizard hands back to device discovery (new-session dialog).
     Bootstrap,
     /// User-invoked (`I`) informational view of a (typically healthy) toolchain.
-    /// Never hands back; `Esc` returns to the previous mode.
+    /// Never hands back; `Esc` returns to `UiMode::Normal`.
     #[default]
     UserInvoked,
 }

@@ -134,7 +134,7 @@ impl<'a> InstallWizardPanel<'a> {
             .render(title_area, buf);
 
         // Row 1: subtitle (dimmed)
-        // When the wizard is opened informally (UserInvoked) and every component is
+        // When the wizard is opened informationally (UserInvoked) and every component is
         // healthy, show a reassuring "All set" hint instead of the generic subtitle.
         if area.height >= 2 {
             let subtitle_text = if !self.state.is_bootstrap() && self.state.all_components_ok() {
