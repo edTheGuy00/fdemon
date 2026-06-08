@@ -140,4 +140,30 @@ async fn fetch_latest_tag_rejects_redirect() {
 
 ## Completion Summary
 
-**Status:** _pending_
+**Status:** Done
+**Branch:** fix/version-check-banner-not-appearing
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/version_check.rs` | Added `MAX_CACHE_BYTES` constant; added size guard in `read_cache_at`; switched `write_cache_at` to per-PID temp name; updated `cache_atomic_write_via_rename` test; added `read_cache_at_rejects_oversized_file` test; added `fetch_latest_tag_rejects_redirect` test; renamed `write_stores_raw_tag_not_result` → `cache_always_stores_raw_tag_on_successful_fetch` |
+
+### Notable Decisions/Tradeoffs
+
+1. **S2 unique temp name implemented**: Used `path.with_extension(format!("{}.tmp", std::process::id()))` giving a file like `version_check.<pid>.tmp`. This produces a file where the OS-level "extension" (after the last dot) is still `tmp`, so the updated `cache_atomic_write_via_rename` test checks for any leftover `.tmp`-extension file in the dir — which correctly catches both old-style and new-style temp files.
+
+2. **Test update strategy for `cache_atomic_write_via_rename`**: The old assertion checked that the literal `path.with_extension("tmp")` (`version_check.tmp`) did not exist. With the PID-based name, that file is never created, so the old assertion would have passed trivially but tested the wrong thing. The updated test uses `read_dir` to scan for any file whose extension is `tmp`, which correctly validates that no temp file lingers after a successful atomic write regardless of the naming scheme.
+
+3. **Size cap semantics preserved**: `read_cache_at` returns `None` (a cache miss) for oversized files, consistent with the "any failure → cache miss" contract. The debug log message includes the file size and path for diagnostics.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app version_check` - Passed (36 tests: 34 existing + 2 new)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **None**: All changes are in test-covered paths with no behavior change for valid inputs. The PID-based temp name is strictly more robust than the fixed name for the defense-in-depth purpose.

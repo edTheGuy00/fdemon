@@ -44,9 +44,9 @@ Wave 1 (all parallel — disjoint write sets, no dependencies)
 
 | # | Task | Status | Depends On | Est. Hours | Agent | Modules |
 |---|------|--------|------------|------------|-------|---------|
-| 1 | [01-version-check-hardening](tasks/01-version-check-hardening.md) | Not Started | - | 1.5-2h | implementor | `fdemon-app/version_check.rs` |
-| 2 | [02-startup-notice-encapsulation](tasks/02-startup-notice-encapsulation.md) | Not Started | - | 1-1.5h | implementor | `fdemon-app/state.rs`, `fdemon-app/handler/update.rs`, `fdemon-app/message.rs` |
-| 3 | [03-render-banner-constant](tasks/03-render-banner-constant.md) | Not Started | - | 0.5-1h | implementor | `fdemon-tui/render/mod.rs`, `fdemon-tui/render/tests.rs` |
+| 1 | [01-version-check-hardening](tasks/01-version-check-hardening.md) | ✅ Done | - | 1.5-2h | implementor | `fdemon-app/version_check.rs` |
+| 2 | [02-startup-notice-encapsulation](tasks/02-startup-notice-encapsulation.md) | ✅ Done | - | 1-1.5h | implementor | `fdemon-app/state.rs`, `fdemon-app/handler/update.rs`, `fdemon-app/message.rs` |
+| 3 | [03-render-banner-constant](tasks/03-render-banner-constant.md) | ✅ Done | - | 0.5-1h | implementor | `fdemon-tui/render/mod.rs`, `fdemon-tui/render/tests.rs` |
 
 ## File Overlap Analysis
 

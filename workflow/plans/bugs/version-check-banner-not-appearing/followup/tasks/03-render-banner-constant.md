@@ -117,4 +117,29 @@ fn banner_not_rendered_when_terminal_too_short() {
 
 ## Completion Summary
 
-**Status:** _pending_
+**Status:** Done
+**Branch:** worktree-agent-ae63d296a653d84dc
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Added `BANNER_ROW_HEIGHT: u16 = 1` constant; updated `BANNER_MIN_HEIGHT` derivation comment to reference `BANNER_ROW_HEIGHT`; replaced bare `1` literals in banner layout block with `BANNER_ROW_HEIGHT` |
+| `crates/fdemon-tui/src/render/tests.rs` | Added `banner_not_rendered_when_terminal_too_short` test verifying the `area.height < BANNER_MIN_HEIGHT` guard skips the banner at 1-row terminal height |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reformatted content Rect construction**: The new multi-line `Rect::new(...)` for the content area (using `BANNER_ROW_HEIGHT`) passes `cargo fmt` cleanly and matches the project's formatting conventions for multi-argument calls.
+2. **Test construction matches `no_double_render_in_dialog`**: Used `TestBackend::new(80, 1)` + `Terminal::new` + `terminal.draw(|f| view(f, &mut state))` + `buf.content().iter().map(|c| c.symbol()).collect::<String>()` — identical to the existing banner test harness as required.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed (clean)
+- `cargo test -p fdemon-tui` - Passed (1487 unit tests + 7 integration tests, 0 failed)
+  - New test `render::tests::banner_not_rendered_when_terminal_too_short` - ok
+  - Existing banner tests (`startup_notice_renders_on_normal_screen`, `startup_notice_renders_on_loading_screen`, `no_banner_when_notice_absent`, `no_double_render_in_dialog`) - all ok
+
+### Risks/Limitations
+
+1. **Pure refactor**: Rendering output for all valid terminal sizes is unchanged — the constant substitution is semantically equivalent to the bare `1` literals it replaces.

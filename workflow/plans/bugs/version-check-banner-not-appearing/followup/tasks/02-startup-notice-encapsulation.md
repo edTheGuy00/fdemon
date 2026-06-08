@@ -158,4 +158,29 @@ fn dismiss_startup_notice_on_interaction_noop_in_startup_mode() {
 
 ## Completion Summary
 
-**Status:** _pending_
+**Status:** Done
+**Branch:** worktree-agent-a23868987aea419e6
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `set_startup_notice` method with `debug_assert` boundary validation; refreshed `startup_notice` field doc to describe both render paths and both clear paths; added `dismiss_startup_notice_on_interaction_noop_in_startup_mode` test |
+| `crates/fdemon-app/src/handler/update.rs` | Changed `Message::NewVersionAvailable` arm from direct field write to `state.set_startup_notice(...)` call |
+| `crates/fdemon-app/src/message.rs` | Refreshed `NewVersionAvailable` rustdoc to describe the decoupled render path (dialog + standalone banner) and clear path |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single-variant irrefutable let**: Since `StartupNotice` has exactly one variant (`NewVersionAvailable`), the `debug_assert` block uses an irrefutable `let StartupNotice::NewVersionAvailable { latest } = &notice;` — no `match` needed. The task note confirmed this approach.
+2. **`#[cfg(debug_assertions)]` block**: The assertion is wrapped in a `#[cfg(debug_assertions)]` block (not just `debug_assert!`) to avoid a potential unused-variable warning from clippy in release mode on the destructured `latest` binding.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` - Passed (clean)
+- `cargo test -p fdemon-app` - Passed (2,941 tests)
+- `cargo test -p fdemon-app dismiss_startup_notice` - Passed (4 tests, including new `noop_in_startup_mode`)
+
+### Risks/Limitations
+
+1. **No production behavior change**: The setter is a pure encapsulation refactor — `set_startup_notice` stores `Some(notice)` unconditionally, identical to the previous direct field write. Existing handler tests pass unchanged.
