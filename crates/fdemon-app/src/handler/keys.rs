@@ -423,6 +423,7 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `c` — copy the selected guided command to the clipboard (`InstallWizardCopyCommand`)
 /// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
 /// - `]` — select the next guided command (`InstallWizardNextCommand`)
+/// - `+` — open the new-session dialog (`OpenNewSessionDialog`), only when no step is running
 fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message> {
     match key {
         // ── Global keys ───────────────────────────────────────────────────────
@@ -455,6 +456,16 @@ fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message>
         // Cycle through multiple guided commands on a step (Phase 4, Task 04).
         InputKey::Char('[') => Some(Message::InstallWizardPrevCommand),
         InputKey::Char(']') => Some(Message::InstallWizardNextCommand),
+        // Open the new-session dialog when idle (makes the "press + to start a session"
+        // hint truthful). Ignored while a wizard step is actively running, mirroring the
+        // Esc guard above.
+        InputKey::Char('+') => {
+            if state.install_wizard_state.is_step_running() {
+                None
+            } else {
+                Some(Message::OpenNewSessionDialog)
+            }
+        }
 
         _ => None,
     }
@@ -3736,6 +3747,41 @@ mod install_wizard_key_tests {
         assert!(
             matches!(msg, Some(Message::InstallWizardNextCommand)),
             "']' in InstallWizard should emit InstallWizardNextCommand, got: {msg:?}"
+        );
+    }
+
+    /// `+` while no step is running opens the new-session dialog, making the
+    /// "press + to start a session" hint truthful.
+    #[test]
+    fn plus_while_idle_opens_new_session_dialog() {
+        let state = make_install_wizard_state();
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "precondition: no step running"
+        );
+        let msg = handle_key(&state, InputKey::Char('+'));
+        assert!(
+            matches!(msg, Some(Message::OpenNewSessionDialog)),
+            "'+' while idle must emit OpenNewSessionDialog, got: {msg:?}"
+        );
+    }
+
+    /// `+` while a wizard step is in flight must be ignored (returns `None`),
+    /// so the user cannot open a session dialog mid-install.
+    #[test]
+    fn plus_while_step_running_is_ignored() {
+        let mut state = make_install_wizard_state();
+        state
+            .install_wizard_state
+            .begin_step(crate::install_wizard::WizardStepKind::FlutterSdk);
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "precondition: step must be running"
+        );
+        let msg = handle_key(&state, InputKey::Char('+'));
+        assert!(
+            msg.is_none(),
+            "'+' while a step is running must return None, got: {msg:?}"
         );
     }
 }
