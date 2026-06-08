@@ -1698,6 +1698,15 @@ impl AppState {
         self.startup_notice = None;
     }
 
+    /// Clears the startup notice once the user interacts on a non-dialog screen.
+    /// No-op when the New Session Dialog is visible (the dialog owns the notice's
+    /// lifecycle and clears it on dismiss via `hide_new_session_dialog`).
+    pub fn dismiss_startup_notice_on_interaction(&mut self) {
+        if self.startup_notice.is_some() && !self.is_new_session_dialog_visible() {
+            self.startup_notice = None;
+        }
+    }
+
     // ─────────────────────────────────────────────────────────
     // Flutter Version Panel Helpers (Phase 2)
     // ─────────────────────────────────────────────────────────
@@ -3094,6 +3103,50 @@ mod tests {
     #[test]
     fn startup_notice_defaults_to_none() {
         let state = AppState::new();
+        assert!(state.startup_notice.is_none());
+    }
+
+    /// `dismiss_startup_notice_on_interaction` must clear the notice when
+    /// the user interacts outside the dialog (Normal mode).
+    #[test]
+    fn dismiss_startup_notice_on_interaction_clears_in_normal_mode() {
+        let mut state = AppState {
+            startup_notice: Some(StartupNotice::NewVersionAvailable {
+                latest: "0.5.7".into(),
+            }),
+            ..AppState::new()
+        };
+        state.ui_mode = UiMode::Normal;
+        state.dismiss_startup_notice_on_interaction();
+        assert!(state.startup_notice.is_none());
+    }
+
+    /// `dismiss_startup_notice_on_interaction` must be a no-op while the New
+    /// Session Dialog is visible — the dialog owns the lifecycle.
+    #[test]
+    fn dismiss_startup_notice_on_interaction_noop_in_dialog() {
+        let mut state = AppState {
+            startup_notice: Some(StartupNotice::NewVersionAvailable {
+                latest: "0.5.7".into(),
+            }),
+            ..AppState::new()
+        };
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.dismiss_startup_notice_on_interaction();
+        assert!(
+            state.startup_notice.is_some(),
+            "notice must survive while dialog is visible"
+        );
+    }
+
+    /// `dismiss_startup_notice_on_interaction` must be a no-op when there is no
+    /// notice to dismiss.
+    #[test]
+    fn dismiss_startup_notice_on_interaction_noop_when_no_notice() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        // Should not panic or set any unexpected state
+        state.dismiss_startup_notice_on_interaction();
         assert!(state.startup_notice.is_none());
     }
 
