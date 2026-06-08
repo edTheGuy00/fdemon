@@ -1110,9 +1110,18 @@ mod tests {
     fn test_path_separator_join_paths_roundtrips() {
         // Build a PATH from two entries and verify each entry survives.
         let jdk_bin = PathBuf::from("/home/user/.jdks/corretto-21/bin");
-        let existing = "/usr/local/bin:/usr/bin:/bin";
+        // Construct the existing PATH with OS-correct separators (`;` on
+        // Windows, `:` on POSIX) via `join_paths` rather than a hardcoded
+        // colon-joined literal — otherwise `split_paths` on Windows treats the
+        // whole string as a single entry and the preservation checks fail.
+        let existing = std::env::join_paths([
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .expect("join existing PATH must succeed");
 
-        let existing_entries = std::env::split_paths(existing);
+        let existing_entries = std::env::split_paths(&existing);
         let new_entries: Vec<_> = std::iter::once(jdk_bin.clone())
             .chain(existing_entries)
             .collect();
