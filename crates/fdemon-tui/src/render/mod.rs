@@ -68,10 +68,14 @@ use crate::theme::{icons::IconSet, palette};
 
 // ─── Startup-notice banner ──────────────────────────────────────────────────
 
-/// Minimum terminal height required to render the banner without losing all
-/// content area.  With a 1-row banner the remaining height must be at least 1
-/// to keep the layout system from producing zero-height areas.
-const BANNER_MIN_HEIGHT: u16 = 2;
+/// Height of the standalone version-check banner, in terminal rows.
+const BANNER_ROW_HEIGHT: u16 = 1;
+
+/// Minimum terminal height required to carve out the banner row and still leave
+/// at least one content row. Derived from: BANNER_ROW_HEIGHT (1) + 1 minimum
+/// content row = 2. Below this, the banner is skipped so the content area is
+/// never zero-height.
+const BANNER_MIN_HEIGHT: u16 = BANNER_ROW_HEIGHT + 1;
 
 /// Returns `true` when the startup-notice banner should be rendered as a
 /// standalone top-row on the current screen.
@@ -199,10 +203,15 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // to avoid producing zero-height content areas.
     let content_area = if let Some(notice) = state.startup_notice.as_ref() {
         if should_render_banner_outside_dialog(&state.ui_mode) && area.height >= BANNER_MIN_HEIGHT {
-            let banner_area = Rect::new(area.x, area.y, area.width, 1);
+            let banner_area = Rect::new(area.x, area.y, area.width, BANNER_ROW_HEIGHT);
             let buf = frame.buffer_mut();
             render_banner(notice, banner_area, buf);
-            Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+            Rect::new(
+                area.x,
+                area.y + BANNER_ROW_HEIGHT,
+                area.width,
+                area.height - BANNER_ROW_HEIGHT,
+            )
         } else {
             area
         }

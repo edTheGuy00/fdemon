@@ -1637,3 +1637,35 @@ fn no_double_render_in_dialog() {
         count
     );
 }
+
+/// When the terminal is only 1 row tall (below `BANNER_MIN_HEIGHT` = 2), the
+/// banner guard must skip the banner entirely to avoid producing a zero-height
+/// content rect.  The rendered output must not contain the banner text, and the
+/// call must not panic.
+#[test]
+fn banner_not_rendered_when_terminal_too_short() {
+    use fdemon_app::state::{StartupNotice, UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    // 1 row is below BANNER_MIN_HEIGHT (2): the guard must skip the banner.
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::Normal;
+    state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+        latest: "0.5.7".to_string(),
+    });
+
+    let backend = TestBackend::new(80, 1);
+    let mut terminal = Terminal::new(backend).unwrap();
+    // Must not panic even at 1-row height.
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let buf = terminal.backend().buffer();
+    let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+    assert!(
+        !text.contains("New version available"),
+        "banner must not render when terminal height (1) < BANNER_MIN_HEIGHT (2); \
+         guard must fall back to content_area = area to avoid zero-height rects"
+    );
+}
