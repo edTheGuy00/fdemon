@@ -852,14 +852,14 @@ pub(crate) fn is_jdk_actionable(components: &[ComponentCheck]) -> bool {
 
 /// Map a [`ToolchainReport`]'s components into the five ordered UI steps.
 ///
-/// Step order: Prerequisites → AndroidTools → PathConfig → FlutterSdk → Doctor
+/// Step order: Prerequisites → AndroidTools → FlutterSdk → PathConfig → Doctor
 ///
 /// Component grouping:
 /// - `Prerequisites` — `ComponentKind::Prerequisites`, `ComponentKind::Git`
 /// - `AndroidTools` — `AndroidCmdlineTools`, `AndroidPlatformTools`,
 ///   `AndroidPlatform`, `AndroidBuildTools`, `AndroidLicenses`, `Jdk`
-/// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `FlutterSdk` — `ComponentKind::FlutterSdk`
+/// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `Doctor` — no components; detail comes from `report.doctor`
 pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
     let mut prerequisites: Vec<ComponentCheck> = Vec::new();
@@ -949,17 +949,17 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
             guided_commands: android_guided,
         },
         WizardStep {
-            kind: WizardStepKind::PathConfig,
-            title: "PATH Configuration".to_string(),
-            status: path_config_status,
-            components: Vec::new(),
-            guided_commands: Vec::new(),
-        },
-        WizardStep {
             kind: WizardStepKind::FlutterSdk,
             title: "Flutter SDK".to_string(),
             status: flutter_status,
             components: flutter_sdk,
+            guided_commands: Vec::new(),
+        },
+        WizardStep {
+            kind: WizardStepKind::PathConfig,
+            title: "PATH Configuration".to_string(),
+            status: path_config_status,
+            components: Vec::new(),
             guided_commands: Vec::new(),
         },
         WizardStep {
@@ -1055,8 +1055,8 @@ mod tests {
         assert_eq!(steps.len(), 5);
         assert_eq!(steps[0].kind, WizardStepKind::Prerequisites);
         assert_eq!(steps[1].kind, WizardStepKind::AndroidTools);
-        assert_eq!(steps[2].kind, WizardStepKind::PathConfig);
-        assert_eq!(steps[3].kind, WizardStepKind::FlutterSdk);
+        assert_eq!(steps[2].kind, WizardStepKind::FlutterSdk);
+        assert_eq!(steps[3].kind, WizardStepKind::PathConfig);
         assert_eq!(steps[4].kind, WizardStepKind::Doctor);
     }
 
@@ -1902,8 +1902,8 @@ mod tests {
             ComponentStatus::Ok,
         )]);
         state.apply_report(report);
-        // PathConfig (index 2) has 0 guided commands.
-        state.selected_index = 2;
+        // PathConfig (index 3) has 0 guided commands.
+        state.selected_index = 3;
         state.selected_command_index = 0;
         state.select_next_command();
         assert_eq!(
@@ -1920,8 +1920,8 @@ mod tests {
             ComponentStatus::Ok,
         )]);
         state.apply_report(report);
-        // PathConfig (index 2) has 0 guided commands.
-        state.selected_index = 2;
+        // PathConfig (index 3) has 0 guided commands.
+        state.selected_index = 3;
         state.selected_command_index = 0;
         state.select_prev_command();
         assert_eq!(

@@ -941,7 +941,7 @@ mod tests {
     fn make_state_components() -> InstallWizardState {
         let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(make_report_with_doctor());
-        state.selected_index = 3; // FlutterSdk step (has components)
+        state.selected_index = 2; // FlutterSdk step (has components)
         state
     }
 
@@ -1014,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_shows_enter_hint_for_flutter_step() {
-        let state = make_state_components(); // FlutterSdk step selected (index 3)
+        let state = make_state_components(); // FlutterSdk step selected (index 2)
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -1034,7 +1034,7 @@ mod tests {
     #[test]
     fn test_step_detail_shows_enter_hint_for_path_config_step() {
         let mut state = make_state_components();
-        state.selected_index = 2; // PathConfig step
+        state.selected_index = 3; // PathConfig step
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -1123,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_shows_progress_view_when_running() {
-        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        let mut state = make_state_components(); // FlutterSdk selected (index 2)
                                                  // Start a run for FlutterSdk
         state.execution = StepExecution {
             kind: Some(WizardStepKind::FlutterSdk),
@@ -1206,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_progress_not_shown_for_different_step() {
-        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        let mut state = make_state_components(); // FlutterSdk selected (index 2)
                                                  // But execution is for a different step (PathConfig)
         state.execution = StepExecution {
             kind: Some(WizardStepKind::PathConfig),
@@ -1231,8 +1231,8 @@ mod tests {
     #[test]
     fn test_empty_step_shows_no_components_message() {
         let mut state = make_state_with_doctor_step_selected();
-        // Override selected_index to PathConfig (index 2) which has no components
-        state.selected_index = 2;
+        // Override selected_index to PathConfig (index 3) which has no components
+        state.selected_index = 3;
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -2176,7 +2176,7 @@ mod tests {
     fn detail_shows_esc_cancels_hint_while_running() {
         // While execution status is Running for the selected step, the detail pane
         // must show an "Esc" cancel hint (passed through StepProgress).
-        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        let mut state = make_state_components(); // FlutterSdk selected (index 2)
         state.execution = StepExecution {
             kind: Some(WizardStepKind::FlutterSdk),
             status: StepExecStatus::Running,

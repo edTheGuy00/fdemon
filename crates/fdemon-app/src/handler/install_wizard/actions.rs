@@ -419,7 +419,7 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                     // at all (settings None, env unset, default absent).
                     if android_sdk_root.is_none() {
                         state.install_wizard_state.status_message = Some(
-                            "Tip: run Android Tools first so ANDROID_HOME is also configured."
+                            "Tip: run the Android Tools step first so ANDROID_HOME is also configured."
                                 .into(),
                         );
                     }
@@ -1109,8 +1109,8 @@ mod tests {
     #[test]
     fn test_run_selected_flutter_step_dispatches_install_action() {
         let mut state = state_with_preflight();
-        // Select the FlutterSdk step (index 3 in the 5-step list).
-        state.install_wizard_state.selected_index = 3;
+        // Select the FlutterSdk step (index 2 in the 5-step list).
+        state.install_wizard_state.selected_index = 2;
         assert_eq!(
             state.install_wizard_state.selected_step().map(|s| s.kind),
             Some(WizardStepKind::FlutterSdk),
@@ -1143,7 +1143,7 @@ mod tests {
     fn test_run_selected_noop_while_running() {
         let mut state = state_with_preflight();
         // Select and start the FlutterSdk step.
-        state.install_wizard_state.selected_index = 3;
+        state.install_wizard_state.selected_index = 2;
         handle_run_selected_step(&mut state);
         assert!(state.install_wizard_state.is_step_running());
 
@@ -1159,8 +1159,8 @@ mod tests {
     #[test]
     fn test_pathconfig_without_known_sdk_sets_status_message() {
         let mut state = state_with_preflight();
-        // Select PathConfig (index 2) with no SDK path set.
-        state.install_wizard_state.selected_index = 2;
+        // Select PathConfig (index 3) with no SDK path set.
+        state.install_wizard_state.selected_index = 3;
         assert_eq!(
             state.install_wizard_state.selected_step().map(|s| s.kind),
             Some(WizardStepKind::PathConfig),
@@ -1198,7 +1198,7 @@ mod tests {
         // Simulate a just-completed FlutterSdk step that stashed an sdk_path.
         state.install_wizard_state.installed_sdk_path =
             Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 2; // PathConfig
+        state.install_wizard_state.selected_index = 3; // PathConfig
 
         let result = handle_run_selected_step(&mut state);
 
@@ -1287,7 +1287,7 @@ mod tests {
             Some("network timeout")
         );
         // A fresh run must now be dispatchable.
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
         let result = handle_run_selected_step(&mut state);
         assert!(
             result.action.is_some(),
@@ -1344,7 +1344,7 @@ mod tests {
     #[test]
     fn test_step_started_preserves_install_task_and_run_seq() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
 
         // Drive handle_run_selected_step — this calls begin_step, mints the
         // token, and stores install_task synchronously.
@@ -1403,7 +1403,7 @@ mod tests {
     #[test]
     fn test_stale_cross_kind_step_started_is_noop() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
 
         // Simulate Run B: begin_step(FlutterSdk) with seq = N (e.g. 2).
         // We do this via handle_run_selected_step to get a real install_task.
@@ -1453,7 +1453,7 @@ mod tests {
     #[test]
     fn test_step_started_with_current_seq_same_kind_preserves_task() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
 
         // Drive handle_run_selected_step to get a real install_task.
         let result = handle_run_selected_step(&mut state);
@@ -2177,7 +2177,7 @@ mod tests {
             Some(std::path::PathBuf::from("/opt/android-sdk"));
         // Give it a Flutter SDK path so PathConfig can resolve a bin dir.
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 2; // PathConfig
+        state.install_wizard_state.selected_index = 3; // PathConfig
 
         let r = handle_run_selected_step(&mut state);
 
@@ -2241,7 +2241,7 @@ mod tests {
     fn test_copy_command_sets_status_when_no_command() {
         // FlutterSdk step has no guided commands.
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
 
         // Verify precondition: no guided command.
         assert!(
@@ -2286,7 +2286,7 @@ mod tests {
         let mut state = state_with_preflight();
         state.settings.toolchain.android_sdk_root = None;
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 2; // PathConfig
+        state.install_wizard_state.selected_index = 3; // PathConfig
 
         let r = handle_run_selected_step(&mut state);
 
@@ -2337,7 +2337,7 @@ mod tests {
         state.settings.toolchain.android_sdk_root =
             Some(std::path::PathBuf::from("/opt/android-sdk"));
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 2; // PathConfig
+        state.install_wizard_state.selected_index = 3; // PathConfig
 
         handle_run_selected_step(&mut state);
 
@@ -2363,7 +2363,7 @@ mod tests {
         let mut state = state_with_preflight();
         state.settings.toolchain.android_sdk_root = None; // not set in settings
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 2; // PathConfig
+        state.install_wizard_state.selected_index = 3; // PathConfig
 
         let r = handle_run_selected_step(&mut state);
 
@@ -2835,7 +2835,7 @@ mod tests {
     #[test]
     fn run_selected_step_stores_token_synchronously() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
 
         let result = handle_run_selected_step(&mut state);
 
@@ -2863,7 +2863,7 @@ mod tests {
     #[test]
     fn cancel_during_early_window_fires_token_and_resets_to_idle() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
         handle_run_selected_step(&mut state);
         assert!(state.install_wizard_state.is_step_running(), "precondition");
         assert!(
@@ -2903,7 +2903,7 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_matching_seq_upgrades_join() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
         handle_run_selected_step(&mut state);
 
         let current_seq = state.install_wizard_state.run_seq;
@@ -2935,7 +2935,7 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_kind_mismatch_is_discarded() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
         handle_run_selected_step(&mut state);
 
         let current_seq = state.install_wizard_state.run_seq;
@@ -2969,7 +2969,7 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_seq_mismatch_is_discarded() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
         handle_run_selected_step(&mut state);
 
         let stale_seq = state.install_wizard_state.run_seq - 1; // seq before this run
@@ -3001,7 +3001,7 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_after_terminal_does_not_reinstall_handle() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
         let result = handle_run_selected_step(&mut state);
         let run_seq = state.install_wizard_state.run_seq;
         let _action = result.action;
@@ -3036,7 +3036,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_retry_same_kind_late_ready_for_a_is_discarded() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 3; // FlutterSdk
+        state.install_wizard_state.selected_index = 2; // FlutterSdk
 
         // Start run A.
         handle_run_selected_step(&mut state);
