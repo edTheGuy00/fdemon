@@ -689,9 +689,11 @@ pub enum Message {
     // ─────────────────────────────────────────────────────────
     // Version Check Messages (version-check-banner)
     // ─────────────────────────────────────────────────────────
-    /// A newer fdemon release was discovered on GitHub during the
-    /// startup background check. Sets `state.startup_notice` so the
-    /// New Session Dialog renders a one-line banner.
+    /// A newer fdemon release was discovered on GitHub during the startup
+    /// background check. Stores the version in `AppState::startup_notice`, which is
+    /// rendered either above the New Session Dialog (Startup / NewSessionDialog
+    /// modes) or as a standalone top-row banner on all other screens (Normal,
+    /// Loading, …). Cleared on the first keypress outside the dialog.
     NewVersionAvailable { latest: String },
 
     // ─────────────────────────────────────────────────────────

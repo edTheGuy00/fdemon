@@ -387,7 +387,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // `Message::Key`). On the New Session Dialog the notice is cleared when
         // the dialog is dismissed via `hide_new_session_dialog`.
         Message::NewVersionAvailable { latest } => {
-            state.startup_notice = Some(StartupNotice::NewVersionAvailable { latest });
+            state.set_startup_notice(StartupNotice::NewVersionAvailable { latest });
             UpdateResult::none()
         }
 

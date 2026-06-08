@@ -1438,12 +1438,14 @@ pub struct AppState {
     /// which sets `visible = true` and `loading = true` while the preflight task runs.
     pub install_wizard_state: InstallWizardState,
 
-    /// Optional one-line notice rendered above the New Session Dialog on startup.
+    /// Optional one-line notice rendered on startup — above the New Session Dialog
+    /// (Startup / NewSessionDialog modes) or as a standalone top-row banner on
+    /// other screens.
     ///
-    /// Set by handlers such as `Message::NewVersionAvailable` to surface
-    /// actionable information (e.g., a newer fdemon release is available).
-    /// Cleared when the New Session dialog is dismissed via
-    /// [`AppState::hide_new_session_dialog`].
+    /// Set via [`AppState::set_startup_notice`] (e.g. from `Message::NewVersionAvailable`).
+    /// Cleared either when the New Session dialog is dismissed
+    /// ([`AppState::hide_new_session_dialog`]) or on the first keypress in a
+    /// non-dialog mode ([`AppState::dismiss_startup_notice_on_interaction`]).
     pub startup_notice: Option<StartupNotice>,
 
     /// Transient toast notifications shown as a one-line overlay in the TUI.
@@ -1705,6 +1707,27 @@ impl AppState {
         if self.startup_notice.is_some() && !self.is_new_session_dialog_visible() {
             self.startup_notice = None;
         }
+    }
+
+    /// Sets the one-line startup notice. This is the single entry point for
+    /// populating `startup_notice`; the clear paths are `hide_new_session_dialog`
+    /// and `dismiss_startup_notice_on_interaction`.
+    ///
+    /// The `latest` carried by `StartupNotice::NewVersionAvailable` is, by contract,
+    /// the digit-and-dot normalized form produced by `version_check::check_for_newer_release`
+    /// (see its "returned string is digit-and-dot only" doc). The `debug_assert!` documents and
+    /// enforces that invariant in debug builds so a future producer cannot smuggle terminal
+    /// escape sequences into the banner via the public `Message` boundary.
+    pub fn set_startup_notice(&mut self, notice: StartupNotice) {
+        #[cfg(debug_assertions)]
+        {
+            let StartupNotice::NewVersionAvailable { latest } = &notice;
+            debug_assert!(
+                latest.chars().all(|c| c.is_ascii_digit() || c == '.'),
+                "startup_notice latest must be digit-and-dot only, got {latest:?}"
+            );
+        }
+        self.startup_notice = Some(notice);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -3136,6 +3159,24 @@ mod tests {
         assert!(
             state.startup_notice.is_some(),
             "notice must survive while dialog is visible"
+        );
+    }
+
+    /// `dismiss_startup_notice_on_interaction` must be a no-op while the startup
+    /// splash (Startup mode) is visible — same dialog-ownership rule as NewSessionDialog.
+    #[test]
+    fn dismiss_startup_notice_on_interaction_noop_in_startup_mode() {
+        let mut state = AppState {
+            startup_notice: Some(StartupNotice::NewVersionAvailable {
+                latest: "0.5.7".into(),
+            }),
+            ..AppState::new()
+        };
+        state.ui_mode = UiMode::Startup;
+        state.dismiss_startup_notice_on_interaction();
+        assert!(
+            state.startup_notice.is_some(),
+            "notice must survive a keypress while the startup splash is visible"
         );
     }
 
