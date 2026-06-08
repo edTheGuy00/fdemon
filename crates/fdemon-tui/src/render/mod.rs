@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use super::{layout, widgets};
 use crate::widgets::LogViewState;
-use fdemon_app::state::{AppState, LoadingState, ToastLevel, UiMode};
+use fdemon_app::state::{AppState, LoadingState, StartupNotice, ToastLevel, UiMode};
 use fdemon_app::{MouseAction, MouseRect, MouseRegionsBuilder};
 use fdemon_core::LogEntry;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -65,6 +65,41 @@ impl<'a> MouseCtx<'a> {
 }
 
 use crate::theme::{icons::IconSet, palette};
+
+// ─── Startup-notice banner ──────────────────────────────────────────────────
+
+/// Minimum terminal height required to render the banner without losing all
+/// content area.  With a 1-row banner the remaining height must be at least 1
+/// to keep the layout system from producing zero-height areas.
+const BANNER_MIN_HEIGHT: u16 = 2;
+
+/// Returns `true` when the startup-notice banner should be rendered as a
+/// standalone top-row on the current screen.
+///
+/// The banner is rendered here (outside the dialog) only for modes that do NOT
+/// already show it inside the `NewSessionDialog`.  For `Startup` and
+/// `NewSessionDialog` modes the dialog widget owns the banner, so we must not
+/// double-render it.
+fn should_render_banner_outside_dialog(mode: &UiMode) -> bool {
+    !matches!(mode, UiMode::Startup | UiMode::NewSessionDialog)
+}
+
+/// Render the startup-notice banner on the topmost row of `banner_area`.
+///
+/// Clears the row before painting so the deep-background fill does not bleed
+/// through the styled text.
+fn render_banner(notice: &StartupNotice, banner_area: Rect, buf: &mut ratatui::buffer::Buffer) {
+    use crate::widgets::new_session_dialog::startup_notice_line;
+
+    // Clear the row so the background fill does not bleed through.
+    ratatui::widgets::Widget::render(Clear, banner_area, buf);
+
+    let line = startup_notice_line(notice);
+    let paragraph = Paragraph::new(line)
+        .style(Style::default().fg(palette::STATUS_YELLOW))
+        .alignment(Alignment::Center);
+    ratatui::widgets::Widget::render(paragraph, banner_area, buf);
+}
 
 /// Render search overlay at the bottom of the log area
 ///
@@ -155,8 +190,28 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     let bg_block = Block::default().style(Style::default().bg(palette::DEEPEST_BG));
     frame.render_widget(bg_block, area);
 
+    // ── Startup-notice banner ────────────────────────────────────────────────
+    // When a startup notice is set AND the current mode is NOT Startup/NewSessionDialog
+    // (which render the banner inside the dialog), draw the banner on the topmost
+    // terminal row and shrink the content area by one row.
+    //
+    // Guard: skip the banner if the terminal is too short (< BANNER_MIN_HEIGHT)
+    // to avoid producing zero-height content areas.
+    let content_area = if let Some(notice) = state.startup_notice.as_ref() {
+        if should_render_banner_outside_dialog(&state.ui_mode) && area.height >= BANNER_MIN_HEIGHT {
+            let banner_area = Rect::new(area.x, area.y, area.width, 1);
+            let buf = frame.buffer_mut();
+            render_banner(notice, banner_area, buf);
+            Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+        } else {
+            area
+        }
+    } else {
+        area
+    };
+
     let session_count = state.session_manager.len();
-    let areas = layout::create_with_sessions(area, session_count);
+    let areas = layout::create_with_sessions(content_area, session_count);
 
     // Construct IconSet from settings
     let icons = IconSet::new(state.settings.ui.icons);
@@ -261,7 +316,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // Render modal overlays based on UI mode
     match state.ui_mode {
         UiMode::Startup | UiMode::NewSessionDialog => {
-            // Render NewSessionDialog for both startup (no sessions) and add session cases
+            // Render NewSessionDialog for both startup (no sessions) and add session cases.
+            // The dialog takes the full `content_area` (which equals `area` in these modes
+            // because `should_render_banner_outside_dialog` returns false for Startup /
+            // NewSessionDialog — the dialog widget renders the banner itself).
             let dialog = widgets::NewSessionDialog::new(
                 &state.new_session_dialog_state,
                 &state.tool_availability,
@@ -271,7 +329,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             .enable_mouse(state.settings.ui.enable_mouse)
             .animation_frame(state.animation_frame);
             widgets::new_session_dialog::render_with_regions(
-                area,
+                content_area,
                 frame.buffer_mut(),
                 dialog,
                 Some(&mut mouse_ctx),
@@ -284,7 +342,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         UiMode::Loading => {
             // Render loading screen (Task 08d)
             if let Some(ref loading) = state.loading_state {
-                render_loading_screen(frame, state, loading, area);
+                render_loading_screen(frame, state, loading, content_area);
             }
         }
         UiMode::ConfirmDialog => {
@@ -292,7 +350,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             if let Some(ref dialog_state) = state.confirm_dialog_state {
                 let dialog = widgets::ConfirmDialog::new(dialog_state);
                 widgets::confirm_dialog::render_with_regions(
-                    area,
+                    content_area,
                     frame.buffer_mut(),
                     dialog,
                     Some(&mut mouse_ctx),
@@ -390,7 +448,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Full-screen settings panel
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
             widgets::settings_panel::render_with_regions(
-                area,
+                content_area,
                 frame.buffer_mut(),
                 settings_panel,
                 &mut state.settings_view_state,
@@ -402,7 +460,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // The underlying header and log view are already rendered above; here we
             // render the dimmed overlay + centered panel dialog on top of them.
             let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state);
-            frame.render_widget(panel, area);
+            frame.render_widget(panel, content_area);
         }
         UiMode::InstallWizard => {
             // Full-screen Install Wizard panel — renders centered over the terminal.
@@ -412,7 +470,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &state.install_wizard_state,
                 state.animation_frame,
             );
-            frame.render_widget(panel, area);
+            frame.render_widget(panel, content_area);
         }
         // Legacy StartupDialog removed - use NewSessionDialog instead
         UiMode::DevTools => {
