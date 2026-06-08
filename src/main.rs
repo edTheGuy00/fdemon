@@ -3,12 +3,13 @@
 //! This is the binary entry point.
 
 mod dap_stdio;
+mod doctor;
 mod headless;
 mod tui;
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use fdemon_core::prelude::*;
 use fdemon_core::{
     discover_flutter_projects, get_project_type, is_runnable_flutter_project, ProjectType,
@@ -20,7 +21,40 @@ use fdemon_tui::{select_project, SelectionResult};
 #[derive(Parser, Debug)]
 #[command(name = "fdemon", version)]
 #[command(about = "A high-performance TUI for Flutter development", long_about = None)]
-struct Args {
+struct Cli {
+    /// Subcommand (optional — defaults to running the TUI).
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[command(flatten)]
+    run: RunArgs,
+}
+
+/// Subcommands for `fdemon`.
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Diagnose the Flutter toolchain and exit (no TUI).
+    ///
+    /// Probes Flutter SDK, Git, JDK, and Android SDK components, prints a
+    /// structured status report, and appends the `flutter doctor -v` output
+    /// when Flutter is found.
+    ///
+    /// Exit code: 0 when all components are OK, 1 otherwise.
+    ///
+    /// NOTE: If your Flutter project is in a directory named `doctor`, use the
+    /// explicit path form to avoid this subcommand intercepting the token:
+    ///
+    ///   fdemon ./doctor
+    Doctor {
+        /// Flutter project directory to probe (defaults to the current
+        /// working directory).
+        path: Option<PathBuf>,
+    },
+}
+
+/// Arguments for the default `run` mode (start the TUI / headless session).
+#[derive(Parser, Debug)]
+struct RunArgs {
     /// Path to Flutter project
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
@@ -82,7 +116,59 @@ async fn main() -> Result<()> {
     // Initialize error handling (must happen once at binary startup)
     color_eyre::install().map_err(|e| Error::terminal(e.to_string()))?;
 
-    let args = Args::parse();
+    let cli = Cli::parse();
+
+    // ── `fdemon doctor` subcommand ────────────────────────────────────────────
+    //
+    // Dispatch before any Engine / TUI initialisation.  `run_doctor` never
+    // panics and never starts the TUI; it prints to stdout/stderr and exits.
+    if let Some(Commands::Doctor { path }) = cli.command {
+        // Reject run-mode flags that are silently ignored when `doctor` is
+        // the active subcommand.  The user most likely made a flag-ordering
+        // mistake (e.g. `fdemon --headless doctor` instead of `fdemon doctor`);
+        // failing loudly prevents confusing silent no-ops.
+        let run = &cli.run;
+        let has_run_flags = run.headless
+            || run.dap_stdio
+            || run.dap_port.is_some()
+            || run.log_dir.is_some()
+            || run.dap_config.is_some();
+        if has_run_flags {
+            // Mimic clap's error style: message to stderr, exit code 2.
+            eprintln!(
+                "error: run-mode flags (--headless, --dap-stdio, --dap-port, \
+                 --log-dir, --dap-config) are not compatible with the `doctor` \
+                 subcommand and would be silently ignored.\n\
+                 \n\
+                 hint: place flags after the subcommand, or omit them:\n  \
+                 fdemon doctor [PATH]\n  \
+                 fdemon --headless [PATH]"
+            );
+            std::process::exit(2);
+        }
+
+        let cwd =
+            path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        // F24: load project settings so the configured [flutter] sdk_path is
+        // honoured.  A user who pins a non-default SDK in .fdemon/config.toml
+        // should see the same SDK probed here as the TUI uses at runtime.
+        let settings = fdemon_app::config::load_settings(&cwd);
+        let explicit_sdk = settings.flutter.sdk_path.clone();
+        let exit_code = doctor::run_doctor(cwd, explicit_sdk).await;
+        // `ExitCode` cannot be converted back to an integer on stable Rust, so
+        // we compare against the two possible values and call `std::process::exit`
+        // directly (we cannot return `ExitCode` from a `Result<()>` main).
+        let code = if exit_code == std::process::ExitCode::SUCCESS {
+            0i32
+        } else {
+            1i32
+        };
+        std::process::exit(code);
+    }
+
+    // ── Default run mode (TUI / headless) ────────────────────────────────────
+
+    let args = cli.run;
 
     // Initialize logging (to file, since TUI owns stdout).
     // --log-dir overrides the default log directory.

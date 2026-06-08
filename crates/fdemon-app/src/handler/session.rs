@@ -77,7 +77,7 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
         // Update session state based on message type
         handle_session_message_state(state, session_id, &msg);
     } else if !line.trim().is_empty() {
-        // Non-JSON output (build progress, etc.)
+        // Non-JSON output (build progress, device logcat, etc.)
         if let Some(handle) = state.session_manager.get_mut(session_id) {
             // Process through exception detection and raw line handling
             let entries = handle.session.process_raw_line(line);
@@ -87,6 +87,11 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
                     handle.session.flush_batched_logs();
                 }
             }
+            // Surface the on-device Dart VM service failure (Android only) with
+            // actionable guidance. Without the VM service, Flutter never emits
+            // `app.started`, so the session would otherwise stay in Launching
+            // with no explanation. No-op unless the line is the failure marker.
+            handle.session.detect_vm_service_failure(line);
         }
     }
 }
@@ -277,6 +282,18 @@ pub fn handle_session_message_state(
                     session_id,
                     app_started.app_id
                 );
+            } else {
+                // Observability: an app.started whose app_id does not match the
+                // session's app_id (captured at app.start) is dropped here, so the
+                // session stays in Launching. Log it instead of silently ignoring,
+                // so a stuck-in-Launching report is diagnosable from the INFO log.
+                tracing::warn!(
+                    "Session {} received app.started for app_id={} but session app_id={:?}; \
+                     phase NOT advanced to Running (app_id mismatch)",
+                    session_id,
+                    app_started.app_id,
+                    handle.session.app_id,
+                );
             }
         }
     }
@@ -287,7 +304,15 @@ pub fn handle_session_message_state(
             if !handle.session.is_running() {
                 match (&progress.message, progress.finished) {
                     (Some(m), false) => handle.session.set_progress(m.clone()),
-                    (_, true) => handle.session.clear_progress(),
+                    // Guard: do not wipe the VM-failure hint that
+                    // `detect_vm_service_failure` plants in `current_progress`.
+                    // A late `finished:true` can arrive after the hint is set
+                    // (the Gradle install progress completes asynchronously);
+                    // clearing it here would hide the compact hint next to the
+                    // still-shimmering phase label.
+                    (_, true) if !handle.session.vm_service_unavailable => {
+                        handle.session.clear_progress()
+                    }
                     _ => {}
                 }
             }
@@ -942,6 +967,103 @@ mod tests {
         assert!(
             handle.session.current_progress.is_none(),
             "AppProgress should be ignored once running"
+        );
+    }
+
+    #[test]
+    fn vm_service_failure_line_surfaces_guidance_and_keeps_launching() {
+        // Android session in Launching (state_with_session marks app.start).
+        let (mut state, session_id) = state_with_session("my-app");
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert_eq!(handle.session.phase, AppPhase::Launching);
+            assert!(!handle.session.vm_service_unavailable);
+        }
+
+        // The raw on-device error line (non-JSON) flows through stdout handling.
+        handle_session_stdout(
+            &mut state,
+            session_id,
+            "I/flutter (25963): Could not start Dart VM service HTTP server:",
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.vm_service_unavailable,
+            "failure line must flag the session"
+        );
+        // The phase machine is untouched — only app.started promotes to Running.
+        assert_eq!(handle.session.phase, AppPhase::Launching);
+        // Guidance reached the log buffer.
+        assert!(handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("android.permission.INTERNET")));
+    }
+
+    /// A late `app.progress { finished: true }` arriving while the session is
+    /// still `Launching` (after `detect_vm_service_failure` set the hint) must
+    /// NOT clear the VM-failure hint stored in `current_progress`.
+    ///
+    /// Regression test for the guard added to the `(_, true)` arm of the
+    /// `AppProgress` handler — without it, the compact hint next to the
+    /// shimmering phase label would be silently wiped by the Gradle install
+    /// completion progress event.
+    #[test]
+    fn vm_failure_hint_survives_late_finished_progress() {
+        // Android session in Launching.
+        let (mut state, session_id) = state_with_session("my-app");
+
+        // Step 1: surface the VM-service failure hint via the raw line path.
+        handle_session_stdout(
+            &mut state,
+            session_id,
+            "I/flutter (25963): Could not start Dart VM service HTTP server:",
+        );
+
+        // Confirm the hint is set.
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert!(
+                handle.session.vm_service_unavailable,
+                "vm_service_unavailable must be set after the failure line"
+            );
+            assert!(
+                handle
+                    .session
+                    .current_progress
+                    .as_deref()
+                    .is_some_and(|p| p.contains("VM service unavailable")),
+                "compact hint must be present before the late progress arrives"
+            );
+            assert_eq!(
+                handle.session.phase,
+                AppPhase::Launching,
+                "session must still be Launching"
+            );
+        }
+
+        // Step 2: feed a late `app.progress { finished: true }` — simulates the
+        // Gradle install completion event arriving after the hint was set.
+        let late_finished = DaemonMessage::AppProgress(AppProgress {
+            app_id: "my-app".to_string(),
+            id: "gradle-install".to_string(),
+            progress_id: None,
+            message: None,
+            finished: true,
+        });
+        handle_session_message_state(&mut state, session_id, &late_finished);
+
+        // Assert the hint survived.
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle
+                .session
+                .current_progress
+                .as_deref()
+                .is_some_and(|p| p.contains("VM service unavailable")),
+            "VM-failure hint must survive a late finished:true AppProgress while Launching"
         );
     }
 }

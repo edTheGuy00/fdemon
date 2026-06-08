@@ -1,0 +1,5 @@
+# VM disk image (large, machine-local) and cross-compiled artifacts / pulled logs.
+storage/
+oem/fdemon.exe
+shared/*
+!shared/.gitkeep

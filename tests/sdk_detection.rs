@@ -31,7 +31,7 @@ mod tests {
     use super::fixtures::{
         create_asdf_layout, create_flutter_project, create_flutter_wrapper_layout,
         create_fvm_layout, create_fvm_legacy_layout, create_mise_layout, create_proto_layout,
-        create_puro_layout, EnvGuard, MockSdkBuilder,
+        create_puro_layout, isolate_fvm_cache, EnvGuard, MockSdkBuilder,
     };
     use fdemon_daemon::flutter_sdk::{find_flutter_sdk, validate_sdk_path, SdkSource};
     use serial_test::serial;
@@ -315,6 +315,7 @@ mod tests {
         // Isolate PATH and env vars so no flutter binary is found anywhere.
         let _path_guard = EnvGuard::set("PATH", tmp.path().to_str().unwrap());
         let _flutter_root_guard = EnvGuard::remove("FLUTTER_ROOT");
+        let _fvm_guard = isolate_fvm_cache(tmp.path());
 
         let result = find_flutter_sdk(tmp.path(), None);
         assert_sdk_not_found(&result);

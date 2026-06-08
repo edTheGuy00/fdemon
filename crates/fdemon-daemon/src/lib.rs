@@ -64,6 +64,7 @@ pub mod simulators;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_utils;
 pub mod tool_availability;
+pub mod toolchain;
 pub mod vm_service;
 
 // Public API re-exports
@@ -104,6 +105,14 @@ pub use simulators::{
 #[cfg(target_os = "macos")]
 pub use tool_availability::IosLogTool;
 pub use tool_availability::ToolAvailability;
+#[cfg(test)]
+pub use toolchain::{clear_test_home_override, set_test_home_override, with_test_home};
+pub use toolchain::{
+    detect_linux_package_manager, parse_missing_prereq_keys, resolve_android_sdk_root_path,
+    run_preflight, ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker,
+    HostPlatform, HostShell, LinuxPackageManager, PreflightOutcome, ToolchainReport,
+    PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+};
 
 use fdemon_core::prelude::*;
 use fdemon_core::types::{DeviceState, Platform};

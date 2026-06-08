@@ -17,6 +17,7 @@
 //! - `scroll`: Scroll handlers
 //! - `log_view`: Log view operation handlers
 //! - `flutter_version`: Flutter Version panel handlers
+//! - `install_wizard`: Install Wizard panel handlers
 
 pub(crate) mod daemon;
 pub(crate) mod dap;
@@ -24,6 +25,7 @@ pub(crate) mod dap_backend;
 pub(crate) mod devtools;
 pub(crate) mod flutter_version;
 pub(crate) mod helpers;
+pub(crate) mod install_wizard;
 pub(crate) mod keys;
 pub(crate) mod log_view;
 pub(crate) mod mouse;
@@ -41,6 +43,7 @@ pub(crate) mod update;
 mod tests;
 
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
+use crate::install_wizard::WizardStepKind;
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::{Device, FlutterExecutable};
@@ -207,7 +210,7 @@ pub enum UpdateAction {
     /// Emits [`Message::SettingsPersisted`] on success, or
     /// [`Message::SettingsPersistFailed`] on failure.
     PersistSettings {
-        settings: crate::config::Settings,
+        settings: Box<crate::config::Settings>,
         project_path: std::path::PathBuf,
     },
 
@@ -655,6 +658,69 @@ pub enum UpdateAction {
         executable: Option<fdemon_daemon::FlutterExecutable>,
     },
 
+    // ── Install Wizard ────────────────────────────────────────────────────────
+    /// Run the toolchain preflight check asynchronously.
+    ///
+    /// Spawns `fdemon_daemon::toolchain::run_preflight` in the background and
+    /// sends `Message::ToolchainPreflightCompleted` when it finishes.
+    /// `run_preflight` never returns `Err`, so there is no failure message.
+    RunToolchainPreflight {
+        /// Project root path passed to `run_preflight`.
+        project_path: std::path::PathBuf,
+        /// Explicit SDK path from `settings.flutter.sdk_path`, if set.
+        explicit_sdk_path: Option<std::path::PathBuf>,
+        /// Android SDK root override from `settings.toolchain.android_sdk_root`,
+        /// if set. Takes precedence over `$ANDROID_HOME` / the platform default
+        /// so a re-check after a managed install finds the freshly-installed
+        /// tools without requiring a shell reload.
+        android_sdk_root: Option<std::path::PathBuf>,
+    },
+
+    /// Execute a wizard step asynchronously (Flutter SDK install or PATH config).
+    ///
+    /// The executor task (task 08) reads `kind` to decide which sub-executor to
+    /// invoke, then emits `Message::WizardStepStarted`, zero or more
+    /// `WizardStepLog` / `WizardDownloadProgress` messages, and finally
+    /// `WizardStepCompleted` or `WizardStepFailed`.
+    ///
+    /// `install` is `Some` for the `FlutterSdk` step and `None` for the
+    /// `PathConfig` step.  `path_bin_dir` is `Some` for the `PathConfig` step
+    /// and `None` for all other steps.  `android_sdk_root` is `Some` for the
+    /// `PathConfig` step when an Android SDK root is known (so the executor can
+    /// also write `ANDROID_HOME`), and `None` otherwise.  `android` is `Some`
+    /// for the `AndroidTools` step and `None` for all other steps.
+    RunWizardStep {
+        /// Which wizard step to execute.
+        kind: WizardStepKind,
+        /// Sequence counter from `InstallWizardState::run_seq` at the time the
+        /// run was started. Forwarded to `WizardInstallTaskReady` so the handler
+        /// can reject stale ready messages from a previous run.
+        run_seq: u64,
+        /// Cancellation token minted synchronously by `handle_run_selected_step`
+        /// and already stored on `InstallWizardState::install_task`. The
+        /// executor reuses this token (instead of minting a fresh one) so that
+        /// the token stored in state and the one checked in the install loop are
+        /// the same object — closing the F3 race window.
+        cancel_token: tokio_util::sync::CancellationToken,
+        /// Resolved Flutter install parameters.
+        ///
+        /// `None` for the `PathConfig` step (no download/clone needed).
+        install: Option<FlutterStepParams>,
+        /// Flutter `bin/` directory to add to PATH.
+        ///
+        /// `Some` for the `PathConfig` step, `None` for all others.
+        path_bin_dir: Option<std::path::PathBuf>,
+        /// Android SDK root to write as `ANDROID_HOME` during the `PathConfig` step.
+        ///
+        /// `Some` when the PathConfig step should also export `ANDROID_HOME`.
+        /// `None` for all other steps and when no Android SDK root is known.
+        android_sdk_root: Option<std::path::PathBuf>,
+        /// Resolved Android tools install parameters.
+        ///
+        /// `Some` for the `AndroidTools` step, `None` for all other steps.
+        android: Option<AndroidStepParams>,
+    },
+
     /// Fire-and-forget a daemon command on the session's Flutter process stdin.
     ///
     /// Used by the eager DevTools serve path to send `devtools.serve` to the
@@ -750,6 +816,53 @@ pub enum UpdateAction {
         /// VM Service request handle. `None` until hydrated by `process.rs`.
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
+}
+
+/// Parameters for a managed Flutter SDK installation step.
+///
+/// Carried by [`UpdateAction::RunWizardStep`] to the Phase 2 executor (task 08).
+/// The executor converts these into a `fdemon_daemon::toolchain::FlutterInstallTarget`
+/// (added in task 03) before starting the download or clone.
+#[derive(Debug, Clone)]
+pub struct FlutterStepParams {
+    /// How to acquire the SDK (download archive or git clone).
+    pub method: fdemon_daemon::toolchain::InstallMethod,
+    /// The Flutter channel or version string (e.g. `"stable"`, `"3.24.0"`).
+    pub channel: String,
+    /// Root directory where the SDK should be installed.
+    ///
+    /// `None` → the executor resolves a platform-appropriate default
+    /// (e.g. `~/.local/share/fdemon/flutter` on Linux).
+    pub install_root: Option<std::path::PathBuf>,
+}
+
+/// Parameters for a managed Android tools installation step.
+///
+/// Carried by [`UpdateAction::RunWizardStep`] to the Phase 3 executor (task 06).
+/// The executor uses these to install the Android SDK command-line tools, the
+/// required platform API level, and optionally a JDK.
+#[derive(Debug, Clone)]
+pub struct AndroidStepParams {
+    /// Root directory where the Android SDK should be installed.
+    ///
+    /// `None` → the executor resolves a platform-appropriate default
+    /// (e.g. `~/.local/share/fdemon/android` on Linux).
+    pub sdk_root: Option<std::path::PathBuf>,
+    /// Android platform API level to install (e.g. `34`).
+    pub api_level: u32,
+    /// Specific cmdline-tools build version to download (e.g. `"11076708"`).
+    ///
+    /// `None` → the executor resolves the latest stable build.
+    pub cmdline_tools_build: Option<String>,
+    /// Path to the JDK to use during installation.
+    ///
+    /// `None` → the executor uses the system JDK or installs one if missing.
+    pub jdk_path: Option<std::path::PathBuf>,
+    /// Optional SHA-256 hex digest to verify the downloaded cmdline-tools zip.
+    ///
+    /// When `Some`, the installer verifies the archive before extraction.
+    /// When `None`, the download relies on HTTPS/TLS for integrity.
+    pub cmdline_tools_sha256: Option<String>,
 }
 
 /// Background tasks to spawn

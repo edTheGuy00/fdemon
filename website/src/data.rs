@@ -397,6 +397,25 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             ],
         },
 
+        // ── Install Wizard Mode ──────────────────────────────────────
+        KeybindingSection {
+            title: "Install Wizard Mode",
+            color: "bg-amber-500",
+            key_color: "text-amber-400",
+            bindings: vec![
+                Keybinding { key: "I", action: "Open Install Wizard", description: "Open the toolchain install wizard from Normal mode; a preflight check runs automatically" },
+                Keybinding { key: "Tab", action: "Switch Pane", description: "Toggle focus between the step list and the detail pane" },
+                Keybinding { key: "k / \u{2191}", action: "Up", description: "Move selection up in the step list, or scroll the detail pane up" },
+                Keybinding { key: "j / \u{2193}", action: "Down", description: "Move selection down in the step list, or scroll the detail pane down" },
+                Keybinding { key: "Enter", action: "Run / Retry Step", description: "Run or retry the selected step (Flutter SDK, Android Tools, PATH config). No-op on guided-only steps like Prerequisites." },
+                Keybinding { key: "r", action: "Re-run Preflight", description: "Re-run the toolchain preflight check (useful after completing a guided step outside fdemon)" },
+                Keybinding { key: "c", action: "Copy Command", description: "Copy the selected guided command to the clipboard" },
+                Keybinding { key: "[ / ]", action: "Cycle Commands", description: "Select the previous/next guided command when a step offers more than one" },
+                Keybinding { key: "Esc", action: "Cancel / Close", description: "Cancel the running step if one is in flight; otherwise close the wizard" },
+                Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit" },
+            ],
+        },
+
         // ── Confirm Dialog ───────────────────────────────────────────
         KeybindingSection {
             title: "Confirm Dialog",

@@ -28,6 +28,7 @@ This document provides a complete reference for all configuration options availa
     - [Pre-App Custom Sources](#pre-app-custom-sources)
   - [DAP Settings](#dap-settings)
   - [Flutter SDK Settings](#flutter-sdk-settings)
+  - [Toolchain Settings](#toolchain-settings)
   - [Editor Settings](#editor-settings)
 - [Launch Configuration Reference](#launch-configuration-reference)
   - [Configuration Properties](#configuration-properties)
@@ -695,6 +696,81 @@ sdk_path = ""   # Explicit SDK path override (empty = auto-detect via version ma
 |----------|------|---------|-------------|
 | `sdk_path` | `string` | `""` (auto-detect) | Explicit Flutter SDK path (e.g., `/Users/me/flutter`). When set, bypasses all version manager detection (fvm, asdf, mise). Leave empty to use the standard detection chain. |
 
+> **Automatic write:** After a managed Flutter install via the Install Wizard, fdemon writes `sdk_path` in `config.toml` to point at the newly installed SDK. This ensures fdemon resolves the new SDK on the next run without requiring a manual restart or re-detection.
+
+### Toolchain Settings
+
+Control the Install Wizard's managed Flutter and Android toolchain installs. All fields are optional — a missing `[toolchain]` block uses the defaults shown below.
+
+```toml
+[toolchain]
+# Where managed Flutter SDKs are installed (default: ~/fvm/versions/<version>)
+# flutter_install_dir = "~/fvm/versions"
+channel = "stable"                  # Flutter channel to install
+flutter_install_method = "git"      # "git" (default) or "archive"
+
+# Android SDK root (default: $ANDROID_HOME / $ANDROID_SDK_ROOT, else the per-OS
+# default: ~/Android/Sdk, ~/Library/Android/sdk, or %LOCALAPPDATA%\Android\Sdk).
+# Written automatically after a successful Android Tools install.
+# android_sdk_root = "~/.android/sdk"
+
+# Android API level for platforms/build-tools (default: 36).
+android_api_level = 36
+
+# cmdline-tools build number used in the download URL. Override only if the default
+# 404s (find the current value on https://developer.android.com/studio#command-tools).
+# cmdline_tools_build = "11076708"
+
+# Explicit JDK 17 directory, passed to `flutter config --jdk-dir`.
+# jdk_path = "/usr/lib/jvm/java-17-openjdk"
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `flutter_install_dir` | `string` | `~/fvm/versions` | Directory where managed Flutter SDKs are installed. Each version is placed in a `<version>` subdirectory. Shared with the Flutter Version panel's FVM cache. Leave unset to use the default. |
+| `channel` | `string` | `"stable"` | Flutter channel to install (`"stable"`, `"beta"`, `"main"`, etc.). Used by the Install Wizard when running the Flutter SDK install step. |
+| `flutter_install_method` | `string` | `"git"` | Flutter install method: `"git"` clones the Flutter repository (default); `"archive"` downloads a prebuilt archive. |
+| `android_sdk_root` | `string` | `$ANDROID_HOME` / `$ANDROID_SDK_ROOT`, else `~/Android/Sdk` (Linux/Windows) or `~/Library/Android/sdk` (macOS) | Android SDK root directory override. When unset, fdemon checks `$ANDROID_HOME` and `$ANDROID_SDK_ROOT` then falls back to the per-OS default. **Written automatically** after a successful Android Tools install via the Install Wizard. |
+| `android_api_level` | `integer` | `36` | Android API level for `platforms/` and `build-tools/` installation. |
+| `cmdline_tools_build` | `string` | (current) | `cmdline-tools` build number override, used in the download URL. Leave unset to use the current default. Override when the default URL 404s — find the latest build number at [developer.android.com/studio#command-tools](https://developer.android.com/studio#command-tools). |
+| `jdk_path` | `string` | (auto-detect) | Explicit JDK 17 directory, passed to `flutter config --jdk-dir`. When unset, fdemon auto-detects via `$JAVA_HOME` and `which java`. |
+
+#### Android install assumptions
+
+The managed Android SDK install makes two assumptions that can fail silently. Both have escape hatches in `[toolchain]`.
+
+**1. `build-tools;<api>.0.0` patch-version assumption**
+
+When installing Android packages, fdemon requests `build-tools;<api>.0.0` (e.g. `build-tools;36.0.0` for the default `android_api_level = 36`). This is the patch version that Google publishes for every stable API level. If a future API level ships with a different initial patch (e.g. `.0.1`) — or if the `.0.0` package is withdrawn from the `sdkmanager` index — the install step will fail with a "package not found" error from `sdkmanager`.
+
+**Remediation:** Lower `android_api_level` to a stable API level that has a published `.0.0` build-tools package:
+
+```toml
+[toolchain]
+android_api_level = 35   # fall back to 35 if 36.0.0 is not available
+```
+
+Run the Install Wizard again after changing the value. You can also run `sdkmanager --list | grep build-tools` to see what is actually available.
+
+**2. `cmdline_tools_build` URL assumption**
+
+The Android command-line tools (`sdkmanager`, `avdmanager`) are downloaded from a URL of the form:
+
+```
+https://dl.google.com/android/repository/commandlinetools-<os>-<build>_latest.zip
+```
+
+There is no build-less "latest" URL for this archive. fdemon ships a default build number (`11076708`) that is current at release time, but Google rotates this number when they publish a new version. When the default build number is stale, the download step will fail with an HTTP 404.
+
+**Remediation:** Override `cmdline_tools_build` with the current build number. Find the up-to-date value in the **Command line tools only** section at [developer.android.com/studio#command-tools](https://developer.android.com/studio#command-tools) — it appears in the download filename (e.g. `commandlinetools-linux-12345678_latest.zip`):
+
+```toml
+[toolchain]
+cmdline_tools_build = "12345678"   # replace with the current build number
+```
+
+Run the Install Wizard again after setting this value.
+
 ### Editor Settings
 
 Configure editor integration for opening files from stack traces.
@@ -1026,6 +1102,10 @@ suppress_reload_on_pause = true
 
 [flutter]
 # sdk_path = "/Users/me/flutter"  # Uncomment to override SDK auto-detection
+
+[toolchain]
+channel = "stable"
+flutter_install_method = "git"
 
 [editor]
 command = ""  # Auto-detect

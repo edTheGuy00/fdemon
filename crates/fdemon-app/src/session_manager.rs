@@ -379,13 +379,24 @@ impl SessionManager {
             .collect()
     }
 
-    /// Get sessions that can be reloaded (have app_id and cmd_sender, not busy)
+    /// Get sessions that can be reloaded (have app_id and cmd_sender, not busy,
+    /// and are fully running).
     /// Returns (session_id, app_id) pairs
     pub fn reloadable_sessions(&self) -> Vec<(SessionId, String)> {
         self.sessions
             .values()
             .filter_map(|h| {
-                // Skip busy sessions
+                // Only fully-running sessions are auto-reloadable.
+                // A session in Initializing/Preparing/Launching/Stopped does not
+                // yet have a live Dart VM even when app_id and cmd_sender are set
+                // (app_id arrives at app.start → Launching, before the app is
+                // actually running). Reloading a building session would cause
+                // complete_reload() to promote it to Running prematurely.
+                if h.session.phase != AppPhase::Running {
+                    return None;
+                }
+                // Skip busy sessions (Reloading is excluded above via phase check,
+                // but keep is_busy() for forward-compatibility with new busy phases)
                 if h.session.is_busy() {
                     return None;
                 }
@@ -1024,5 +1035,65 @@ mod tests {
 
         // selected_index must be within bounds
         assert!(manager.selected_index() < manager.len());
+    }
+
+    // ── reloadable_sessions phase gate ──────────────────────────────────────
+
+    /// Helper: attach a test cmd_sender and app_id to a session.
+    fn attach_reloadable(manager: &mut SessionManager, id: SessionId) {
+        let handle = manager.get_mut(id).unwrap();
+        handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
+        handle.session.app_id = Some("app-123".to_string());
+    }
+
+    #[test]
+    fn reloadable_sessions_excludes_launching_session() {
+        // A session in Launching with app_id + cmd_sender set must NOT appear in
+        // reloadable_sessions(), because the Dart VM is not yet alive.
+        let mut manager = SessionManager::new();
+        let id = manager.create_session(&test_device("d1", "D1")).unwrap();
+        attach_reloadable(&mut manager, id);
+        manager.get_mut(id).unwrap().session.phase = AppPhase::Launching;
+
+        let reloadable = manager.reloadable_sessions();
+        assert!(
+            reloadable.is_empty(),
+            "Launching session must not be reloadable, got: {:?}",
+            reloadable
+        );
+    }
+
+    #[test]
+    fn reloadable_sessions_includes_running_session() {
+        // A Running session with app_id + cmd_sender MUST appear.
+        let mut manager = SessionManager::new();
+        let id = manager.create_session(&test_device("d1", "D1")).unwrap();
+        attach_reloadable(&mut manager, id);
+        manager.get_mut(id).unwrap().session.phase = AppPhase::Running;
+
+        let reloadable = manager.reloadable_sessions();
+        assert_eq!(reloadable.len(), 1);
+        assert_eq!(reloadable[0].0, id);
+    }
+
+    #[test]
+    fn reloadable_sessions_excludes_preparing_and_initializing() {
+        // Neither Preparing nor Initializing should be reloadable.
+        for phase in [
+            AppPhase::Preparing,
+            AppPhase::Initializing,
+            AppPhase::Stopped,
+        ] {
+            let mut manager = SessionManager::new();
+            let id = manager.create_session(&test_device("d1", "D1")).unwrap();
+            attach_reloadable(&mut manager, id);
+            manager.get_mut(id).unwrap().session.phase = phase;
+
+            let reloadable = manager.reloadable_sessions();
+            assert!(
+                reloadable.is_empty(),
+                "{phase:?} session must not be reloadable"
+            );
+        }
     }
 }

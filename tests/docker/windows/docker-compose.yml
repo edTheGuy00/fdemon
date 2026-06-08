@@ -1,0 +1,48 @@
+# tests/docker/windows/docker-compose.yml
+#
+# Real Windows 11 VM (via dockur/windows + QEMU/KVM) for end-to-end testing of
+# fdemon's Windows toolchain-bootstrap paths — in particular the user-PATH
+# registry writes to HKCU:\Environment (New-ItemProperty ExpandString/String,
+# GetValue(..,'DoNotExpandEnvironmentNames')) that Wine cannot faithfully emulate.
+#
+# REQUIRES /dev/kvm on the host (this dev machine has it). GitHub-hosted runners
+# do NOT — use a windows-latest CI job for automated registry assertions instead.
+#
+# ── Usage (from this directory) ────────────────────────────────────────────────
+#   1. Put the cross-compiled binary in place:  ./oem/fdemon.exe
+#      (see ../../docker/windows/README.md — build with the windows-wine builder)
+#   2. docker compose up -d
+#   3. Watch first install (~20-30 min, downloads a ~7.9 GB Win11 ISO):
+#        open http://localhost:8006   (noVNC web viewer)
+#   4. When the desktop is up, RDP in:
+#        xfreerdp /v:localhost /u:Docker /p:admin /cert:ignore   (or Remmina)
+#   5. Open Windows Terminal / cmd in the guest and run fdemon (see README).
+#
+# The ./storage volume persists the installed VM — after the first install,
+# subsequent `up` boots take ~30-60 s. Delete ./storage to start fresh.
+services:
+  windows:
+    image: dockurr/windows
+    container_name: fdemon-windows
+    environment:
+      VERSION: "11"          # Windows 11 Pro
+      RAM_SIZE: "8G"         # Win11 wants 8 GB
+      CPU_CORES: "4"
+      DISK_SIZE: "64G"       # sparse qcow2 — a ceiling, not preallocated
+      USERNAME: "Docker"     # RDP user (default)
+      PASSWORD: "admin"      # RDP password (default)
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "8006:8006"          # noVNC web viewer (watch the install)
+      - "3389:3389/tcp"      # RDP (real terminal for the TUI wizard)
+      - "3389:3389/udp"
+    volumes:
+      - ./storage:/storage   # persist the installed VM disk (gitignored)
+      - ./oem:/oem           # copied to C:\OEM; install.bat auto-runs post-install
+      - ./shared:/shared     # appears as the "Shared" desktop folder (pull logs out)
+    restart: "no"
+    stop_grace_period: 2m

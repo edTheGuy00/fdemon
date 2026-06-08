@@ -517,7 +517,7 @@ Widgets call `ctx.click(rect, action)`, `ctx.click_at_z(rect, action, z)`, or `c
 
 **Step 3 — Modal precedence via renderer-level suppression:**
 
-When the active `UiMode` is a modal (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `LinkHighlight`, `FlutterVersion`) or `tag_filter_visible` is set, pass `None` as the `MouseCtx` to base-UI widgets. This prevents z=0 base-UI regions from being registered, so clicks that miss a modal's z=1 rects cannot fall through to base-UI actions. See `docs/ARCHITECTURE.md` "Modal Precedence and Sub-Modal Gates" for the full policy.
+When the active `UiMode` is a modal (`Startup`, `NewSessionDialog`, `ConfirmDialog`, `Settings`, `LinkHighlight`, `FlutterVersion`, `InstallWizard`) or `tag_filter_visible` is set, pass `None` as the `MouseCtx` to base-UI widgets. This prevents z=0 base-UI regions from being registered, so clicks that miss a modal's z=1 rects cannot fall through to base-UI actions. See `docs/ARCHITECTURE.md` "Modal Precedence and Sub-Modal Gates" for the full policy.
 
 #### Annotation requirement
 

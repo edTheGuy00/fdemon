@@ -1,0 +1,363 @@
+//! # Toolchain Preflight Subsystem
+//!
+//! Provides a single entry point [`run_preflight`] that runs a **read-only**
+//! structured diagnosis of the Flutter toolchain and returns a
+//! [`PreflightOutcome`] bundling the [`ToolchainReport`] with the optionally
+//! resolved [`crate::flutter_sdk::FlutterSdk`].
+//!
+//! ## Design Principles
+//!
+//! - **Read-only**: no installs, downloads, or file mutations.
+//! - **Never fails**: `run_preflight` returns `PreflightOutcome`, never `Err`.
+//!   Failures are encoded as `ComponentStatus::Error` or `ComponentStatus::Missing`.
+//! - **Concurrent**: independent checks run with `tokio::join!`.
+//! - **Reuses existing SDK detection**: calls the same `find_flutter_sdk` used
+//!   by the Flutter process spawner, and returns the resolved SDK so callers
+//!   never need to call `find_flutter_sdk` a second time.
+//!
+//! ## Public API
+//!
+//! - [`run_preflight`] — top-level orchestrator
+//! - [`PreflightOutcome`] — combined outcome: report + optionally-resolved SDK
+//! - [`ToolchainReport`], [`ComponentCheck`], [`ComponentStatus`], [`ComponentKind`]
+//! - [`HostPlatform`], [`HostShell`]
+//! - [`DoctorLine`], [`DoctorMarker`]
+
+mod android_install;
+mod checks;
+mod doctor;
+pub mod download;
+pub mod flutter_install;
+pub mod jdk;
+pub mod path_config;
+pub mod process_stream;
+mod types;
+
+pub use android_install::{
+    install_android_tools, relocate_cmdline_tools, resolve_cmdline_tools_url,
+};
+pub use checks::{
+    detect_linux_package_manager, parse_missing_prereq_keys, resolve_android_sdk_root_path,
+    LinuxPackageManager, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
+    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+};
+pub use download::{download_to_file, extract_archive, extract_tar_xz, extract_zip, verify_sha256};
+pub use flutter_install::{
+    archive_download_url, fetch_release_manifest, install_flutter, resolve_install_dir,
+    InstallEvent,
+};
+pub use jdk::{configure_flutter_jdk_dir, resolve_jdk_home};
+pub use path_config::{
+    add_android_env, add_to_path, merge_machine_user_path, rc_file_for_shell,
+    refresh_process_path_from_registry, PathConfigOutcome,
+};
+#[cfg(test)]
+pub use path_config::{clear_test_home_override, set_test_home_override, with_test_home};
+pub use process_stream::{run_streaming, run_streaming_with_input};
+pub use types::{
+    cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,
+    ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker, DownloadProgress,
+    FlutterInstallOutcome, FlutterInstallTarget, FlutterRelease, FlutterReleaseManifest, HostArch,
+    HostPlatform, HostShell, InstallMethod, ToolchainReport, DEFAULT_CMDLINE_TOOLS_BUILD,
+};
+
+use std::path::Path;
+
+/// The combined outcome of [`run_preflight`].
+///
+/// Bundles the structured [`ToolchainReport`] with the optionally-resolved
+/// [`crate::flutter_sdk::FlutterSdk`] so callers never need a second
+/// `find_flutter_sdk` call to obtain the executable after a successful
+/// preflight.
+///
+/// `flutter_sdk` is `None` when no live Flutter SDK was found during the
+/// preflight — i.e. the `FlutterSdk` component status is not `Ok`.  When it
+/// is `Some`, `report.components[0].status == ComponentStatus::Ok` holds by
+/// construction.
+#[derive(Debug)]
+pub struct PreflightOutcome {
+    /// Structured per-component status report, always fully populated.
+    pub report: ToolchainReport,
+    /// The resolved Flutter SDK, or `None` when Flutter was not found.
+    pub flutter_sdk: Option<crate::flutter_sdk::FlutterSdk>,
+}
+
+/// Run a full read-only toolchain preflight diagnostic.
+///
+/// Detects the host platform and shell, probes each toolchain component
+/// concurrently, and (when Flutter is found) captures the output of
+/// `flutter doctor -v`.
+///
+/// # Arguments
+///
+/// * `project_path` — Root of the Flutter project (forwarded to the SDK locator
+///   for version-manager config discovery).
+/// * `explicit_sdk_path` — Optional user-configured SDK path from
+///   `.fdemon/config.toml` `[flutter] sdk_path`. Pass `None` to rely on
+///   automatic detection.
+/// * `override_android_root` — Optional Android SDK root that takes precedence
+///   over `$ANDROID_HOME` / `$ANDROID_SDK_ROOT` / the platform default. Passed
+///   by the install wizard (from `settings.toolchain.android_sdk_root`) so a
+///   re-check after a managed install finds the freshly-installed tools even
+///   though the running process's environment is still stale. Pass `None` to
+///   rely on env/default resolution.
+///
+/// # Returns
+///
+/// A [`PreflightOutcome`] that is always populated — this function **never
+/// panics** and never returns `Err`. All probe failures are encoded as
+/// [`ComponentStatus::Error`] or [`ComponentStatus::Missing`] inside the
+/// returned report. The `flutter_sdk` field is `Some` when the Flutter SDK
+/// component resolved successfully, and `None` otherwise.
+pub async fn run_preflight(
+    project_path: &Path,
+    explicit_sdk_path: Option<&Path>,
+    override_android_root: Option<&Path>,
+) -> PreflightOutcome {
+    // ── Windows: refresh process PATH from registry ───────────────────────────
+    // On Windows, winget/installer-GUI writes new bin dirs into the registry
+    // PATH (HKLM Machine and/or HKCU User) after fdemon launched. A running
+    // process never sees those changes unless it re-reads the registry — so
+    // pressing `r` to re-check would still report a newly-installed tool as
+    // missing. We refresh once, up front, before fanning out probe tasks.
+    //
+    // This is process-global (std::env::set_var) so it MUST run before any
+    // concurrent probe tasks are spawned (tokio::join! below). The refresh is
+    // a no-op on Linux/macOS. See path_config::refresh_process_path_from_registry
+    // for the full rationale and safety discussion.
+    #[cfg(target_os = "windows")]
+    path_config::refresh_process_path_from_registry();
+
+    let platform = HostPlatform::detect();
+    let shell = HostShell::detect();
+
+    tracing::debug!(
+        "Toolchain preflight starting (platform={}, shell={})",
+        platform,
+        shell
+    );
+
+    // Step 1: Flutter SDK check — sequential first because other checks may
+    //         branch on whether we have a usable executable.
+    //
+    //         `check_flutter` now returns the full `FlutterSdk` (not just the
+    //         executable) so we can thread it through to `PreflightOutcome`
+    //         without a second `find_flutter_sdk` call.
+    let (flutter_check, maybe_sdk) = checks::check_flutter(project_path, explicit_sdk_path).await;
+
+    // Derive the executable reference needed by `capture_doctor_if_available`
+    // from the resolved SDK (avoids duplicating the `find_flutter_sdk` call).
+    let maybe_exe = maybe_sdk.as_ref().map(|sdk| sdk.executable.clone());
+
+    // Step 2: If Flutter was found, capture `flutter doctor -v` concurrently
+    //         with the remaining component probes.
+    let android_root = checks::android_sdk_root_with_override(override_android_root);
+    let android_root_ref = android_root.as_ref();
+
+    // Capture synchronous Android filesystem checks before entering async block
+    // (they take immutable refs that cannot cross await points easily).
+    let cmdline_check = checks::check_android_cmdline_tools(android_root_ref);
+    let platform_check = checks::check_android_platform(android_root_ref);
+    let build_tools_check = checks::check_android_build_tools(android_root_ref);
+    let licenses_check = checks::check_android_licenses(android_root_ref);
+
+    // Detect package-manager and winget availability in the async preflight so
+    // that `prerequisites_guided_commands` (called from `build_steps` in the
+    // TEA `update()` path) can be a pure function of the report — no
+    // synchronous `which::which` I/O inside `update()`.
+    let linux_package_manager = if matches!(platform, HostPlatform::Linux) {
+        Some(checks::detect_linux_package_manager())
+    } else {
+        None
+    };
+    let winget_available = if matches!(platform, HostPlatform::Windows) {
+        which::which("winget").is_ok()
+    } else {
+        false
+    };
+
+    // Run async checks concurrently
+    let (git_check, jdk_check, platform_tools_check, prereq_check, doctor_output) = tokio::join!(
+        checks::check_git(),
+        checks::check_jdk(),
+        checks::check_android_platform_tools(android_root_ref),
+        checks::check_prerequisites(&platform),
+        capture_doctor_if_available(&maybe_exe),
+    );
+
+    // Assemble components in user-facing order:
+    // Flutter → Git → JDK → Android (cmdline, platform-tools, platform, build-tools, licenses) → Prerequisites
+    let components = vec![
+        flutter_check,
+        git_check,
+        jdk_check,
+        cmdline_check,
+        platform_tools_check,
+        platform_check,
+        build_tools_check,
+        licenses_check,
+        prereq_check,
+    ];
+
+    let report = ToolchainReport {
+        platform,
+        shell,
+        components,
+        doctor: doctor_output,
+        linux_package_manager,
+        winget_available,
+    };
+
+    tracing::debug!(
+        "Toolchain preflight complete ({} components checked, doctor={})",
+        report.components.len(),
+        report.doctor.as_ref().map_or(0, |d| d.len()),
+    );
+
+    PreflightOutcome {
+        report,
+        flutter_sdk: maybe_sdk,
+    }
+}
+
+/// Run `flutter doctor -v` if an executable is available and parse the output.
+///
+/// Returns `None` when no Flutter executable was found or when capture fails.
+async fn capture_doctor_if_available(
+    exe: &Option<crate::flutter_sdk::FlutterExecutable>,
+) -> Option<Vec<types::DoctorLine>> {
+    let exe = exe.as_ref()?;
+    let raw = doctor::capture_flutter_doctor(exe).await?;
+    let lines = doctor::parse_doctor_output(&raw);
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn test_run_preflight_returns_report_without_panicking() {
+        // Use a temp directory as the project path so the locator does not
+        // accidentally pick up the actual repo's Flutter configuration.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outcome = run_preflight(tmp.path(), None, None).await;
+        let report = &outcome.report;
+
+        // Must always have 9 components in the defined order
+        assert_eq!(report.components.len(), 9);
+        assert_eq!(report.components[0].kind, ComponentKind::FlutterSdk);
+        assert_eq!(report.components[1].kind, ComponentKind::Git);
+        assert_eq!(report.components[2].kind, ComponentKind::Jdk);
+        assert_eq!(
+            report.components[3].kind,
+            ComponentKind::AndroidCmdlineTools
+        );
+        assert_eq!(
+            report.components[4].kind,
+            ComponentKind::AndroidPlatformTools
+        );
+        assert_eq!(report.components[5].kind, ComponentKind::AndroidPlatform);
+        assert_eq!(report.components[6].kind, ComponentKind::AndroidBuildTools);
+        assert_eq!(report.components[7].kind, ComponentKind::AndroidLicenses);
+        assert_eq!(report.components[8].kind, ComponentKind::Prerequisites);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_run_preflight_nonexistent_sdk_path_does_not_panic() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Point the fvm versions cache (Strategy 13) at an empty dir so the
+        // host's real ~/fvm/versions cannot satisfy detection via fall-through.
+        // (PATH is intentionally left untouched — mutating it globally would
+        // race parallel tests that spawn child processes.)
+        let saved_fvm = std::env::var_os("FVM_CACHE_PATH");
+        let empty_cache = tmp.path().join("empty_fvm");
+        std::fs::create_dir_all(&empty_cache).unwrap();
+        std::env::set_var("FVM_CACHE_PATH", &empty_cache);
+
+        let fake_sdk = PathBuf::from("/nonexistent/flutter/sdk");
+        let outcome = run_preflight(tmp.path(), Some(&fake_sdk), None).await;
+        let report = &outcome.report;
+
+        match saved_fvm {
+            Some(v) => std::env::set_var("FVM_CACHE_PATH", v),
+            None => std::env::remove_var("FVM_CACHE_PATH"),
+        }
+
+        // With a non-existent explicit SDK path and no fallback SDK reachable,
+        // the Flutter check should be Partial or Missing (never Ok).
+        let flutter = &report.components[0];
+        assert_eq!(flutter.kind, ComponentKind::FlutterSdk);
+        assert_ne!(flutter.status, ComponentStatus::Ok);
+        // Doctor must be None when Flutter is missing
+        assert!(report.doctor.is_none());
+        // flutter_sdk must be None when the component is not Ok
+        assert!(
+            outcome.flutter_sdk.is_none(),
+            "flutter_sdk must be None when Flutter check is not Ok"
+        );
+    }
+
+    #[test]
+    fn test_toolchain_report_has_expected_fields() {
+        // Ensure the type compiles and fields are accessible
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        assert_eq!(report.platform, HostPlatform::Linux);
+        assert_eq!(report.shell, HostShell::Bash);
+        assert!(report.components.is_empty());
+        assert!(report.doctor.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_run_preflight_populates_linux_package_manager_on_linux() {
+        // On Linux, linux_package_manager must be Some(_).
+        // On other platforms, it must be None.
+        // We accept any LinuxPackageManager variant — the exact result depends
+        // on what is installed on the test host.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outcome = run_preflight(tmp.path(), None, None).await;
+        let report = &outcome.report;
+
+        if cfg!(target_os = "linux") {
+            assert!(
+                report.linux_package_manager.is_some(),
+                "linux_package_manager must be Some on Linux"
+            );
+        } else {
+            assert!(
+                report.linux_package_manager.is_none(),
+                "linux_package_manager must be None on non-Linux"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_preflight_populates_winget_available() {
+        // On non-Windows hosts winget must always be false (binary not present).
+        // On Windows we accept any bool — winget may or may not be installed.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outcome = run_preflight(tmp.path(), None, None).await;
+        let report = &outcome.report;
+
+        if !cfg!(target_os = "windows") {
+            assert!(
+                !report.winget_available,
+                "winget_available must be false on non-Windows"
+            );
+        }
+        // On Windows any bool is acceptable.
+    }
+}

@@ -42,6 +42,11 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [General Controls](#general-controls-4)
   - [Pane Navigation](#pane-navigation)
   - [Version List Controls](#version-list-controls-when-installed-versions-pane-is-focused)
+- [Install Wizard Mode](#install-wizard-mode)
+  - [General Controls](#general-controls-5)
+  - [Pane Navigation](#pane-navigation-1)
+  - [Step List Controls](#step-list-controls-when-step-list-pane-is-focused)
+  - [Detail Pane Controls](#detail-pane-controls-when-detail-pane-is-focused)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -195,8 +200,11 @@ Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls
 | Key | Action | Description |
 |-----|--------|-------------|
 | `V` | Open Flutter Version Panel | Open the Flutter SDK version manager panel |
+| `I` | Open Install Wizard | Open the toolchain install wizard (runs a preflight check). When the toolchain is already healthy, opens as a read-only informational view (all components shown green); `Esc` returns directly to Normal mode without triggering device discovery. |
 
 Once in Flutter Version mode, see [Flutter Version Mode](#flutter-version-mode) for detailed controls.
+
+Once in Install Wizard mode, see [Install Wizard Mode](#install-wizard-mode) for detailed controls.
 
 ### DAP Server
 
@@ -616,6 +624,53 @@ The panel has a two-pane layout:
 | `u` | Update Version | Update the selected Flutter SDK version |
 
 > **Note:** Switching to the active version or removing the active version are both blocked — the status bar will show an error message.
+
+---
+
+## Install Wizard Mode
+
+Enter Install Wizard mode by pressing `I` in Normal mode. This panel shows the results of a toolchain preflight check, grouped into five ordered steps.
+
+The panel has a two-pane layout:
+- **Step List** (left): Five ordered steps with roll-up status indicators
+- **Detail** (right): Per-step detail — component checks and embedded doctor output
+
+Preflight runs automatically when the wizard opens. Press `r` to re-run at any time.
+
+> **Guided vs executable steps:** Some steps (such as FlutterSdk and PathConfig) can be run directly by pressing `Enter`. The **Prerequisites step is guided-only** — `Enter` has no effect there. Instead, the wizard shows per-OS install commands (e.g. the Linux package-manager command, macOS Xcode CLT / CocoaPods / Rosetta commands, or Windows Git for Windows). Use `[` / `]` to cycle between commands when a step offers multiple options, copy the selected command with `c`, run it in your terminal, then press `r` to re-check.
+
+### General Controls
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Cancel Step / Close Panel | **Context-dependent:** when an install step is currently Running, cancels the in-flight step by firing the synchronously-stored `CancellationToken` and stays in the wizard. If the cancel token fires the running task before `Esc` is processed, the step ends in `StepExecStatus::Cancelled` (neutral, no red badge — distinct from `Failed`); if `Esc` fires before the daemon confirmation arrives, execution resets to Idle immediately. Either way the step is retriable via Enter. When no step is running (idle, succeeded, cancelled, or failed), closes the Install Wizard. **Close behaviour depends on how the wizard was opened (`WizardOrigin`):** a Bootstrap-origin wizard (auto-opened at startup because the toolchain was missing or broken) with no running session triggers device discovery and transitions to `UiMode::Startup` so the new-session dialog is populated. A user-invoked (`I`-key) wizard always returns directly to `UiMode::Normal` on close, regardless of Flutter state. |
+| `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
+
+### Pane Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Tab` | Switch Pane | Toggle focus between Step List and Detail pane |
+
+### Step List Controls (when Step List pane is focused)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `k` / `↑` | Navigate Up | Move selection up in the step list |
+| `j` / `↓` | Navigate Down | Move selection down in the step list |
+| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write). No-op on guided-only steps (e.g. Prerequisites). |
+| `[` | Previous Command | Select the previous guided command on the current step (e.g. cycle backward through macOS Prerequisites: Xcode CLT → Rosetta). No-op when only one command is available. |
+| `]` | Next Command | Select the next guided command on the current step (e.g. cycle forward through macOS Prerequisites: Xcode CLT → CocoaPods → Rosetta). No-op when only one command is available. |
+| `c` | Copy Selected Guided Command | Copy the currently selected guided command to the clipboard (e.g. the JDK install command or a per-OS prerequisite install command). No-op when the step has no guided command. |
+| `r` | Re-run Preflight | Re-run the toolchain preflight check (useful after completing a guided step such as installing JDK 17 or OS prerequisites outside fdemon) |
+
+### Detail Pane Controls (when Detail pane is focused)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `k` / `↑` | Scroll Up | Scroll the detail pane up |
+| `j` / `↓` | Scroll Down | Scroll the detail pane down |
+| `r` | Re-run Preflight | Re-run the toolchain preflight check |
 
 ---
 

@@ -121,6 +121,7 @@ fn is_modal_ui_mode(mode: &UiMode) -> bool {
             | UiMode::Settings
             | UiMode::FlutterVersion
             | UiMode::EmulatorSelector
+            | UiMode::InstallWizard
     )
 }
 
@@ -401,6 +402,16 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // The underlying header and log view are already rendered above; here we
             // render the dimmed overlay + centered panel dialog on top of them.
             let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state);
+            frame.render_widget(panel, area);
+        }
+        UiMode::InstallWizard => {
+            // Full-screen Install Wizard panel — renders centered over the terminal.
+            // The underlying header and log view are already rendered above; here we
+            // render the dimmed overlay + centered dialog on top of them.
+            let panel = widgets::InstallWizardPanel::new(
+                &state.install_wizard_state,
+                state.animation_frame,
+            );
             frame.render_widget(panel, area);
         }
         // Legacy StartupDialog removed - use NewSessionDialog instead

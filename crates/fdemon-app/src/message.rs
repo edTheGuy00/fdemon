@@ -3,6 +3,7 @@
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::input_mouse::MouseInput;
+use crate::install_wizard::{WizardOrigin, WizardStepKind};
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::memory::MemorySection;
 use crate::session::performance::{PerfSection, SelectionDirection, TimelineEventCursor};
@@ -1704,6 +1705,186 @@ pub enum Message {
 
     /// Update the selected version (u key) — stub for Phase 3
     FlutterVersionUpdate,
+
+    // ── Install Wizard ────────────────────────────────────────────────────────
+    /// Open the Install Wizard panel.
+    ///
+    /// `origin` records why the wizard was opened so the post-install handback
+    /// can be gated: only `Bootstrap` auto-advances to device discovery;
+    /// `UserInvoked` (the `I` key) is an informational view that returns to
+    /// `UiMode::Normal` on close.
+    ShowInstallWizard { origin: WizardOrigin },
+
+    /// Close the Install Wizard panel
+    HideInstallWizard,
+
+    /// Priority-ordered escape: close panel → return to Normal
+    InstallWizardEscape,
+
+    /// Switch pane focus (Tab key)
+    InstallWizardSwitchPane,
+
+    /// Navigate up in the step list or scroll detail pane up (k/Up)
+    InstallWizardUp,
+
+    /// Navigate down in the step list or scroll detail pane down (j/Down)
+    InstallWizardDown,
+
+    /// Re-run the toolchain preflight check (r key)
+    InstallWizardRerunPreflight,
+
+    /// Copy the selected step's guided command to the clipboard (c key).
+    ///
+    /// No-op when the currently selected step has no guided command to copy
+    /// (e.g. FlutterSdk and PathConfig steps, which are fully automated).
+    /// Used for steps like `AndroidTools` that may surface a JDK install
+    /// command the user should run manually.
+    InstallWizardCopyCommand,
+
+    /// Select the previous guided command within the selected step (`[` key).
+    ///
+    /// No-op when the selected step has 0 or 1 guided commands.
+    /// Steps with multiple commands (e.g. macOS Prerequisites: CLT / CocoaPods /
+    /// Rosetta) cycle backwards through the list.
+    InstallWizardPrevCommand,
+
+    /// Select the next guided command within the selected step (`]` key).
+    ///
+    /// No-op when the selected step has 0 or 1 guided commands.
+    /// Steps with multiple commands (e.g. macOS Prerequisites: CLT / CocoaPods /
+    /// Rosetta) cycle forwards through the list.
+    InstallWizardNextCommand,
+
+    /// Preflight task completed — populate the wizard with the report
+    ToolchainPreflightCompleted {
+        report: fdemon_daemon::toolchain::ToolchainReport,
+    },
+
+    // ── Install Wizard — Step Execution Protocol (Phase 2, Task 05) ──────────
+    /// Run (or retry) the currently selected wizard step.
+    ///
+    /// Emitted by `Enter` in `UiMode::InstallWizard`. The update handler reads
+    /// `install_wizard_state.selected_step` to determine which step to run and
+    /// returns `UpdateAction::RunWizardStep`. Handling lands in task 09.
+    InstallWizardRunSelectedStep,
+
+    /// A wizard step has started executing.
+    ///
+    /// Transitions the step's status to `StepStatus::Running` (added in task 07)
+    /// and clears any previous log lines for the step.
+    ///
+    /// `run_seq` is the sequence counter assigned at dispatch (mirrors the value
+    /// stored on `InstallWizardState::run_seq`). The handler discards any message
+    /// whose `run_seq` does not equal the current state `run_seq`, closing the
+    /// cross-kind race where a delayed Started from a cancelled run (Run A) can
+    /// clobber the live install (Run B) via the `begin_step` defensive fallback.
+    WizardStepStarted { kind: WizardStepKind, run_seq: u64 },
+
+    /// Streamed log line from a running wizard step.
+    ///
+    /// Appended to the step's detail log buffer so the TUI can display
+    /// live progress while the executor is running.
+    WizardStepLog { kind: WizardStepKind, line: String },
+
+    /// Download progress for a running wizard step.
+    ///
+    /// `received` is the number of bytes downloaded so far.
+    /// `total` is `Some(n)` when the Content-Length is known, or `None`
+    /// for chunked/unknown-size transfers.
+    WizardDownloadProgress {
+        kind: WizardStepKind,
+        received: u64,
+        total: Option<u64>,
+    },
+
+    /// A wizard step finished successfully.
+    ///
+    /// `summary` is a human-readable description of what was done (e.g. the
+    /// resolved SDK path or the rc file written). `sdk_path` is set for the
+    /// `FlutterSdk` step and `None` for all other steps.
+    WizardStepCompleted {
+        kind: WizardStepKind,
+        summary: String,
+        sdk_path: Option<std::path::PathBuf>,
+    },
+
+    /// Phase label update from a running wizard step.
+    ///
+    /// Sent by the executor when `InstallEvent::Phase(label)` is received
+    /// (e.g. `"Cloning"`, `"Downloading"`, `"Verifying"`, `"Extracting"`).
+    /// The handler calls `InstallWizardState::set_step_phase` so the
+    /// `StepProgress` widget can display the current operation name.
+    WizardStepPhase { kind: WizardStepKind, label: String },
+
+    /// A wizard step failed.
+    ///
+    /// `reason` is a human-readable error description shown in the step's
+    /// detail pane so the user can diagnose and retry.
+    WizardStepFailed {
+        kind: WizardStepKind,
+        reason: String,
+    },
+
+    /// The install task for a wizard step is ready — carries the join handle
+    /// so the TEA can upgrade the already-stored `InstallTaskHandle`.
+    ///
+    /// Sent by `handle_action(RunWizardStep)` after `tokio::spawn` returns
+    /// (so the `JoinHandle` is available). The token is no longer carried here
+    /// — it is minted synchronously by `handle_run_selected_step` and stored
+    /// on `InstallWizardState::install_task` **before** `RunWizardStep` is
+    /// dispatched. This message only upgrades the `join` field.
+    ///
+    /// `handle_install_task_ready` validates that `kind` and `run_seq` match
+    /// the current run before upgrading — stale messages are discarded and
+    /// the associated `JoinHandle` is aborted.
+    WizardInstallTaskReady {
+        /// Which wizard step this ready message belongs to.
+        ///
+        /// Used by `handle_install_task_ready` to reject stale messages from
+        /// a previously cancelled run of the same step kind.
+        kind: WizardStepKind,
+        /// Sequence counter from `InstallWizardState::run_seq` at the time
+        /// the run was started. Used alongside `kind` to distinguish run A
+        /// from run B when the same step kind is retried after a cancel.
+        run_seq: u64,
+        /// JoinHandle for the install task.
+        ///
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out when upgrading.
+        handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    },
+
+    /// Cancel the currently running wizard step (Esc while a step is running).
+    ///
+    /// The update handler calls `install_task.cancel.cancel()`, resets the
+    /// step to `Idle`, and sets a neutral "Cancelled" `status_message`.
+    /// A subsequent `Enter` retries the step.
+    ///
+    /// This message is dispatched by `Esc` only when `is_step_running()` is
+    /// `true`; when no step is running `Esc` dispatches `InstallWizardEscape`
+    /// (close the wizard).
+    InstallWizardCancelStep,
+
+    /// Auto-configure PATH after a successful managed install.
+    ///
+    /// Emitted by `handle_step_completed` when `FlutterSdk` or `AndroidTools`
+    /// completes with a resolved SDK path.  The handler dispatches
+    /// `RunWizardStep { kind: PathConfig, .. }` using the freshly-stashed SDK
+    /// root so the shell rc file is updated without a manual step.
+    ///
+    /// - For `FlutterSdk` origin: writes the Flutter `<sdk>/bin` PATH entry
+    ///   only (`android_sdk_root: None`), keeping FlutterSdk side-effects scoped
+    ///   to what was installed.
+    /// - For `AndroidTools` origin: writes both the Flutter PATH (if a Flutter
+    ///   SDK is known) and the Android `ANDROID_HOME` + PATH entries.
+    ///
+    /// If no Flutter bin dir can be resolved (unlikely but possible on a fresh
+    /// machine with no prior SDK), the handler falls back to
+    /// `InstallWizardRerunPreflight` so the step list still refreshes.
+    InstallWizardAutoConfigurePath {
+        /// Which installer step triggered this auto-config.
+        kind: WizardStepKind,
+    },
 
     // ── Mouse Click Messages (Phase 5) ────────────────────────────────────────
     /// Click on a device row inside the NewSessionDialog Connected/Bootable list.

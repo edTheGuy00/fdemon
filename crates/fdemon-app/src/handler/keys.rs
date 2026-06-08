@@ -1,6 +1,7 @@
 //! Key event handlers for different UI modes
 
 use crate::input_key::InputKey;
+use crate::install_wizard::WizardOrigin;
 use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::session::performance::{PerfSection, SelectionDirection};
 use crate::session::NetworkDetailTab;
@@ -62,6 +63,7 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
         UiMode::Settings => handle_key_settings(state, key),
         UiMode::FlutterVersion => handle_key_flutter_version(key, state),
         UiMode::DevTools => handle_key_devtools(state, key),
+        UiMode::InstallWizard => handle_key_install_wizard(key, state),
     }
 }
 
@@ -354,6 +356,15 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         // future vim-style visual mode that might use lowercase 'v')
         InputKey::Char('V') => Some(Message::ShowFlutterVersion),
 
+        // ─────────────────────────────────────────────────────────
+        // Install Wizard
+        // ─────────────────────────────────────────────────────────
+        // 'I' - Open Install Wizard panel (uppercase; lowercase 'i' is used
+        // in FlutterVersion for Install)
+        InputKey::Char('I') => Some(Message::ShowInstallWizard {
+            origin: WizardOrigin::UserInvoked,
+        }),
+
         _ => None,
     }
 }
@@ -393,6 +404,68 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
         InputKey::Char('d') => Some(Message::FlutterVersionRemove),
         InputKey::Char('i') => Some(Message::FlutterVersionInstall),
         InputKey::Char('u') => Some(Message::FlutterVersionUpdate),
+
+        _ => None,
+    }
+}
+
+/// Handle key events in Install Wizard panel mode.
+///
+/// Key bindings:
+/// - `Ctrl+C` — force quit (always active)
+/// - `Esc` — cancel the running step if one is in flight (`InstallWizardCancelStep`),
+///   or close the panel when idle (`InstallWizardEscape`).
+/// - `Tab` — switch between panes (`InstallWizardSwitchPane`)
+/// - `k`/`Up` — navigate up in the step list or scroll detail up
+/// - `j`/`Down` — navigate down in the step list or scroll detail down
+/// - `Enter` — run (or retry) the selected wizard step (`InstallWizardRunSelectedStep`)
+/// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
+/// - `c` — copy the selected guided command to the clipboard (`InstallWizardCopyCommand`)
+/// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
+/// - `]` — select the next guided command (`InstallWizardNextCommand`)
+/// - `+` — open the new-session dialog (`OpenNewSessionDialog`), only when no step is running
+fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message> {
+    match key {
+        // ── Global keys ───────────────────────────────────────────────────────
+        InputKey::CharCtrl('c') => Some(Message::Quit),
+
+        // ── Panel lifecycle ───────────────────────────────────────────────────
+        // Esc is overloaded: cancel the running step if one is in flight,
+        // otherwise close the wizard (existing behaviour).
+        InputKey::Esc => {
+            if state.install_wizard_state.is_step_running() {
+                Some(Message::InstallWizardCancelStep)
+            } else {
+                Some(Message::InstallWizardEscape)
+            }
+        }
+
+        // ── Pane switching ────────────────────────────────────────────────────
+        InputKey::Tab => Some(Message::InstallWizardSwitchPane),
+
+        // ── Navigation ───────────────────────────────────────────────────────
+        InputKey::Char('k') | InputKey::Up => Some(Message::InstallWizardUp),
+        InputKey::Char('j') | InputKey::Down => Some(Message::InstallWizardDown),
+
+        // ── Actions ───────────────────────────────────────────────────────────
+        // Run (or retry) the currently selected wizard step (Phase 2, Task 05).
+        InputKey::Enter => Some(Message::InstallWizardRunSelectedStep),
+        InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
+        // Copy the selected guided command to the clipboard (Phase 3, Task 07).
+        InputKey::Char('c') => Some(Message::InstallWizardCopyCommand),
+        // Cycle through multiple guided commands on a step (Phase 4, Task 04).
+        InputKey::Char('[') => Some(Message::InstallWizardPrevCommand),
+        InputKey::Char(']') => Some(Message::InstallWizardNextCommand),
+        // Open the new-session dialog when idle (makes the "press + to start a session"
+        // hint truthful). Ignored while a wizard step is actively running, mirroring the
+        // Esc guard above.
+        InputKey::Char('+') => {
+            if state.install_wizard_state.is_step_running() {
+                None
+            } else {
+                Some(Message::OpenNewSessionDialog)
+            }
+        }
 
         _ => None,
     }
@@ -3539,5 +3612,176 @@ mod target_selector_multiselect_key_tests {
             handle_key(&state, InputKey::Char('r')),
             Some(Message::NewSessionDialogRefreshDevices)
         ));
+    }
+}
+
+#[cfg(test)]
+mod install_wizard_key_tests {
+    use super::*;
+    use crate::state::{AppState, UiMode};
+    use std::path::PathBuf;
+
+    fn make_install_wizard_state() -> AppState {
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.ui_mode = UiMode::InstallWizard;
+        state
+    }
+
+    /// Acceptance criterion (Task 05): `Enter` in `UiMode::InstallWizard`
+    /// produces `Message::InstallWizardRunSelectedStep`.
+    #[test]
+    fn test_enter_in_install_wizard_runs_selected_step() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardRunSelectedStep)),
+            "Enter in InstallWizard should emit InstallWizardRunSelectedStep, got: {msg:?}"
+        );
+    }
+
+    /// Esc while idle (no step running) must close the wizard.
+    #[test]
+    fn test_esc_while_idle_closes_wizard() {
+        let state = make_install_wizard_state();
+        // No step started → is_step_running() == false → InstallWizardEscape.
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "precondition: no step running"
+        );
+        let msg = handle_key(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardEscape)),
+            "Esc while idle must emit InstallWizardEscape, got: {msg:?}"
+        );
+    }
+
+    /// Esc while a step is running must cancel, not close.
+    #[test]
+    fn esc_while_running_cancels_not_closes() {
+        let mut state = make_install_wizard_state();
+        // Simulate a running step.
+        state
+            .install_wizard_state
+            .begin_step(crate::install_wizard::WizardStepKind::FlutterSdk);
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "precondition: step must be running"
+        );
+        let msg = handle_key(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardCancelStep)),
+            "Esc while running must emit InstallWizardCancelStep, got: {msg:?}"
+        );
+        // Wizard must remain open (the message closes nothing — cancel handler
+        // resets execution to Idle without changing UiMode).
+        assert_eq!(
+            state.ui_mode,
+            crate::state::UiMode::InstallWizard,
+            "ui_mode must still be InstallWizard after Esc-cancel"
+        );
+    }
+
+    #[test]
+    fn test_tab_in_install_wizard_switches_pane() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Tab);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardSwitchPane)),
+            "Tab in InstallWizard should emit InstallWizardSwitchPane, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_r_in_install_wizard_reruns_preflight() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Char('r'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardRerunPreflight)),
+            "'r' in InstallWizard should emit InstallWizardRerunPreflight, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_ctrl_c_in_install_wizard_quits() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::CharCtrl('c'));
+        assert!(
+            matches!(msg, Some(Message::Quit)),
+            "Ctrl+C in InstallWizard should emit Quit, got: {msg:?}"
+        );
+    }
+
+    /// Acceptance criterion (Task 04): `c` in `UiMode::InstallWizard`
+    /// produces `Message::InstallWizardCopyCommand`.
+    #[test]
+    fn test_c_in_install_wizard_emits_copy_command() {
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.ui_mode = UiMode::InstallWizard;
+        let msg = handle_key(&state, InputKey::Char('c'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardCopyCommand)),
+            "'c' in InstallWizard should emit InstallWizardCopyCommand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_bracket_open_in_install_wizard_emits_prev_command() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Char('['));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardPrevCommand)),
+            "'[' in InstallWizard should emit InstallWizardPrevCommand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_bracket_close_in_install_wizard_emits_next_command() {
+        let state = make_install_wizard_state();
+        let msg = handle_key(&state, InputKey::Char(']'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardNextCommand)),
+            "']' in InstallWizard should emit InstallWizardNextCommand, got: {msg:?}"
+        );
+    }
+
+    /// `+` while no step is running opens the new-session dialog, making the
+    /// "press + to start a session" hint truthful.
+    #[test]
+    fn plus_while_idle_opens_new_session_dialog() {
+        let state = make_install_wizard_state();
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "precondition: no step running"
+        );
+        let msg = handle_key(&state, InputKey::Char('+'));
+        assert!(
+            matches!(msg, Some(Message::OpenNewSessionDialog)),
+            "'+' while idle must emit OpenNewSessionDialog, got: {msg:?}"
+        );
+    }
+
+    /// `+` while a wizard step is in flight must be ignored (returns `None`),
+    /// so the user cannot open a session dialog mid-install.
+    #[test]
+    fn plus_while_step_running_is_ignored() {
+        let mut state = make_install_wizard_state();
+        state
+            .install_wizard_state
+            .begin_step(crate::install_wizard::WizardStepKind::FlutterSdk);
+        assert!(
+            state.install_wizard_state.is_step_running(),
+            "precondition: step must be running"
+        );
+        let msg = handle_key(&state, InputKey::Char('+'));
+        assert!(
+            msg.is_none(),
+            "'+' while a step is running must return None, got: {msg:?}"
+        );
     }
 }

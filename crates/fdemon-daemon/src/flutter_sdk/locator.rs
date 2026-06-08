@@ -1,7 +1,7 @@
 //! # Flutter SDK Locator
 //!
 //! Top-level detection chain that resolves the Flutter SDK for a given project.
-//! Walks 12 strategies in strict priority order, returning the first valid SDK found.
+//! Walks 13 strategies in strict priority order, returning the first valid SDK found.
 //!
 //! ## Priority Order
 //!
@@ -17,6 +17,8 @@
 //! 10. System PATH (`which flutter` → resolve symlinks → SDK root)
 //! 11. Lenient PATH fallback (binary on PATH but VERSION file missing/unreadable)
 //! 12. Binary-only fallback (shim installers: scoop, winget — executable found but SDK root not canonical)
+//! 13. FVM global versions cache (`$FVM_CACHE_PATH` or `~/fvm/versions/<version>`) — an SDK fdemon
+//!     installed (or `fvm install` placed) that is neither project-pinned nor on PATH
 
 use std::path::{Path, PathBuf};
 
@@ -25,8 +27,8 @@ use fdemon_core::prelude::*;
 use super::{
     channel::detect_channel,
     types::{
-        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterExecutable,
-        FlutterSdk, SdkSource,
+        read_channel_from_version_json, read_version_file, validate_sdk_path,
+        validate_sdk_path_lenient, FlutterExecutable, FlutterSdk, SdkSource,
     },
     version_managers,
 };
@@ -204,7 +206,9 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
         match validate_sdk_path_lenient(sdk_root) {
             Ok(executable) => {
                 let version = read_version_file(sdk_root).unwrap_or_else(|_| "unknown".to_string());
-                let channel = detect_channel(sdk_root).map(|c| c.to_string());
+                let channel = detect_channel(sdk_root)
+                    .map(|c| c.to_string())
+                    .or_else(|| read_channel_from_version_json(sdk_root));
                 let sdk = FlutterSdk {
                     root: sdk_root.clone(),
                     executable,
@@ -254,8 +258,76 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
         return Ok(sdk);
     }
 
+    // Strategy 13: FVM global versions cache (`$FVM_CACHE_PATH` or `~/fvm/versions/<v>`).
+    // This mirrors `flutter_install::resolve_install_dir`, so an SDK that fdemon
+    // installed (or `fvm install` placed) is discoverable on the *next* run even
+    // when the project isn't fvm-pinned and the SDK isn't on PATH — without this,
+    // the user would be re-shown the install wizard until `sdk_path` is persisted.
+    for sdk_root in fvm_global_version_candidates() {
+        if let Some(sdk) = try_resolve_sdk(
+            sdk_root,
+            |v| SdkSource::Fvm {
+                version: v.to_string(),
+            },
+            "FVM global cache",
+        ) {
+            return Ok(sdk);
+        }
+    }
+
     warn!("SDK detection: all strategies exhausted, Flutter SDK not found");
     Err(Error::FlutterNotFound)
+}
+
+/// Resolve the fvm versions-cache root: `$FVM_CACHE_PATH` when set to an absolute
+/// path, otherwise `~/fvm/versions`. Mirrors
+/// [`crate::toolchain::resolve_install_dir`] so SDKs fdemon installed are found.
+fn fvm_versions_root() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FVM_CACHE_PATH") {
+        let pb = PathBuf::from(p);
+        if pb.is_absolute() {
+            return Some(pb);
+        }
+    }
+    dirs::home_dir().map(|h| h.join("fvm").join("versions"))
+}
+
+/// Whether `<root>/bin/flutter` (or `flutter.bat` on Windows) exists.
+fn has_flutter_binary(root: &Path) -> bool {
+    root.join("bin").join("flutter").is_file() || root.join("bin").join("flutter.bat").is_file()
+}
+
+/// Ordered candidate SDK roots under the fvm versions cache.
+///
+/// Only directories that actually contain a flutter binary are returned. Common
+/// channel names (`stable`, `beta`, `master`, `main`) are ordered first — the
+/// wizard installs to `<cache>/<channel>` — then any remaining version
+/// directories sorted lexicographically for deterministic selection.
+fn fvm_global_version_candidates() -> Vec<PathBuf> {
+    let Some(root) = fvm_versions_root() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| has_flutter_binary(p))
+        .collect();
+    dirs.sort();
+    const PREFERRED: [&str; 4] = ["stable", "beta", "master", "main"];
+    dirs.sort_by_key(|p| {
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        PREFERRED
+            .iter()
+            .position(|&c| c == name)
+            .unwrap_or(PREFERRED.len())
+    });
+    dirs
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,7 +362,11 @@ fn try_resolve_sdk(
                     return None;
                 }
             };
-            let channel = detect_channel(&sdk_root).map(|c| c.to_string());
+            // git-based detection first; fall back to flutter.version.json `channel`
+            // field for archive/wizard-produced installs that have no .git directory.
+            let channel = detect_channel(&sdk_root)
+                .map(|c| c.to_string())
+                .or_else(|| read_channel_from_version_json(&sdk_root));
             let source = make_source(&version);
             let sdk = FlutterSdk {
                 root: sdk_root,
@@ -453,6 +529,20 @@ mod tests {
         fs::write(root.join("VERSION"), version).unwrap();
     }
 
+    /// Create a git-less (archive/wizard-produced) mock SDK: no `.git` dir, no
+    /// root VERSION file; version and channel come from `flutter.version.json`.
+    fn create_mock_sdk_gitless(root: &Path, version: &str, channel: &str) {
+        fs::create_dir_all(root.join("bin/cache")).unwrap();
+        fs::write(root.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
+        fs::write(
+            root.join("bin/cache/flutter.version.json"),
+            format!(r#"{{"frameworkVersion": "{version}", "channel": "{channel}"}}"#),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_explicit_path_takes_priority() {
         let tmp = TempDir::new().unwrap();
@@ -491,11 +581,23 @@ mod tests {
         let original_path = std::env::var_os("PATH");
         std::env::set_var("PATH", tmp.path());
         std::env::remove_var("FLUTTER_ROOT");
+        // Point the fvm cache (Strategy 13) at an empty dir so the host's real
+        // ~/fvm/versions does not satisfy detection.
+        let original_fvm = std::env::var_os("FVM_CACHE_PATH");
+        let empty_cache = tmp.path().join("empty_fvm_versions");
+        fs::create_dir_all(&empty_cache).unwrap();
+        std::env::set_var("FVM_CACHE_PATH", &empty_cache);
+
         let result = find_flutter_sdk(tmp.path(), None);
-        // Restore PATH to its original value
+
+        // Restore env to its original values
         match original_path {
             Some(v) => std::env::set_var("PATH", v),
             None => std::env::remove_var("PATH"),
+        }
+        match original_fvm {
+            Some(v) => std::env::set_var("FVM_CACHE_PATH", v),
+            None => std::env::remove_var("FVM_CACHE_PATH"),
         }
         assert!(result.is_err());
     }
@@ -557,6 +659,65 @@ mod tests {
 
         assert!(matches!(result.source, SdkSource::Fvm { .. }));
         assert_eq!(result.version, "3.19.0");
+    }
+
+    #[test]
+    #[serial]
+    fn test_fvm_global_version_candidates_orders_channels_first() {
+        let tmp = TempDir::new().unwrap();
+        let versions = tmp.path().join("versions");
+        // Two channel dirs + one arbitrary version + one dir with no flutter binary.
+        create_mock_sdk(&versions.join("3.40.0"), "3.40.0");
+        create_mock_sdk(&versions.join("stable"), "3.44.1");
+        fs::create_dir_all(versions.join("empty")).unwrap(); // no bin/flutter → excluded
+
+        std::env::set_var("FVM_CACHE_PATH", &versions);
+        let candidates = fvm_global_version_candidates();
+        std::env::remove_var("FVM_CACHE_PATH");
+
+        let names: Vec<String> = candidates
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // "stable" (a known channel) must come before the bare "3.40.0"; the
+        // binary-less "empty" dir must be excluded entirely.
+        assert_eq!(names, vec!["stable".to_string(), "3.40.0".to_string()]);
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(not(target_os = "windows"))]
+    fn test_strategy13_resolves_global_fvm_when_unpinned_and_off_path() {
+        // Reproduces the user's case: SDK installed at ~/fvm/versions/<channel>
+        // (here via FVM_CACHE_PATH), project NOT fvm-pinned, no explicit sdk_path,
+        // flutter NOT on PATH. Strategy 13 must still resolve it.
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("app"); // no .fvmrc / .fvm / etc.
+        fs::create_dir_all(&project).unwrap();
+        let versions = tmp.path().join("versions");
+        create_mock_sdk(&versions.join("stable"), "3.44.1");
+
+        // Ensure higher-priority strategies cannot fire.
+        let saved_path = std::env::var_os("PATH");
+        let saved_flutter_root = std::env::var_os("FLUTTER_ROOT");
+        std::env::remove_var("FLUTTER_ROOT");
+        std::env::set_var("PATH", ""); // flutter not discoverable on PATH
+        std::env::set_var("FVM_CACHE_PATH", &versions);
+
+        let result = find_flutter_sdk(&project, None);
+
+        std::env::remove_var("FVM_CACHE_PATH");
+        if let Some(p) = saved_path {
+            std::env::set_var("PATH", p);
+        }
+        if let Some(fr) = saved_flutter_root {
+            std::env::set_var("FLUTTER_ROOT", fr);
+        }
+
+        let sdk = result.expect("Strategy 13 must resolve the global fvm SDK");
+        assert!(matches!(sdk.source, SdkSource::Fvm { .. }));
+        assert_eq!(sdk.version, "3.44.1");
+        assert_eq!(sdk.root, versions.join("stable"));
     }
 
     #[test]
@@ -770,6 +931,21 @@ mod tests {
             sdk.executable.path().ends_with("flutter")
                 || sdk.executable.path().ends_with("flutter.bat")
         );
+    }
+
+    #[test]
+    fn test_channel_from_version_json_for_gitless_install() {
+        // A git-less install (no .git directory) whose flutter.version.json carries
+        // "channel": "stable" must report FlutterSdk.channel == Some("stable").
+        // Git-based installs are unaffected (covered by the existing test fixtures
+        // that create .git/HEAD).
+        let tmp = TempDir::new().unwrap();
+        let sdk_root = tmp.path().join("gitless-flutter");
+        create_mock_sdk_gitless(&sdk_root, "3.44.1", "stable");
+
+        let result = find_flutter_sdk(tmp.path(), Some(&sdk_root)).unwrap();
+        assert_eq!(result.channel.as_deref(), Some("stable"));
+        assert_eq!(result.version, "3.44.1");
     }
 
     #[test]

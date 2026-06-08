@@ -1,0 +1,50 @@
+# tests/docker/macos/docker-compose.yml
+#
+# macOS VM (via dockur/macos + OpenCore + QEMU/KVM) for cross-OS testing of
+# fdemon — a clean macOS environment to exercise the install wizard and general
+# behavior, complementing the Windows bed in ../windows/.
+#
+# ┌─ LEGAL / EULA NOTICE ───────────────────────────────────────────────────────┐
+# │ Apple's macOS EULA permits macOS ONLY on Apple-branded hardware. dockur/macos │
+# │ itself states: "Only run this container on Apple hardware." Running this on a │
+# │ non-Apple Linux host violates that EULA — use is entirely at your own risk    │
+# │ and for local/internal developer testing only (never in shared/public CI).   │
+# │ Prefer your PHYSICAL Mac, or GitHub Actions `macos` runners (real Apple HW,   │
+# │ legal, scriptable), for anything that matters. This bed is the "clean VM"     │
+# │ fallback when you can't reach a Mac.                                          │
+# └──────────────────────────────────────────────────────────────────────────────┘
+#
+# REQUIRES /dev/kvm (this host has it). x86_64 (Intel) guest only — matches an
+# Intel host; the binary you test must be x86_64-apple-darwin (see README).
+#
+# ── First boot is MANUAL (no unattended/oem hook in dockur/macos) ──────────────
+#   1. docker compose up -d   (downloads the macOS recovery image; ~30-90 min total)
+#   2. Open http://localhost:8006 (noVNC) and, in the macOS installer:
+#        Disk Utility → erase the QEMU disk → quit → Reinstall macOS → create a user
+#   3. Install fdemon + share access — see ../macos/README.md
+#
+# The ./storage volume persists the installed macOS — later boots take ~1-3 min.
+services:
+  macos:
+    image: dockurr/macos
+    container_name: fdemon-macos
+    environment:
+      VERSION: "14"          # Sonoma (pin explicitly — Dockerfile/README defaults differ)
+      RAM_SIZE: "8G"
+      CPU_CORES: "4"         # Intel host: multi-core from the start is fine
+      DISK_SIZE: "96G"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "8006:8006"          # noVNC web viewer (primary access)
+      - "5900:5900/tcp"      # VNC
+      - "5900:5900/udp"
+      - "2222:22"            # SSH — only works AFTER you enable Remote Login in macOS
+    volumes:
+      - ./storage:/storage   # persisted macOS disk (gitignored)
+      - ./shared:/shared     # host<->guest exchange (9p; in-guest: `sudo mount_9p shared`)
+    restart: "no"
+    stop_grace_period: 2m

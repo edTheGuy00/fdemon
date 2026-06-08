@@ -1,0 +1,5 @@
+# macOS VM disk (large, machine-local) and any binaries dropped into the share.
+storage/
+shared/*
+!shared/.gitkeep
+!shared/reset-toolchain.sh
