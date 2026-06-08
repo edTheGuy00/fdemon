@@ -3491,4 +3491,102 @@ mod tests {
             "Error status must latch observed_unhealthy"
         );
     }
+
+    // --- all_components_ok tests ---
+
+    /// No report applied yet → `all_components_ok` must return `false`.
+    #[test]
+    fn all_components_ok_returns_false_when_no_report() {
+        let state = InstallWizardState::default();
+        assert!(
+            !state.all_components_ok(),
+            "all_components_ok must return false when no report has been applied"
+        );
+    }
+
+    /// Report with empty component list → `all_components_ok` must return `false`.
+    #[test]
+    fn all_components_ok_returns_false_when_components_empty() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![]);
+        state.apply_report(report);
+        assert!(
+            !state.all_components_ok(),
+            "all_components_ok must return false when the component list is empty"
+        );
+    }
+
+    /// All components `Ok` → `all_components_ok` must return `true`.
+    #[test]
+    fn all_components_ok_returns_true_when_all_ok() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+            make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
+        ]);
+        state.apply_report(report);
+        assert!(
+            state.all_components_ok(),
+            "all_components_ok must return true when every component is Ok"
+        );
+    }
+
+    /// A single `Missing` component → `all_components_ok` must return `false`.
+    #[test]
+    fn all_components_ok_returns_false_when_any_component_is_missing() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Missing),
+        ]);
+        state.apply_report(report);
+        assert!(
+            !state.all_components_ok(),
+            "all_components_ok must return false when any component is Missing"
+        );
+    }
+
+    /// A single `Unknown` component → `all_components_ok` must return `false`.
+    ///
+    /// Documents the intentionally stricter-than-`rollup_status` behaviour:
+    /// `rollup_status` treats `Unknown` as non-failing (rolls up to `Ok` with other Ok
+    /// components), but `all_components_ok` is a health gate that conservatively
+    /// requires every component to be positively confirmed `Ok`.
+    #[test]
+    fn all_components_ok_returns_false_when_any_component_is_unknown() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Unknown),
+        ]);
+        state.apply_report(report);
+        assert!(
+            !state.all_components_ok(),
+            "all_components_ok must return false when any component is Unknown \
+             (stricter than rollup_status which treats Unknown as non-failing)"
+        );
+    }
+
+    // --- is_bootstrap tests ---
+
+    /// `opening(WizardOrigin::Bootstrap)` → `is_bootstrap` must return `true`.
+    #[test]
+    fn is_bootstrap_returns_true_for_bootstrap_origin() {
+        let state = InstallWizardState::opening(WizardOrigin::Bootstrap);
+        assert!(
+            state.is_bootstrap(),
+            "is_bootstrap must return true when origin is Bootstrap"
+        );
+    }
+
+    /// `opening(WizardOrigin::UserInvoked)` → `is_bootstrap` must return `false`.
+    #[test]
+    fn is_bootstrap_returns_false_for_user_invoked_origin() {
+        let state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        assert!(
+            !state.is_bootstrap(),
+            "is_bootstrap must return false when origin is UserInvoked"
+        );
+    }
 }
