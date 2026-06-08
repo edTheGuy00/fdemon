@@ -53,6 +53,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::Key(key) => {
+            // Dismiss the version-check banner on the first keypress outside
+            // the New Session Dialog. Dialog keypresses do not clear the notice —
+            // `hide_new_session_dialog` owns that lifecycle.
+            state.dismiss_startup_notice_on_interaction();
             if let Some(msg) = handle_key(state, key) {
                 UpdateResult::message(msg)
             } else {
@@ -376,20 +380,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         // ── Version Check (version-check-banner) ─────────────────────────────
 
-        // A newer fdemon release was discovered on GitHub. Set the startup
-        // notice so it renders as a banner above the New Session Dialog.
-        // Gate on dialog visibility: if the user has already left the startup
-        // screen, the result arrives too late to be useful and is silently
-        // dropped (with a debug trace for diagnostics).
+        // A newer fdemon release was discovered on GitHub. Store the notice
+        // unconditionally; the render layer decides where/whether to show it.
+        // On Normal/Loading screens the notice is cleared on the user's first
+        // keypress (see `dismiss_startup_notice_on_interaction` call in
+        // `Message::Key`). On the New Session Dialog the notice is cleared when
+        // the dialog is dismissed via `hide_new_session_dialog`.
         Message::NewVersionAvailable { latest } => {
-            if state.is_new_session_dialog_visible() {
-                state.startup_notice = Some(StartupNotice::NewVersionAvailable { latest });
-            } else {
-                tracing::debug!(
-                    "Version check completed after dialog dismissed; dropping notice for v{}",
-                    latest
-                );
-            }
+            state.set_startup_notice(StartupNotice::NewVersionAvailable { latest });
             UpdateResult::none()
         }
 
@@ -3486,16 +3484,69 @@ mod tests {
     }
 
     #[test]
-    fn new_version_available_dropped_when_dialog_not_visible() {
+    fn new_version_available_sets_notice_in_normal_mode() {
         let mut state = AppState::new();
         state.ui_mode = UiMode::Normal;
         update(
             &mut state,
             Message::NewVersionAvailable {
-                latest: "0.6.0".into(),
+                latest: "0.5.7".into(),
             },
         );
-        assert!(state.startup_notice.is_none());
+        assert_eq!(
+            state.startup_notice,
+            Some(StartupNotice::NewVersionAvailable {
+                latest: "0.5.7".into()
+            })
+        );
+    }
+
+    #[test]
+    fn new_version_available_sets_notice_in_loading_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Loading;
+        update(
+            &mut state,
+            Message::NewVersionAvailable {
+                latest: "0.5.7".into(),
+            },
+        );
+        assert_eq!(
+            state.startup_notice,
+            Some(StartupNotice::NewVersionAvailable {
+                latest: "0.5.7".into()
+            })
+        );
+    }
+
+    #[test]
+    fn keypress_clears_notice_in_normal_mode() {
+        use crate::input_key::InputKey;
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+            latest: "0.5.7".into(),
+        });
+        update(&mut state, Message::Key(InputKey::Char('r')));
+        assert!(
+            state.startup_notice.is_none(),
+            "first keypress in Normal mode must clear the startup notice"
+        );
+    }
+
+    #[test]
+    fn keypress_does_not_clear_notice_in_dialog() {
+        use crate::input_key::InputKey;
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+            latest: "0.5.7".into(),
+        });
+        update(&mut state, Message::Key(InputKey::Char('r')));
+        assert!(
+            state.startup_notice.is_some(),
+            "keypresses while dialog is visible must NOT clear the startup notice"
+        );
     }
 
     // ── Auto-reload / reload-failed phase guards ─────────────────────────────

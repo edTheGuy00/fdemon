@@ -1512,3 +1512,160 @@ fn render_long_toast_text_is_truncated_with_ellipsis() {
         "ellipsis (…) should appear when toast is truncated"
     );
 }
+
+// ===========================================================================
+// Startup-notice banner tests (Task 03 — render-decouple)
+//
+// These tests verify that the startup-notice banner appears on Normal and
+// Loading screens (where the NewSessionDialog is not shown), is absent when
+// the notice is unset, and is not double-rendered when the dialog is visible.
+// ===========================================================================
+
+/// `UiMode::Normal` with a `StartupNotice` must render the banner text on the
+/// topmost row of the terminal.
+#[test]
+fn startup_notice_renders_on_normal_screen() {
+    use fdemon_app::state::{StartupNotice, UiMode};
+
+    let mut state = create_base_state();
+    state.ui_mode = UiMode::Normal;
+    state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+        latest: "0.5.7".to_string(),
+    });
+
+    let mut term = TestTerminal::new();
+    term.draw_with(|frame| view(frame, &mut state));
+
+    // Banner text must appear somewhere in the rendered output.
+    assert!(
+        term.buffer_contains("New version available"),
+        "Normal mode: banner must contain 'New version available'"
+    );
+    assert!(
+        term.buffer_contains("0.5.7"),
+        "Normal mode: banner must contain the latest version '0.5.7'"
+    );
+    // Specifically on the top row (row 0).
+    assert!(
+        term.line_contains(0, "New version available"),
+        "Normal mode: banner must be on the topmost row (row 0)"
+    );
+}
+
+/// `UiMode::Loading` with a `StartupNotice` must render the banner text on the
+/// topmost row of the terminal.
+#[test]
+fn startup_notice_renders_on_loading_screen() {
+    use fdemon_app::state::{LoadingState, StartupNotice, UiMode};
+
+    let mut state = create_base_state();
+    state.ui_mode = UiMode::Loading;
+    state.loading_state = Some(LoadingState::new("Discovering devices..."));
+    state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+        latest: "0.5.7".to_string(),
+    });
+
+    let mut term = TestTerminal::new();
+    term.draw_with(|frame| view(frame, &mut state));
+
+    assert!(
+        term.buffer_contains("New version available"),
+        "Loading mode: banner must contain 'New version available'"
+    );
+    assert!(
+        term.buffer_contains("0.5.7"),
+        "Loading mode: banner must contain the latest version '0.5.7'"
+    );
+    assert!(
+        term.line_contains(0, "New version available"),
+        "Loading mode: banner must be on the topmost row (row 0)"
+    );
+}
+
+/// When `startup_notice` is `None`, the top row must not contain the banner text.
+#[test]
+fn no_banner_when_notice_absent() {
+    use fdemon_app::state::UiMode;
+
+    let mut state = create_base_state();
+    state.ui_mode = UiMode::Normal;
+    // Explicit: notice is absent (default).
+    state.startup_notice = None;
+
+    let mut term = TestTerminal::new();
+    term.draw_with(|frame| view(frame, &mut state));
+
+    assert!(
+        !term.buffer_contains("New version available"),
+        "Top row must not contain banner text when startup_notice is None"
+    );
+}
+
+/// When the dialog is visible (`UiMode::NewSessionDialog`) with a notice set,
+/// the banner is rendered inside the dialog only — NOT as a separate top-row
+/// overlay. Specifically, `should_render_banner_outside_dialog` must return
+/// `false` for `NewSessionDialog`, so the banner appears exactly once (inside
+/// the dialog widget).
+#[test]
+fn no_double_render_in_dialog() {
+    use fdemon_app::state::{StartupNotice, UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::NewSessionDialog;
+    state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+        latest: "0.5.7".to_string(),
+    });
+
+    // Use a wide terminal so the dialog renders (not "too small").
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    // Collect the full buffer as a flat string of symbols.
+    let buf = terminal.backend().buffer();
+    let full: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+    // Count occurrences of the banner trigger string.  There must be exactly
+    // one (inside the dialog), never two.
+    let count = full.matches("New version available").count();
+    assert_eq!(
+        count, 1,
+        "NewSessionDialog with notice must render banner exactly once (inside dialog, \
+         not also as top-row overlay), found {} occurrence(s)",
+        count
+    );
+}
+
+/// When the terminal is only 1 row tall (below `BANNER_MIN_HEIGHT` = 2), the
+/// banner guard must skip the banner entirely to avoid producing a zero-height
+/// content rect.  The rendered output must not contain the banner text, and the
+/// call must not panic.
+#[test]
+fn banner_not_rendered_when_terminal_too_short() {
+    use fdemon_app::state::{StartupNotice, UiMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    // 1 row is below BANNER_MIN_HEIGHT (2): the guard must skip the banner.
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::Normal;
+    state.startup_notice = Some(StartupNotice::NewVersionAvailable {
+        latest: "0.5.7".to_string(),
+    });
+
+    let backend = TestBackend::new(80, 1);
+    let mut terminal = Terminal::new(backend).unwrap();
+    // Must not panic even at 1-row height.
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let buf = terminal.backend().buffer();
+    let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+    assert!(
+        !text.contains("New version available"),
+        "banner must not render when terminal height (1) < BANNER_MIN_HEIGHT (2); \
+         guard must fall back to content_area = area to avoid zero-height rects"
+    );
+}

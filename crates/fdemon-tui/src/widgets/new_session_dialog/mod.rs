@@ -171,6 +171,26 @@ pub struct NewSessionDialog<'a> {
     animation_frame: u64,
 }
 
+/// Build a [`Line`] for the startup-notice banner.
+///
+/// This is a shared formatter used by both the `NewSessionDialog` banner
+/// (rendered above the dialog on `Startup`/`NewSessionDialog` screens) and
+/// the top-row banner on `Normal`/`Loading` screens.  Keeping both callers
+/// in sync via a single function prevents copy-divergence.
+///
+/// The returned `Line` is unstyled — the caller applies `STATUS_YELLOW` via a
+/// wrapping `Paragraph` style so the colour applies to the full row.
+pub(crate) fn startup_notice_line(notice: &StartupNotice) -> Line<'_> {
+    let text = match notice {
+        StartupNotice::NewVersionAvailable { latest } => format!(
+            "\u{2B06} New version available: v{} (current v{}) \u{2014} https://github.com/edTheGuy00/fdemon/releases",
+            latest,
+            env!("CARGO_PKG_VERSION")
+        ),
+    };
+    Line::raw(text)
+}
+
 impl<'a> NewSessionDialog<'a> {
     /// Minimum terminal width for dialog (updated to match MIN_WIDTH constant)
     pub const MIN_WIDTH: u16 = MIN_WIDTH;
@@ -656,14 +676,8 @@ impl<'a> NewSessionDialog<'a> {
     /// row of the provided area and uses `STATUS_YELLOW` to draw the user's eye
     /// to the actionable information.
     fn render_startup_notice(notice: &StartupNotice, area: Rect, buf: &mut Buffer) {
-        let text = match notice {
-            StartupNotice::NewVersionAvailable { latest } => format!(
-                "\u{2B06} New version available: v{} (current v{}) \u{2014} https://github.com/edTheGuy00/fdemon/releases",
-                latest,
-                env!("CARGO_PKG_VERSION")
-            ),
-        };
-        let banner = Paragraph::new(text)
+        let line = startup_notice_line(notice);
+        let banner = Paragraph::new(line)
             .style(Style::default().fg(palette::STATUS_YELLOW))
             .alignment(Alignment::Center);
         banner.render(area, buf);

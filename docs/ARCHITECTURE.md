@@ -607,7 +607,7 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 | `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `MemoryState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
-| `version_check.rs` | GitHub releases API client; queries the latest fdemon release at TUI startup and returns `Some(version)` when a newer release is available. Results are cached in `<dirs::cache_dir()>/fdemon/version_check.json` (24 h TTL, JSON `{ checked_at, latest }`; per-user, not per-project) — no outbound request is made on a cache hit within the TTL. Errors and non-newer releases collapse silently to `None` (fire-and-forget — this is a developer convenience, not a security channel). |
+| `version_check.rs` | GitHub releases API client; queries the latest fdemon release at TUI startup and returns `Some(version)` when a newer release is available. Results are cached in `<dirs::cache_dir()>/fdemon/version_check.json` (24 h TTL; per-user, not per-project) — no outbound request is made on a cache hit within the TTL. The cache entry is **version-keyed**: it stores the binary version that wrote it (`current_version`) alongside the raw fetched tag (`latest`). On a cache hit, the read path checks `current_version == CARGO_PKG_VERSION` — a mismatch (cross-version cache poisoning) causes the entry to be treated as a miss and triggers a fresh network fetch. The raw tag is always stored (not the filtered comparison result) so that a different binary version reading the cache can re-compare against its own version. Errors and non-newer releases collapse silently to `None` (fire-and-forget — this is a developer convenience, not a security channel). |
 
 **Configuration (`config/`):**
 
@@ -2057,7 +2057,7 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
 8. tui::run_with_project(): Spawn background startup tasks (fire-and-forget, non-blocking):
    - spawn_tool_availability_check — detect adb, xcrun simctl, idevicesyslog
    - spawn_bootable_device_discovery — list iOS simulators and Android AVDs
-   - spawn_version_check — query GitHub releases API (or serve from on-disk cache); sends Message::NewVersionAvailable if a newer release exists. The handler drops this message silently if ui_mode has already transitioned away from Startup/NewSessionDialog (late-arrival gate).
+   - spawn_version_check — query GitHub releases API (or serve from on-disk cache, version-keyed); sends Message::NewVersionAvailable if a newer release exists. The handler stores the version string in `AppState::startup_notice` and clears it on the first keypress. The `startup_notice` is rendered in two locations: (a) inside the `NewSessionDialog` widget (for `UiMode::Startup` and `UiMode::NewSessionDialog`), and (b) as a standalone top-row banner on all other screens (Normal, Loading, DevTools, etc.) — rendered by `render::view()` before the main content area, which is shrunk by one row to accommodate it. This decoupled render path ensures sessions launched via auto-launch (which bypass the dialog) still see the notice. The handler stores the notice unconditionally — a `NewVersionAvailable` message always overwrites `startup_notice`, regardless of the current `UiMode`.
 9. tui::run_with_project(): Flutter SDK resolution — if no SDK resolves, opens
    UiMode::InstallWizard and emits UpdateAction::RunToolchainPreflight (background task).
    InstallWizard can also be opened at any time via the `I` key from Normal mode.
@@ -2378,7 +2378,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 **Internal** (`pub(crate)`):
 - TEA handler implementation (`handler/`)
 - Process spawning logic (`process.rs`, `spawn.rs`)
-- Version check (`version_check.rs`) — GitHub releases API call; exposed only via `spawn_version_check` in `spawn.rs`
+- Version check (`version_check.rs`) — GitHub releases API call with version-keyed on-disk cache; exposed only via `spawn_version_check` in `spawn.rs`
 - Signal handling (`signals.rs`)
 - Action dispatching (`actions/` — modular directory with `mod.rs`, `session.rs`, `vm_service.rs`, `performance.rs`, `inspector/`, `network.rs`)
 

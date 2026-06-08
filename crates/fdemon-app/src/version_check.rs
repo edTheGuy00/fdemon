@@ -14,6 +14,16 @@
 //! 24 hours. On a cache hit within the TTL, no outbound network request is
 //! made. The cache is written atomically (write-to-.tmp + rename) to avoid
 //! corruption on crash.
+//!
+//! ## Cache format (version-keyed)
+//!
+//! Each cache entry records the **binary version that wrote it** (`current_version`)
+//! and the **raw fetched tag** (`latest`). On a cache hit the read path checks
+//! `current_version == CARGO_PKG_VERSION`; a mismatch means a different binary
+//! version wrote the entry (cross-version poisoning) and the entry is discarded
+//! as a cache miss. This prevents, e.g., a `0.5.7` build that wrote
+//! `latest: null` from silencing the banner for a concurrently running `0.5.6`
+//! build (or vice-versa).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -26,6 +36,12 @@ const GITHUB_RELEASES_LATEST: &str =
 /// typically a few kilobytes; this cap prevents a hostile or malformed response
 /// from consuming unbounded memory.
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+
+/// Maximum allowed on-disk cache file size. A well-formed entry is a few
+/// hundred bytes; this cap mirrors the network-side `MAX_RESPONSE_BYTES` guard
+/// and prevents a corrupt or hostile cache file from causing a large
+/// allocation at startup. (1 MiB — generous vs. the real ~200-byte payload.)
+const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 
 /// Cache TTL in seconds (24 hours).
 const CACHE_TTL_SECS: u64 = 86_400;
@@ -44,12 +60,24 @@ struct ReleaseResponse {
 // ── Cache ─────────────────────────────────────────────────────────────────────
 
 /// A single cache entry persisted to disk.
+///
+/// # Migration note
+///
+/// No `#[serde(deny_unknown_fields)]` is applied. All three fields are required
+/// by `serde`, so an old-format file (missing `current_version`) will fail to
+/// deserialize; `read_cache_at` returns `None` in that case, which is treated as
+/// a cache miss. This is the desired migration behavior: the first run after an
+/// upgrade transparently refreshes the cache.
 #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CacheEntry {
     /// POSIX seconds when the check was performed.
     pub checked_at: u64,
-    /// The latest tag string (bare semver, no `v` prefix), or `None` when the
-    /// last check confirmed the installed version is current.
+    /// The binary version string (`CARGO_PKG_VERSION`) that wrote this entry.
+    /// Used to detect cross-version poisoning: if `current_version` does not
+    /// match the running binary's `CARGO_PKG_VERSION`, the entry is ignored.
+    pub current_version: String,
+    /// The raw fetched tag (bare semver, no `v` prefix), or `None` when the
+    /// fetch returned nothing parseable. Always `Some` after a successful fetch.
     pub latest: Option<String>,
 }
 
@@ -64,6 +92,16 @@ fn cache_path() -> Option<PathBuf> {
 /// This function is public within the crate to allow tests to inject an
 /// arbitrary path without relying on `dirs::cache_dir()`.
 pub(crate) fn read_cache_at(path: &Path) -> Option<CacheEntry> {
+    // Reject oversized files before reading them into memory.
+    let len = std::fs::metadata(path).ok()?.len();
+    if len > MAX_CACHE_BYTES {
+        tracing::debug!(
+            "Version check: cache file too large ({} bytes) at {:?}, treating as miss",
+            len,
+            path
+        );
+        return None;
+    }
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
@@ -104,7 +142,10 @@ pub(crate) fn write_cache_at(path: &Path, entry: &CacheEntry) {
         }
     }
 
-    let tmp_path = path.with_extension("tmp");
+    // Derive a per-process-unique temp path so concurrent or stale writers cannot
+    // collide on a fixed `.tmp` name. The temp file is renamed over `path` on
+    // success and removed on failure, so it never lingers.
+    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
     if let Err(e) = std::fs::write(&tmp_path, &json) {
         tracing::debug!("Version check: failed to write cache tmp file: {}", e);
         return;
@@ -240,26 +281,36 @@ pub(crate) async fn check_for_newer_release(timeout: Duration) -> Option<String>
     let current = parse_semver(env!("CARGO_PKG_VERSION"))?;
     let now = now_secs();
 
-    // Cache hit: skip network if within TTL.
+    // Cache hit: skip network if within TTL and written by the same binary version.
     if let Some(entry) = read_cache() {
-        if now.saturating_sub(entry.checked_at) < CACHE_TTL_SECS {
+        let fresh = now.saturating_sub(entry.checked_at) < CACHE_TTL_SECS;
+        let same_binary = entry.current_version == env!("CARGO_PKG_VERSION");
+        if fresh && same_binary {
             tracing::debug!(
                 "Version check: serving from cache (age={}s)",
                 now.saturating_sub(entry.checked_at)
             );
+            // Re-compare the raw tag against the running binary's version so
+            // that the comparison is always correct for the current binary.
             return entry.latest.and_then(|tag| {
                 let parsed = parse_semver(&tag)?;
-                if parsed > current {
-                    Some(format!("{}.{}.{}", parsed.0, parsed.1, parsed.2))
-                } else {
-                    None
-                }
+                (parsed > current).then(|| format!("{}.{}.{}", parsed.0, parsed.1, parsed.2))
             });
         }
-        tracing::debug!(
-            "Version check: cache expired (age={}s), fetching from network",
-            now.saturating_sub(entry.checked_at)
-        );
+        if fresh && !same_binary {
+            // A different binary version wrote this entry — discard it and fetch
+            // fresh so the running binary is not silenced by a stale comparison.
+            tracing::debug!(
+                "Version check: cache written by {} but running {}, ignoring",
+                entry.current_version,
+                env!("CARGO_PKG_VERSION")
+            );
+        } else {
+            tracing::debug!(
+                "Version check: cache expired (age={}s), fetching from network",
+                now.saturating_sub(entry.checked_at)
+            );
+        }
     }
 
     // Network fetch.
@@ -267,19 +318,27 @@ pub(crate) async fn check_for_newer_release(timeout: Duration) -> Option<String>
     let latest = parse_semver(&tag_str)?;
     let normalized = format!("{}.{}.{}", latest.0, latest.1, latest.2);
 
-    let result = if latest > current {
-        Some(normalized)
-    } else {
-        None
-    };
-
-    // Write cache (best-effort).
+    // Write cache (best-effort). Store the RAW normalized tag (always Some on a
+    // successful fetch+parse), NOT the filtered comparison result. This way a
+    // different binary version reading the cache can re-compare against its own
+    // version rather than being silenced by a stale `null` written by a build
+    // that happened to equal the latest release.
     write_cache(&CacheEntry {
         checked_at: now,
-        latest: result.clone(),
+        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        latest: Some(normalized.clone()),
     });
 
-    result
+    if latest > current {
+        Some(normalized)
+    } else {
+        tracing::debug!(
+            "Version check: latest {} not newer than current {:?}",
+            normalized,
+            current
+        );
+        None
+    }
 }
 
 // ── Parse ─────────────────────────────────────────────────────────────────────
@@ -358,14 +417,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("version_check.json");
         let now = now_secs();
+        let current_version = env!("CARGO_PKG_VERSION");
         std::fs::write(
             &path,
-            format!(r#"{{"checked_at": {}, "latest": "999.0.0"}}"#, now),
+            format!(
+                r#"{{"checked_at": {}, "current_version": "{}", "latest": "999.0.0"}}"#,
+                now, current_version
+            ),
         )
         .unwrap();
 
         let entry = read_cache_at(&path).unwrap();
         assert_eq!(entry.checked_at, now);
+        assert_eq!(entry.current_version, current_version);
         assert_eq!(entry.latest, Some("999.0.0".to_string()));
         // Within TTL: age = 0
         assert!(now.saturating_sub(entry.checked_at) < CACHE_TTL_SECS);
@@ -375,13 +439,33 @@ mod tests {
     fn cache_outside_ttl_is_expired() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("version_check.json");
+        let current_version = env!("CARGO_PKG_VERSION");
         // checked_at = 0 means age is effectively "now" seconds which exceeds 24h.
-        std::fs::write(&path, r#"{"checked_at": 0, "latest": "999.0.0"}"#).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"checked_at": 0, "current_version": "{}", "latest": "999.0.0"}}"#,
+                current_version
+            ),
+        )
+        .unwrap();
 
         let entry = read_cache_at(&path).unwrap();
         let now = now_secs();
         // Age should be at least CACHE_TTL_SECS (over 24h since epoch).
         assert!(now.saturating_sub(entry.checked_at) >= CACHE_TTL_SECS);
+    }
+
+    #[test]
+    fn read_cache_at_rejects_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        // Write a file larger than MAX_CACHE_BYTES.
+        std::fs::write(&path, vec![b'{'; (MAX_CACHE_BYTES as usize) + 1]).unwrap();
+        assert!(
+            read_cache_at(&path).is_none(),
+            "oversized cache file must be treated as a cache miss"
+        );
     }
 
     #[test]
@@ -405,15 +489,26 @@ mod tests {
         let path = dir.path().join("version_check.json");
         let entry = CacheEntry {
             checked_at: 12345,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
             latest: Some("1.2.3".to_string()),
         };
         write_cache_at(&path, &entry);
 
-        // The .tmp file should NOT exist after a successful write.
-        let tmp_path = path.with_extension("tmp");
+        // No per-process or legacy `.tmp` file should remain after a successful
+        // atomic write. The temp file is renamed over `path`; on failure it is
+        // removed. Check that no file in the temp dir ends with ".tmp".
+        let leftover_tmp = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "tmp")
+                    .unwrap_or(false)
+            });
         assert!(
-            !tmp_path.exists(),
-            ".tmp file must not exist after successful atomic write"
+            !leftover_tmp,
+            "no .tmp file must remain after a successful atomic write"
         );
 
         // The final file should contain the correct JSON.
@@ -427,6 +522,7 @@ mod tests {
         let path = dir.path().join("version_check.json");
         let entry = CacheEntry {
             checked_at: 99999,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
             latest: None,
         };
         write_cache_at(&path, &entry);
@@ -497,6 +593,26 @@ mod tests {
             .await;
         let result = fetch_latest_tag(&mock.uri(), Duration::from_secs(3)).await;
         assert!(result.is_none(), "oversized response must return None");
+    }
+
+    #[tokio::test]
+    async fn fetch_latest_tag_rejects_redirect() {
+        // The HTTP client is built with `redirect::Policy::none()`. Verify that
+        // a 301/302 response is treated as a non-success status and returns None,
+        // locking in the no-follow defense.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("Location", "https://evil.example/"),
+            )
+            .mount(&server)
+            .await;
+        let result = fetch_latest_tag(&server.uri(), Duration::from_secs(3)).await;
+        assert!(
+            result.is_none(),
+            "redirect response must return None (no-follow policy)"
+        );
     }
 
     #[tokio::test]
@@ -595,15 +711,18 @@ mod tests {
 
     #[test]
     fn cache_hit_with_suffixed_tag_returns_normalized_form() {
-        // Simulate an old cache entry that was written before the normalization
-        // fix — i.e., the `latest` field holds a raw suffixed string.
+        // Simulate a cache entry whose `latest` field holds a raw suffixed string.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("version_check.json");
         let now = now_secs();
+        let current_version = env!("CARGO_PKG_VERSION");
         // Write a cache entry whose `latest` contains a pre-release suffix.
         std::fs::write(
             &path,
-            format!(r#"{{"checked_at": {}, "latest": "999.0.0-rc.1"}}"#, now),
+            format!(
+                r#"{{"checked_at": {}, "current_version": "{}", "latest": "999.0.0-rc.1"}}"#,
+                now, current_version
+            ),
         )
         .unwrap();
 
@@ -628,6 +747,166 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_digit() || c == '.'),
             "cache-hit normalized form must contain only digits and dots"
+        );
+    }
+
+    // ── New tests: version-keyed cache ────────────────────────────────────────
+
+    /// A round-trip serialize/deserialize must preserve `current_version`.
+    #[test]
+    fn cache_entry_roundtrips_with_current_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        let entry = CacheEntry {
+            checked_at: 42,
+            current_version: "1.2.3".to_string(),
+            latest: Some("1.3.0".to_string()),
+        };
+        write_cache_at(&path, &entry);
+        let read_back = read_cache_at(&path).unwrap();
+        assert_eq!(read_back, entry);
+        assert_eq!(read_back.current_version, "1.2.3");
+    }
+
+    /// An old-format cache file (missing `current_version`) must be treated as a
+    /// cache miss — `read_cache_at` must return `None` without panicking.
+    #[test]
+    fn old_format_cache_is_treated_as_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        let now = now_secs();
+        // Write a JSON blob with only the two old fields — no `current_version`.
+        std::fs::write(
+            &path,
+            format!(r#"{{"checked_at": {}, "latest": "999.0.0"}}"#, now),
+        )
+        .unwrap();
+
+        // Must return None — the missing required field causes a serde error.
+        let result = read_cache_at(&path);
+        assert!(
+            result.is_none(),
+            "old-format cache (missing current_version) must be treated as a cache miss"
+        );
+    }
+
+    /// When the network returns a tag equal to the current version the cache must
+    /// still store `latest: Some(current)` (the raw tag), not `None`.
+    #[tokio::test]
+    async fn cache_always_stores_raw_tag_on_successful_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("version_check.json");
+
+        let current_version = env!("CARGO_PKG_VERSION");
+        // Serve the exact current version — comparison result would be `None`.
+        let mock = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "tag_name": format!("v{}", current_version) }),
+                ),
+            )
+            .mount(&mock)
+            .await;
+
+        let tag_str = fetch_latest_tag(&mock.uri(), Duration::from_secs(3))
+            .await
+            .expect("fetch should succeed");
+        let latest = parse_semver(&tag_str).expect("tag should parse");
+        let normalized = format!("{}.{}.{}", latest.0, latest.1, latest.2);
+
+        // Simulate what check_for_newer_release does: always write Some(normalized).
+        write_cache_at(
+            &cache_path,
+            &CacheEntry {
+                checked_at: now_secs(),
+                current_version: current_version.to_string(),
+                latest: Some(normalized.clone()),
+            },
+        );
+
+        let written = read_cache_at(&cache_path).unwrap();
+        assert_eq!(
+            written.latest,
+            Some(normalized),
+            "cache must store the raw normalized tag even when tag == current version"
+        );
+        assert!(
+            written.latest.is_some(),
+            "cache latest must be Some (raw tag), not None, when fetch succeeds"
+        );
+    }
+
+    /// A cache entry written by a different binary version must not be served
+    /// from cache — `read_cache_at` must return the entry, but the version-check
+    /// logic must ignore it (treated as a cache miss).
+    #[test]
+    fn read_ignores_entry_from_different_binary_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        let now = now_secs();
+        // Write an entry with a different binary version and a newer latest.
+        write_cache_at(
+            &path,
+            &CacheEntry {
+                checked_at: now,
+                current_version: "0.0.1".to_string(), // deliberately differs from running binary
+                latest: Some("999.99.99".to_string()),
+            },
+        );
+
+        let entry = read_cache_at(&path).unwrap();
+        let fresh = now.saturating_sub(entry.checked_at) < CACHE_TTL_SECS;
+        let same_binary = entry.current_version == env!("CARGO_PKG_VERSION");
+
+        // The entry is fresh but from a different binary version — must not be served.
+        assert!(fresh, "entry should be fresh (just written)");
+        assert!(
+            !same_binary,
+            "entry should be from a different binary version"
+        );
+        // Confirm that the guard logic rejects it.
+        assert!(
+            !(fresh && same_binary),
+            "version-mismatch entry must not pass the cache-hit guard"
+        );
+    }
+
+    /// A fresh cache entry written by the current binary with a newer tag must be
+    /// returned directly without a network fetch.
+    #[test]
+    fn fresh_cache_serves_banner_when_raw_tag_newer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("version_check.json");
+        let now = now_secs();
+        let current_version = env!("CARGO_PKG_VERSION");
+
+        write_cache_at(
+            &path,
+            &CacheEntry {
+                checked_at: now,
+                current_version: current_version.to_string(),
+                latest: Some("999.99.99".to_string()),
+            },
+        );
+
+        let entry = read_cache_at(&path).unwrap();
+        let fresh = now.saturating_sub(entry.checked_at) < CACHE_TTL_SECS;
+        let same_binary = entry.current_version == current_version;
+
+        assert!(fresh, "entry should be within TTL");
+        assert!(same_binary, "entry should be from the same binary version");
+
+        // Reproduce the cache-hit return logic.
+        let current = parse_semver(current_version).unwrap();
+        let result = entry.latest.and_then(|tag| {
+            let parsed = parse_semver(&tag)?;
+            (parsed > current).then(|| format!("{}.{}.{}", parsed.0, parsed.1, parsed.2))
+        });
+        assert_eq!(
+            result,
+            Some("999.99.99".to_string()),
+            "fresh same-binary cache with newer tag must return Some"
         );
     }
 }
