@@ -322,6 +322,58 @@ version_check_timeout_secs = 10
 
 A value of `0` disables the check (equivalent to setting `version_check = false`).
 
+#### Version-check cache
+
+fdemon caches the result of each GitHub release check on disk so that subsequent launches within the same 24-hour window make no outbound network request.
+
+**Cache file location:**
+
+| Platform | Path |
+|----------|------|
+| Linux | `~/.cache/fdemon/version_check.json` (or `$XDG_CACHE_HOME/fdemon/version_check.json` if `$XDG_CACHE_HOME` is set) |
+| macOS | `~/Library/Caches/fdemon/version_check.json` |
+| Windows | `%LOCALAPPDATA%\fdemon\version_check.json` |
+
+**Cache format (version-keyed):**
+
+The cache file is a JSON object with three fields:
+
+| Field | Description |
+|-------|-------------|
+| `checked_at` | POSIX timestamp (seconds) when the check was performed |
+| `current_version` | The fdemon binary version string (`CARGO_PKG_VERSION`) that wrote this entry |
+| `latest` | The raw fetched release tag (bare semver, no `v` prefix), or `null` when no release was found |
+
+The cache is **version-keyed**: when fdemon reads the cache it checks that `current_version` matches the running binary's version. A mismatch (e.g. a `0.5.7` build wrote the file but `0.5.6` is now running) causes the entry to be discarded as a cache miss. This prevents a newer dev build that wrote `latest: null` from silencing the update banner for an older concurrent build.
+
+**TTL:** 24 hours. After the TTL expires fdemon fetches fresh data from the GitHub API regardless of the cached value.
+
+**Cache writes are atomic:** fdemon writes to a `.tmp` file first then renames it into place, so a crash during write cannot produce a corrupt cache.
+
+**To force an immediate re-check**, delete the cache file:
+
+```bash
+# Linux
+rm ~/.cache/fdemon/version_check.json
+
+# macOS
+rm ~/Library/Caches/fdemon/version_check.json
+
+# Windows (PowerShell)
+Remove-Item "$env:LOCALAPPDATA\fdemon\version_check.json"
+```
+
+Setting `[behavior] version_check = false` disables the check entirely — no cache file is created and no outbound request is made.
+
+**Banner scope and dismiss behavior:**
+
+The update banner is shown in two places:
+
+1. **Above the New Session Dialog** — displayed when fdemon starts and a newer version is available.
+2. **On the main screen (log view)** — also shown for users who skip the New Session Dialog via auto-launch (`auto_start = true` or `auto_launch = true`), so the banner is never silently dropped.
+
+The banner is dismissed on the **first keypress** after it appears. It does not require an explicit confirmation and does not persist across restarts.
+
 ### Watcher Settings
 
 Configure the file watcher for automatic hot reload.
