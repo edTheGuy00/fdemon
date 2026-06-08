@@ -97,17 +97,64 @@ Run: `cargo test -p fdemon-app && cargo test -p fdemon-tui`, then `cargo clippy 
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** <fill in>
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `observed_unhealthy: bool` field to `InstallWizardState`; latch logic in `apply_report` sets it when any component is `!= ComponentStatus::Ok`; added `show_installed_hint()` predicate; updated `Debug` impl; added 8 unit tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Extended `render_header` subtitle selection to three cases; added 2 render tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **New-session keybinding is `+`**: Confirmed from `crates/fdemon-app/src/handler/keys.rs` line 227-232 — `InputKey::Char('+')` emits `Message::OpenNewSessionDialog`. The hint text reads "press + to start a session".
+
+2. **Latch is set on any non-Ok `ComponentStatus`**: The latch triggers on `Missing`, `Partial`, `Error`, and `Unknown` (anything != `Ok`). This is the broadest possible definition of "unhealthy", matching the task's intent to capture any broken state.
+
+3. **`opening()` resets via `..Self::default()`**: The new field defaults to `false`, so `opening()` gets the reset for free via the existing `..Self::default()` spread — no additional explicit reset needed.
+
+4. **Three-case priority order**: `show_installed_hint()` is evaluated first (highest priority); then `!is_bootstrap() && all_components_ok()`; then the fallback "Flutter toolchain setup". This ensures the installed-hint case takes precedence over the all-set case when both conditions overlap (which cannot actually happen since `show_installed_hint` requires `observed_unhealthy` to be true, but the ordering is explicit for clarity).
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2919 tests)
+- `cargo test -p fdemon-tui` - Passed (1482 tests)
+- `cargo test --workspace` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+
 ### Risks/Limitations
+
+1. **`Unknown` status is treated as unhealthy**: `ComponentStatus::Unknown` is not `Ok`, so it will latch `observed_unhealthy`. This is conservative but correct — an unknown status is not a confirmed healthy state.
+
+---
+
+## Completion Summary (Follow-on: bind `+` in Install Wizard)
+
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Added `+` arm to `handle_key_install_wizard` guarded by `is_step_running()`; updated function doc-comment bullet list; added two unit tests (`plus_while_idle_opens_new_session_dialog`, `plus_while_step_running_is_ignored`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard mirrors the `Esc` arm**: `+` returns `None` when `is_step_running()` is true, preventing the new-session dialog from opening mid-install — same pattern already used for the cancel-vs-close Esc overload.
+2. **No handler changes needed**: `Message::OpenNewSessionDialog` already routes through `handle_open_new_session_dialog`, which discovers devices if needed and requires only `flutter_executable()` to be `Some` — guaranteed after a successful install.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2922 + all other crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None — purely additive key binding with a conservative guard.

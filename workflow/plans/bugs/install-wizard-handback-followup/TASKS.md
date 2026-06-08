@@ -33,10 +33,10 @@ plus a doc update. See [BUG.md](BUG.md) for root-cause analysis and the chosen a
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-harden-handback-sdk-resolution](tasks/01-harden-handback-sdk-resolution.md) | Not Started | - | 3-5h | `fdemon-daemon/toolchain`, `fdemon-app/actions`, `src/doctor.rs`, `fdemon-app/handler/install_wizard` |
-| 2 | [02-tailor-installed-hint](tasks/02-tailor-installed-hint.md) | Not Started | - | 2-3h | `fdemon-app/install_wizard/state.rs`, `fdemon-tui/widgets/install_wizard` |
-| 3 | [03-state-predicate-unit-tests](tasks/03-state-predicate-unit-tests.md) | Not Started | 2 (file overlap) | 0.5-1h | `fdemon-app/install_wizard/state.rs` |
-| 4 | [04-doc-architecture](tasks/04-doc-architecture.md) | Not Started | 1 | 0.5h | `docs/ARCHITECTURE.md` |
+| 1 | [01-harden-handback-sdk-resolution](tasks/01-harden-handback-sdk-resolution.md) | Done ✅ | - | 3-5h | `fdemon-daemon/toolchain`, `fdemon-app/actions`, `src/doctor.rs`, `fdemon-app/handler/install_wizard` |
+| 2 | [02-tailor-installed-hint](tasks/02-tailor-installed-hint.md) | Done ✅ (+`+` keybind follow-on, validator CONCERN→fixed) | - | 2-3h | `fdemon-app/install_wizard/state.rs`, `fdemon-tui/widgets/install_wizard` |
+| 3 | [03-state-predicate-unit-tests](tasks/03-state-predicate-unit-tests.md) | Done ✅ | 2 (file overlap) | 0.5-1h | `fdemon-app/install_wizard/state.rs` |
+| 4 | [04-doc-architecture](tasks/04-doc-architecture.md) | Done ✅ (redo — 1st attempt FAILED: incomplete + stale worktree) | 1 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

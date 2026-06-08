@@ -32,9 +32,9 @@ See [BUG.md](BUG.md) for the full root-cause analysis and behaviour matrix.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-core-origin-fix](tasks/01-core-origin-fix.md) | Not Started | - | 3-5h | `fdemon-app/install_wizard`, `handler`, `state.rs`, `message.rs`, `fdemon-tui/runner.rs` |
-| 2 | [02-tui-header-hint](tasks/02-tui-header-hint.md) | Not Started | 1 | 1-2h | `fdemon-tui/widgets/install_wizard` |
-| 3 | [03-doc-architecture](tasks/03-doc-architecture.md) | Not Started | 1 | 0.5-1h | `docs/ARCHITECTURE.md` |
+| 1 | [01-core-origin-fix](tasks/01-core-origin-fix.md) | Done ✅ | - | 3-5h | `fdemon-app/install_wizard`, `handler`, `state.rs`, `message.rs`, `fdemon-tui/runner.rs` |
+| 2 | [02-tui-header-hint](tasks/02-tui-header-hint.md) | Done ✅ | 1 | 1-2h | `fdemon-tui/widgets/install_wizard` |
+| 3 | [03-doc-architecture](tasks/03-doc-architecture.md) | Done ✅ | 1 | 0.5-1h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

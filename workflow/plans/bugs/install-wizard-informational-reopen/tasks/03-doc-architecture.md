@@ -55,14 +55,26 @@ origin-gated handback in the Install Wizard subsystem.
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** <fill in>
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/ARCHITECTURE.md` | Three targeted edits to install_wizard entries: types.rs description adds WizardOrigin { Bootstrap, UserInvoked }; state.rs description adds origin field, is_bootstrap(), all_components_ok(); actions.rs description documents origin-gated close_wizard_and_dispatch_discovery (Bootstrap-only, skipped when session running; UserInvoked returns to Normal). |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: NO (N/A)
 
 ### Notable Decisions/Tradeoffs
 
+1. **Terse parenthetical style**: Matched the existing Phase 2/3/4 annotation style used throughout the install_wizard entries — one-line additions appended to existing file descriptions rather than new sections.
+2. **No keybindings**: `I`-key behaviour is already documented in KEYBINDINGS.md (task 01); not duplicated here per task instructions.
+
 ### Testing Performed
+
+- Verified symbol names against implemented source: `WizardOrigin`, `is_bootstrap()`, `all_components_ok()`, `close_wizard_and_dispatch_discovery`, `origin` field.
+- Content boundary check: no build commands, no code samples, no keybindings — architecture module descriptions only.

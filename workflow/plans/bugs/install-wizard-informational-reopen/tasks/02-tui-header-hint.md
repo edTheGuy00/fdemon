@@ -90,17 +90,30 @@ Run: `cargo test -p fdemon-tui`, then `cargo clippy --workspace` and `cargo fmt 
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** <fill in>
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Modified `render_header` to show "All set — press Esc to return" when `!is_bootstrap() && all_components_ok()`; changed subtitle style from `TEXT_SECONDARY` to `TEXT_MUTED` for both variants; added two render tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Subtitle colour harmonisation**: The "All set" hint uses `palette::TEXT_MUTED` as specified in the task. For visual consistency the original "Flutter toolchain setup" subtitle was also changed from `TEXT_SECONDARY` to `TEXT_MUTED`. Both are dimmed colours; `TEXT_MUTED` is slightly more subdued, which is appropriate given the subtitle is secondary information in both cases.
+
+2. **Unicode em dash**: The em dash (`—`) in "All set — press Esc to return" is embedded as the escape sequence `\u{2014}` per the project pattern (other places in the same file use `\u{00b7}`, `\u{2500}`, `\u{2502}` etc.).
+
+3. **Tests cover all three negative cases**: Bootstrap origin, partial (any-non-Ok) report, and loading state are verified in a single parameterised test body rather than three separate test functions to keep the test module tidy while still covering every branch of the acceptance criteria.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all crates; new tests `informational_all_ok_shows_all_set_hint` and `bootstrap_or_partial_does_not_show_all_set_hint` both passed)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
 ### Risks/Limitations
+
+1. **Pure presentation**: No state or handler logic was changed; the entire behaviour gate lives in `is_bootstrap()` and `all_components_ok()` which were implemented in task 01. If those accessors change semantics, this presentation layer will follow automatically.

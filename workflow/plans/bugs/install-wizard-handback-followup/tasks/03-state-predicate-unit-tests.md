@@ -59,14 +59,24 @@ Add tests covering every branch of each predicate:
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** <fill in>
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added 7 unit tests in existing `#[cfg(test)] mod tests` block covering all branches of `all_components_ok()` and `is_bootstrap()` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Test placement**: Tests appended after the existing `observed_unhealthy` section (task 02 coverage) near end of the test block, under clear section comments. No duplication with task 02 tests.
+2. **Helper reuse**: Used existing `make_report()` and `make_check()` helpers throughout — no new helpers introduced.
+3. **Unknown status note**: The `all_components_ok_returns_false_when_any_component_is_unknown` test includes a doc comment explaining the intentional stricter-than-`rollup_status` behaviour, per task spec.
+
 ### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (2929 unit tests in fdemon-app)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed

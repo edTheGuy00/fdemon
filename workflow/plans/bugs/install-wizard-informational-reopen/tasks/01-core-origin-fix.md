@@ -237,17 +237,46 @@ Run: `cargo test -p fdemon-app`, then `cargo clippy --workspace` and `cargo fmt 
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** <fill in>
+**Status:** Done
+**Branch:** feat/toolchain-bootstrap
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/install_wizard/types.rs` | Added `WizardOrigin { Bootstrap, UserInvoked }` enum with `Default = UserInvoked`; added 2 unit tests |
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Re-exported `WizardOrigin` from `pub use types::{...}` |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `origin: WizardOrigin` field; changed `opening()` → `opening(origin: WizardOrigin)`; added `is_bootstrap()` and `all_components_ok()` helpers; updated Debug impl; fixed all `InstallWizardState::opening()` call sites in tests |
+| `crates/fdemon-app/src/state.rs` | Imported `WizardOrigin`; changed `show_install_wizard()` → `show_install_wizard(origin: WizardOrigin)` |
+| `crates/fdemon-app/src/message.rs` | Imported `WizardOrigin`; changed `ShowInstallWizard` → `ShowInstallWizard { origin: WizardOrigin }` |
+| `crates/fdemon-app/src/handler/update.rs` | Threaded `origin` from `ShowInstallWizard { origin }` into `handle_show(state, origin)` |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Updated `handle_show` signature; updated `maybe_dispatch_discovery_on_close` doc; updated all ~5 test call sites |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Added `is_bootstrap()` gate to `handle_preflight_completed`; rewrote `close_wizard_and_dispatch_discovery` to gate on `is_bootstrap() && !has_running_sessions()`; updated all ~17 test call sites; added 3 new tests (`user_invoked_open_does_not_handback_on_healthy_toolchain`, `bootstrap_open_still_handbacks`, `bootstrap_handback_skipped_when_session_running`) |
+| `crates/fdemon-app/src/handler/keys.rs` | `ShowInstallWizard { origin: WizardOrigin::UserInvoked }` |
+| `crates/fdemon-tui/src/runner.rs` | `ShowInstallWizard { origin: WizardOrigin::Bootstrap }` |
+| `crates/fdemon-tui/src/render/tests.rs` | Fixed 2 `InstallWizardState::opening(WizardOrigin::UserInvoked)` call sites |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Fixed `WizardOrigin` import in test module; fixed 2 `opening()` call sites |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Fixed `WizardOrigin` import; fixed 4 `opening()` call sites |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Session guard in `close_wizard_and_dispatch_discovery`**: Added `!has_running_sessions()` as a defensive guard even though `Bootstrap` origin already implies no running session at startup. Documents intent and protects future callers per the task's guidance.
+
+2. **Test origin assignments**: Tests that assert handback fires use `Bootstrap`; tests that navigate/display/no-handback use `UserInvoked`. The `handback_does_not_fire_twice` and `preflight_completed_without_live_flutter_does_not_handback` tests both use `Bootstrap` since they test guard mechanics on the bootstrap path.
+
+3. **`WizardOrigin` import placement in TUI**: Kept `WizardOrigin` out of production TUI imports (only used in tests) to avoid `unused_imports` Clippy warnings. Added to test-block explicit imports instead.
+
+4. **`all_components_ok()` helper**: Implemented per task spec to drive the "All set" hint in TUI task 02. Uses same `ComponentStatus::Ok` pattern as `flutter_now_live()`.
+
 ### Testing Performed
 
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo test --workspace` — PASS (2914 fdemon-app tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+
 ### Risks/Limitations
+
+1. **Navigation.rs existing handback tests**: The `state_with_live_sdk()` helper is now `Bootstrap`. All existing handback tests (`manual_close_with_live_sdk_spawns_discovery`, `handle_hide_with_live_sdk_dispatches_discovery`) still pass because they explicitly test the bootstrap path.
+
+2. **`all_components_ok()` not yet consumed**: The helper is available for TUI task 02 but no code reads it yet — this is correct per the task's "do not change the TUI header here" note.
