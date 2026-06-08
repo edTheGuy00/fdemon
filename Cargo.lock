@@ -795,7 +795,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fdemon-app"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "arboard",
  "chrono",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-core"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "chrono",
  "dirs",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-daemon"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "chrono",
  "dirs",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-dap"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fdemon-core",
  "percent-encoding",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-tui"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "chrono",
  "crossterm",
@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "flutter-demon"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "chrono",
  "clap",
@@ -1278,9 +1278,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "http"
-version = "1.4.1"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8be7462df143984c4598a256ef469b251d7d7f9e271135073e78fc535414f3d0"
+checksum = "6970f50e31d6fc17d3fa27329444bfa74e196cf62e95052a3f6fee181dba6425"
 dependencies = [
  "bytes",
  "itoa",
