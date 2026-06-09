@@ -256,24 +256,38 @@ mod tests {
         let outcome = run_preflight(tmp.path(), None, None, None).await;
         let report = &outcome.report;
 
-        // Must always have 10 components in the defined order
-        assert_eq!(report.components.len(), 10);
-        assert_eq!(report.components[0].kind, ComponentKind::FlutterSdk);
-        assert_eq!(report.components[1].kind, ComponentKind::Git);
-        assert_eq!(report.components[2].kind, ComponentKind::Jdk);
-        assert_eq!(
-            report.components[3].kind,
-            ComponentKind::AndroidCmdlineTools
+        // Lower-bound sanity check: the current baseline is 10 cross-platform
+        // components. Phases 4–5 will add host-gated probes (Xcode on macOS,
+        // VS on Windows) that make the count host-variable, so we assert >= 10
+        // rather than == 10 to stay forward-compatible.
+        assert!(
+            report.components.len() >= 10,
+            "expected at least 10 components, got {}",
+            report.components.len()
         );
-        assert_eq!(
-            report.components[4].kind,
-            ComponentKind::AndroidPlatformTools
-        );
-        assert_eq!(report.components[5].kind, ComponentKind::AndroidPlatform);
-        assert_eq!(report.components[6].kind, ComponentKind::AndroidBuildTools);
-        assert_eq!(report.components[7].kind, ComponentKind::AndroidLicenses);
-        assert_eq!(report.components[8].kind, ComponentKind::Prerequisites);
-        assert_eq!(report.components[9].kind, ComponentKind::WebBrowser);
+
+        // Presence-based assertions: every expected ComponentKind must appear
+        // somewhere in the component list, regardless of order or index.
+        // The component set is expected to grow host-variably in Phases 4–5
+        // (e.g., Xcode on macOS, Visual Studio on Windows), so presence —
+        // not count or positional index — is the stable invariant.
+        for expected in [
+            ComponentKind::FlutterSdk,
+            ComponentKind::Git,
+            ComponentKind::Jdk,
+            ComponentKind::AndroidCmdlineTools,
+            ComponentKind::AndroidPlatformTools,
+            ComponentKind::AndroidPlatform,
+            ComponentKind::AndroidBuildTools,
+            ComponentKind::AndroidLicenses,
+            ComponentKind::Prerequisites,
+            ComponentKind::WebBrowser,
+        ] {
+            assert!(
+                report.components.iter().any(|c| c.kind == expected),
+                "missing component: {expected:?}"
+            );
+        }
     }
 
     #[tokio::test]
