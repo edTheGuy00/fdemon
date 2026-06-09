@@ -571,7 +571,10 @@ fn web_browser_guided_commands(
     report: &ToolchainReport,
     web_status: StepStatus,
 ) -> Vec<GuidedCommand> {
-    if web_status == StepStatus::Ok {
+    // Guide the user only when the browser is actually determined absent.
+    // Partial = the capped form of a Missing browser. Ok = found; Pending = no
+    // probe data / legacy report — neither should surface install commands.
+    if web_status != StepStatus::Partial {
         return Vec::new();
     }
 
