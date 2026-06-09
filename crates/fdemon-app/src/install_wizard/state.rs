@@ -546,6 +546,118 @@ fn jdk_guided_command(report: &ToolchainReport) -> GuidedCommand {
     }
 }
 
+/// Per-OS guided commands to install a Chromium-based web browser for
+/// `flutter run -d chrome`.
+///
+/// Returns an empty `Vec` when `web_status` is `Ok` (browser already found).
+/// Otherwise, emits one per-OS install suggestion:
+///
+/// - **Linux** — prefer Chromium (cross-distro), install command chosen from
+///   the pre-detected `report.linux_package_manager`. Unknown PM falls back to
+///   the Chrome download URL. The note always includes an
+///   `export CHROME_EXECUTABLE="<path>"` placeholder so the user knows how to
+///   point Flutter at a non-default browser path.
+/// - **macOS** — Chrome download URL + `export CHROME_EXECUTABLE` note.
+/// - **Windows** — `winget install Google.Chrome` + `set CHROME_EXECUTABLE` note.
+/// - **`HostPlatform::Unknown`** — empty (no actionable commands).
+///
+/// **Command strings are templates, not configured values.** `build_steps` is a
+/// pure function of the report (it takes no settings param), so the
+/// `CHROME_EXECUTABLE` paths use angle-bracket placeholders rather than the
+/// configured `web_browser_executable` value. The configured path arrives here
+/// already reflected in the `WebBrowser` component's `status` field (via
+/// Task 02's `run_preflight` plumbing).
+fn web_browser_guided_commands(
+    report: &ToolchainReport,
+    web_status: StepStatus,
+) -> Vec<GuidedCommand> {
+    if web_status == StepStatus::Ok {
+        return Vec::new();
+    }
+
+    match report.platform {
+        HostPlatform::Linux => {
+            let pm = report
+                .linux_package_manager
+                .unwrap_or(LinuxPackageManager::Unknown);
+
+            let (command, note) = match pm {
+                LinuxPackageManager::Apt => (
+                    "sudo apt install chromium-browser",
+                    Some(
+                        "or: sudo apt install google-chrome-stable\n\
+                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    ),
+                ),
+                LinuxPackageManager::Dnf => (
+                    "sudo dnf install chromium",
+                    Some(
+                        "or: sudo dnf install google-chrome-stable\n\
+                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    ),
+                ),
+                LinuxPackageManager::Yum => (
+                    "sudo yum install chromium",
+                    Some(
+                        "or: sudo yum install google-chrome-stable\n\
+                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    ),
+                ),
+                LinuxPackageManager::Pacman => (
+                    "sudo pacman -S chromium",
+                    Some(
+                        "or: yay -S google-chrome (AUR)\n\
+                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    ),
+                ),
+                LinuxPackageManager::Zypper => (
+                    "sudo zypper install chromium",
+                    Some(
+                        "or: download Chrome from https://www.google.com/chrome/\n\
+                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    ),
+                ),
+                LinuxPackageManager::Unknown => (
+                    "https://www.google.com/chrome/",
+                    Some("To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\""),
+                ),
+            };
+
+            vec![GuidedCommand {
+                label: "Install a browser".into(),
+                command: command.into(),
+                note: note.map(Into::into),
+            }]
+        }
+
+        HostPlatform::MacOs => {
+            vec![GuidedCommand {
+                label: "Download Chrome".into(),
+                command: "https://www.google.com/chrome/".into(),
+                note: Some(
+                    "After installing, if Flutter does not detect it:\n\
+                     export CHROME_EXECUTABLE=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\""
+                        .into(),
+                ),
+            }]
+        }
+
+        HostPlatform::Windows => {
+            vec![GuidedCommand {
+                label: "Install Chrome".into(),
+                command: "winget install Google.Chrome".into(),
+                note: Some(
+                    "If Flutter does not detect it, set the path:\n\
+                     set CHROME_EXECUTABLE=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                        .into(),
+                ),
+            }]
+        }
+
+        HostPlatform::Unknown => Vec::new(),
+    }
+}
+
 /// Map a probe key (from `parse_missing_prereq_keys`) to the package name for
 /// the given Linux package manager.
 ///
@@ -911,19 +1023,25 @@ fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
 ///
 /// After the `Platforms` parent, inserts host-gated leaf rows (indent = 1):
 /// - `PlatformAndroid` — all hosts
-/// - `PlatformWeb`     — all hosts
+/// - `PlatformWeb`     — all hosts (live as of Phase 3)
 /// - `PlatformIos`     — macOS only
 /// - `PlatformMacos`   — macOS only
 /// - `PlatformWindows` — Windows only
 ///
-/// In Phase 2, all leaves except `PlatformAndroid` are **placeholders** with
-/// `StepStatus::Pending`, empty `components`, and no `guided_commands`.
+/// In Phase 2 and earlier, all leaves except `PlatformAndroid` were **placeholders**
+/// with `StepStatus::Pending`, empty `components`, and no `guided_commands`.
+/// As of Phase 3, `PlatformWeb` is live: it routes `ComponentKind::WebBrowser`
+/// checks, caps `Missing → Partial` (so an absent browser is **non-blocking** —
+/// it never propagates `Missing` to the Platforms parent), and emits per-OS
+/// guided commands when the browser is absent.
 ///
 /// ## Component grouping
 ///
 /// - `Prerequisites` — `ComponentKind::Prerequisites`, `ComponentKind::Git`
 /// - `PlatformAndroid` — `AndroidCmdlineTools`, `AndroidPlatformTools`,
 ///   `AndroidPlatform`, `AndroidBuildTools`, `AndroidLicenses`, `Jdk`
+/// - `PlatformWeb` — `ComponentKind::WebBrowser`; status capped at `Partial`
+///   (never surfaces `Missing`); non-blocking.
 /// - `FlutterSdk` — `ComponentKind::FlutterSdk`
 /// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `Doctor` — no components; detail comes from `report.doctor`
@@ -977,12 +1095,20 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
 
     let prerequisites_status = rollup_status(&prerequisites);
     let android_status = rollup_status(&platform_android_components);
-    // Web status: Missing browser → Missing (Task 03 will cap to Partial/non-blocking).
+    // Web status: non-blocking cap — `Missing` becomes `Partial` so that an absent
+    // browser never propagates `Missing` up through the Platforms parent (which would
+    // block the whole wizard).  The cap is local to this leaf; `rollup_status` itself
+    // stays unchanged so Android still surfaces true `Missing`.
     // Empty (no WebBrowser component yet) → Pending so legacy reports remain unaffected.
     let web_status = if platform_web_components.is_empty() {
         StepStatus::Pending
     } else {
-        rollup_status(&platform_web_components)
+        let raw = rollup_status(&platform_web_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
     };
     let flutter_status = rollup_status(&flutter_sdk);
 
@@ -1033,14 +1159,15 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             indent: 1,
         });
 
-        // PlatformWeb: all hosts. WebBrowser component routed here from build_steps.
-        // Guided commands arrive in Task 03.
+        // PlatformWeb: all hosts. Non-blocking: Missing→Partial cap applied above so
+        // an absent browser never causes the Platforms parent to surface Missing.
+        // Guided commands are per-OS installation hints for Chromium/Chrome.
         leaves.push(WizardStep {
             kind: WizardStepKind::PlatformWeb,
             title: "Web".to_string(),
             status: web_status,
             components: platform_web_components,
-            guided_commands: Vec::new(),
+            guided_commands: web_browser_guided_commands(report, web_status),
             indent: 1,
         });
 
@@ -1238,10 +1365,14 @@ mod tests {
 
     #[test]
     fn test_build_steps_expanded_inserts_android_leaf() {
-        // Linux report: expanded should include PlatformAndroid + PlatformWeb only.
+        // Linux report with a WebBrowser Ok component: expanded should include
+        // PlatformAndroid + PlatformWeb only (no iOS/macOS/Windows leaves on Linux).
+        // Feed a WebBrowser Ok component so PlatformWeb gets a real (Ok) status
+        // rather than Pending — ensuring the Web leaf is live, not a placeholder.
         let report = make_report(vec![
             make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
             make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Ok),
         ]);
         let steps = build_steps(&report, true);
         // Prerequisites, Platforms, PlatformAndroid, PlatformWeb, FlutterSdk, PathConfig, Doctor
@@ -1253,6 +1384,12 @@ mod tests {
         assert_eq!(steps[4].kind, WizardStepKind::FlutterSdk);
         assert_eq!(steps[5].kind, WizardStepKind::PathConfig);
         assert_eq!(steps[6].kind, WizardStepKind::Doctor);
+        // Web is now live (Phase 3): a WebBrowser Ok component drives Ok status.
+        assert_eq!(
+            steps[3].status,
+            StepStatus::Ok,
+            "PlatformWeb with a WebBrowser Ok component must have Ok status"
+        );
     }
 
     #[test]
@@ -1815,12 +1952,20 @@ mod tests {
     /// Prerequisites/Git entries — so `prerequisites_guided_commands`
     /// short-circuits to an empty vec.  This test asserts the invariant
     /// *for that fixture* (JDK missing, no prereq components).
+    ///
+    /// `PlatformWeb` is excluded from the assertion: as of Phase 3, the Web leaf
+    /// is live and may carry guided commands when the browser component is missing
+    /// or absent from the report (the `report_with_jdk` fixture has no WebBrowser
+    /// entry, which drives a `Pending` Web status and therefore no commands — but
+    /// the exclusion future-proofs the test against fixture changes).
     #[test]
     fn test_non_android_non_prereq_steps_have_no_guided_commands_when_prereqs_absent() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
         let steps = build_steps(&report, true);
         for step in &steps {
-            if step.kind != WizardStepKind::PlatformAndroid {
+            if step.kind != WizardStepKind::PlatformAndroid
+                && step.kind != WizardStepKind::PlatformWeb
+            {
                 assert!(
                     step.guided_commands.is_empty(),
                     "Step {:?} should have no guided commands (prereqs absent fixture)",
@@ -4044,6 +4189,150 @@ mod tests {
                 .iter()
                 .any(|s| s.kind == WizardStepKind::PlatformAndroid),
             "expanded steps must include PlatformAndroid"
+        );
+    }
+
+    // ── Phase 3, Task 03: Web leaf live tests ─────────────────────────────────
+
+    /// A `WebBrowser Missing` component must never surface as `Missing` on the
+    /// `PlatformWeb` leaf — the cap converts it to `Partial` (non-blocking).
+    #[test]
+    fn test_web_leaf_status_never_missing() {
+        let report = make_report(vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report, true);
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_ne!(
+            web.status,
+            StepStatus::Missing,
+            "PlatformWeb must never have Missing status (non-blocking cap)"
+        );
+        assert_eq!(
+            web.status,
+            StepStatus::Partial,
+            "PlatformWeb with a Missing browser must be capped to Partial"
+        );
+    }
+
+    /// A `Partial` Web leaf (browser missing / capped) must produce at least one
+    /// guided command so the user knows how to install a browser.
+    #[test]
+    fn test_web_leaf_has_guided_command_when_browser_missing() {
+        let report = make_report(vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report, true);
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_eq!(
+            web.status,
+            StepStatus::Partial,
+            "precondition: Web must be Partial"
+        );
+        assert!(
+            !web.guided_commands.is_empty(),
+            "Partial Web leaf must have at least one guided command"
+        );
+    }
+
+    /// When the browser is `Ok`, the `PlatformWeb` leaf must have no guided
+    /// commands (nothing to show).
+    #[test]
+    fn test_web_no_guided_command_when_browser_ok() {
+        let report = make_report(vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Ok,
+        )]);
+        let steps = build_steps(&report, true);
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_eq!(
+            web.status,
+            StepStatus::Ok,
+            "precondition: Web must be Ok when browser is Ok"
+        );
+        assert!(
+            web.guided_commands.is_empty(),
+            "Ok Web leaf must have no guided commands"
+        );
+    }
+
+    /// When Android is `Ok` and Web is `Partial` (browser missing → capped),
+    /// the `Platforms` parent must roll up to `Partial`, not `Missing`.
+    ///
+    /// This validates the non-blocking contract: a missing browser never blocks
+    /// the wizard or propagates a hard `Missing` status up the tree.
+    #[test]
+    fn test_platforms_parent_not_blocked_by_web_partial() {
+        let report = make_report(vec![
+            // Android all-Ok
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            // Web missing → capped to Partial
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Missing),
+        ]);
+        let steps = build_steps(&report, true);
+
+        // Web leaf must be Partial (not Missing).
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_eq!(
+            web.status,
+            StepStatus::Partial,
+            "PlatformWeb must be Partial when browser is Missing (cap applied)"
+        );
+
+        // Platforms parent must roll up to at most Partial.
+        let platforms = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms step must be present");
+        assert_ne!(
+            platforms.status,
+            StepStatus::Missing,
+            "Platforms parent must not be Missing when Web is Partial (non-blocking)"
+        );
+        assert_eq!(
+            platforms.status,
+            StepStatus::Partial,
+            "Platforms parent must be Partial when Android is Ok and Web is Partial"
+        );
+    }
+
+    /// `flutter_now_live()` must return `true` when `FlutterSdk` is `Ok`,
+    /// regardless of whether the Web leaf is `Partial` (browser missing).
+    ///
+    /// The handback / auto-close predicate reads `FlutterSdk` status only;
+    /// an absent browser must not block the handback.
+    #[test]
+    fn test_flutter_now_live_unaffected_by_web_partial() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Missing),
+        ]);
+        state.apply_report(report);
+
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk is Ok, \
+             even when the Web browser is Missing (non-blocking)"
         );
     }
 }
