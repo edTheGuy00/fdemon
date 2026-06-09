@@ -50,13 +50,13 @@ pub enum WizardStepKind {
     /// Android SDK tools: cmdline-tools, platform-tools, platform, build-tools, licenses, JDK.
     /// Leaf under `Platforms`; only visible when `platforms_expanded == true`.
     PlatformAndroid,
-    /// iOS platform support (placeholder — leaf under `Platforms`; macOS only).
+    /// iOS platform support — live detect+guided-only leaf (Xcode + CocoaPods probe, macOS only).
     PlatformIos,
-    /// macOS platform support (placeholder — leaf under `Platforms`; macOS only).
+    /// macOS platform support — live detect+guided-only leaf (Xcode + CocoaPods probe, macOS only).
     PlatformMacos,
-    /// Web platform support (placeholder — leaf under `Platforms`; all hosts).
+    /// Web platform support — live detect+guided-only leaf (browser probe, all hosts).
     PlatformWeb,
-    /// Windows platform support (placeholder — leaf under `Platforms`; Windows only).
+    /// Windows platform support (placeholder — leaf under `Platforms`; Windows only; arrives in Phase 5).
     PlatformWindows,
     /// PATH and environment configuration (informational step; no component check).
     PathConfig,
