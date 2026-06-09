@@ -872,22 +872,32 @@ pub(crate) fn is_jdk_actionable(components: &[ComponentCheck]) -> bool {
 ///
 /// `Pending` is treated as neutral: it represents a placeholder leaf that has
 /// not yet been probed, so it does not degrade the parent status.
+///
+/// Performs a single pass over the slice with no heap allocation.
 fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
-    let non_pending: Vec<StepStatus> = statuses
-        .iter()
-        .copied()
-        .filter(|s| *s != StepStatus::Pending)
-        .collect();
-    if non_pending.is_empty() {
-        return StepStatus::Pending;
+    let mut any_real = false;
+    let mut any_missing = false;
+    let mut any_partial = false;
+    for &s in statuses {
+        if s == StepStatus::Pending {
+            continue;
+        }
+        any_real = true;
+        match s {
+            StepStatus::Missing => any_missing = true,
+            StepStatus::Partial => any_partial = true,
+            _ => {}
+        }
     }
-    if non_pending.contains(&StepStatus::Missing) {
-        return StepStatus::Missing;
+    if !any_real {
+        StepStatus::Pending
+    } else if any_missing {
+        StepStatus::Missing
+    } else if any_partial {
+        StepStatus::Partial
+    } else {
+        StepStatus::Ok
     }
-    if non_pending.contains(&StepStatus::Partial) {
-        return StepStatus::Partial;
-    }
-    StepStatus::Ok
 }
 
 /// Map a [`ToolchainReport`]'s components into the wizard UI steps.
@@ -991,44 +1001,79 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
     // Pure function of the report — no I/O in the TEA update() path.
     let prereq_guided = prerequisites_guided_commands(report, &prerequisites);
 
-    // Build leaf rows (only used when expanded == true).
-    // PlatformAndroid: carries the real components and JDK guided command.
-    let android_leaf = WizardStep {
-        kind: WizardStepKind::PlatformAndroid,
-        title: "Android".to_string(),
-        status: android_status,
-        components: platform_android_components,
-        guided_commands: android_guided,
-        indent: 1,
+    // Build the full platform leaf set unconditionally (single host-gating site).
+    //
+    // All leaves are constructed here; only PlatformAndroid carries real components
+    // and a non-Pending status in Phase 2. The other leaves are Pending placeholders
+    // whose detection and guided commands arrive in Phases 3–5.
+    //
+    // Leaf order: Android → Web → iOS/macOS (macOS only) → Windows (Windows only).
+    // This matches the emission order below and keeps the host-gating match in one place.
+    let platform_leaves: Vec<WizardStep> = {
+        let mut leaves = Vec::new();
+
+        // PlatformAndroid: all hosts; carries the real components and JDK guided command.
+        leaves.push(WizardStep {
+            kind: WizardStepKind::PlatformAndroid,
+            title: "Android".to_string(),
+            status: android_status,
+            components: platform_android_components,
+            guided_commands: android_guided,
+            indent: 1,
+        });
+
+        // PlatformWeb: all hosts (placeholder — Pending).
+        leaves.push(WizardStep {
+            kind: WizardStepKind::PlatformWeb,
+            title: "Web".to_string(),
+            status: StepStatus::Pending,
+            components: Vec::new(),
+            guided_commands: Vec::new(),
+            indent: 1,
+        });
+
+        // macOS-only leaves (placeholders — Pending).
+        if report.platform == HostPlatform::MacOs {
+            leaves.push(WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: StepStatus::Pending,
+                components: Vec::new(),
+                guided_commands: Vec::new(),
+                indent: 1,
+            });
+            leaves.push(WizardStep {
+                kind: WizardStepKind::PlatformMacos,
+                title: "macOS".to_string(),
+                status: StepStatus::Pending,
+                components: Vec::new(),
+                guided_commands: Vec::new(),
+                indent: 1,
+            });
+        }
+
+        // Windows-only leaf (placeholder — Pending).
+        if report.platform == HostPlatform::Windows {
+            leaves.push(WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: StepStatus::Pending,
+                components: Vec::new(),
+                guided_commands: Vec::new(),
+                indent: 1,
+            });
+        }
+
+        leaves
     };
 
-    // Compute the Platforms parent status by rolling up the leaf statuses.
-    // In Phase 2 only PlatformAndroid is real; other leaves are Pending placeholders.
-    // rollup_step_statuses treats Pending as neutral, so the parent reflects
-    // only the Android leaf's real status in this phase.
-    let platforms_parent_status = {
-        let leaf_statuses = if expanded {
-            // When expanded, collect all leaf statuses (platform-gated below).
-            let mut statuses = vec![android_status]; // Android always present
-                                                     // Placeholder leaves are Pending — contribute neutrally.
-            match report.platform {
-                HostPlatform::MacOs => {
-                    statuses.push(StepStatus::Pending); // PlatformIos
-                    statuses.push(StepStatus::Pending); // PlatformMacos
-                }
-                HostPlatform::Windows => {
-                    statuses.push(StepStatus::Pending); // PlatformWindows
-                }
-                _ => {}
-            }
-            statuses.push(StepStatus::Pending); // PlatformWeb always present
-            statuses
-        } else {
-            // Collapsed: roll up the android status directly (only real leaf).
-            vec![android_status]
-        };
-        rollup_step_statuses(&leaf_statuses)
-    };
+    // Derive the Platforms parent status by rolling up the built leaves' statuses.
+    //
+    // In Phase 2 only PlatformAndroid carries a real status; the other leaves are
+    // Pending (neutral), so the parent reflects Android's status in both collapsed
+    // and expanded projections — identical to the pre-refactor behaviour.
+    let leaf_statuses: Vec<StepStatus> = platform_leaves.iter().map(|l| l.status).collect();
+    let platforms_parent_status = rollup_step_statuses(&leaf_statuses);
 
     let mut steps: Vec<WizardStep> = Vec::new();
 
@@ -1052,52 +1097,10 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
         indent: 0,
     });
 
-    // 3. Platform leaves (only when expanded), host-gated by report.platform
+    // 3. Platform leaves — emitted only when expanded.
+    //    The leaves were built above (single host-gating site); push them now.
     if expanded {
-        // PlatformAndroid: all hosts
-        steps.push(android_leaf);
-
-        // PlatformWeb: all hosts
-        steps.push(WizardStep {
-            kind: WizardStepKind::PlatformWeb,
-            title: "Web".to_string(),
-            status: StepStatus::Pending,
-            components: Vec::new(),
-            guided_commands: Vec::new(),
-            indent: 1,
-        });
-
-        // macOS-only leaves
-        if report.platform == HostPlatform::MacOs {
-            steps.push(WizardStep {
-                kind: WizardStepKind::PlatformIos,
-                title: "iOS".to_string(),
-                status: StepStatus::Pending,
-                components: Vec::new(),
-                guided_commands: Vec::new(),
-                indent: 1,
-            });
-            steps.push(WizardStep {
-                kind: WizardStepKind::PlatformMacos,
-                title: "macOS".to_string(),
-                status: StepStatus::Pending,
-                components: Vec::new(),
-                guided_commands: Vec::new(),
-                indent: 1,
-            });
-        }
-
-        // Windows-only leaf
-        if report.platform == HostPlatform::Windows {
-            steps.push(WizardStep {
-                kind: WizardStepKind::PlatformWindows,
-                title: "Windows".to_string(),
-                status: StepStatus::Pending,
-                components: Vec::new(),
-                guided_commands: Vec::new(),
-                indent: 1,
-            });
-        }
+        steps.extend(platform_leaves);
     }
 
     // 4. FlutterSdk
@@ -3949,6 +3952,19 @@ mod tests {
     #[test]
     fn test_rollup_step_statuses_empty_returns_pending() {
         assert_eq!(rollup_step_statuses(&[]), StepStatus::Pending);
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_single_ok_returns_ok() {
+        assert_eq!(rollup_step_statuses(&[StepStatus::Ok]), StepStatus::Ok);
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_ok_with_pending_returns_ok() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Ok, StepStatus::Pending]),
+            StepStatus::Ok
+        );
     }
 
     #[test]
