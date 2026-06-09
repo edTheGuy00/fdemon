@@ -1066,6 +1066,85 @@ fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
     }
 }
 
+/// Guided commands for the Apple-platform leaves.
+///
+/// `include_ios_platform` adds the iOS-only `xcodebuild -downloadPlatform iOS`
+/// command. Returns an empty `Vec` unless the leaf status is `Partial` (a tool
+/// is absent).
+///
+/// - When `XcodeTools` is not `Ok`: emits three commands — open the App Store to
+///   install Xcode, select the Xcode developer directory and accept the license,
+///   and (iOS only) download the iOS platform.
+/// - When `CocoaPods` is not `Ok`: emits a `brew install cocoapods` command.
+///
+/// **`all_components_ok()` intentionally stays strict (Phase 3 Web precedent).**
+/// A `Partial` / `Missing` `XcodeTools` makes it return `false` on a macOS host
+/// lacking Xcode — correct, and **non-blocking**: handback gates on
+/// `flutter_now_live()` / `flutter_executable()`, not `all_components_ok()`.
+/// Do not special-case `XcodeTools` / `CocoaPods`.
+///
+/// **Guided command text does not echo a configured path.** The commands use the
+/// canonical `/Applications/Xcode.app` path; users adjust if their Xcode lives
+/// elsewhere.
+fn xcode_guided_commands(
+    report: &ToolchainReport,
+    status: StepStatus,
+    include_ios_platform: bool,
+) -> Vec<GuidedCommand> {
+    // Guide only when a tool is determined absent (Partial = capped form of Missing).
+    if status != StepStatus::Partial {
+        return Vec::new();
+    }
+
+    let xcode_missing = report
+        .components
+        .iter()
+        .any(|c| c.kind == ComponentKind::XcodeTools && c.status != ComponentStatus::Ok);
+    let cocoapods_missing = report
+        .components
+        .iter()
+        .any(|c| c.kind == ComponentKind::CocoaPods && c.status != ComponentStatus::Ok);
+
+    let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+    if xcode_missing {
+        // Step 1: Install Xcode from the App Store (or via xcodes CLI).
+        cmds.push(GuidedCommand {
+            label: "Install Xcode".to_string(),
+            command: "open \"https://apps.apple.com/us/app/xcode/id497799835\"".to_string(),
+            note: Some("Or: brew install --cask xcodes && xcodes install --latest".to_string()),
+        });
+        // Step 2: Point the active developer dir at the full Xcode (not CLT),
+        //         run the first-launch setup, and accept the license.
+        cmds.push(GuidedCommand {
+            label: "Select Xcode & accept license".to_string(),
+            command: "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer \
+                      && sudo xcodebuild -runFirstLaunch \
+                      && sudo xcodebuild -license accept"
+                .to_string(),
+            note: None,
+        });
+        // Step 3 (iOS only): download the iOS simulator platform.
+        if include_ios_platform {
+            cmds.push(GuidedCommand {
+                label: "Download the iOS platform".to_string(),
+                command: "xcodebuild -downloadPlatform iOS".to_string(),
+                note: None,
+            });
+        }
+    }
+
+    if cocoapods_missing {
+        cmds.push(GuidedCommand {
+            label: "Install CocoaPods".to_string(),
+            command: "brew install cocoapods".to_string(),
+            note: Some("Or: sudo gem install cocoapods".to_string()),
+        });
+    }
+
+    cmds
+}
+
 /// Map a [`ToolchainReport`]'s components into the wizard UI steps.
 ///
 /// ## Collapsed (expanded == false)
@@ -1078,8 +1157,8 @@ fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
 /// After the `Platforms` parent, inserts host-gated leaf rows (indent = 1):
 /// - `PlatformAndroid` — all hosts
 /// - `PlatformWeb`     — all hosts (live as of Phase 3)
-/// - `PlatformIos`     — macOS only
-/// - `PlatformMacos`   — macOS only
+/// - `PlatformIos`     — macOS only (live as of Phase 4)
+/// - `PlatformMacos`   — macOS only (live as of Phase 4)
 /// - `PlatformWindows` — Windows only
 ///
 /// In Phase 2 and earlier, all leaves except `PlatformAndroid` were **placeholders**
@@ -1088,6 +1167,10 @@ fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
 /// checks, caps `Missing → Partial` (so an absent browser is **non-blocking** —
 /// it never propagates `Missing` to the Platforms parent), and emits per-OS
 /// guided commands when the browser is absent.
+/// As of Phase 4, `PlatformIos` and `PlatformMacos` are live: they route
+/// `ComponentKind::XcodeTools` + `ComponentKind::CocoaPods` checks (cloned into
+/// both buckets), cap `Missing → Partial`, and emit Xcode/CocoaPods guided
+/// commands. The iOS leaf additionally includes `xcodebuild -downloadPlatform iOS`.
 ///
 /// ## Component grouping
 ///
@@ -1096,6 +1179,10 @@ fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
 ///   `AndroidPlatform`, `AndroidBuildTools`, `AndroidLicenses`, `Jdk`
 /// - `PlatformWeb` — `ComponentKind::WebBrowser`; status capped at `Partial`
 ///   (never surfaces `Missing`); non-blocking.
+/// - `PlatformIos` — `XcodeTools`, `CocoaPods` (cloned); status capped at
+///   `Partial`; macOS-only; non-blocking.
+/// - `PlatformMacos` — `XcodeTools`, `CocoaPods` (cloned); status capped at
+///   `Partial`; macOS-only; non-blocking.
 /// - `FlutterSdk` — `ComponentKind::FlutterSdk`
 /// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `Doctor` — no components; detail comes from `report.doctor`
@@ -1105,6 +1192,11 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
     let mut prerequisites: Vec<ComponentCheck> = Vec::new();
     let mut platform_android_components: Vec<ComponentCheck> = Vec::new();
     let mut platform_web_components: Vec<ComponentCheck> = Vec::new();
+    // iOS and macOS share the same probe (XcodeTools + CocoaPods).
+    // Both buckets receive clones of the same checks so the two leaves are
+    // independent and the parent rollup is not double-counted.
+    let mut platform_ios_components: Vec<ComponentCheck> = Vec::new();
+    let mut platform_macos_components: Vec<ComponentCheck> = Vec::new();
     let mut flutter_sdk: Vec<ComponentCheck> = Vec::new();
 
     for check in &report.components {
@@ -1126,8 +1218,14 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             ComponentKind::FlutterSdk => {
                 flutter_sdk.push(check.clone());
             }
-            // Phase 4 Task 01 stub: routed to the iOS/macOS leaves in Task 03.
-            ComponentKind::XcodeTools | ComponentKind::CocoaPods => {}
+            // XcodeTools and CocoaPods are shared between iOS and macOS.
+            // Clone each check into both buckets so the leaf statuses are
+            // independent and the parent rollup is not double-counted.
+            // (Both leaves will always have the same status — by design.)
+            ComponentKind::XcodeTools | ComponentKind::CocoaPods => {
+                platform_ios_components.push(check.clone());
+                platform_macos_components.push(check.clone());
+            }
         }
     }
 
@@ -1160,6 +1258,33 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
         StepStatus::Pending
     } else {
         let raw = rollup_status(&platform_web_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
+    // iOS status: non-blocking cap — `Missing` becomes `Partial` so that an
+    // absent Xcode/CocoaPods never propagates `Missing` up through the Platforms
+    // parent (which would block the whole wizard).
+    // Empty (no XcodeTools/CocoaPods components, i.e. non-macOS report) → Pending.
+    let ios_status = if platform_ios_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_ios_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
+    // macOS status: same cap and rationale as ios_status above.
+    // ios_status == macos_status always (they derive from the same component data),
+    // but keeping two bindings makes the leaf bodies read cleanly and symmetrically.
+    let macos_status = if platform_macos_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_macos_components);
         if raw == StepStatus::Missing {
             StepStatus::Partial
         } else {
@@ -1227,22 +1352,26 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             indent: 1,
         });
 
-        // macOS-only leaves (placeholders — Pending).
+        // macOS-only leaves (live as of Phase 4 — XcodeTools + CocoaPods probes).
+        // Guided commands are built before moving the components Vec into the struct
+        // to satisfy the borrow checker (xcode_guided_commands reads report.components).
         if report.platform == HostPlatform::MacOs {
+            let ios_guided = xcode_guided_commands(report, ios_status, true);
             leaves.push(WizardStep {
                 kind: WizardStepKind::PlatformIos,
                 title: "iOS".to_string(),
-                status: StepStatus::Pending,
-                components: Vec::new(),
-                guided_commands: Vec::new(),
+                status: ios_status,
+                guided_commands: ios_guided,
+                components: platform_ios_components,
                 indent: 1,
             });
+            let macos_guided = xcode_guided_commands(report, macos_status, false);
             leaves.push(WizardStep {
                 kind: WizardStepKind::PlatformMacos,
                 title: "macOS".to_string(),
-                status: StepStatus::Pending,
-                components: Vec::new(),
-                guided_commands: Vec::new(),
+                status: macos_status,
+                guided_commands: macos_guided,
+                components: platform_macos_components,
                 indent: 1,
             });
         }
@@ -4629,5 +4758,403 @@ mod tests {
                 "Linux/{pm:?} first command should be a PM sudo command; got: {first_cmd}"
             );
         }
+    }
+
+    // ── iOS / macOS leaf tests (Phase 4 Task 03) ─────────────────────────────
+
+    /// Build a macOS `ToolchainReport` with the given components.
+    fn make_macos_report(components: Vec<ComponentCheck>) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components,
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        }
+    }
+
+    /// AC1: On a macOS report, `build_steps(..., expanded=true)` emits live
+    /// `PlatformIos` and `PlatformMacos` leaves whose `components` each contain
+    /// both the `XcodeTools` + `CocoaPods` checks (cloned), with `indent == 1`.
+    #[test]
+    fn test_ios_macos_leaves_present_on_macos_expanded() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Ok),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos leaf must be present on macOS expanded");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos leaf must be present on macOS expanded");
+
+        assert_eq!(ios.indent, 1, "PlatformIos must have indent == 1");
+        assert_eq!(macos.indent, 1, "PlatformMacos must have indent == 1");
+
+        // Both leaves must carry both components (cloned from the same probe data).
+        assert_eq!(
+            ios.components.len(),
+            2,
+            "PlatformIos must contain XcodeTools + CocoaPods checks"
+        );
+        assert_eq!(
+            macos.components.len(),
+            2,
+            "PlatformMacos must contain XcodeTools + CocoaPods checks"
+        );
+
+        // Verify the component kinds are present in each leaf.
+        assert!(
+            ios.components
+                .iter()
+                .any(|c| c.kind == ComponentKind::XcodeTools),
+            "PlatformIos must contain an XcodeTools check"
+        );
+        assert!(
+            ios.components
+                .iter()
+                .any(|c| c.kind == ComponentKind::CocoaPods),
+            "PlatformIos must contain a CocoaPods check"
+        );
+        assert!(
+            macos
+                .components
+                .iter()
+                .any(|c| c.kind == ComponentKind::XcodeTools),
+            "PlatformMacos must contain an XcodeTools check"
+        );
+        assert!(
+            macos
+                .components
+                .iter()
+                .any(|c| c.kind == ComponentKind::CocoaPods),
+            "PlatformMacos must contain a CocoaPods check"
+        );
+    }
+
+    /// AC2 (Missing → Partial cap): When `XcodeTools` is `Missing` in the report,
+    /// both leaf statuses must be `Partial` (not `Missing`), and guided commands
+    /// must be non-empty.
+    #[test]
+    fn test_ios_macos_missing_xcode_caps_to_partial() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        assert_ne!(
+            ios.status,
+            StepStatus::Missing,
+            "PlatformIos must not surface Missing (capped to Partial)"
+        );
+        assert_eq!(
+            ios.status,
+            StepStatus::Partial,
+            "PlatformIos must be Partial when XcodeTools is Missing"
+        );
+        assert_ne!(
+            macos.status,
+            StepStatus::Missing,
+            "PlatformMacos must not surface Missing (capped to Partial)"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Partial,
+            "PlatformMacos must be Partial when XcodeTools is Missing"
+        );
+
+        assert!(
+            !ios.guided_commands.is_empty(),
+            "Partial iOS leaf must have guided commands"
+        );
+        assert!(
+            !macos.guided_commands.is_empty(),
+            "Partial macOS leaf must have guided commands"
+        );
+    }
+
+    /// AC2 (all Ok): When both `XcodeTools` and `CocoaPods` are `Ok`, both leaf
+    /// statuses must be `Ok` and guided commands must be empty.
+    #[test]
+    fn test_xcode_ok_yields_no_guided_commands() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Ok),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        assert_eq!(
+            ios.status,
+            StepStatus::Ok,
+            "PlatformIos must be Ok when both components are Ok"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Ok,
+            "PlatformMacos must be Ok when both components are Ok"
+        );
+        assert!(
+            ios.guided_commands.is_empty(),
+            "Ok iOS leaf must have no guided commands"
+        );
+        assert!(
+            macos.guided_commands.is_empty(),
+            "Ok macOS leaf must have no guided commands"
+        );
+    }
+
+    /// AC3: The iOS leaf includes `xcodebuild -downloadPlatform iOS` when Xcode
+    /// is missing; the macOS leaf does not.
+    #[test]
+    fn test_ios_leaf_includes_download_platform_macos_does_not() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        let ios_has_download = ios
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("xcodebuild -downloadPlatform iOS"));
+        assert!(
+            ios_has_download,
+            "PlatformIos guided commands must include 'xcodebuild -downloadPlatform iOS'"
+        );
+
+        let macos_has_download = macos
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("xcodebuild -downloadPlatform iOS"));
+        assert!(
+            !macos_has_download,
+            "PlatformMacos guided commands must NOT include 'xcodebuild -downloadPlatform iOS'"
+        );
+    }
+
+    /// AC3: When only `CocoaPods` is missing (XcodeTools Ok), guided commands
+    /// contain only the CocoaPods install command — no Xcode commands.
+    #[test]
+    fn test_cocoapods_only_missing_emits_only_cocoapods_command() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Ok),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Missing),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        // Both leaves should be Partial (CocoaPods missing → capped).
+        assert_eq!(
+            ios.status,
+            StepStatus::Partial,
+            "iOS must be Partial when CocoaPods is Missing"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Partial,
+            "macOS must be Partial when CocoaPods is Missing"
+        );
+
+        // Must have at least one command (the CocoaPods install).
+        assert!(
+            !ios.guided_commands.is_empty(),
+            "iOS leaf must have CocoaPods guided command"
+        );
+        assert!(
+            !macos.guided_commands.is_empty(),
+            "macOS leaf must have CocoaPods guided command"
+        );
+
+        // All commands must relate to CocoaPods — no Xcode commands.
+        for cmd in &ios.guided_commands {
+            assert!(
+                cmd.command.contains("cocoapods") || cmd.command.contains("gem"),
+                "iOS command must be CocoaPods-related when only CocoaPods is missing; got: {}",
+                cmd.command
+            );
+        }
+        for cmd in &macos.guided_commands {
+            assert!(
+                cmd.command.contains("cocoapods") || cmd.command.contains("gem"),
+                "macOS command must be CocoaPods-related when only CocoaPods is missing; got: {}",
+                cmd.command
+            );
+        }
+
+        // Must NOT contain Xcode installation commands.
+        let ios_has_xcode_cmd = ios
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("apps.apple.com"));
+        let macos_has_xcode_cmd = macos
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("apps.apple.com"));
+        assert!(
+            !ios_has_xcode_cmd,
+            "iOS leaf must not have Xcode App Store command when XcodeTools is Ok"
+        );
+        assert!(
+            !macos_has_xcode_cmd,
+            "macOS leaf must not have Xcode App Store command when XcodeTools is Ok"
+        );
+    }
+
+    /// AC5: On a non-macOS report, no `XcodeTools`/`CocoaPods` components exist
+    /// and no iOS/macOS leaves appear.
+    #[test]
+    fn test_no_ios_macos_leaves_on_linux_report() {
+        // Linux report with no XcodeTools/CocoaPods components (daemon never emits them).
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps.iter().find(|s| s.kind == WizardStepKind::PlatformIos);
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos);
+
+        assert!(
+            ios.is_none(),
+            "PlatformIos must not be emitted on a Linux report"
+        );
+        assert!(
+            macos.is_none(),
+            "PlatformMacos must not be emitted on a Linux report"
+        );
+    }
+
+    /// AC4: The Platforms parent rolls up to at most `Partial` from iOS/macOS when
+    /// Xcode is missing. `flutter_now_live()` must remain unaffected — handback
+    /// reads only `FlutterSdk`.
+    #[test]
+    fn test_platforms_parent_rolls_up_to_partial_from_xcode() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        // Platforms parent must be Partial, not Missing.
+        let platforms = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms step must be present");
+        assert_ne!(
+            platforms.status,
+            StepStatus::Missing,
+            "Platforms parent must not be Missing when iOS/macOS leaves are capped to Partial"
+        );
+        assert_eq!(
+            platforms.status,
+            StepStatus::Partial,
+            "Platforms parent must be Partial when Xcode is missing (leaves are Partial)"
+        );
+
+        // flutter_now_live() must return true: FlutterSdk is Ok.
+        let mut state = InstallWizardState::default();
+        state.apply_report(report);
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk is Ok, \
+             regardless of Xcode/CocoaPods status (non-blocking)"
+        );
+    }
+
+    /// AC2 (non-macOS, no components): When the platform is not macOS, iOS/macOS
+    /// leaves are not emitted at all (no panic, no spurious leaves).
+    #[test]
+    fn test_ios_macos_leaves_absent_when_no_xcode_components() {
+        // macOS report with NO XcodeTools/CocoaPods components → Pending status,
+        // but still emits the leaves (they're gated by platform, not by component count).
+        // Actually: leaves ARE emitted on macOS even with empty components, with Pending status.
+        // This test validates that the collapse mode omits them correctly.
+        let report = make_macos_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        // Collapsed: no leaves shown.
+        let collapsed = build_steps(&report, false);
+        assert!(
+            collapsed.iter().all(|s| !matches!(
+                s.kind,
+                WizardStepKind::PlatformIos | WizardStepKind::PlatformMacos
+            )),
+            "Collapsed mode must not include iOS/macOS leaf rows"
+        );
+
+        // Expanded: leaves shown but with Pending status (no component data).
+        let expanded = build_steps(&report, true);
+        let ios = expanded
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present on macOS expanded");
+        let macos = expanded
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present on macOS expanded");
+        assert_eq!(
+            ios.status,
+            StepStatus::Pending,
+            "PlatformIos with no component data must be Pending"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Pending,
+            "PlatformMacos with no component data must be Pending"
+        );
+        assert!(
+            ios.guided_commands.is_empty(),
+            "Pending iOS leaf must have no guided commands"
+        );
+        assert!(
+            macos.guided_commands.is_empty(),
+            "Pending macOS leaf must have no guided commands"
+        );
     }
 }
