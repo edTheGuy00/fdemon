@@ -55,7 +55,7 @@ const HEADER_HEIGHT: u16 = 2;
 
 /// Height of the action hint row at the bottom of the detail body.
 ///
-/// Derived from: 1 row for the "▶ Press Enter to …" / "Available in a later phase" hint.
+/// Derived from: 1 row for the "▶ Press Enter to …" / "coming soon" hint.
 const ACTION_HINT_HEIGHT: u16 = 1;
 
 /// Height of the guided-command section header line.
