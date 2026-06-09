@@ -161,17 +161,30 @@ Watch these specific tests (they exercise the renumbered indices):
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Swapped FlutterSdk and PathConfig blocks in `build_steps()` vec; updated doc-comment step order; renumbered 3 index-based tests (build_steps assertion, 2x noop_for_no_command_step) |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Rewrote soft-tip wording in PathConfig arm; renumbered 13 index-based tests (7 FlutterSdk 3→2, 6 PathConfig 2→3) |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Updated `make_state_components()` fixture (3→2); updated 2 tests using index; updated 4 comment-only `(index 3)→(index 2)` sites |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Pure reorder, no logic changes**: Only the `vec![]` order in `build_steps()` and the index-based test references changed. All `match WizardStepKind` arms, the `path_config_status` derivation, and the "Install Flutter first" gate are untouched.
+2. **Soft tip wording**: Changed "run Android Tools first" to "run the Android Tools step first" to be specific about the step name. Logic unchanged — still only emitted when no Android SDK is discoverable.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-app --lib install_wizard` — Passed (256 tests)
+- `cargo test -p fdemon-tui --lib install_wizard` — Passed (124 tests)
+- `cargo test --workspace --lib` — Passed (1487 tests)
+- `cargo fmt --all` — Clean (no formatting changes)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+
 ### Risks/Limitations
+
+1. **Display-only change**: PathConfig step index changed from 2 to 3. Any code that references PathConfig by index (rather than by `WizardStepKind::PathConfig` variant or `position()` search) would be affected, but all such sites were in tests which are now updated.

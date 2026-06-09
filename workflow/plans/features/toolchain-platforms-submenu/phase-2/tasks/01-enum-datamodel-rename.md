@@ -137,6 +137,25 @@ Apply the rename `WizardStepKind::AndroidTools` → `PlatformAndroid` in all tes
   → parent `Ok`.
 - Fix any `~25` `build_steps(&report)` call sites to pass the new `expanded` arg (`false` unless the test
   needs leaves).
+- **Migrate hardcoded `selected_index = N` literals to kind-lookup (Phase 1 review carry-forward).** The
+  collapsed-list reshuffle (Platforms parent now at index 1; FlutterSdk/PathConfig/Doctor shift) and the
+  expanded projection (leaves inserted mid-list) invalidate the `~20` literal `selected_index = N` test
+  values renumbered in Phase 1 (`actions.rs`, `state.rs`, `step_detail.rs`). **Do not re-renumber them by
+  hand** — replace each with a kind-based lookup so the tests stop tracking absolute positions:
+  ```rust
+  // before:  state.install_wizard_state.selected_index = 2; // FlutterSdk
+  // after:
+  let steps = build_steps(&report, /* expanded */ false);
+  state.install_wizard_state.selected_index =
+      steps.iter().position(|s| s.kind == WizardStepKind::FlutterSdk).unwrap();
+  ```
+  This is the same `position(|s| s.kind == …)` pattern the order-independent `select_step()` tests already
+  use. It eliminates the silent-mis-target trap flagged in the Phase 1 review (two adjacent steps can both
+  satisfy a weak assertion — e.g. both `FlutterSdk` and `PathConfig` have 0 guided commands — so a stale
+  literal index passes against the wrong step). For tests selecting an expanded-only leaf
+  (`PlatformAndroid`), build with `expanded = true` and set `platforms_expanded = true` so the index
+  resolves. Keep the existing `assert_eq!(selected_step().kind, …)` precondition asserts — with kind-lookup
+  they become a tautology guard but document intent; you may drop the now-redundant `// index N` comments.
 
 ### Acceptance Criteria
 
@@ -149,7 +168,10 @@ Apply the rename `WizardStepKind::AndroidTools` → `PlatformAndroid` in all tes
 4. `PlatformAndroid` keeps the JDK gate + `AndroidStepParams` dispatch; placeholder leaves return
    "Available in a later phase" and do not panic/hang.
 5. No `WizardStepKind::AndroidTools` reference remains anywhere.
-6. `cargo test --workspace --lib` green; `cargo fmt --all` + `cargo clippy --workspace -- -D warnings` clean.
+6. Every test touched by this task resolves its `selected_index` via `position(|s| s.kind == …)` (or
+   `select_step()`), not a bare `selected_index = N` literal — the Phase 1 index-literal pattern is retired
+   in the files this task edits (Phase 1 review LOW-1).
+7. `cargo test --workspace --lib` green; `cargo fmt --all` + `cargo clippy --workspace -- -D warnings` clean.
 
 ### Testing
 
@@ -173,6 +195,10 @@ parent-status rollup.
 - Keep `selected_command_index`, the JDK gate predicate, and the completion chain semantically unchanged —
   only names move.
 - Host gating reads `report.platform` only (keep `build_steps` pure/testable).
+- **Prefer kind-lookup over literal indices in all touched/new tests** (see Tests §6). Phase 1's review
+  approved its literal renumber as a one-time minimal diff but explicitly recommended this migration here so
+  the index churn from the Platforms reshuffle is absorbed structurally rather than by another hand-renumber.
+  See `workflow/reviews/features/toolchain-platforms-submenu-phase-1/REVIEW.md` (LOW-1).
 
 ---
 

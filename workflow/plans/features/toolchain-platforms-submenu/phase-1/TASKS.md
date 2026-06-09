@@ -28,8 +28,8 @@ tests that hardcode step indices, one soft-tip wording, and the website docs.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-reorder-steps-and-tests](tasks/01-reorder-steps-and-tests.md) | Not Started | - | 1–2h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `widgets/install_wizard/step_detail.rs` |
-| 2 | [02-update-website-docs](tasks/02-update-website-docs.md) | Not Started | - | 0.5h | `website/src/pages/docs/toolchain.rs` |
+| 1 | [01-reorder-steps-and-tests](tasks/01-reorder-steps-and-tests.md) | ✅ Done (validated, merged) | - | 1–2h | `install_wizard/state.rs`, `handler/install_wizard/actions.rs`, `widgets/install_wizard/step_detail.rs` |
+| 2 | [02-update-website-docs](tasks/02-update-website-docs.md) | ✅ Done (validated, merged) | - | 0.5h | `website/src/pages/docs/toolchain.rs` |
 
 ## File Overlap Analysis
 

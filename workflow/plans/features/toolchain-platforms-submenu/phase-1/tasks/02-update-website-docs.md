@@ -95,17 +95,25 @@ Keep it factually correct and brief; do not introduce Platforms-submenu content 
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| | |
+| `website/src/pages/docs/toolchain.rs` | (1) Swapped ASCII-art rows 3/4 so Flutter SDK appears above PATH Config; (2) Swapped table rows 3/4 — "3. Flutter SDK" now precedes "4. PATH Config" with correct descriptions; (3) Replaced "Step order vs. install order" note to state the UI mirrors dependency order without implying PATH precedes Flutter SDK. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Info box rewrite**: Chose the "simplify" option from the task spec — the new note says "the UI order mirrors the dependency order" rather than keeping the old contrast sentence. This is accurate and concise; the old sentence's contrast was no longer meaningful once the orders align.
+2. **Build verification from main repo**: The worktree lives inside the fdemon workspace directory, so `cargo check` in the worktree's `website/` sub-directory hits a "believes it's in a workspace" error (cargo walks up and finds the parent Cargo.toml, but the exclusion path doesn't match the worktree path). Verified the unchanged website crate compiles cleanly from the main repo instead — the change is pure string-literal swaps with no structural Rust impact.
+
 ### Testing Performed
 
+- `cargo check --target wasm32-unknown-unknown` from `/home/ed/Dev/personal/fdemon/website` — Passed (1 warning, unrelated to this change)
+- Visual diff review of all three change sites confirms correct swap order and alignment
+
 ### Risks/Limitations
+
+1. **Task 01 not yet applied**: The underlying `build_steps()` in `state.rs` still shows the old order (PathConfig at index 2, FlutterSdk at index 3). This doc update is intentionally ahead of task 01 — the tasks are designed to run in parallel. Once task 01 lands, the code and docs will agree.

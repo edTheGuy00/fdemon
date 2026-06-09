@@ -110,3 +110,8 @@ Phase 2 is complete when:
   avoid editing it twice. (Tracked as a Phase-5 / wrap-up docs task.)
 - Snapshot line numbers in the task files **will drift** (Phase 1 already shifted some) — locate by
   symbol/test-name/variant, not absolute line.
+- **Retire the literal `selected_index = N` test pattern (Phase 1 review LOW-1).** The Platforms reshuffle
+  invalidates the ~20 hardcoded index literals renumbered in Phase 1. Task 01 must migrate every test it
+  touches to `position(|s| s.kind == …)` kind-lookup rather than hand-renumbering literals again — this
+  removes the silent-mis-target trap where two adjacent steps both satisfy a weak assertion. See
+  `workflow/reviews/features/toolchain-platforms-submenu-phase-1/REVIEW.md` and Task 01 §6 + acceptance #6.
