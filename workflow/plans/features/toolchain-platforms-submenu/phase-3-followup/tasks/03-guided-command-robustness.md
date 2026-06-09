@@ -96,3 +96,37 @@ New/updated tests:
   `build_steps`/the helper pure-on-report — no settings param, no I/O.
 - Per-distro detection (Debian `chromium` vs Ubuntu snap) is explicitly out of scope — this is framing +
   fallback robustness, tracked from review finding C as a known limitation otherwise.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `CHROME_DOWNLOAD_URL` + `CHROME_EXECUTABLE_NOTE` consts; refactored `web_browser_guided_commands` to emit the download-URL fallback on every platform arm, gate Windows winget on `report.winget_available`, use the consts everywhere; updated doc comment; added 4 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Linux arms now emit 2 commands (PM hint + download URL)** instead of 1: the PM-specific `sudo install` command is retained as a convenience (first command), and the cross-distro `CHROME_DOWNLOAD_URL` fallback is always appended as the second. This matches the criterion of "not only a PM command".
+2. **Apt note updated for distro variance**: The Apt arm's note now acknowledges that `chromium-browser` is the Ubuntu name and `chromium` is the Debian name, explicitly pointing to `CHROME_DOWNLOAD_URL` as the safe fallback — without attempting per-distro detection (out of scope).
+3. **Windows winget gating**: When `report.winget_available == false`, only the download-URL command is emitted. When `true`, the winget command is prepended as a convenience, and the download URL follows. This satisfies criterion 2 (the failed case from the prior attempt).
+4. **macOS note extended**: The macOS note now incorporates `CHROME_EXECUTABLE_NOTE` via `format!`, eliminating one more inline duplicate.
+5. **`map_or(false, …)` replaced with `.is_some_and(…)`** in the new tests after clippy flagged them.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib install_wizard::state` — Passed (144 tests)
+- `cargo test -p fdemon-app --lib` — Passed (3002 tests)
+- `cargo fmt --all` — Clean
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Clean
+
+### Risks/Limitations
+
+1. **Linux PM-specific command label changed**: Now says "Install a browser (package manager)" instead of "Install a browser". This is visible in the TUI. The TUI rendering does not assert exact label text, so no TUI tests break — but users will see the updated label.
+2. **macOS now emits two `CHROME_EXECUTABLE` hints in the note**: The note includes the app-specific path (`/Applications/Google Chrome.app/...`) and the generic `CHROME_EXECUTABLE_NOTE` line. Minor redundancy, but explicitly comprehensive.
+3. **Per-distro detection** (Debian `chromium` vs Ubuntu snap transitional for Apt) remains out of scope and is noted in the Apt arm's note text.

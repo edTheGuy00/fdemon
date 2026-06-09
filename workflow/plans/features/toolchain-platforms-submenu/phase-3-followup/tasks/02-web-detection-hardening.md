@@ -108,3 +108,38 @@ New/updated tests:
 - Keep the env-var save/restore guard pattern for any test that mutates `CHROME_EXECUTABLE`.
 - Do not change the public `check_web` signature or its Ok/Missing/Unknown semantics — this is a
   testability + polish pass, not a behaviour change.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a7b8e7ede0027a4e3
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/web.rs` | All 5 changes: MACOS_BROWSER_CANDIDATES const + windows_chrome_candidates helper + BROWSER_VERSION_TIMEOUT + &Path fix + serial attrs + tautological assertion fix + 5 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`pub(super)` visibility for new const and helper**: `MACOS_BROWSER_CANDIDATES` and `windows_chrome_candidates` are `pub(super)` so the test module inside `web.rs` can reach them directly. This keeps them private to `checks/` while enabling the cross-host unit tests.
+
+2. **BROWSER_VERSION_TIMEOUT kept web.rs-local**: Follows the same pattern as `JDK_PROBE_TIMEOUT` in `mod.rs` — module-specific constants stay in their own module. No changes to `checks/mod.rs`.
+
+3. **Tautological assertion replaced**: The `result.detail.contains(path) || !result.detail.is_empty()` assertion was replaced with simply `!result.detail.is_empty()`, which is the invariant that actually matters: the fallback always guarantees a non-empty detail when the override path exists.
+
+4. **`&PathBuf` → `&Path`**: `probe_version` now takes `&Path`. All three call sites pass `&path` / `&env_path` which Deref-coerce correctly; no call sites required changes.
+
+5. **Pre-existing test failure**: `toolchain::tests::test_run_preflight_nonexistent_sdk_path_does_not_panic` was already failing before this task (confirmed by git stash test). This is the subject of Task 05 (count-assertion-forward-compat).
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon --lib web` — 11 passed (including 5 new tests)
+- `cargo fmt --all` — clean
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — clean
+
+### Risks/Limitations
+
+1. **Windows path construction on Linux**: The `windows_chrome_candidates` tests use forward-slash-compatible path joining (`PathBuf::join`). On Linux, `PathBuf::from("C:\\Program Files").join("Google")` joins with `/` not `\`, so the path comparison tests verify the join semantics portably. This is intentional — we are testing path-string typos, not Windows path separators.

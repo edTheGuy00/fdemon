@@ -63,12 +63,12 @@ docs, and forward-compat.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-doctor-web-non-gating](tasks/01-doctor-web-non-gating.md) | Not started | - | 1.5–2h | `src/doctor.rs` |
-| 2 | [02-web-detection-hardening](tasks/02-web-detection-hardening.md) | Not started | - | 2–3h | `crates/fdemon-daemon/src/toolchain/checks/web.rs` |
-| 3 | [03-guided-command-robustness](tasks/03-guided-command-robustness.md) | Not started | - | 1.5–2h | `crates/fdemon-app/src/install_wizard/state.rs` |
-| 4 | [04-config-doc-accuracy](tasks/04-config-doc-accuracy.md) | Not started | - | 0.5h | `crates/fdemon-app/src/config/types.rs` |
-| 5 | [05-count-assertion-forward-compat](tasks/05-count-assertion-forward-compat.md) | Not started | - | 0.5–1h | `crates/fdemon-daemon/src/toolchain/mod.rs` |
-| 6 | [06-update-docs](tasks/06-update-docs.md) | Not started | 1 | 0.5h | `docs/ARCHITECTURE.md` |
+| 1 | [01-doctor-web-non-gating](tasks/01-doctor-web-non-gating.md) | ✅ Done (validated, merged) | - | 1.5–2h | `src/doctor.rs` |
+| 2 | [02-web-detection-hardening](tasks/02-web-detection-hardening.md) | ✅ Done (validated, merged) | - | 2–3h | `crates/fdemon-daemon/src/toolchain/checks/web.rs` |
+| 3 | [03-guided-command-robustness](tasks/03-guided-command-robustness.md) | ✅ Done (re-impl after FAIL on AC2, validated, merged) | - | 1.5–2h | `crates/fdemon-app/src/install_wizard/state.rs` |
+| 4 | [04-config-doc-accuracy](tasks/04-config-doc-accuracy.md) | ✅ Done (validated CONCERN: dropped stray settings.local.toml, merged) | - | 0.5h | `crates/fdemon-app/src/config/types.rs` |
+| 5 | [05-count-assertion-forward-compat](tasks/05-count-assertion-forward-compat.md) | ✅ Done (validated, merged) | - | 0.5–1h | `crates/fdemon-daemon/src/toolchain/mod.rs` |
+| 6 | [06-update-docs](tasks/06-update-docs.md) | ✅ Done (validated, committed) | 1 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 
