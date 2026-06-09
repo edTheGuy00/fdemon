@@ -61,16 +61,24 @@ submenu**:
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `docs/ARCHITECTURE.md` | Updated install-wizard subsystem description for Phase 2 Platforms submenu: new WizardStepKind variants (Platforms parent + 5 platform leaves + is_platform_leaf()), WizardStep.indent: u8, InstallWizardState.platforms_expanded: bool, build_steps(report, expanded) two-mode projection, rollup_step_statuses for parent status, handle_toggle_expand + Esc collapse tier in navigation.rs, InstallWizardToggleExpand message, TUI indent/caret/dynamic-height changes in step_list.rs; renamed all AndroidTools references to PlatformAndroid throughout. |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Phase 2 scope boundary**: Documented that only PlatformAndroid is functional in Phase 2; the four other platform leaves (PlatformIos/PlatformMacos/PlatformWeb/PlatformWindows) are explicitly noted as host-gated placeholders (StepStatus::Pending) whose detection arrives in Phases 3–5. This is stated in both the project-structure tree and the module reference table.
+2. **Targeted edits only**: All seven edit locations are in install-wizard-specific entries; no unrelated sections were touched. Cross-references from Data Flow, Key Types, and Message Categories sections were all updated to use the new variant names.
+
 ### Testing Performed
 
+Verified all edits against the live source: WizardStepKind variants from types.rs, WizardStep.indent and InstallWizardState.platforms_expanded from state.rs, build_steps signature and rollup_step_statuses from state.rs, handle_toggle_expand and Esc collapse tier from navigation.rs, InstallWizardToggleExpand from message.rs. No AndroidTools references remain in ARCHITECTURE.md.
+
 ### Risks/Limitations
+
+None. The documented types and signatures exactly match the code as read.
