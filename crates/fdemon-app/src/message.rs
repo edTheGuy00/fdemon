@@ -1757,6 +1757,14 @@ pub enum Message {
     /// Rosetta) cycle forwards through the list.
     InstallWizardNextCommand,
 
+    /// Toggle expand/collapse of the Platforms submenu parent row.
+    ///
+    /// No-op unless the selected step is the `Platforms` parent. When the
+    /// submenu expands, host-gated leaf rows (`PlatformAndroid`, `PlatformWeb`,
+    /// etc.) are inserted after the parent in the step list. The cursor stays on
+    /// the parent row; the user presses `j` to descend into the leaves.
+    InstallWizardToggleExpand,
+
     /// Preflight task completed — populate the wizard with the report
     ToolchainPreflightCompleted {
         report: fdemon_daemon::toolchain::ToolchainReport,

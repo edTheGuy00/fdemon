@@ -3250,6 +3250,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::InstallWizardPrevCommand => install_wizard::handle_prev_command(state),
         Message::InstallWizardNextCommand => install_wizard::handle_next_command(state),
 
+        // Toggle the Platforms submenu expand/collapse (Phase 2, Task 02).
+        Message::InstallWizardToggleExpand => install_wizard::handle_toggle_expand(state),
+
         Message::ToolchainPreflightCompleted { report } => {
             install_wizard::handle_preflight_completed(state, report)
         }

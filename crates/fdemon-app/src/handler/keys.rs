@@ -1,7 +1,7 @@
 //! Key event handlers for different UI modes
 
 use crate::input_key::InputKey;
-use crate::install_wizard::WizardOrigin;
+use crate::install_wizard::{WizardOrigin, WizardStepKind};
 use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::session::performance::{PerfSection, SelectionDirection};
 use crate::session::NetworkDetailTab;
@@ -414,11 +414,15 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// Key bindings:
 /// - `Ctrl+C` — force quit (always active)
 /// - `Esc` — cancel the running step if one is in flight (`InstallWizardCancelStep`),
-///   or close the panel when idle (`InstallWizardEscape`).
+///   or collapse the Platforms submenu if expanded (`InstallWizardEscape` → collapse tier),
+///   or close the panel when idle (`InstallWizardEscape` → close tier).
 /// - `Tab` — switch between panes (`InstallWizardSwitchPane`)
 /// - `k`/`Up` — navigate up in the step list or scroll detail up
 /// - `j`/`Down` — navigate down in the step list or scroll detail down
-/// - `Enter` — run (or retry) the selected wizard step (`InstallWizardRunSelectedStep`)
+/// - `Enter` — on the Platforms parent: toggle expand/collapse (`InstallWizardToggleExpand`);
+///   on any other step: run (or retry) the step (`InstallWizardRunSelectedStep`).
+/// - `l`/`Right` — expand Platforms submenu (same as Enter on parent; `InstallWizardToggleExpand`)
+/// - `h`/`Left` — collapse Platforms submenu (same as Enter on parent; `InstallWizardToggleExpand`)
 /// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
 /// - `c` — copy the selected guided command to the clipboard (`InstallWizardCopyCommand`)
 /// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
@@ -430,8 +434,9 @@ fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message>
         InputKey::CharCtrl('c') => Some(Message::Quit),
 
         // ── Panel lifecycle ───────────────────────────────────────────────────
-        // Esc is overloaded: cancel the running step if one is in flight,
-        // otherwise close the wizard (existing behaviour).
+        // Esc priority order: cancel running step > collapse submenu > close panel.
+        // The collapse and close tiers are both handled by handle_escape; the
+        // cancel tier is dispatched here before reaching that handler.
         InputKey::Esc => {
             if state.install_wizard_state.is_step_running() {
                 Some(Message::InstallWizardCancelStep)
@@ -448,8 +453,24 @@ fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message>
         InputKey::Char('j') | InputKey::Down => Some(Message::InstallWizardDown),
 
         // ── Actions ───────────────────────────────────────────────────────────
-        // Run (or retry) the currently selected wizard step (Phase 2, Task 05).
-        InputKey::Enter => Some(Message::InstallWizardRunSelectedStep),
+        // Enter on the Platforms parent toggles expand/collapse; on any other
+        // step it runs (or retries) the step (Phase 2, Task 02).
+        InputKey::Enter => {
+            let on_parent = state
+                .install_wizard_state
+                .selected_step()
+                .map(|s| s.kind == WizardStepKind::Platforms)
+                .unwrap_or(false);
+            if on_parent {
+                Some(Message::InstallWizardToggleExpand)
+            } else {
+                Some(Message::InstallWizardRunSelectedStep)
+            }
+        }
+        // l/Right expand the Platforms submenu; h/Left collapse it.
+        // Both are no-ops when not on the Platforms parent (handled by toggle handler).
+        InputKey::Char('l') | InputKey::Right => Some(Message::InstallWizardToggleExpand),
+        InputKey::Char('h') | InputKey::Left => Some(Message::InstallWizardToggleExpand),
         InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
         // Copy the selected guided command to the clipboard (Phase 3, Task 07).
         InputKey::Char('c') => Some(Message::InstallWizardCopyCommand),
@@ -3782,6 +3803,120 @@ mod install_wizard_key_tests {
         assert!(
             msg.is_none(),
             "'+' while a step is running must return None, got: {msg:?}"
+        );
+    }
+
+    // ── Phase 2, Task 02: Enter routing and l/h toggle keys ──────────────────
+
+    /// Build an AppState in InstallWizard mode with a report applied so the
+    /// step list is populated and the Platforms parent can be found by kind.
+    fn make_install_wizard_state_with_report() -> AppState {
+        use crate::install_wizard::WizardOrigin;
+        use fdemon_daemon::toolchain::{
+            ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, HostShell,
+            LinuxPackageManager, ToolchainReport,
+        };
+        let report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
+            winget_available: false,
+        };
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.ui_mode = UiMode::InstallWizard;
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.apply_report(report);
+        state
+    }
+
+    #[test]
+    fn enter_on_platforms_parent_emits_toggle() {
+        let mut state = make_install_wizard_state_with_report();
+        // Select the Platforms parent by kind-lookup.
+        let platforms_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == crate::install_wizard::WizardStepKind::Platforms)
+            .expect("Platforms step must exist after apply_report");
+        state.install_wizard_state.selected_index = platforms_idx;
+
+        let msg = handle_key(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardToggleExpand)),
+            "Enter on Platforms parent must emit InstallWizardToggleExpand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn enter_on_leaf_emits_run_selected_step() {
+        let mut state = make_install_wizard_state_with_report();
+        // Expand the submenu so leaves are present.
+        state.install_wizard_state.platforms_expanded = true;
+        let report = state.install_wizard_state.report.as_ref().cloned().unwrap();
+        state.install_wizard_state.steps = crate::install_wizard::build_steps(&report, true);
+        // Select the PlatformAndroid leaf by kind-lookup.
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == crate::install_wizard::WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid must exist when expanded");
+        state.install_wizard_state.selected_index = android_idx;
+
+        let msg = handle_key(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardRunSelectedStep)),
+            "Enter on a leaf step must emit InstallWizardRunSelectedStep, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn l_key_emits_toggle_expand() {
+        let state = make_install_wizard_state_with_report();
+        let msg = handle_key(&state, InputKey::Char('l'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardToggleExpand)),
+            "'l' must emit InstallWizardToggleExpand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn h_key_emits_toggle_expand() {
+        let state = make_install_wizard_state_with_report();
+        let msg = handle_key(&state, InputKey::Char('h'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardToggleExpand)),
+            "'h' must emit InstallWizardToggleExpand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn right_key_emits_toggle_expand() {
+        let state = make_install_wizard_state_with_report();
+        let msg = handle_key(&state, InputKey::Right);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardToggleExpand)),
+            "Right must emit InstallWizardToggleExpand, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn left_key_emits_toggle_expand() {
+        let state = make_install_wizard_state_with_report();
+        let msg = handle_key(&state, InputKey::Left);
+        assert!(
+            matches!(msg, Some(Message::InstallWizardToggleExpand)),
+            "Left must emit InstallWizardToggleExpand, got: {msg:?}"
         );
     }
 }
