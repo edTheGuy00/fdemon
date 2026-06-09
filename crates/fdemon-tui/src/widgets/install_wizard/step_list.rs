@@ -66,6 +66,14 @@ const CARET_COLLAPSED: &str = "▸";
 /// leaf row under the `Platforms` parent.
 const INDENT_WIDTH: usize = 2;
 
+/// Fixed leading spaces prepended before the status glyph on every row
+/// (at indent level 0).
+///
+/// Derived from: `" ".repeat(2 + INDENT_WIDTH * indent)` where `indent=0`
+/// yields 2 spaces.  The glyph cell x-coordinate for a top-level row is
+/// therefore `area.x + LEADING_PREFIX_COLS`.
+const LEADING_PREFIX_COLS: u16 = 2;
+
 /// Height of the pane title header (label + separator).
 ///
 /// Derived from: 1 title row + 1 separator row = 2 rows.
@@ -237,11 +245,11 @@ impl<'a> StepListPane<'a> {
         // Level 0 = top-level / parent rows (standard "  " prefix).
         // Level 1 = platform leaf rows ("    " prefix — 2 base + 2 indent).
         let indent_spaces = INDENT_WIDTH * step.indent as usize;
-        let leading = " ".repeat(2 + indent_spaces);
+        let leading = " ".repeat(LEADING_PREFIX_COLS as usize + indent_spaces);
 
-        // Expand/collapse caret appended to the Platforms parent row title.
-        // The caret is NOT included in the selection-highlight width math; it is
-        // appended as plain unstyled text so it does not affect the row_style fill.
+        // Expand/collapse caret appended to the Platforms parent row. It is styled
+        // with `row_style` (so it participates in the selection highlight), and
+        // `suffix_len` below reserves its width so the background fill starts after it.
         let caret = if step.kind == WizardStepKind::Platforms {
             if self.platforms_expanded {
                 Some(CARET_EXPANDED)
@@ -271,10 +279,8 @@ impl<'a> StepListPane<'a> {
 
         // Fill rest of row with row background to avoid stray characters.
         // text_len counts leading spaces + glyph + space + title.
-        // The caret (and its preceding space) are NOT counted here — Paragraph
-        // renders them with the row_style already applied, so there is no stray
-        // unstyled cell after them; the fill only needs to cover the gap between
-        // the end of the title and the right edge of the row.
+        // suffix_len accounts for the caret and its preceding space so the fill
+        // starts after the caret, not in the middle of it.
         if is_selected {
             let text_len =
                 (leading.chars().count() + glyph.chars().count() + 1 + step.title.chars().count())
@@ -358,10 +364,29 @@ mod tests {
     use fdemon_app::install_wizard::{StepStatus, WizardStepKind};
     use ratatui::{buffer::Buffer, layout::Rect};
 
+    /// Return the (x, y) buffer coordinate of the status glyph cell for a step row
+    /// at the given visible `row_index` (0-based, counting from the first content row)
+    /// and `indent` depth.
+    ///
+    /// - x = `LEADING_PREFIX_COLS + INDENT_WIDTH * indent`
+    /// - y = `HEADER_HEIGHT + row_index`
+    ///
+    /// Using this helper instead of bare literals means a change to `HEADER_HEIGHT`
+    /// or `INDENT_WIDTH` automatically updates all derived test coordinates.
+    fn glyph_xy(row_index: u16, indent: u16) -> (u16, u16) {
+        (
+            LEADING_PREFIX_COLS + INDENT_WIDTH as u16 * indent,
+            HEADER_HEIGHT + row_index,
+        )
+    }
+
     /// Build a minimal flat step list (all top-level, no platform leaves).
     ///
     /// Keeps coordinates stable across collapsed / expanded state — use this
     /// helper when the test only needs to exercise top-level steps.
+    ///
+    /// Deliberately hand-rolled (not `build_steps`) so render-test coordinates
+    /// stay fixed and independent of the collapsed/expanded projection.
     fn make_steps() -> Vec<WizardStep> {
         vec![
             WizardStep {
@@ -524,14 +549,14 @@ mod tests {
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
-        // Row at y = HEADER_HEIGHT(2) + index(0) = 2 should have accent background.
+        // Row at y = HEADER_HEIGHT + index(0) should have accent background.
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();
         assert!(
             content.contains("Prerequisites"),
             "selected step title should appear"
         );
-        // Glyph cell: x=2 (two leading spaces, indent=0), y=2.
-        let cell = &buf[(2, 2)];
+        // Glyph cell: x = LEADING_PREFIX_COLS (indent=0), y = HEADER_HEIGHT + 0.
+        let cell = &buf[glyph_xy(0, 0)];
         assert_eq!(
             cell.bg,
             palette::ACCENT,
@@ -546,9 +571,9 @@ mod tests {
         let area = make_area();
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
-        // Step 0 is selected but pane is unfocused — should use SELECTED_ROW_BG
-        // Row y = header(2) + 0 = 2
-        let cell = &buf[(2, 2)];
+        // Step 0 is selected but pane is unfocused — should use SELECTED_ROW_BG.
+        // Glyph cell: x = LEADING_PREFIX_COLS (indent=0), y = HEADER_HEIGHT + 0.
+        let cell = &buf[glyph_xy(0, 0)];
         assert_eq!(
             cell.bg,
             palette::SELECTED_ROW_BG,
@@ -607,11 +632,11 @@ mod tests {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
 
-        // FlutterSdk row is at y = HEADER_HEIGHT(2) + index(2) = 4.
-        // The glyph cell is at x=2 (two leading spaces, indent=0), y=4.
+        // FlutterSdk row is at y = HEADER_HEIGHT + index(2).
+        // The glyph cell is at x = LEADING_PREFIX_COLS (indent=0).
         // The step is NOT selected (selected_index=0), so the glyph colour is
         // the badge colour — STATUS_RED for run-failed.
-        let glyph_cell = &buf[(2, 4)];
+        let glyph_cell = &buf[glyph_xy(2, 0)];
         assert_eq!(
             glyph_cell.fg,
             palette::STATUS_RED,
@@ -642,18 +667,18 @@ mod tests {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
 
-        // Prerequisites row (index 0) is at y = HEADER_HEIGHT(2) + 0 = 2; glyph x=2 (indent=0).
-        // Status=Ok → glyph should be STATUS_GREEN (unselected row, no run-failed).
-        let prereq_glyph_cell = &buf[(2, 2)];
+        // Prerequisites row (index 0): glyph at x = LEADING_PREFIX_COLS (indent=0),
+        // y = HEADER_HEIGHT + 0. Status=Ok → STATUS_GREEN (unselected, no run-failed).
+        let prereq_glyph_cell = &buf[glyph_xy(0, 0)];
         assert_eq!(
             prereq_glyph_cell.fg,
             palette::STATUS_GREEN,
             "Prerequisites (Ok) badge should stay green; run-failed only applies to FlutterSdk"
         );
 
-        // PlatformAndroid row (index 1) at y=3; indent=1 → glyph at x = 2 + 2 = 4.
-        // Status=Partial → STATUS_YELLOW.
-        let android_glyph_cell = &buf[(4, 3)];
+        // PlatformAndroid row (index 1): indent=1 → x = LEADING_PREFIX_COLS + INDENT_WIDTH.
+        // y = HEADER_HEIGHT + 1. Status=Partial → STATUS_YELLOW.
+        let android_glyph_cell = &buf[glyph_xy(1, 1)];
         assert_eq!(
             android_glyph_cell.fg,
             palette::STATUS_YELLOW,
@@ -675,7 +700,8 @@ mod tests {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
         // FlutterSdk (index 2, Missing) unselected → STATUS_RED fg.
-        let cell = &buf[(2, 4)];
+        // Glyph at x = LEADING_PREFIX_COLS (indent=0), y = HEADER_HEIGHT + 2.
+        let cell = &buf[glyph_xy(2, 0)];
         assert_eq!(
             cell.fg,
             palette::STATUS_RED,
@@ -704,8 +730,8 @@ mod tests {
         let pane_failed =
             StepListPane::new(&steps, 0, true, Some(WizardStepKind::FlutterSdk), false);
         pane_failed.render(area, &mut buf_failed);
-        // FlutterSdk glyph at x=2, y = HEADER_HEIGHT(2) + index(2) = 4
-        let run_failed_cell = &buf_failed[(2, 4)];
+        // FlutterSdk glyph at x = LEADING_PREFIX_COLS (indent=0), y = HEADER_HEIGHT + index(2).
+        let run_failed_cell = &buf_failed[glyph_xy(2, 0)];
         assert!(
             run_failed_cell
                 .style()
@@ -719,7 +745,7 @@ mod tests {
         let mut buf_plain = Buffer::empty(area);
         let pane_plain = StepListPane::new(&steps, 0, true, None, false);
         pane_plain.render(area, &mut buf_plain);
-        let plain_missing_cell = &buf_plain[(2, 4)];
+        let plain_missing_cell = &buf_plain[glyph_xy(2, 0)];
         assert!(
             !plain_missing_cell
                 .style()
@@ -784,14 +810,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
 
-        // Top-level glyph x: Prerequisites at index 0, indent=0 → x = 2.
-        // Leaf glyph x: PlatformAndroid at index 2, indent=1 → x = 2 + INDENT_WIDTH = 4.
-        let top_level_glyph_x: u16 = 2;
-        let leaf_glyph_x: u16 = 2 + INDENT_WIDTH as u16;
-        let top_y: u16 = HEADER_HEIGHT; // y=2
-        let leaf_y: u16 = HEADER_HEIGHT + 2; // y=4 (Platforms at 1, Android at 2)
+        // Top-level glyph x: Prerequisites at row_index=0, indent=0.
+        // Leaf glyph x: PlatformAndroid at row_index=2, indent=1.
+        let (top_level_glyph_x, top_y) = glyph_xy(0, 0); // indent=0 → x = LEADING_PREFIX_COLS
+        let (leaf_glyph_x, leaf_y) = glyph_xy(2, 1); // indent=1 → x = LEADING_PREFIX_COLS + INDENT_WIDTH
 
-        // Top-level row glyph: ✓ at (2, 2)
+        // Top-level row glyph: ✓ at glyph_xy(0, 0)
         let top_cell = &buf[(top_level_glyph_x, top_y)];
         assert_eq!(
             top_cell.symbol(),
@@ -800,7 +824,7 @@ mod tests {
             top_cell.symbol()
         );
 
-        // Leaf row glyph: ! at (4, 4) — PlatformAndroid is Partial
+        // Leaf row glyph: ! at glyph_xy(2, 1) — PlatformAndroid is Partial
         let leaf_cell = &buf[(leaf_glyph_x, leaf_y)];
         assert_eq!(
             leaf_cell.symbol(),

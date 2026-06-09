@@ -82,6 +82,12 @@ const LEFT_PANE_PERCENT: u16 = 28;
 /// horizontal separator below it, keeping the list from appearing cramped.
 const VERTICAL_STEP_LIST_PADDING: u16 = 2;
 
+/// Minimum rows reserved below the step-list pane in vertical layout for the
+/// detail pane + separator, so an expanded step list never starves the detail view.
+///
+/// Derived from: detail-pane `Constraint::Min(5)` + 1 separator row = 6.
+const MIN_DETAIL_RESERVE_ROWS: u16 = 6;
+
 /// The main Install Wizard panel widget.
 ///
 /// Renders as a centered overlay over the full terminal area.  Reads purely
@@ -245,7 +251,7 @@ impl<'a> InstallWizardPanel<'a> {
         let step_list_height = ((HEADER_HEIGHT as usize)
             + self.state.steps.len()
             + VERTICAL_STEP_LIST_PADDING as usize)
-            .min(area.height.saturating_sub(6) as usize) // leave at least 6 rows for detail + sep
+            .min(area.height.saturating_sub(MIN_DETAIL_RESERVE_ROWS) as usize) // leave MIN_DETAIL_RESERVE_ROWS for detail + sep
             as u16;
 
         let chunks = Layout::vertical([

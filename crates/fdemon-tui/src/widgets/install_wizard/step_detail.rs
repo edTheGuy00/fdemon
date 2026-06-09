@@ -11,7 +11,7 @@
 //!   section (label, command, optional note) and a `[c] copy` affordance, with a
 //!   "JDK 17 required" caption.
 //! - **Non-executable steps** (`Prerequisites`, `Doctor`):
-//!   shows component checks plus "Available in a later phase" note.
+//!   shows component checks plus a "coming soon" placeholder note.
 //!
 //! Vertical scroll is driven by `state.detail_scroll`.  The actual visible
 //! height is written back to `state.last_known_visible_height` each frame
@@ -95,6 +95,9 @@ fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
         WizardStepKind::Prerequisites => {
             Some("  Install the OS build tools below, then press r to re-check")
         }
+        // Phase 2: only PlatformAndroid and Prerequisites have captions.
+        // A new leaf caption also needs a corresponding executor/handler arm
+        // — keep this in sync with the action hints and guided-command logic.
         _ => None,
     }
 }
@@ -232,8 +235,8 @@ impl<'a> StepDetailPane<'a> {
 
     /// Render the action hint line for the bottom of the content area.
     ///
-    /// Shows "▶ Press Enter to …" for executable steps, or
-    /// "Available in a later phase" for non-executable steps.
+    /// Shows "▶ Press Enter to …" for executable steps, or a "coming soon"
+    /// placeholder for inert placeholder steps.
     /// `has_guided_commands` controls whether `PlatformAndroid` is treated as executable.
     fn render_action_hint(
         &self,
@@ -269,7 +272,7 @@ impl<'a> StepDetailPane<'a> {
             return;
         } else {
             (
-                "  Available in a later phase".to_string(),
+                "  Setup for this platform is coming soon \u{2014} run flutter doctor to check it manually".to_string(),
                 palette::TEXT_MUTED,
                 false,
             )
@@ -1107,19 +1110,29 @@ mod tests {
     }
 
     #[test]
-    fn test_step_detail_shows_later_phase_for_prerequisites_step_with_no_commands() {
-        // Prerequisites step with no guided commands (all Ok) still shows "later phase".
+    fn test_step_detail_shows_coming_soon_for_prerequisites_step_with_no_commands() {
+        // Prerequisites step with no guided commands (all Ok) shows the softened
+        // "coming soon" placeholder instead of the old "Available in a later phase".
+        // Use an 80-wide area so the full hint text (≈82 chars) is visible.
         let mut state = make_state_components();
         state.selected_index = 0; // Prerequisites step (no guided commands in this report)
         let pane = StepDetailPane::new(&state, true, 0);
-        let area = make_area();
+        let area = Rect::new(0, 0, 80, 20);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();
 
         assert!(
-            content.contains("later phase"),
-            "Prerequisites step with no guided commands should still show 'Available in a later phase': '{content}'"
+            content.contains("coming soon"),
+            "Prerequisites step with no guided commands should show the 'coming soon' placeholder: '{content}'"
+        );
+        assert!(
+            content.contains("flutter doctor"),
+            "Prerequisites step placeholder should mention 'flutter doctor': '{content}'"
+        );
+        assert!(
+            !content.contains("later phase"),
+            "old 'Available in a later phase' text must not appear: '{content}'"
         );
     }
 
