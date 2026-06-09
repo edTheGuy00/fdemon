@@ -1126,6 +1126,8 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             ComponentKind::FlutterSdk => {
                 flutter_sdk.push(check.clone());
             }
+            // Phase 4 Task 01 stub: routed to the iOS/macOS leaves in Task 03.
+            ComponentKind::XcodeTools | ComponentKind::CocoaPods => {}
         }
     }
 

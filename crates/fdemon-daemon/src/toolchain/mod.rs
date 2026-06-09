@@ -181,19 +181,32 @@ pub async fn run_preflight(
         false
     };
 
-    // Run async checks concurrently
-    let (git_check, jdk_check, platform_tools_check, prereq_check, web_check, doctor_output) = tokio::join!(
+    // Run async checks concurrently.
+    // `check_ios` is independent of the Android-root checks and slots in safely
+    // beside `check_web`. On non-macOS it returns an empty Vec (no-op extend).
+    let (
+        git_check,
+        jdk_check,
+        platform_tools_check,
+        prereq_check,
+        web_check,
+        ios_checks,
+        doctor_output,
+    ) = tokio::join!(
         checks::check_git(),
         checks::check_jdk(),
         checks::check_android_platform_tools(android_root_ref),
         checks::check_prerequisites(&platform),
         checks::check_web(&platform, web_browser_executable),
+        checks::check_ios(&platform),
         capture_doctor_if_available(&maybe_exe),
     );
 
     // Assemble components in user-facing order:
-    // Flutter → Git → JDK → Android (cmdline, platform-tools, platform, build-tools, licenses) → Prerequisites → WebBrowser
-    let components = vec![
+    // Flutter → Git → JDK → Android (cmdline, platform-tools, platform, build-tools, licenses)
+    //   → Prerequisites → WebBrowser
+    //   → XcodeTools, CocoaPods (macOS-only trailing entries via ios_checks extend)
+    let mut components = vec![
         flutter_check,
         git_check,
         jdk_check,
@@ -205,6 +218,9 @@ pub async fn run_preflight(
         prereq_check,
         web_check,
     ];
+    // On macOS, appends XcodeTools + CocoaPods (12 total).
+    // On Linux/Windows, ios_checks is empty — no-op.
+    components.extend(ios_checks);
 
     let report = ToolchainReport {
         platform,
@@ -286,6 +302,25 @@ mod tests {
             assert!(
                 report.components.iter().any(|c| c.kind == expected),
                 "missing component: {expected:?}"
+            );
+        }
+
+        // macOS-only: XcodeTools + CocoaPods must be present (Phase 4).
+        #[cfg(target_os = "macos")]
+        {
+            assert!(
+                report
+                    .components
+                    .iter()
+                    .any(|c| c.kind == ComponentKind::XcodeTools),
+                "macOS: expected XcodeTools component in preflight report"
+            );
+            assert!(
+                report
+                    .components
+                    .iter()
+                    .any(|c| c.kind == ComponentKind::CocoaPods),
+                "macOS: expected CocoaPods component in preflight report"
             );
         }
     }

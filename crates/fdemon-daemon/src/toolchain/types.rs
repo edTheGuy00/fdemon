@@ -101,6 +101,15 @@ pub enum ComponentKind {
     Prerequisites,
     /// Chromium-based web browser for `flutter run -d chrome` (Chrome, Chromium, or Edge).
     WebBrowser,
+    /// Full Xcode IDE installation required for iOS and macOS Flutter development.
+    ///
+    /// Distinct from [`Prerequisites`], which checks only the Xcode Command Line Tools.
+    /// macOS-only — this component is never emitted on Linux or Windows.
+    XcodeTools,
+    /// CocoaPods dependency manager, required for iOS and macOS Flutter builds.
+    ///
+    /// macOS-only — this component is never emitted on Linux or Windows.
+    CocoaPods,
 }
 
 impl std::fmt::Display for ComponentKind {
@@ -116,6 +125,8 @@ impl std::fmt::Display for ComponentKind {
             Self::AndroidLicenses => write!(f, "Android Licenses"),
             Self::Prerequisites => write!(f, "Prerequisites"),
             Self::WebBrowser => write!(f, "Web Browser"),
+            Self::XcodeTools => write!(f, "Xcode"),
+            Self::CocoaPods => write!(f, "CocoaPods"),
         }
     }
 }
@@ -547,6 +558,8 @@ mod tests {
         );
         assert_eq!(ComponentKind::Prerequisites.to_string(), "Prerequisites");
         assert_eq!(ComponentKind::WebBrowser.to_string(), "Web Browser");
+        assert_eq!(ComponentKind::XcodeTools.to_string(), "Xcode");
+        assert_eq!(ComponentKind::CocoaPods.to_string(), "CocoaPods");
     }
 
     #[test]
