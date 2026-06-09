@@ -216,15 +216,28 @@ pub struct ToolchainSettings {
     /// `.fdemon/config.toml`.
     pub cmdline_tools_sha256: Option<String>,
 
-    /// Custom Chromium-based browser for `flutter run -d chrome` / the web
-    /// doctor check. Sets `CHROME_EXECUTABLE`. Any Chromium browser (Chrome,
-    /// Edge, Brave, Chromium) is acceptable.
+    /// Path to a Chromium-based browser used by the **Install Wizard's web
+    /// probe** (`check_web`). Any Chromium-based browser (Chrome, Edge, Brave,
+    /// Chromium) is acceptable.
+    ///
+    /// When set, takes precedence over the `CHROME_EXECUTABLE` environment
+    /// variable and the per-OS default browser locations when fdemon probes for
+    /// a web browser. The probe order is: this field → `CHROME_EXECUTABLE` env
+    /// var → per-OS defaults.
+    ///
+    /// **Does not set `CHROME_EXECUTABLE`** in the environment and does not
+    /// affect what `flutter run -d chrome` uses — that is governed by Flutter's
+    /// own `CHROME_EXECUTABLE` lookup. To make Flutter itself use a custom
+    /// browser, export `CHROME_EXECUTABLE` in your shell profile.
     ///
     /// Default (`None`) → auto-detect via `CHROME_EXECUTABLE` env var and
-    /// per-OS defaults.
+    /// per-OS default browser locations.
     ///
     /// **Note:** this lives under `[toolchain]` (distinct from
     /// `[devtools] browser`, which controls the DevTools web UI opener).
+    ///
+    // TODO(followup): validate executable-path config fields (null bytes,
+    // absurd lengths) via a shared helper usable by jdk_path and similar fields.
     pub web_browser_executable: Option<String>,
 }
 
