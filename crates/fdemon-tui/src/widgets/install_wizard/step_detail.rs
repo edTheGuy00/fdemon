@@ -95,9 +95,9 @@ fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
         WizardStepKind::Prerequisites => {
             Some("  Install the OS build tools below, then press r to re-check")
         }
-        // Phase 2: only PlatformAndroid and Prerequisites have captions.
-        // A new leaf caption also needs a corresponding executor/handler arm
-        // — keep this in sync with the action hints and guided-command logic.
+        WizardStepKind::PlatformWeb => Some("  Browser required for flutter run -d chrome"),
+        // Add a new leaf caption here when its guided-command logic is implemented.
+        // Keep this in sync with the action hints and guided-command logic.
         _ => None,
     }
 }
@@ -264,11 +264,14 @@ impl<'a> StepDetailPane<'a> {
         } else if has_guided_commands
             && matches!(
                 kind,
-                WizardStepKind::PlatformAndroid | WizardStepKind::Prerequisites
+                WizardStepKind::PlatformAndroid
+                    | WizardStepKind::Prerequisites
+                    | WizardStepKind::PlatformWeb
             )
         {
-            // PlatformAndroid gated (JDK missing) or Prerequisites with guided commands —
-            // the guided-command section is the primary CTA; skip the "later phase" hint.
+            // PlatformAndroid gated (JDK missing), Prerequisites with guided commands, or
+            // PlatformWeb with guided commands (browser absent/partial) —
+            // the guided-command section is the primary CTA; skip the "coming soon" hint.
             return;
         } else {
             (
@@ -1999,6 +2002,124 @@ mod tests {
             step_caption(WizardStepKind::Doctor).is_none(),
             "Doctor should have no caption"
         );
+    }
+
+    // --- Phase 3 task 04: PlatformWeb caption + coming-soon suppression ---
+
+    #[test]
+    fn test_step_caption_web_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformWeb);
+        assert!(caption.is_some(), "PlatformWeb should have a caption");
+        assert!(
+            caption.unwrap().contains("Browser"),
+            "PlatformWeb caption should mention Browser: {:?}",
+            caption
+        );
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWeb step selected and a guided
+    /// command present (simulates a browser absent/partial scenario).
+    fn make_state_web_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWeb,
+                title: "Web".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::WebBrowser,
+                    status: ComponentStatus::Missing,
+                    detail: "not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Google Chrome".to_string(),
+                    command: "sudo apt-get install -y google-chrome-stable".to_string(),
+                    note: Some("or: sudo snap install google-chrome".to_string()),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWeb step selected and no guided
+    /// commands (browser already detected — clean state).
+    fn make_state_web_no_guided_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWeb,
+                title: "Web".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::WebBrowser,
+                    status: ComponentStatus::Ok,
+                    detail: "Google Chrome 120".to_string(),
+                }],
+                guided_commands: vec![],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    #[test]
+    fn test_step_detail_suppresses_coming_soon_for_web_with_guided_commands() {
+        // PlatformWeb with a guided command must NOT render the "coming soon" hint.
+        // The guided-command block is the sole CTA (no dual-CTA).
+        let state = make_state_web_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Guided-command block must be present.
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformWeb with guided commands should show the guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Browser"),
+            "PlatformWeb step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformWeb step should show [c] copy affordance: '{content}'"
+        );
+        // "coming soon" must NOT appear when guided commands are present.
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformWeb with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_web_no_guided_commands_no_dual_cta() {
+        // PlatformWeb with no guided commands (browser detected) renders cleanly:
+        // no dual-CTA (both guided block and "coming soon" must not coexist).
+        // The "coming soon" placeholder is acceptable here (step is non-executable).
+        let state = make_state_web_no_guided_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // No guided-command block when browser is detected.
+        assert!(
+            !content.contains("Guided steps"),
+            "PlatformWeb with no guided commands must NOT show guided-steps header: '{content}'"
+        );
+        // No dual-CTA: only one of "coming soon" or "Guided steps" should appear
+        // (already asserted above), so we just check no crash and sane output.
+        assert!(
+            content.contains("Chrome"),
+            "PlatformWeb (browser Ok) should show the component detail: '{content}'"
+        );
+        // Must not panic or show a guided block — already asserted above.
     }
 
     // --- F1 scroll-window: selected command always visible on short terminal ---
