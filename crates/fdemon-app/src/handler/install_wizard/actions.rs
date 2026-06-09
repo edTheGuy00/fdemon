@@ -136,6 +136,7 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
         project_path,
         explicit_sdk_path,
         android_sdk_root,
+        web_browser_executable: None,
     })
 }
 

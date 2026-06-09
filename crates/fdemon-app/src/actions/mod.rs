@@ -801,6 +801,7 @@ pub fn handle_action(
             project_path,
             explicit_sdk_path,
             android_sdk_root,
+            web_browser_executable,
         } => {
             let msg_tx = msg_tx.clone();
             tokio::spawn(async move {
@@ -808,6 +809,7 @@ pub fn handle_action(
                     &project_path,
                     explicit_sdk_path.as_deref(),
                     android_sdk_root.as_deref(),
+                    web_browser_executable.as_deref(),
                 )
                 .await;
 

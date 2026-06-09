@@ -16,6 +16,7 @@
 
 mod android;
 mod prerequisites;
+mod web;
 
 pub use android::{
     android_sdk_root_with_override, check_android_build_tools, check_android_cmdline_tools,
@@ -27,6 +28,7 @@ pub use prerequisites::{
     LinuxPackageManager, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
     PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
+pub use web::check_web;
 
 use std::path::Path;
 use std::process::Stdio;

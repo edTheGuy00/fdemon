@@ -84,7 +84,7 @@ pub async fn run_doctor(cwd: PathBuf, explicit_sdk: Option<PathBuf>) -> ExitCode
 
     // Headless doctor has no persisted wizard settings — rely on env/default
     // Android SDK resolution (no override).
-    let outcome = run_preflight(&cwd, explicit_sdk.as_deref(), None).await;
+    let outcome = run_preflight(&cwd, explicit_sdk.as_deref(), None, None).await;
     let report = outcome.report;
 
     // Determine whether Android components should gate the exit code.

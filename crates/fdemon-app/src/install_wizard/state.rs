@@ -932,6 +932,7 @@ fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
 pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> {
     let mut prerequisites: Vec<ComponentCheck> = Vec::new();
     let mut platform_android_components: Vec<ComponentCheck> = Vec::new();
+    let mut platform_web_components: Vec<ComponentCheck> = Vec::new();
     let mut flutter_sdk: Vec<ComponentCheck> = Vec::new();
 
     for check in &report.components {
@@ -946,6 +947,9 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             | ComponentKind::AndroidLicenses
             | ComponentKind::Jdk => {
                 platform_android_components.push(check.clone());
+            }
+            ComponentKind::WebBrowser => {
+                platform_web_components.push(check.clone());
             }
             ComponentKind::FlutterSdk => {
                 flutter_sdk.push(check.clone());
@@ -973,6 +977,13 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
 
     let prerequisites_status = rollup_status(&prerequisites);
     let android_status = rollup_status(&platform_android_components);
+    // Web status: Missing browser → Missing (Task 03 will cap to Partial/non-blocking).
+    // Empty (no WebBrowser component yet) → Pending so legacy reports remain unaffected.
+    let web_status = if platform_web_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        rollup_status(&platform_web_components)
+    };
     let flutter_status = rollup_status(&flutter_sdk);
 
     // Doctor step: no components; always Ok when doctor data is present,
@@ -1022,12 +1033,13 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             indent: 1,
         });
 
-        // PlatformWeb: all hosts (placeholder — Pending).
+        // PlatformWeb: all hosts. WebBrowser component routed here from build_steps.
+        // Guided commands arrive in Task 03.
         leaves.push(WizardStep {
             kind: WizardStepKind::PlatformWeb,
             title: "Web".to_string(),
-            status: StepStatus::Pending,
-            components: Vec::new(),
+            status: web_status,
+            components: platform_web_components,
             guided_commands: Vec::new(),
             indent: 1,
         });

@@ -28,6 +28,7 @@ pub fn handle_show(state: &mut AppState, origin: WizardOrigin) -> UpdateResult {
         project_path,
         explicit_sdk_path,
         android_sdk_root,
+        web_browser_executable: None,
     })
 }
 

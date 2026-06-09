@@ -99,6 +99,8 @@ pub enum ComponentKind {
     AndroidLicenses,
     /// OS-level prerequisites (cmake, ninja, clang, etc. on Linux; Xcode on macOS).
     Prerequisites,
+    /// Chromium-based web browser for `flutter run -d chrome` (Chrome, Chromium, or Edge).
+    WebBrowser,
 }
 
 impl std::fmt::Display for ComponentKind {
@@ -113,6 +115,7 @@ impl std::fmt::Display for ComponentKind {
             Self::AndroidBuildTools => write!(f, "Android Build Tools"),
             Self::AndroidLicenses => write!(f, "Android Licenses"),
             Self::Prerequisites => write!(f, "Prerequisites"),
+            Self::WebBrowser => write!(f, "Web Browser"),
         }
     }
 }
@@ -543,6 +546,7 @@ mod tests {
             "Android Licenses"
         );
         assert_eq!(ComponentKind::Prerequisites.to_string(), "Prerequisites");
+        assert_eq!(ComponentKind::WebBrowser.to_string(), "Web Browser");
     }
 
     #[test]

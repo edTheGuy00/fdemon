@@ -674,6 +674,10 @@ pub enum UpdateAction {
         /// so a re-check after a managed install finds the freshly-installed
         /// tools without requiring a shell reload.
         android_sdk_root: Option<std::path::PathBuf>,
+        /// Explicit web browser executable override from
+        /// `settings.toolchain.web_browser_executable`, if set. Takes precedence
+        /// over `CHROME_EXECUTABLE` env and per-OS defaults.
+        web_browser_executable: Option<String>,
     },
 
     /// Execute a wizard step asynchronously (Flutter SDK install or PATH config).

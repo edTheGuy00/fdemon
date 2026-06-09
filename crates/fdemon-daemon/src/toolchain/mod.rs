@@ -101,6 +101,10 @@ pub struct PreflightOutcome {
 ///   re-check after a managed install finds the freshly-installed tools even
 ///   though the running process's environment is still stale. Pass `None` to
 ///   rely on env/default resolution.
+/// * `web_browser_executable` — Optional explicit path to a Chromium-based
+///   browser binary, from `settings.toolchain.web_browser_executable`. Takes
+///   precedence over `CHROME_EXECUTABLE` env and per-OS defaults. Pass `None`
+///   to rely on automatic detection.
 ///
 /// # Returns
 ///
@@ -113,6 +117,7 @@ pub async fn run_preflight(
     project_path: &Path,
     explicit_sdk_path: Option<&Path>,
     override_android_root: Option<&Path>,
+    web_browser_executable: Option<&str>,
 ) -> PreflightOutcome {
     // ── Windows: refresh process PATH from registry ───────────────────────────
     // On Windows, winget/installer-GUI writes new bin dirs into the registry
@@ -177,16 +182,17 @@ pub async fn run_preflight(
     };
 
     // Run async checks concurrently
-    let (git_check, jdk_check, platform_tools_check, prereq_check, doctor_output) = tokio::join!(
+    let (git_check, jdk_check, platform_tools_check, prereq_check, web_check, doctor_output) = tokio::join!(
         checks::check_git(),
         checks::check_jdk(),
         checks::check_android_platform_tools(android_root_ref),
         checks::check_prerequisites(&platform),
+        checks::check_web(&platform, web_browser_executable),
         capture_doctor_if_available(&maybe_exe),
     );
 
     // Assemble components in user-facing order:
-    // Flutter → Git → JDK → Android (cmdline, platform-tools, platform, build-tools, licenses) → Prerequisites
+    // Flutter → Git → JDK → Android (cmdline, platform-tools, platform, build-tools, licenses) → Prerequisites → WebBrowser
     let components = vec![
         flutter_check,
         git_check,
@@ -197,6 +203,7 @@ pub async fn run_preflight(
         build_tools_check,
         licenses_check,
         prereq_check,
+        web_check,
     ];
 
     let report = ToolchainReport {
@@ -246,11 +253,11 @@ mod tests {
         // Use a temp directory as the project path so the locator does not
         // accidentally pick up the actual repo's Flutter configuration.
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_preflight(tmp.path(), None, None).await;
+        let outcome = run_preflight(tmp.path(), None, None, None).await;
         let report = &outcome.report;
 
-        // Must always have 9 components in the defined order
-        assert_eq!(report.components.len(), 9);
+        // Must always have 10 components in the defined order
+        assert_eq!(report.components.len(), 10);
         assert_eq!(report.components[0].kind, ComponentKind::FlutterSdk);
         assert_eq!(report.components[1].kind, ComponentKind::Git);
         assert_eq!(report.components[2].kind, ComponentKind::Jdk);
@@ -266,6 +273,7 @@ mod tests {
         assert_eq!(report.components[6].kind, ComponentKind::AndroidBuildTools);
         assert_eq!(report.components[7].kind, ComponentKind::AndroidLicenses);
         assert_eq!(report.components[8].kind, ComponentKind::Prerequisites);
+        assert_eq!(report.components[9].kind, ComponentKind::WebBrowser);
     }
 
     #[tokio::test]
@@ -282,7 +290,7 @@ mod tests {
         std::env::set_var("FVM_CACHE_PATH", &empty_cache);
 
         let fake_sdk = PathBuf::from("/nonexistent/flutter/sdk");
-        let outcome = run_preflight(tmp.path(), Some(&fake_sdk), None).await;
+        let outcome = run_preflight(tmp.path(), Some(&fake_sdk), None, None).await;
         let report = &outcome.report;
 
         match saved_fvm {
@@ -328,7 +336,7 @@ mod tests {
         // We accept any LinuxPackageManager variant — the exact result depends
         // on what is installed on the test host.
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_preflight(tmp.path(), None, None).await;
+        let outcome = run_preflight(tmp.path(), None, None, None).await;
         let report = &outcome.report;
 
         if cfg!(target_os = "linux") {
@@ -349,7 +357,7 @@ mod tests {
         // On non-Windows hosts winget must always be false (binary not present).
         // On Windows we accept any bool — winget may or may not be installed.
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_preflight(tmp.path(), None, None).await;
+        let outcome = run_preflight(tmp.path(), None, None, None).await;
         let report = &outcome.report;
 
         if !cfg!(target_os = "windows") {
