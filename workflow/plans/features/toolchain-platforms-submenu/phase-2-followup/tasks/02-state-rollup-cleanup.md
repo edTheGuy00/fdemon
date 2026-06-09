@@ -155,16 +155,32 @@ behavior-preservation guard for this refactor.
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Replaced `rollup_step_statuses` with allocation-free single-pass version; refactored `build_steps` to build all platform leaves unconditionally (single host-gating site), derive parent status from those leaves, and emit them only when `expanded`; added two new `rollup_step_statuses` unit tests (`single_ok_returns_ok`, `ok_with_pending_returns_ok`). |
 
 ### Notable Decisions/Tradeoffs
 
+1. **Leaf vec for parent-status derivation allocates transiently**: The `leaf_statuses: Vec<StepStatus>` collect is a small allocation (≤5 elements), used only within `build_steps` to feed `rollup_step_statuses`. The `rollup_step_statuses` function itself is now allocation-free as required. The `platform_leaves` vec is also only an intermediate; both are dropped before `build_steps` returns. This is the cleanest approach without changing the function signature.
+
+2. **Leaf emission order preserved exactly**: Android → Web → iOS/macOS (macOS only) → Windows (Windows only) — unchanged from the pre-refactor expansion block. The old parent-status block used a slightly different internal order (Android → iOS/macOS → Web), but since all non-Android leaves are `Pending`, the parent status was identical regardless of order. The canonical order is now the emission order.
+
+3. **Collapsed projection unchanged**: `build_steps(report, false)` still returns exactly 5 rows. The leaves vec is built but not pushed into `steps` when `expanded == false`, so the collapsed output is identical to before.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-app --lib install_wizard::state` — 135 passed, 0 failed
+- `cargo fmt --all -- --check` — clean
+- `cargo check --workspace --all-targets` — clean
+- `cargo test --workspace --lib` — 1491 passed, 0 failed
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+
 ### Risks/Limitations
+
+1. **Minor transient allocation in `build_steps`**: `platform_leaves` and `leaf_statuses` are small vecs allocated and dropped within the function. No observable impact on performance, but `rollup_step_statuses` itself is now allocation-free as the task requires.
+2. **Behavior-preserving refactor only**: No logic changes; all existing tests pass unchanged.

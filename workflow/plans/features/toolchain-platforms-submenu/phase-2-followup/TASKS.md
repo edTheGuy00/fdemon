@@ -50,10 +50,10 @@ Research collapsed the 13 findings into **3 implementor tasks + 1 doc task**:
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-navigation-correctness](tasks/01-navigation-correctness.md) | Not Started | - | 2–3h | `message.rs`, `handler/update.rs`, `handler/keys.rs`, `handler/install_wizard/navigation.rs`, `docs/KEYBINDINGS.md` |
-| 2 | [02-state-rollup-cleanup](tasks/02-state-rollup-cleanup.md) | Not Started | - | 1h | `install_wizard/state.rs` |
-| 3 | [03-tui-polish](tasks/03-tui-polish.md) | Not Started | - | 1.5–2h | `widgets/install_wizard/{step_list,mod,step_detail}.rs` |
-| 4 | [04-update-architecture-docs](tasks/04-update-architecture-docs.md) | Not Started | 1 | 0.5h | `docs/ARCHITECTURE.md` |
+| 1 | [01-navigation-correctness](tasks/01-navigation-correctness.md) | ✅ Done (validated, merged) | - | 2–3h | `message.rs`, `handler/update.rs`, `handler/keys.rs`, `handler/install_wizard/navigation.rs`, `docs/KEYBINDINGS.md` |
+| 2 | [02-state-rollup-cleanup](tasks/02-state-rollup-cleanup.md) | ✅ Done (validated, merged) | - | 1h | `install_wizard/state.rs` |
+| 3 | [03-tui-polish](tasks/03-tui-polish.md) | ✅ Done (validated w/ minor concern, fixed, merged) | - | 1.5–2h | `widgets/install_wizard/{step_list,mod,step_detail}.rs` |
+| 4 | [04-update-architecture-docs](tasks/04-update-architecture-docs.md) | ✅ Done (validated, committed) | 1 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

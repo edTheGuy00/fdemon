@@ -151,16 +151,33 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
 
 ## Completion Summary
 
-**Status:** _(fill in)_
-**Branch:** feat/toolchain-platforms-submenu
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu (worktree: worktree-agent-a10ee77f4b1389ff5)
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_list.rs` | S1: fixed contradictory caret/fill comments; N4: added `LEADING_PREFIX_COLS` constant + `glyph_xy` test helper + updated 7 tests to use it; N5: added `build_steps` bypass note to `make_steps()` doc |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | N1: introduced `MIN_DETAIL_RESERVE_ROWS: u16 = 6` constant with derivation comment; replaced bare `6` literal in `render_vertical_panes` |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | N2: replaced `"Available in a later phase"` with user-facing `"Setup for this platform is coming soon — run flutter doctor to check it manually"`; updated test to check for `"coming soon"` and `"flutter doctor"` on 80-wide area; N6: added exhaustiveness note to `_ => None` arm of `step_caption`; updated module doc comment and `render_action_hint` doc to remove stale "later phase" wording |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`LEADING_PREFIX_COLS` used in production code**: The constant was introduced to derive test coordinates, but to avoid a `dead_code` warning it is also used in the `" ".repeat(LEADING_PREFIX_COLS as usize + indent_spaces)` expression in `render_step_row`, replacing the bare `2`. This is the correct usage described in the task ("introduce a named const for the `2` baked into `" ".repeat(2 + …)`").
+
+2. **N2 test area widened to 80 cols**: The new hint text is ~82 chars. The existing `make_area()` returns 60 cols, which clips "flutter doctor" at the word boundary. The test was updated to use `Rect::new(0, 0, 80, 20)` so the full hint is visible — this is more realistic than the original 60-wide area for a detail pane.
+
+3. **N4: glyph_xy derives both x and y**: The helper captures both dimensions (x = prefix + indent, y = header + row_index), covering all the coordinate pairs used in the affected tests.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-tui --lib install_wizard` — 128 passed, 0 failed
+- `cargo fmt --all -- --check` — passed (no diff)
+- `cargo check --workspace --all-targets` — no warnings, no errors
+- `cargo test --workspace --lib` — 7999 passed across all crates, 0 failed
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+
 ### Risks/Limitations
+
+1. **N2 copy length**: The new hint string (`"Setup for this platform is coming soon — run flutter doctor to check it manually"`) is ~82 chars. On very narrow terminals (<82 cols) it will be clipped by the single-row `Paragraph::new(line).render(Rect::new(area.x, y, area.width, 1), buf)` call. This matches the existing behaviour for all other action hints and is acceptable for a muted secondary hint.

@@ -193,16 +193,40 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
 
 ## Completion Summary
 
-**Status:** _(fill in)_
-**Branch:** feat/toolchain-platforms-submenu
+**Status:** Done
+**Branch:** worktree-agent-a5faa1e9ae822a8ca (merges to feat/toolchain-platforms-submenu)
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `InstallWizardExpand` and `InstallWizardCollapse` variants after `InstallWizardToggleExpand` |
+| `crates/fdemon-app/src/handler/update.rs` | Added dispatch arms for `InstallWizardExpand` → `handle_expand` and `InstallWizardCollapse` → `handle_collapse` |
+| `crates/fdemon-app/src/handler/keys.rs` | Changed `l`/`Right` → `InstallWizardExpand`, `h`/`Left` → `InstallWizardCollapse`; updated doc-comment; renamed/updated key routing tests |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Added `set_platforms_expanded` private free function (shared helper M1+M2+M3+S3); added `handle_expand` and `handle_collapse`; rewrote `handle_toggle_expand` and `handle_escape` to route through helper; added 15 new tests; tightened `esc_collapse_clamps_selected_index` to assert landing kind == Platforms |
+| `docs/KEYBINDINGS.md` | Updated install-wizard step list table: added `l`/→ expand row and `h`/← collapse row with directional semantics; updated `Enter` row to mention Platforms-parent toggle |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`set_platforms_expanded` as a private free function in `navigation.rs`**: Satisfies the isolation constraint (not a method on `InstallWizardState` in `state.rs`) while keeping this task disjoint from Task 02. The function signature takes `&mut InstallWizardState` so it is self-contained.
+
+2. **Borrow-split (S3)**: The helper reads `wiz.report` via a shared ref (`if let Some(report) = &wiz.report`), captures `steps` as an owned `Vec`, then assigns to `wiz.steps`. This avoids the `.as_ref().cloned()` pattern present in the old `handle_escape` and `handle_toggle_expand` paths.
+
+3. **`handle_expand` no-op guard**: `expand` is only applied when the selected step is the `Platforms` parent **and** `platforms_expanded == false` — satisfying AC1 exactly. On leaves or already-expanded state it is a no-op without any state mutation.
+
+4. **`handle_collapse` from parent or leaf**: The task spec and AC2 require collapse to work from any position when expanded. The helper's M2 re-anchor fires only when `was_leaf == true`, so collapsing from the parent is also correct (cursor stays put, just clamps defensively).
+
 ### Testing Performed
 
+- `cargo test -p fdemon-app --lib handler::install_wizard::navigation` — 43 passed (up from 28; 15 new tests added)
+- `cargo test -p fdemon-app --lib keys` — 160 passed (l/h/Right/Left tests renamed and corrected)
+- `cargo test --workspace --lib` — 1491 passed (fdemon-app), full suite green
+- `cargo fmt --all -- --check` — clean
+- `cargo check --workspace --all-targets` — clean
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+
 ### Risks/Limitations
+
+1. **`Enter` on Platforms parent still emits `InstallWizardToggleExpand`** (not `InstallWizardExpand`): This is correct per AC1 and the task spec ("Enter still toggles"). Toggle semantics are appropriate for Enter, while directional keys have expand-only / collapse-only semantics.
+
+2. **Windows leaf test uses `HostPlatform::Windows`**: The test verifies that `build_steps` on a Windows report includes at least one `is_platform_leaf()` step — this is covered by the existing `PlatformWindows` branch in `build_steps`. If future platform gating changes cause `PlatformWindows` to be absent on a Windows report the test would fail at `expect("at least one leaf must exist")`, which is a clear diagnostic.
