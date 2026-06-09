@@ -18,6 +18,20 @@ use super::types::{
     WizardStepKind, MAX_LOG_TAIL,
 };
 
+// ── Web-browser guided-command constants ──────────────────────────────────────
+
+/// Chrome download URL — the canonical, package-manager-independent way to get
+/// a Chromium-based browser on any platform.
+const CHROME_DOWNLOAD_URL: &str = "https://www.google.com/chrome/";
+
+/// Note appended to every web-browser guided command so users know how to
+/// point Flutter at a non-default browser path.
+///
+/// On Linux/macOS the environment variable is `CHROME_EXECUTABLE`.
+/// (Windows uses `set CHROME_EXECUTABLE=…` — see the Windows arm.)
+const CHROME_EXECUTABLE_NOTE: &str =
+    "To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"";
+
 /// A running install task: a `JoinHandle` paired with a `CancellationToken`.
 ///
 /// Held on [`InstallWizardState::install_task`] while a wizard step is in
@@ -550,15 +564,19 @@ fn jdk_guided_command(report: &ToolchainReport) -> GuidedCommand {
 /// `flutter run -d chrome`.
 ///
 /// Returns an empty `Vec` when `web_status` is `Ok` (browser already found).
-/// Otherwise, emits one per-OS install suggestion:
+/// Otherwise, emits per-OS install suggestions:
 ///
-/// - **Linux** — prefer Chromium (cross-distro), install command chosen from
-///   the pre-detected `report.linux_package_manager`. Unknown PM falls back to
-///   the Chrome download URL. The note always includes an
-///   `export CHROME_EXECUTABLE="<path>"` placeholder so the user knows how to
-///   point Flutter at a non-default browser path.
+/// - **Linux** — a package-manager hint (chosen from the pre-detected
+///   `report.linux_package_manager`) plus the cross-distro fallback
+///   ([`CHROME_DOWNLOAD_URL`] + [`CHROME_EXECUTABLE_NOTE`]). The PM command is
+///   a convenience; the download URL is always present so distro variances
+///   (snap transitional on Ubuntu, `chromium` on Debian, etc.) never strand
+///   the user.
 /// - **macOS** — Chrome download URL + `export CHROME_EXECUTABLE` note.
-/// - **Windows** — `winget install Google.Chrome` + `set CHROME_EXECUTABLE` note.
+/// - **Windows** — when `report.winget_available` is `true`, a
+///   `winget install Google.Chrome` convenience hint is prepended; the
+///   [`CHROME_DOWNLOAD_URL`] fallback is **always** emitted regardless of
+///   winget availability.
 /// - **`HostPlatform::Unknown`** — empty (no actionable commands).
 ///
 /// **Command strings are templates, not configured values.** `build_steps` is a
@@ -584,77 +602,110 @@ fn web_browser_guided_commands(
                 .linux_package_manager
                 .unwrap_or(LinuxPackageManager::Unknown);
 
-            let (command, note) = match pm {
-                LinuxPackageManager::Apt => (
+            // Build a PM-specific hint when the package manager is known.
+            // The note acknowledges distro variance and points to the
+            // download URL + CHROME_EXECUTABLE as the reliable path.
+            let pm_cmd: Option<(&str, String)> = match pm {
+                LinuxPackageManager::Apt => Some((
                     "sudo apt install chromium-browser",
-                    Some(
-                        "or: sudo apt install google-chrome-stable\n\
-                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    format!(
+                        "Package name varies by distro (chromium-browser on Ubuntu, \
+                         chromium on Debian). If unavailable, download Chrome from \
+                         {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
                     ),
-                ),
-                LinuxPackageManager::Dnf => (
+                )),
+                LinuxPackageManager::Dnf => Some((
                     "sudo dnf install chromium",
-                    Some(
+                    format!(
                         "or: sudo dnf install google-chrome-stable\n\
-                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                         Download Chrome: {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
                     ),
-                ),
-                LinuxPackageManager::Yum => (
+                )),
+                LinuxPackageManager::Yum => Some((
                     "sudo yum install chromium",
-                    Some(
+                    format!(
                         "or: sudo yum install google-chrome-stable\n\
-                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                         Download Chrome: {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
                     ),
-                ),
-                LinuxPackageManager::Pacman => (
+                )),
+                LinuxPackageManager::Pacman => Some((
                     "sudo pacman -S chromium",
-                    Some(
-                        "or: yay -S google-chrome (AUR)\n\
-                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    format!(
+                        "or: yay -S google-chrome (AUR helper required)\n\
+                         Download Chrome: {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
                     ),
-                ),
-                LinuxPackageManager::Zypper => (
+                )),
+                LinuxPackageManager::Zypper => Some((
                     "sudo zypper install chromium",
-                    Some(
-                        "or: download Chrome from https://www.google.com/chrome/\n\
-                         To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"",
+                    format!(
+                        "or: download Chrome from {CHROME_DOWNLOAD_URL}\n\
+                         {CHROME_EXECUTABLE_NOTE}"
                     ),
-                ),
-                LinuxPackageManager::Unknown => (
-                    "https://www.google.com/chrome/",
-                    Some("To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\""),
-                ),
+                )),
+                LinuxPackageManager::Unknown => None,
             };
 
-            vec![GuidedCommand {
-                label: "Install a browser".into(),
-                command: command.into(),
-                note: note.map(Into::into),
-            }]
+            let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+            if let Some((cmd, note)) = pm_cmd {
+                cmds.push(GuidedCommand {
+                    label: "Install a browser (package manager)".into(),
+                    command: cmd.into(),
+                    note: Some(note),
+                });
+            }
+
+            // Always emit the cross-distro, package-manager-independent fallback.
+            cmds.push(GuidedCommand {
+                label: "Download Chrome (cross-distro fallback)".into(),
+                command: CHROME_DOWNLOAD_URL.into(),
+                note: Some(CHROME_EXECUTABLE_NOTE.into()),
+            });
+
+            cmds
         }
 
         HostPlatform::MacOs => {
             vec![GuidedCommand {
                 label: "Download Chrome".into(),
-                command: "https://www.google.com/chrome/".into(),
-                note: Some(
+                command: CHROME_DOWNLOAD_URL.into(),
+                note: Some(format!(
                     "After installing, if Flutter does not detect it:\n\
-                     export CHROME_EXECUTABLE=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\""
-                        .into(),
-                ),
+                     export CHROME_EXECUTABLE=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\"\n\
+                     {CHROME_EXECUTABLE_NOTE}"
+                )),
             }]
         }
 
         HostPlatform::Windows => {
-            vec![GuidedCommand {
-                label: "Install Chrome".into(),
-                command: "winget install Google.Chrome".into(),
+            let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+            // Winget convenience hint — only when winget is pre-confirmed available.
+            if report.winget_available {
+                cmds.push(GuidedCommand {
+                    label: "Install Chrome (winget)".into(),
+                    command: "winget install Google.Chrome".into(),
+                    note: Some(
+                        "If Flutter does not detect it after installing, set the path:\n\
+                         set CHROME_EXECUTABLE=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                            .into(),
+                    ),
+                });
+            }
+
+            // Always emit the download-URL fallback — it does not depend on any
+            // package manager and is the canonical cross-platform option.
+            cmds.push(GuidedCommand {
+                label: "Download Chrome (direct)".into(),
+                command: CHROME_DOWNLOAD_URL.into(),
                 note: Some(
-                    "If Flutter does not detect it, set the path:\n\
+                    "After installing, if Flutter does not detect it:\n\
                      set CHROME_EXECUTABLE=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
                         .into(),
                 ),
-            }]
+            });
+
+            cmds
         }
 
         HostPlatform::Unknown => Vec::new(),
@@ -4337,5 +4388,244 @@ mod tests {
             "flutter_now_live must return true when FlutterSdk is Ok, \
              even when the Web browser is Missing (non-blocking)"
         );
+    }
+
+    // ── web_browser_guided_commands robustness tests ──────────────────────────
+
+    /// Build a minimal Windows `ToolchainReport` with the given `winget_available`
+    /// flag and `WebBrowser` component at `Missing` status (which gets capped to
+    /// `Partial` by `build_steps`).
+    fn make_windows_report_with_winget(winget_available: bool) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::PowerShell,
+            components: vec![make_check(
+                ComponentKind::WebBrowser,
+                ComponentStatus::Missing,
+            )],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available,
+        }
+    }
+
+    /// When `winget_available = true` the Windows arm must emit the winget
+    /// convenience command **and** the Chrome download URL as a
+    /// package-manager-independent fallback.
+    ///
+    /// Criterion 2 requires that every `Partial` path offers the download-URL
+    /// fallback even when a PM command is also present.
+    #[test]
+    fn web_guided_windows_uses_winget_when_available() {
+        let report = make_windows_report_with_winget(true);
+        let cmds = web_browser_guided_commands(&report, StepStatus::Partial);
+
+        // Must have at least two commands: the winget hint + the download URL.
+        assert!(
+            cmds.len() >= 2,
+            "winget=true arm must emit at least 2 commands (winget + download URL), got {}",
+            cmds.len()
+        );
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=true arm must contain a winget command; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands
+                .iter()
+                .any(|cmd| cmd.contains(CHROME_DOWNLOAD_URL)),
+            "winget=true arm must also contain the Chrome download URL as a fallback; \
+             got: {all_commands:?}"
+        );
+    }
+
+    /// When `winget_available = false` the Windows arm must NOT emit a winget
+    /// command, but must still offer the Chrome download URL + `set
+    /// CHROME_EXECUTABLE` note.
+    #[test]
+    fn web_guided_windows_falls_back_when_no_winget() {
+        let report = make_windows_report_with_winget(false);
+        let cmds = web_browser_guided_commands(&report, StepStatus::Partial);
+
+        assert!(
+            !cmds.is_empty(),
+            "winget=false arm must still emit at least one command (download URL)"
+        );
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        let all_notes: Vec<&str> = cmds.iter().filter_map(|c| c.note.as_deref()).collect();
+
+        assert!(
+            !all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=false arm must not emit a winget command; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands
+                .iter()
+                .any(|cmd| cmd.contains(CHROME_DOWNLOAD_URL)),
+            "winget=false arm must contain the Chrome download URL; got: {all_commands:?}"
+        );
+        assert!(
+            all_notes
+                .iter()
+                .any(|note| note.contains("CHROME_EXECUTABLE")),
+            "winget=false arm must contain a CHROME_EXECUTABLE note; got: {all_notes:?}"
+        );
+    }
+
+    /// Every `Partial` platform path must include the `CHROME_EXECUTABLE_NOTE`
+    /// (or an equivalent `CHROME_EXECUTABLE` mention) so users know how to
+    /// point Flutter at a non-default browser regardless of OS.
+    ///
+    /// Criterion 2: every `Partial` platform path offers a
+    /// package-manager-independent fallback.
+    #[test]
+    fn web_guided_partial_always_offers_chrome_executable_fallback() {
+        let partial_browser = vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )];
+
+        // Linux (Unknown PM — will emit only the download-URL fallback cmd)
+        let linux_report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: partial_browser.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
+            winget_available: false,
+        };
+        let linux_cmds = web_browser_guided_commands(&linux_report, StepStatus::Partial);
+        assert!(
+            !linux_cmds.is_empty(),
+            "Linux Partial must emit at least one command"
+        );
+        let linux_has_download = linux_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        let linux_has_note = linux_cmds.iter().any(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("CHROME_EXECUTABLE"))
+        });
+        assert!(
+            linux_has_download,
+            "Linux Partial must offer the Chrome download URL fallback"
+        );
+        assert!(
+            linux_has_note,
+            "Linux Partial must offer a CHROME_EXECUTABLE note"
+        );
+
+        // macOS
+        let macos_report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Zsh,
+            components: partial_browser.clone(),
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let macos_cmds = web_browser_guided_commands(&macos_report, StepStatus::Partial);
+        assert!(
+            !macos_cmds.is_empty(),
+            "macOS Partial must emit at least one command"
+        );
+        let macos_has_download = macos_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        let macos_has_note = macos_cmds.iter().any(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("CHROME_EXECUTABLE"))
+        });
+        assert!(
+            macos_has_download,
+            "macOS Partial must offer the Chrome download URL fallback"
+        );
+        assert!(
+            macos_has_note,
+            "macOS Partial must offer a CHROME_EXECUTABLE note"
+        );
+
+        // Windows (winget=false — no PM, pure fallback)
+        let win_report = make_windows_report_with_winget(false);
+        let win_cmds = web_browser_guided_commands(&win_report, StepStatus::Partial);
+        let win_has_download = win_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        let win_has_note = win_cmds.iter().any(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("CHROME_EXECUTABLE"))
+        });
+        assert!(
+            win_has_download,
+            "Windows Partial (no winget) must offer the Chrome download URL fallback"
+        );
+        assert!(
+            win_has_note,
+            "Windows Partial (no winget) must offer a CHROME_EXECUTABLE note"
+        );
+
+        // Windows (winget=true — also must have the download URL)
+        let win_winget_report = make_windows_report_with_winget(true);
+        let win_winget_cmds = web_browser_guided_commands(&win_winget_report, StepStatus::Partial);
+        let win_winget_has_download = win_winget_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        assert!(
+            win_winget_has_download,
+            "Windows Partial (winget=true) must also offer the Chrome download URL fallback"
+        );
+    }
+
+    /// Linux arms with known package managers must emit both a PM-specific hint
+    /// command AND the cross-distro download-URL fallback.
+    #[test]
+    fn web_guided_linux_known_pm_emits_pm_hint_and_download_fallback() {
+        let partial_browser = vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )];
+
+        for pm in [
+            LinuxPackageManager::Apt,
+            LinuxPackageManager::Dnf,
+            LinuxPackageManager::Yum,
+            LinuxPackageManager::Pacman,
+            LinuxPackageManager::Zypper,
+        ] {
+            let report = ToolchainReport {
+                platform: HostPlatform::Linux,
+                shell: HostShell::Bash,
+                components: partial_browser.clone(),
+                doctor: None,
+                linux_package_manager: Some(pm),
+                winget_available: false,
+            };
+            let cmds = web_browser_guided_commands(&report, StepStatus::Partial);
+
+            assert!(
+                cmds.len() >= 2,
+                "Linux/{pm:?} Partial must emit at least 2 commands (PM hint + download fallback)"
+            );
+
+            let has_download = cmds.iter().any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+            assert!(
+                has_download,
+                "Linux/{pm:?} Partial must include the Chrome download URL fallback"
+            );
+
+            // The first command should be a PM-specific install command (contains sudo).
+            let first_cmd = &cmds[0].command;
+            assert!(
+                first_cmd.contains("sudo"),
+                "Linux/{pm:?} first command should be a PM sudo command; got: {first_cmd}"
+            );
+        }
     }
 }
