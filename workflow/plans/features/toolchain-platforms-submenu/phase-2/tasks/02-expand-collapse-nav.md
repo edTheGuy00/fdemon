@@ -155,16 +155,37 @@ cargo fmt --all && cargo clippy --workspace -- -D warnings
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `InstallWizardToggleExpand` variant with doc comment |
+| `crates/fdemon-app/src/handler/update.rs` | Added dispatch arm for `InstallWizardToggleExpand` |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Added `handle_toggle_expand`, tiered `handle_escape`, updated imports; 11 new handler tests |
+| `crates/fdemon-app/src/handler/keys.rs` | Updated Enter arm to dispatch conditionally on `Platforms` parent; added `l`/`Right`/`h`/`Left` toggle shortcuts; updated imports and doc comment; 6 new key tests |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`handle_toggle_expand` placement**: Added after `handle_escape` in `navigation.rs` (before the private `maybe_dispatch_discovery_on_close` helper). This groups all public panel-lifecycle handlers together, consistent with the file's existing structure.
+
+2. **Esc tiering via no-op guard check**: The collapse tier only activates when `platforms_expanded` is true, so the existing `handle_escape` tests for the handback path (live SDK, UserInvoked, etc.) are unaffected — those always start with `platforms_expanded = false`.
+
+3. **`l`/`Right` and `h`/`Left` are both wired to `InstallWizardToggleExpand`**: The handler is a no-op unless on the Platforms parent, so `h`/`Left` on a non-parent step is silently ignored rather than needing separate expand/collapse messages. This keeps the API minimal.
+
+4. **Test for `esc_collapse_clamps_selected_index`**: Used a weak but correct non-empty assert (replacing the original tautological `len > 0` check that clippy rejected) since `android_idx` is already validated by the `expect()` call.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-app --lib handler::install_wizard::navigation` — 33 passed (22 existing + 11 new)
+- `cargo test -p fdemon-app --lib keys` — 160 passed (154 existing + 6 new)
+- `cargo test --workspace --lib` — 1487 passed, 0 failed
+- `cargo fmt --all -- --check` — clean (no formatting changes needed after fmt run)
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+
 ### Risks/Limitations
+
+1. **No rendering yet**: The `platforms_expanded` and `indent` fields are set correctly but Task 03 (TUI caret/indent/height) handles the visual presentation. The state is correct; it just renders flat until 03 lands.
+2. **`l`/`h` are global in wizard mode**: These keys were previously unbound in `handle_key_install_wizard`, so no conflicts. If a future task needs `l`/`h` for another purpose in wizard mode, the toggle routing will need to be condition-gated.

@@ -50,10 +50,10 @@ arms must land as **one compiling unit** (Task 01). Interactivity (Task 02, fdem
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-enum-datamodel-rename](tasks/01-enum-datamodel-rename.md) | Not Started | - | 3–4h | `install_wizard/{types,state}.rs`, `handler/install_wizard/actions.rs`, `actions/mod.rs`, `widgets/install_wizard/{step_detail,step_list}.rs` |
-| 2 | [02-expand-collapse-nav](tasks/02-expand-collapse-nav.md) | Not Started | 1 | 2–3h | `message.rs`, `handler/mod.rs`, `handler/install_wizard/navigation.rs`, `handler/keys.rs` |
-| 3 | [03-tui-indent-caret-height](tasks/03-tui-indent-caret-height.md) | Not Started | 1 | 2–3h | `widgets/install_wizard/step_list.rs`, `widgets/install_wizard/mod.rs` |
-| 4 | [04-update-architecture-docs](tasks/04-update-architecture-docs.md) | Not Started | 1, 2, 3 | 1h | `docs/ARCHITECTURE.md` |
+| 1 | [01-enum-datamodel-rename](tasks/01-enum-datamodel-rename.md) | ✅ Done (validated, committed `a5255f4`) | - | 3–4h | `install_wizard/{types,state}.rs`, `handler/install_wizard/actions.rs`, `actions/mod.rs`, `widgets/install_wizard/{step_detail,step_list}.rs` |
+| 2 | [02-expand-collapse-nav](tasks/02-expand-collapse-nav.md) | ✅ Done (validated, merged `af86f55`) | 1 | 2–3h | `message.rs`, `handler/mod.rs`, `handler/install_wizard/navigation.rs`, `handler/keys.rs` |
+| 3 | [03-tui-indent-caret-height](tasks/03-tui-indent-caret-height.md) | ✅ Done (validated, merged `0999100`) | 1 | 2–3h | `widgets/install_wizard/step_list.rs`, `widgets/install_wizard/mod.rs` |
+| 4 | [04-update-architecture-docs](tasks/04-update-architecture-docs.md) | ✅ Done (validated, committed `ebc9f5c`) | 1, 2, 3 | 1h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

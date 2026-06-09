@@ -105,16 +105,35 @@ cargo fmt --all && cargo clippy --workspace -- -D warnings
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_list.rs` | Added `platforms_expanded: bool` to `StepListPane`; updated `new()` and `step_list_pane()` with new param; added `CARET_EXPANDED`/`CARET_COLLAPSED`/`INDENT_WIDTH` constants; promoted `HEADER_HEIGHT` to `pub(super)`; updated `render_step_row` to indent leaves by `step.indent * INDENT_WIDTH` and append caret on `WizardStepKind::Platforms`; updated fill-width math to account for caret suffix; updated all `StepListPane::new` test calls (+`false` arg); fixed `test_selected_step_highlighted` to use top-level step (index 0); fixed `step_list_failed_badge_does_not_affect_other_steps` PlatformAndroid glyph x from 2 to 4; added `make_steps_with_platforms_parent`, `make_steps_with_expanded_platforms` fixtures; added 4 new tests: `platforms_parent_shows_collapsed_caret`, `platforms_parent_shows_expanded_caret`, `leaf_row_glyph_is_indented_relative_to_top_level`, `step_list_height_grows_when_expanded` |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Replaced `VERTICAL_STEP_LIST_HEIGHT = 9` with `VERTICAL_STEP_LIST_PADDING = 2` constant; added `use step_list::HEADER_HEIGHT`; updated `render_vertical_panes` to compute step-list height dynamically from `steps.len()`; passed `state.platforms_expanded` to `step_list_pane` in both horizontal and vertical layout paths; updated `render_footer` to append `· [Enter] expand/collapse` when selected step is `WizardStepKind::Platforms` |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`HEADER_HEIGHT` promoted to `pub(super)` instead of duplicating the constant**: The vertical panes height calculation needs `HEADER_HEIGHT` from `step_list.rs`. Promoting it to `pub(super)` is the correct layering — `mod.rs` is the direct parent and already imports from `step_list`. No public API surface change.
+
+2. **Caret NOT included in selection-highlight fill width math in the obvious sense**: The caret is rendered via `Span::styled(c, row_style)`, so ratatui applies `row_style` to it automatically. The fill only needs to cover the gap between the end of the title and the right edge. The `suffix_len` variable correctly accounts for the caret + preceding space in the `used` total so the fill starts at the right offset.
+
+3. **Test `test_selected_step_highlighted` changed to index 0 (Prerequisites)**: The task specified "Prefer building fixture collapsed where test only needs a top-level step." The original test selected index 1 (PlatformAndroid, indent=1), which shifts the glyph to x=4. Switching to index 0 keeps `buf[(2, 2)]` stable and makes the test invariant to indent changes.
+
+4. **Dynamic height clamped to leave at least 6 rows for the detail pane**: `area.height.saturating_sub(6)` ensures the detail pane always gets a non-trivial allocation even if step count is large. A minimum of 6 rows (1 separator + 5 for Constraint::Min(5)) was chosen to match the existing `Constraint::Min(5)` floor.
+
 ### Testing Performed
 
+- `cargo test -p fdemon-tui --lib install_wizard` — Passed (128 tests)
+- `cargo test --workspace --lib` — Passed (1487 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
 ### Risks/Limitations
+
+1. **Caret columns not counted in terminal-width overflow guards**: The caret adds 2 display columns (`" ▸"` or `" ▾"`) to the Platforms row. On very narrow terminals (< ~20 columns) the step title + caret may wrap or clip. This is acceptable given `MIN_RENDER_WIDTH = 40` and the existing `Paragraph` wrapping behaviour; no stray highlighted cells are produced because the fill math accounts for the suffix.
+
+2. **`VERTICAL_STEP_LIST_HEIGHT` constant removed**: Any code outside this module referencing that constant by name would break. A search confirmed it was only used internally in `render_vertical_panes`; no external callers.

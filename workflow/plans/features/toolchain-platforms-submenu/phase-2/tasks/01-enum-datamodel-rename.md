@@ -204,16 +204,38 @@ parent-status rollup.
 
 ## Completion Summary
 
-**Status:** _(fill in)_
+**Status:** Done
 **Branch:** feat/toolchain-platforms-submenu
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
+| `crates/fdemon-app/src/install_wizard/types.rs` | Renamed `AndroidTools` → `PlatformAndroid`; added `Platforms`, `PlatformIos`, `PlatformMacos`, `PlatformWeb`, `PlatformWindows` variants; added `is_platform_leaf()` method; added 2 tests |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `indent: u8` to `WizardStep`; added `platforms_expanded: bool` to `InstallWizardState` + Debug impl; added `rollup_step_statuses()` helper; rewrote `build_steps(report, expanded)` with collapsed (5 rows) and expanded (host-gated leaves) projections; updated `apply_report`; migrated ~50 tests to kind-lookup; added new tests for host-gating, rollup, indent, expand flag |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Renamed `AndroidTools` → `PlatformAndroid` in all match arms; added `Platforms` arm (no-op) and `PlatformIos/Macos/Web/Windows` placeholder arm; updated all test helpers (`wizard_state_with_jdk` sets `platforms_expanded=true`); migrated all hardcoded `selected_index=N` to `select_step()` kind-lookup; fixed stale tests using `AndroidTools` in `begin_step`/`handle_step_started` |
+| `crates/fdemon-app/src/actions/mod.rs` | Renamed `AndroidTools` → `PlatformAndroid` in executor match arm; added `Platforms | PlatformIos | PlatformMacos | PlatformWeb | PlatformWindows` to non-executable catch-all; updated executor dispatch tests |
+| `crates/fdemon-app/src/message.rs` | Doc comment updates: `AndroidTools` → `PlatformAndroid` |
+| `crates/fdemon-app/src/handler/mod.rs` | Doc comment updates in `RunWizardStep` action: `AndroidTools` → `PlatformAndroid` |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | Updated test to use `platforms_expanded=true` + kind-lookup for `PlatformAndroid` selection; added `WizardStepKind` import to test module |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Renamed `AndroidTools` → `PlatformAndroid` in `step_caption`, `is_executable`, `action_hint_text`; added `Platforms` early-return in `render_action_hint`; added `indent` field to all `WizardStep` test literals |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_list.rs` | Added `indent` field to all `WizardStep` test literals; renamed title assertion "Android Tools" → "Android" to match new leaf title |
 
 ### Notable Decisions/Tradeoffs
 
+1. **`wizard_state_with_jdk` sets `platforms_expanded=true`**: Android tests need the `PlatformAndroid` leaf to exist. The helper pre-sets this flag before `apply_report` so all Android-related tests that use `select_step(PlatformAndroid)` find the step without extra per-test boilerplate.
+2. **`Platforms` parent returns `UpdateResult::none()` in `handle_run_selected_step`**: Rather than setting a status message, pressing Enter on the collapsed parent is silently ignored. Task 02 will route Enter to the toggle handler instead.
+3. **`PlatformIos/Macos/Web/Windows` in `render_action_hint` fall through to "Available in a later phase"**: The existing else branch handles these naturally; no special casing needed.
+4. **`Platforms` parent gets early-return in `render_action_hint`**: Similar to `Doctor`, the parent row shows no action hint — it will show a caret indicator (Task 03).
+
 ### Testing Performed
 
+- `cargo build --workspace` — Passed
+- `cargo test --workspace --lib` — Passed (1487 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (clean)
+- `cargo fmt --all` — Applied, tests re-run after formatting — Passed
+
 ### Risks/Limitations
+
+1. **`Platforms` parent Enter behavior**: Currently a no-op. Task 02 must add the toggle message/handler to make Enter on the parent expand/collapse the submenu.
+2. **No rendering changes**: The `indent` field exists but is not yet used by the step-list renderer — Task 03 adds the tree-style indentation caret.
