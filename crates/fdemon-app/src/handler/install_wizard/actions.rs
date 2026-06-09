@@ -131,12 +131,13 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
     let project_path = state.project_path.clone();
     let explicit_sdk_path = state.settings.flutter.sdk_path.clone();
     let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
+    let web_browser_executable = state.settings.toolchain.web_browser_executable.clone();
 
     UpdateResult::action(UpdateAction::RunToolchainPreflight {
         project_path,
         explicit_sdk_path,
         android_sdk_root,
-        web_browser_executable: None,
+        web_browser_executable,
     })
 }
 
@@ -377,9 +378,26 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             UpdateResult::none()
         }
 
+        WizardStepKind::PlatformWeb => {
+            // PlatformWeb is guided-only (not executable): the wizard cannot
+            // auto-install a browser. When guided commands are present, direct
+            // the user to the detail pane; when none exist (browser already
+            // detected or Task 03 not yet merged), return silently.
+            let has_guided = state
+                .install_wizard_state
+                .selected_step()
+                .map(|s| !s.guided_commands.is_empty())
+                .unwrap_or(false);
+
+            if has_guided {
+                state.install_wizard_state.status_message =
+                    Some("Run the listed command(s), then press r to re-check.".to_string());
+            }
+            UpdateResult::none()
+        }
+
         WizardStepKind::PlatformIos
         | WizardStepKind::PlatformMacos
-        | WizardStepKind::PlatformWeb
         | WizardStepKind::PlatformWindows => {
             // Placeholder leaves: not yet implemented.
             state.install_wizard_state.status_message =
@@ -3423,5 +3441,224 @@ mod tests {
             "DiscoverDevices action must be returned; got {:?}",
             actions
         );
+    }
+
+    // ── PlatformWeb arm (Task 02) ─────────────────────────────────────────────
+
+    /// Build a state with platforms expanded and the PlatformWeb step selected.
+    /// Injects a guided command onto the PlatformWeb step so tests can verify
+    /// the run/re-check message path.
+    fn state_with_web_step_and_guided_command() -> AppState {
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        // Expand platforms so PlatformWeb appears in the step list.
+        state.install_wizard_state.platforms_expanded = true;
+        state.install_wizard_state.apply_report(make_report());
+        // Select PlatformWeb.
+        select_step(&mut state, WizardStepKind::PlatformWeb);
+        // Inject a guided command directly (Task 03 populates these for real;
+        // here we simulate the post-Task-03 state so the arm is tested now).
+        let idx = state.install_wizard_state.selected_index;
+        state.install_wizard_state.steps[idx].guided_commands.push(
+            crate::install_wizard::GuidedCommand {
+                label: "Install Chromium".to_string(),
+                command: "sudo apt install chromium".to_string(),
+                note: None,
+            },
+        );
+        state
+    }
+
+    /// Build a state with platforms expanded and the PlatformWeb step selected,
+    /// but leave its guided_commands empty (browser already detected / pre-Task-03).
+    fn state_with_web_step_no_guided_commands() -> AppState {
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.platforms_expanded = true;
+        state.install_wizard_state.apply_report(make_report());
+        select_step(&mut state, WizardStepKind::PlatformWeb);
+        state
+    }
+
+    #[test]
+    fn test_run_selected_step_web_with_guided_commands_sets_status_message() {
+        // When the selected PlatformWeb step has guided commands, Enter must set
+        // the run/re-check status message and return UpdateResult::none().
+        let mut state = state_with_web_step_and_guided_command();
+
+        let result = handle_run_selected_step(&mut state);
+
+        assert!(
+            result.action.is_none(),
+            "PlatformWeb Enter must not dispatch RunWizardStep; got {:?}",
+            result.action
+        );
+        assert!(
+            result.message.is_none(),
+            "PlatformWeb Enter must not queue a message; got {:?}",
+            result.message
+        );
+
+        let msg = state
+            .install_wizard_state
+            .status_message
+            .as_deref()
+            .unwrap_or("");
+        assert!(
+            msg.contains("re-check"),
+            "status_message must contain 're-check' when guided commands exist; got: {msg}"
+        );
+        assert!(
+            !msg.contains("later phase"),
+            "PlatformWeb must not show 'later phase' message; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_run_selected_step_web_without_guided_commands_is_silent() {
+        // When the selected PlatformWeb step has no guided commands (browser
+        // already detected, or pre-Task-03), Enter must return none() silently
+        // without setting any status message.
+        let mut state = state_with_web_step_no_guided_commands();
+
+        let result = handle_run_selected_step(&mut state);
+
+        assert!(
+            result.action.is_none(),
+            "PlatformWeb Enter must not dispatch RunWizardStep; got {:?}",
+            result.action
+        );
+        assert!(
+            result.message.is_none(),
+            "PlatformWeb Enter must not queue a message; got {:?}",
+            result.message
+        );
+        // No status message when there is nothing to guide the user toward.
+        assert!(
+            state.install_wizard_state.status_message.is_none(),
+            "status_message must be None when PlatformWeb has no guided commands; got: {:?}",
+            state.install_wizard_state.status_message
+        );
+    }
+
+    #[test]
+    fn test_ios_macos_windows_still_show_later_phase() {
+        // PlatformIos, PlatformMacos, PlatformWindows must still return the
+        // "Available in a later phase" message after PlatformWeb was split out.
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.platforms_expanded = true;
+        state.install_wizard_state.apply_report(make_report());
+
+        for kind in [
+            WizardStepKind::PlatformIos,
+            WizardStepKind::PlatformMacos,
+            WizardStepKind::PlatformWindows,
+        ] {
+            // Not all platform leaves are present on every OS; skip missing ones.
+            if state
+                .install_wizard_state
+                .steps
+                .iter()
+                .all(|s| s.kind != kind)
+            {
+                continue;
+            }
+            select_step(&mut state, kind);
+            state.install_wizard_state.status_message = None;
+
+            let result = handle_run_selected_step(&mut state);
+
+            assert!(
+                result.action.is_none(),
+                "{kind:?} Enter must not dispatch RunWizardStep; got {:?}",
+                result.action
+            );
+            let msg = state
+                .install_wizard_state
+                .status_message
+                .as_deref()
+                .unwrap_or("");
+            assert!(
+                msg.contains("later phase"),
+                "{kind:?} must still show 'later phase' message; got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_show_carries_web_browser_executable_from_settings() {
+        // handle_show must thread settings.toolchain.web_browser_executable
+        // into RunToolchainPreflight.
+        use crate::handler::install_wizard::navigation::handle_show;
+
+        let mut state = AppState::new();
+        state.settings.toolchain.web_browser_executable = Some("/usr/bin/chromium".to_string());
+
+        let result = handle_show(&mut state, WizardOrigin::UserInvoked);
+
+        match result.action {
+            Some(UpdateAction::RunToolchainPreflight {
+                web_browser_executable,
+                ..
+            }) => {
+                assert_eq!(
+                    web_browser_executable.as_deref(),
+                    Some("/usr/bin/chromium"),
+                    "handle_show must carry web_browser_executable from settings"
+                );
+            }
+            other => panic!("expected RunToolchainPreflight; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_handle_rerun_preflight_carries_web_browser_executable_from_settings() {
+        // handle_rerun_preflight must thread settings.toolchain.web_browser_executable
+        // into RunToolchainPreflight.
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.apply_report(make_report()); // clears loading
+        state.settings.toolchain.web_browser_executable = Some("/opt/brave/brave".to_string());
+
+        let result = handle_rerun_preflight(&mut state);
+
+        match result.action {
+            Some(UpdateAction::RunToolchainPreflight {
+                web_browser_executable,
+                ..
+            }) => {
+                assert_eq!(
+                    web_browser_executable.as_deref(),
+                    Some("/opt/brave/brave"),
+                    "handle_rerun_preflight must carry web_browser_executable from settings"
+                );
+            }
+            other => panic!("expected RunToolchainPreflight; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_handle_show_web_browser_executable_none_when_not_set() {
+        // When the setting is None, web_browser_executable must be None on the action.
+        use crate::handler::install_wizard::navigation::handle_show;
+
+        let mut state = AppState::new();
+        assert!(state.settings.toolchain.web_browser_executable.is_none());
+
+        let result = handle_show(&mut state, WizardOrigin::UserInvoked);
+
+        match result.action {
+            Some(UpdateAction::RunToolchainPreflight {
+                web_browser_executable,
+                ..
+            }) => {
+                assert!(
+                    web_browser_executable.is_none(),
+                    "web_browser_executable must be None when setting is not configured"
+                );
+            }
+            other => panic!("expected RunToolchainPreflight; got {other:?}"),
+        }
     }
 }
