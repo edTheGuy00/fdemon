@@ -658,7 +658,9 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 |-----|--------|-------------|
 | `k` / `↑` | Navigate Up | Move selection up in the step list |
 | `j` / `↓` | Navigate Down | Move selection down in the step list |
-| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write). No-op on guided-only steps (e.g. Prerequisites). |
+| `Enter` | Run / Retry Step / Toggle | On the **Platforms parent**: toggle the Platforms submenu expand/collapse. On any other step: run or retry it (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write). No-op on guided-only steps (e.g. Prerequisites). |
+| `l` / `→` | Expand Platforms submenu | Expand the Platforms submenu when the `Platforms` parent row is selected and the submenu is currently collapsed. No-op when on any other step or when already expanded. |
+| `h` / `←` | Collapse Platforms submenu | Collapse the Platforms submenu whenever it is expanded, from the parent row **or** any platform leaf. Re-anchors the cursor to the `Platforms` parent row when collapsing from a leaf. No-op when already collapsed. |
 | `[` | Previous Command | Select the previous guided command on the current step (e.g. cycle backward through macOS Prerequisites: Xcode CLT → Rosetta). No-op when only one command is available. |
 | `]` | Next Command | Select the next guided command on the current step (e.g. cycle forward through macOS Prerequisites: Xcode CLT → CocoaPods → Rosetta). No-op when only one command is available. |
 | `c` | Copy Selected Guided Command | Copy the currently selected guided command to the clipboard (e.g. the JDK install command or a per-OS prerequisite install command). No-op when the step has no guided command. |

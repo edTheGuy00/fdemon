@@ -1765,6 +1765,14 @@ pub enum Message {
     /// the parent row; the user presses `j` to descend into the leaves.
     InstallWizardToggleExpand,
 
+    /// Expand the Platforms submenu (directional `l`/`Right`). Sets `platforms_expanded = true`.
+    /// No-op unless the selected step is the collapsed `Platforms` parent.
+    InstallWizardExpand,
+
+    /// Collapse the Platforms submenu (directional `h`/`Left`). Sets `platforms_expanded = false`.
+    /// No-op unless the submenu is currently expanded; re-anchors the cursor to the parent.
+    InstallWizardCollapse,
+
     /// Preflight task completed — populate the wizard with the report
     ToolchainPreflightCompleted {
         report: fdemon_daemon::toolchain::ToolchainReport,

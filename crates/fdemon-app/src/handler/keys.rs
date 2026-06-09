@@ -421,8 +421,10 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `j`/`Down` — navigate down in the step list or scroll detail down
 /// - `Enter` — on the Platforms parent: toggle expand/collapse (`InstallWizardToggleExpand`);
 ///   on any other step: run (or retry) the step (`InstallWizardRunSelectedStep`).
-/// - `l`/`Right` — expand Platforms submenu (same as Enter on parent; `InstallWizardToggleExpand`)
-/// - `h`/`Left` — collapse Platforms submenu (same as Enter on parent; `InstallWizardToggleExpand`)
+/// - `l`/`Right` — expand Platforms submenu (`InstallWizardExpand`); no-op unless the selected
+///   step is the collapsed `Platforms` parent.
+/// - `h`/`Left` — collapse Platforms submenu (`InstallWizardCollapse`); re-anchors cursor to
+///   parent when collapsing from a leaf. No-op when already collapsed.
 /// - `r` — re-run the preflight check (`InstallWizardRerunPreflight`)
 /// - `c` — copy the selected guided command to the clipboard (`InstallWizardCopyCommand`)
 /// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
@@ -467,10 +469,10 @@ fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message>
                 Some(Message::InstallWizardRunSelectedStep)
             }
         }
-        // l/Right expand the Platforms submenu; h/Left collapse it.
-        // Both are no-ops when not on the Platforms parent (handled by toggle handler).
-        InputKey::Char('l') | InputKey::Right => Some(Message::InstallWizardToggleExpand),
-        InputKey::Char('h') | InputKey::Left => Some(Message::InstallWizardToggleExpand),
+        // l/Right expand; h/Left collapse the Platforms submenu.
+        // Expand is a no-op unless on the collapsed parent; collapse works from parent or leaf.
+        InputKey::Char('l') | InputKey::Right => Some(Message::InstallWizardExpand),
+        InputKey::Char('h') | InputKey::Left => Some(Message::InstallWizardCollapse),
         InputKey::Char('r') => Some(Message::InstallWizardRerunPreflight),
         // Copy the selected guided command to the clipboard (Phase 3, Task 07).
         InputKey::Char('c') => Some(Message::InstallWizardCopyCommand),
@@ -3881,42 +3883,42 @@ mod install_wizard_key_tests {
     }
 
     #[test]
-    fn l_key_emits_toggle_expand() {
+    fn l_emits_expand() {
         let state = make_install_wizard_state_with_report();
         let msg = handle_key(&state, InputKey::Char('l'));
         assert!(
-            matches!(msg, Some(Message::InstallWizardToggleExpand)),
-            "'l' must emit InstallWizardToggleExpand, got: {msg:?}"
+            matches!(msg, Some(Message::InstallWizardExpand)),
+            "'l' must emit InstallWizardExpand, got: {msg:?}"
         );
     }
 
     #[test]
-    fn h_key_emits_toggle_expand() {
+    fn h_emits_collapse() {
         let state = make_install_wizard_state_with_report();
         let msg = handle_key(&state, InputKey::Char('h'));
         assert!(
-            matches!(msg, Some(Message::InstallWizardToggleExpand)),
-            "'h' must emit InstallWizardToggleExpand, got: {msg:?}"
+            matches!(msg, Some(Message::InstallWizardCollapse)),
+            "'h' must emit InstallWizardCollapse, got: {msg:?}"
         );
     }
 
     #[test]
-    fn right_key_emits_toggle_expand() {
+    fn right_emits_expand() {
         let state = make_install_wizard_state_with_report();
         let msg = handle_key(&state, InputKey::Right);
         assert!(
-            matches!(msg, Some(Message::InstallWizardToggleExpand)),
-            "Right must emit InstallWizardToggleExpand, got: {msg:?}"
+            matches!(msg, Some(Message::InstallWizardExpand)),
+            "Right must emit InstallWizardExpand, got: {msg:?}"
         );
     }
 
     #[test]
-    fn left_key_emits_toggle_expand() {
+    fn left_emits_collapse() {
         let state = make_install_wizard_state_with_report();
         let msg = handle_key(&state, InputKey::Left);
         assert!(
-            matches!(msg, Some(Message::InstallWizardToggleExpand)),
-            "Left must emit InstallWizardToggleExpand, got: {msg:?}"
+            matches!(msg, Some(Message::InstallWizardCollapse)),
+            "Left must emit InstallWizardCollapse, got: {msg:?}"
         );
     }
 }
