@@ -11,13 +11,34 @@
 //! attempts a best-effort `<browser> --version` call to enrich the `detail`
 //! string; on timeout or error, the bare path is used instead.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::process::Command;
 
 use super::super::types::{ComponentCheck, ComponentKind, ComponentStatus, HostPlatform};
-use super::{strip_and_truncate, PROBE_TIMEOUT};
+use super::strip_and_truncate;
+
+/// Dedicated timeout for the browser `--version` probe.
+///
+/// Browser `--version` output is near-instant; a 5-second ceiling guards
+/// against hung wrapper scripts without the 10-second overhead of the shared
+/// `PROBE_TIMEOUT`.
+const BROWSER_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Canonical `.app` bundle paths for Chromium-based browsers on macOS.
+///
+/// Chrome (and Chromium) install as `.app` bundles and are **not** symlinked
+/// onto PATH, so `which::which` cannot find them. We check these paths
+/// directly via `Path::is_file`.
+///
+/// A unit test asserts the expected canonical paths are present in this list,
+/// giving cross-host CI coverage of path-string typos.
+pub(super) const MACOS_BROWSER_CANDIDATES: &[&str] = &[
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+];
 
 /// Detect a Chromium-based browser for Flutter web (`flutter run -d chrome`).
 ///
@@ -132,13 +153,9 @@ fn find_browser_linux() -> Option<PathBuf> {
 ///
 /// Chrome (and Chromium) are installed as `.app` bundles and are **not**
 /// symlinked onto PATH, so `which::which` cannot find them. We check the
-/// canonical installation paths directly via `PathBuf::is_file`.
+/// canonical installation paths directly via `Path::is_file`.
 fn find_browser_macos() -> Option<PathBuf> {
-    const CANDIDATES: &[&str] = &[
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    ];
-    for candidate in CANDIDATES {
+    for candidate in MACOS_BROWSER_CANDIDATES {
         let path = PathBuf::from(candidate);
         if path.is_file() {
             return Some(path);
@@ -147,28 +164,50 @@ fn find_browser_macos() -> Option<PathBuf> {
     None
 }
 
+/// Build Chrome candidate paths from Windows environment variable values.
+///
+/// This pure helper is testable on any host: it accepts the env values as
+/// parameters so it can be exercised on Linux CI without reading real Windows
+/// env vars.
+///
+/// Call sites pass `std::env::var(...).ok().as_deref()` and then
+/// `is_file()`-filter the results.
+pub(super) fn windows_chrome_candidates(
+    program_files: Option<&str>,
+    local_app_data: Option<&str>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(prog_files) = program_files {
+        candidates.push(
+            PathBuf::from(prog_files)
+                .join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe"),
+        );
+    }
+
+    if let Some(app_data) = local_app_data {
+        candidates.push(
+            PathBuf::from(app_data)
+                .join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe"),
+        );
+    }
+
+    candidates
+}
+
 /// Windows browser detection: check `%PROGRAMFILES%` and `%LOCALAPPDATA%`
 /// Chrome paths, then fall back to `msedge` on PATH.
 fn find_browser_windows() -> Option<PathBuf> {
-    // PROGRAMFILES Chrome
-    if let Ok(prog_files) = std::env::var("PROGRAMFILES") {
-        let path = PathBuf::from(&prog_files)
-            .join("Google")
-            .join("Chrome")
-            .join("Application")
-            .join("chrome.exe");
-        if path.is_file() {
-            return Some(path);
-        }
-    }
+    let program_files = std::env::var("PROGRAMFILES").ok();
+    let local_app_data = std::env::var("LOCALAPPDATA").ok();
 
-    // LOCALAPPDATA Chrome (per-user installation)
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        let path = PathBuf::from(&local_app_data)
-            .join("Google")
-            .join("Chrome")
-            .join("Application")
-            .join("chrome.exe");
+    for path in windows_chrome_candidates(program_files.as_deref(), local_app_data.as_deref()) {
         if path.is_file() {
             return Some(path);
         }
@@ -182,13 +221,13 @@ fn find_browser_windows() -> Option<PathBuf> {
     None
 }
 
-/// Run `<browser> --version` with [`PROBE_TIMEOUT`] and return the cleaned
-/// version string, or `None` on timeout/error.
+/// Run `<browser> --version` with [`BROWSER_VERSION_TIMEOUT`] and return the
+/// cleaned version string, or `None` on timeout/error.
 ///
 /// This is best-effort: callers fall back to the bare path when this returns
 /// `None`.
-async fn probe_version(browser_path: &PathBuf) -> Option<String> {
-    let result = tokio::time::timeout(PROBE_TIMEOUT, async {
+async fn probe_version(browser_path: &Path) -> Option<String> {
+    let result = tokio::time::timeout(BROWSER_VERSION_TIMEOUT, async {
         Command::new(browser_path)
             .arg("--version")
             .stdout(Stdio::piped())
@@ -237,10 +276,11 @@ mod tests {
     // ── Override path ─────────────────────────────────────────────────────────
 
     /// When browser_override points to an existing file, the result must be Ok
-    /// and the detail must contain the override path (as a fallback if
-    /// --version fails, or the version string which also contains the path
-    /// on most browsers).
+    /// and the detail must be non-empty. (The test binary won't produce
+    /// `--version` output that browsers produce, so probe_version returns None
+    /// and the bare path is used as the detail fallback, which is non-empty.)
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_check_web_respects_browser_override() {
         // Use the test binary itself as a stand-in for a "browser" — it exists.
         let self_exe = std::env::current_exe().expect("cannot determine test binary path");
@@ -256,18 +296,17 @@ mod tests {
             "override pointing to existing file must be Ok; detail: {}",
             result.detail
         );
-        // detail must contain some reference to the path we passed
-        // (either bare path fallback or version output; bare path fallback is
-        // guaranteed when --version returns unexpected output for a test binary).
+        // detail must be non-empty (either bare path fallback or version output).
         assert!(
-            result.detail.contains(self_exe.to_str().unwrap()) || !result.detail.is_empty(),
-            "detail should be non-empty"
+            !result.detail.is_empty(),
+            "detail must not be empty when override is used"
         );
     }
 
     /// When browser_override path does not exist, the probe must fall through
     /// to the next strategy, not return Ok.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_check_web_nonexistent_override_falls_through() {
         let result = check_web(&HostPlatform::Linux, Some("/nonexistent/path/to/browser")).await;
         // The override path doesn't exist, so we fall through. On a CI Linux
@@ -318,5 +357,118 @@ mod tests {
             "CHROME_EXECUTABLE pointing to existing file must be Ok; detail: {}",
             result.detail
         );
+    }
+
+    // ── macOS candidate paths ─────────────────────────────────────────────────
+
+    /// Assert that `MACOS_BROWSER_CANDIDATES` contains the canonical Chrome and
+    /// Chromium bundle paths.
+    ///
+    /// This test runs on every host (including Linux CI), catching typos in the
+    /// path strings that would otherwise only surface when run on macOS.
+    #[test]
+    fn macos_browser_candidates_are_canonical_bundle_paths() {
+        let expected_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        let expected_chromium = "/Applications/Chromium.app/Contents/MacOS/Chromium";
+
+        assert!(
+            MACOS_BROWSER_CANDIDATES.contains(&expected_chrome),
+            "MACOS_BROWSER_CANDIDATES must contain the canonical Google Chrome bundle path; \
+             got: {:?}",
+            MACOS_BROWSER_CANDIDATES,
+        );
+        assert!(
+            MACOS_BROWSER_CANDIDATES.contains(&expected_chromium),
+            "MACOS_BROWSER_CANDIDATES must contain the canonical Chromium bundle path; \
+             got: {:?}",
+            MACOS_BROWSER_CANDIDATES,
+        );
+    }
+
+    // ── Windows candidate path construction ──────────────────────────────────
+
+    /// Assert that `windows_chrome_candidates` builds the expected
+    /// `Google\Chrome\Application\chrome.exe` paths from injected env values.
+    ///
+    /// This test runs on every host (including Linux CI), covering path-string
+    /// construction without needing real Windows env vars.
+    #[test]
+    fn windows_chrome_candidates_builds_program_files_and_localappdata_paths() {
+        let candidates = windows_chrome_candidates(
+            Some("C:\\Program Files"),
+            Some("C:\\Users\\Alice\\AppData\\Local"),
+        );
+
+        assert_eq!(candidates.len(), 2, "expected exactly 2 candidates");
+
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("C:\\Program Files")
+                .join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe"),
+            "first candidate must be the PROGRAMFILES Chrome path"
+        );
+
+        assert_eq!(
+            candidates[1],
+            PathBuf::from("C:\\Users\\Alice\\AppData\\Local")
+                .join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe"),
+            "second candidate must be the LOCALAPPDATA Chrome path"
+        );
+    }
+
+    /// Assert that `windows_chrome_candidates` returns only one candidate when
+    /// only one env value is provided.
+    #[test]
+    fn windows_chrome_candidates_with_only_program_files() {
+        let candidates = windows_chrome_candidates(Some("C:\\Program Files"), None);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].ends_with("chrome.exe"));
+    }
+
+    /// Assert that `windows_chrome_candidates` returns an empty vec when both
+    /// env values are absent.
+    #[test]
+    fn windows_chrome_candidates_empty_when_no_env() {
+        let candidates = windows_chrome_candidates(None, None);
+        assert!(candidates.is_empty());
+    }
+
+    /// Assert that `windows_chrome_candidates` returns a path that actually
+    /// exists when an injected tempfile is used as the base directory.
+    ///
+    /// This exercises the path-joining without relying on a real Windows
+    /// Chrome installation.
+    #[test]
+    fn windows_chrome_candidates_finds_injected_tempfile() {
+        let tmp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+
+        // Create the nested directory structure and file that the Chrome path expects.
+        let chrome_dir = tmp_dir
+            .path()
+            .join("Google")
+            .join("Chrome")
+            .join("Application");
+        std::fs::create_dir_all(&chrome_dir).expect("failed to create nested dirs");
+        let chrome_exe = chrome_dir.join("chrome.exe");
+        std::fs::write(&chrome_exe, b"").expect("failed to create fake chrome.exe");
+
+        let base = tmp_dir.path().to_str().expect("temp path is valid UTF-8");
+        let candidates = windows_chrome_candidates(Some(base), None);
+
+        assert_eq!(candidates.len(), 1);
+
+        // The constructed path must point to the file we created.
+        let first_existing = candidates.into_iter().find(|p| p.is_file());
+        assert!(
+            first_existing.is_some(),
+            "expected the constructed path to point to the injected tempfile"
+        );
+        assert_eq!(first_existing.unwrap(), chrome_exe);
     }
 }
