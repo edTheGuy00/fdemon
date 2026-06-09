@@ -83,11 +83,17 @@ user how to install a browser or export `CHROME_EXECUTABLE`. A missing browser s
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-daemon-web-browser-detection](tasks/01-daemon-web-browser-detection.md) | Not started | - | 3–4h | `fdemon-daemon/src/toolchain/{types,mod}.rs`, `toolchain/checks/{web,mod}.rs` |
-| 2 | [02-app-config-preflight-plumbing](tasks/02-app-config-preflight-plumbing.md) | Not started | 1 | 2–3h | `fdemon-app/src/config/types.rs`, `handler/mod.rs`, `actions/mod.rs`, `handler/install_wizard/{navigation,actions}.rs` |
-| 3 | [03-app-build-steps-web-leaf](tasks/03-app-build-steps-web-leaf.md) | Not started | 1 | 2–3h | `fdemon-app/src/install_wizard/state.rs` |
-| 4 | [04-tui-web-caption-and-hint](tasks/04-tui-web-caption-and-hint.md) | Not started | 3 | 1–2h | `fdemon-tui/src/widgets/install_wizard/step_detail.rs` |
-| 5 | [05-update-docs](tasks/05-update-docs.md) | Not started | 1, 2, 3, 4 | 1h | `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md` |
+| 1 | [01-daemon-web-browser-detection](tasks/01-daemon-web-browser-detection.md) | ✅ Done (validated PASS, committed `0a97b04`) | - | 3–4h | `fdemon-daemon/src/toolchain/{types,mod}.rs`, `toolchain/checks/{web,mod}.rs` (+ minimal cross-crate stubs) |
+| 2 | [02-app-config-preflight-plumbing](tasks/02-app-config-preflight-plumbing.md) | ✅ Done (validated PASS, merged `4307bac`) | 1 | 2–3h | `fdemon-app/src/config/types.rs`, `handler/install_wizard/{navigation,actions}.rs` (mod.rs/actions/mod.rs pre-landed by 01) |
+| 3 | [03-app-build-steps-web-leaf](tasks/03-app-build-steps-web-leaf.md) | ✅ Done (validated PASS, merged `50685a9`) | 1 | 2–3h | `fdemon-app/src/install_wizard/state.rs` |
+| 4 | [04-tui-web-caption-and-hint](tasks/04-tui-web-caption-and-hint.md) | ✅ Done (validated PASS, committed `64b34dd`) | 3 | 1–2h | `fdemon-tui/src/widgets/install_wizard/step_detail.rs` |
+| 5 | [05-update-docs](tasks/05-update-docs.md) | ✅ Done (validated CONCERN→fixed, committed `a69c95c`,`468b3e1`) | 1, 2, 3, 4 | 1h | `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md` |
+
+> **Integration fix (`f3bd7b4`):** Tasks 02 and 03 each passed isolated validation but combined to a defect —
+> `web_browser_guided_commands` emitted install commands for `StepStatus::Pending` (no `WebBrowser` data /
+> legacy report), not just `Partial`. Fixed so guided commands emit **only** for `Partial` (the capped form
+> of a determined-absent browser); `Ok` (found) and `Pending` (no signal) both yield no commands. Full
+> workspace gate green afterward (fdemon-app 2998 / daemon 1183 / core 514 / dap 842 / tui 1491, 0 failed).
 
 ## File Overlap Analysis
 

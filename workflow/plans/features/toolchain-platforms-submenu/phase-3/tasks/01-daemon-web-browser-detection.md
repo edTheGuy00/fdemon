@@ -129,3 +129,31 @@ New tests to add in `checks/web.rs`:
 - **Env var tests are global** — `CHROME_EXECUTABLE` and any tempfile-based override must restore/clear
   state to avoid cross-test contamination. Prefer a single serialized test or a scope guard.
 - This task is the sole owner of the `ComponentKind` enum change; Tasks 02–04 build on the merged result.
+
+---
+
+## Completion Summary
+
+**Status:** Done (validated PASS) · **Branch:** feat/toolchain-platforms-submenu · **Commit:** `0a97b04`
+
+> Reconstructed by the orchestrator (the implementor's original summary was lost when task-file changes
+> were discarded during the Wave-2 merge bookkeeping; the code commit is intact and validated).
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `ComponentKind::WebBrowser` (10th variant) + `Display` arm `"Web Browser"` + display-test assertion |
+| `crates/fdemon-daemon/src/toolchain/checks/web.rs` (new) | `check_web(platform, browser_override)`: probe order override → `CHROME_EXECUTABLE` → per-OS defaults (Linux `which`; macOS `PathBuf::is_file`; Windows Program Files/LocalAppData + `msedge`); `Ok`/`Missing`/`Unknown`; best-effort `--version` via `PROBE_TIMEOUT`; 4 unit tests (`serial_test` for env mutation) |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | `mod web;` + `pub use web::check_web;` |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | `run_preflight` gains `web_browser_executable: Option<&str>`; `check_web` added to `tokio::join!`; `web_check` appended (10th component); count assertion `9`→`10` + `[9] == WebBrowser`; test callers updated |
+| Cross-crate stubs (minimal, to keep workspace compiling) | `fdemon-app`: `handler/mod.rs` (`RunToolchainPreflight.web_browser_executable` field), `actions/mod.rs` (executor passes `.as_deref()`), `handler/install_wizard/{navigation,actions}.rs` (`None` placeholders), `install_wizard/state.rs` (`WebBrowser` routing arm + `Pending`-fallback `web_status`); `src/doctor.rs` (`None` arg). Tasks 02/03 replace the placeholders with real wiring. |
+
+### Testing
+
+- `cargo test -p fdemon-daemon --lib` — 1183 passed, 0 failed
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — clean · `cargo fmt --all -- --check` — clean
+
+### Validation
+
+task_validator: **PASS** — all 5 acceptance criteria met; cross-crate stubs confirmed minimal/in-scope; macOS `PathBuf` gotcha honoured; env-var tests serialized.

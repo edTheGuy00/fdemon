@@ -130,3 +130,36 @@ New tests to add:
 - **`build_steps` takes no settings param** — the configured `web_browser_executable` reaches detection
   via Task 02's `run_preflight` plumbing and arrives here already reflected in the `WebBrowser`
   component's status. `build_steps` reads only the report.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Missing→Partial cap on `web_status`; added `web_browser_guided_commands` helper; wired guided commands into `PlatformWeb` leaf; updated `build_steps` doc comment; updated `test_build_steps_expanded_inserts_android_leaf`; excluded `PlatformWeb` from no-guided-commands assertion; added 5 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Missing→Partial cap via `if raw == StepStatus::Missing { StepStatus::Partial } else { raw }`**: Exactly as specified — local to the Web leaf, `rollup_status` unchanged. Android still surfaces true `Missing`.
+2. **`web_browser_guided_commands` returns empty vec when status is `Ok`**: Matches `jdk_guided_command` pattern. The `web_status == StepStatus::Ok` early-return avoids the platform match entirely.
+3. **Template paths in `CHROME_EXECUTABLE` note**: Per task spec — `build_steps` takes no settings param so `<path>` placeholders are used rather than the configured `web_browser_executable` value.
+4. **Linux per-PM chromium install commands**: Each known package manager maps to its own `chromium`/`chromium-browser` package name with a `CHROME_EXECUTABLE` export note. Unknown PM falls back to the Chrome download URL with the same note.
+5. **`test_build_steps_expanded_inserts_android_leaf` now asserts `Ok` not `Pending`**: The fixture was updated to feed a `WebBrowser Ok` component, making the test verify the live routing instead of the placeholder.
+
+### Testing Performed
+
+- `cargo build -p fdemon-app` — Passed
+- `cargo test -p fdemon-app --lib install_wizard::state` — Passed (140 tests)
+- `cargo test -p fdemon-app --lib` — Passed (2989 tests)
+- `cargo fmt --all && cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **`CHROME_EXECUTABLE` placeholder paths**: The guided commands show `"/path/to/browser"` rather than the user's actual configured path. This is intentional per the task spec (Decision 2: `build_steps` is pure-on-report). The configured value arrives via Task 02's `run_preflight` plumbing reflected in the component status — if the browser is found via the configured path, status is `Ok` and no commands are shown.
+2. **Linux Apt command uses `chromium-browser` not `chromium`**: Debian/Ubuntu packages the binary as `chromium-browser` on older releases; the note includes a `google-chrome-stable` alternative. This follows the cross-distro preference for Chromium over Chrome.

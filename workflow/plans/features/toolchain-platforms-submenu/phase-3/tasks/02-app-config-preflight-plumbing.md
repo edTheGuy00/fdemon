@@ -116,3 +116,38 @@ New tests to add:
   `FlutterSdk` / `PlatformAndroid` (verified); Web is guided-only and never dispatches a step.
 - `handle_copy_command` / `selected_guided_command()` already work for any step with populated
   `guided_commands` — no change needed; the `c`-copy key works for Web once Task 03 populates them.
+
+---
+
+## Completion Summary
+
+**Status:** Done (validated PASS) · **Branch:** feat/toolchain-platforms-submenu · **Merge:** `4307bac` (worktree)
+
+> Reconstructed by the orchestrator (the implementor's original summary was lost during Wave-2 merge
+> bookkeeping; the code merge is intact and validated).
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `ToolchainSettings.web_browser_executable: Option<String>` (struct-level `#[serde(default)]`) + `None` in `Default`; 3 TOML round-trip/default tests; no collision with `[devtools] browser` |
+| `crates/fdemon-app/src/handler/install_wizard/navigation.rs` | `handle_show` now reads `state.settings.toolchain.web_browser_executable.clone()` (was `None`) |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | `handle_rerun_preflight` reads the setting (was `None`); split `PlatformWeb` into its own guided-only arm (sets run/re-check `status_message` when guided commands exist, silent when none, returns `none()`); iOS/macOS/Windows keep "Available in a later phase"; tests |
+
+> `handler/mod.rs` (`RunToolchainPreflight` field) and `actions/mod.rs` (executor `.as_deref()` pass-through)
+> were **already landed by Task 01's cross-crate stubs**, so this task did not touch them — the realized
+> write set is narrower than the planned one, preserving the parallel-worktree disjointness with Task 03.
+
+### Testing
+
+- `cargo test -p fdemon-app --lib` — green (2989 at isolation); `clippy`/`fmt` clean.
+- 10 new tests across config round-trip, both preflight dispatch sites carrying the setting, and the
+  `PlatformWeb` arm (guided/silent paths).
+
+### Validation & integration note
+
+task_validator: **PASS** (5/5 criteria; correctly avoided the pre-landed files). One test
+(`test_run_selected_step_web_without_guided_commands_is_silent`) later failed only when combined with
+Task 03 — its `make_report()` fixture yielded a `Pending` Web status that Task 03's guided-command builder
+wrongly treated as "absent". Resolved by integration fix `f3bd7b4` (commands emit only for `Partial`); no
+change to this task's handler arm was needed.

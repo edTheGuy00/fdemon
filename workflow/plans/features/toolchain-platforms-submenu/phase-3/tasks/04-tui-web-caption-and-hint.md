@@ -88,3 +88,34 @@ New tests to add:
 - The guided-command block itself (label / command / note / `c`-copy hint) already exists from Phase 3's
   Android work — this task only adds the caption and the suppression guard for the Web kind.
 - Keep the caption concise; it shares the detail pane with the guided-command block and component rows.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `PlatformWeb` arm to `step_caption`; added `PlatformWeb` to `render_action_hint` skip guard; added 3 new tests + 2 helper builders |
+
+### Notable Decisions/Tradeoffs
+
+1. **Caption text**: Used `"  Browser required for flutter run -d chrome"` (with leading 2-space indent matching the Android and Prerequisites captions) as specified in the task.
+2. **ComponentKind in tests**: Used `ComponentKind::WebBrowser` (the existing variant in the enum) rather than inventing a `ChromeBrowser` variant — confirmed by reading `types.rs`.
+3. **`is_executable` unchanged**: Confirmed the wildcard `_ => false` correctly handles Web (guided-only, never executable via Enter).
+
+### Testing Performed
+
+- `cargo build -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui --lib install_wizard` — Passed (131 tests)
+- `cargo test -p fdemon-tui --lib` — Passed (1494 tests)
+- `cargo fmt --all` — Passed (minor formatting applied)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No risks**: This is a pure TUI rendering change confined to `step_detail.rs` with no handler or state changes.

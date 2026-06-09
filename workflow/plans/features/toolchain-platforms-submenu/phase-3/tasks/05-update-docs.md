@@ -62,3 +62,28 @@ detect + guided-only step backed by `ComponentKind::WebBrowser`, with non-blocki
   so `docs/KEYBINDINGS.md` needs no change. Confirm and skip it.
 - Keep ARCHITECTURE.md structural and CONFIGURATION.md reference-style per the doc schemas; do not
   duplicate config-key details into ARCHITECTURE.md.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added checks/web.rs probe description; updated run_preflight signature (10 components, web_browser_executable param); added ComponentKind::WebBrowser to types.rs entry; graduated PlatformWeb from placeholder to live detect+guided-only in install_wizard/state.rs and types.rs entries; updated step_detail.rs entry to document Web leaf caption and guided-command rendering |
+| `docs/CONFIGURATION.md` | Added `web_browser_executable` to [toolchain] TOML example (commented out), property reference table (with disambiguation from [devtools] browser), and complete config.toml example |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: NO/N/A (no config-key details leaked into ARCHITECTURE.md; no architecture descriptions added to CONFIGURATION.md)
+
+### Notable Decisions/Tradeoffs
+
+1. **Non-blocking contract documented in state.rs entry**: The Missing→Partial cap and the "handback reads only FlutterSdk" note are structural facts about build_steps behaviour, appropriate for ARCHITECTURE.md. No implementation detail beyond what is needed to understand the design.
+2. **types.rs phase attribution disambiguated**: Renamed "Phase 3" entries to distinguish toolchain-bootstrap Phase 3 from toolchain-platforms-submenu Phase 3 to avoid confusion in the module reference.
+3. **KEYBINDINGS.md skipped**: Confirmed — Phase 3 Web leaf reuses existing Enter/c/r keys; no new bindings.
