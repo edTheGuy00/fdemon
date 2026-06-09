@@ -18,7 +18,7 @@ pub enum WizardOrigin {
 /// auto-run. Rendered in the detail pane and copyable with `c`.
 ///
 /// Designed to be reusable across wizard steps: Phase 3 uses it for the JDK
-/// install command on the `AndroidTools` step; Phase 4 will reuse it for
+/// install command on the `PlatformAndroid` step; Phase 4 will reuse it for
 /// prerequisites (apt/brew/xcode-select/Rosetta/CocoaPods) on the `Prerequisites` step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuidedCommand {
@@ -45,14 +45,39 @@ pub enum WizardPane {
 pub enum WizardStepKind {
     /// OS-level prerequisites (cmake, ninja, clang, etc. on Linux; Xcode on macOS).
     Prerequisites,
+    /// Parent row for the Platforms submenu (collapsed: shows roll-up status).
+    Platforms,
     /// Android SDK tools: cmdline-tools, platform-tools, platform, build-tools, licenses, JDK.
-    AndroidTools,
+    /// Leaf under `Platforms`; only visible when `platforms_expanded == true`.
+    PlatformAndroid,
+    /// iOS platform support (placeholder — leaf under `Platforms`; macOS only).
+    PlatformIos,
+    /// macOS platform support (placeholder — leaf under `Platforms`; macOS only).
+    PlatformMacos,
+    /// Web platform support (placeholder — leaf under `Platforms`; all hosts).
+    PlatformWeb,
+    /// Windows platform support (placeholder — leaf under `Platforms`; Windows only).
+    PlatformWindows,
     /// PATH and environment configuration (informational step; no component check).
     PathConfig,
     /// Flutter SDK detection and version.
     FlutterSdk,
     /// Embedded `flutter doctor -v` output summary.
     Doctor,
+}
+
+impl WizardStepKind {
+    /// True for the per-platform leaf rows nested under `Platforms`.
+    pub fn is_platform_leaf(self) -> bool {
+        matches!(
+            self,
+            WizardStepKind::PlatformAndroid
+                | WizardStepKind::PlatformIos
+                | WizardStepKind::PlatformMacos
+                | WizardStepKind::PlatformWeb
+                | WizardStepKind::PlatformWindows
+        )
+    }
 }
 
 /// Per-step roll-up status derived from the underlying component checks.
@@ -159,6 +184,24 @@ mod tests {
         let kind = WizardStepKind::FlutterSdk;
         let copy = kind;
         assert_eq!(kind, copy);
+    }
+
+    #[test]
+    fn test_is_platform_leaf_returns_true_for_leaf_variants() {
+        assert!(WizardStepKind::PlatformAndroid.is_platform_leaf());
+        assert!(WizardStepKind::PlatformIos.is_platform_leaf());
+        assert!(WizardStepKind::PlatformMacos.is_platform_leaf());
+        assert!(WizardStepKind::PlatformWeb.is_platform_leaf());
+        assert!(WizardStepKind::PlatformWindows.is_platform_leaf());
+    }
+
+    #[test]
+    fn test_is_platform_leaf_returns_false_for_non_leaf_variants() {
+        assert!(!WizardStepKind::Platforms.is_platform_leaf());
+        assert!(!WizardStepKind::Prerequisites.is_platform_leaf());
+        assert!(!WizardStepKind::FlutterSdk.is_platform_leaf());
+        assert!(!WizardStepKind::PathConfig.is_platform_leaf());
+        assert!(!WizardStepKind::Doctor.is_platform_leaf());
     }
 
     #[test]

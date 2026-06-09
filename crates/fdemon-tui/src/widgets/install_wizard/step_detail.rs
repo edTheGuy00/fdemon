@@ -4,10 +4,10 @@
 //! Renders the detail for the currently selected [`WizardStep`]:
 //!
 //! - **Doctor step**: delegates to [`DoctorView`].
-//! - **Executable steps** (`FlutterSdk`, `PathConfig`, `AndroidTools` when JDK present):
+//! - **Executable steps** (`FlutterSdk`, `PathConfig`, `PlatformAndroid` when JDK present):
 //!   shows component checks plus an "▶ Press Enter to …" action hint; switches to the live
 //!   [`StepProgress`] view while a run is in progress.
-//! - **AndroidTools with JDK missing**: shows component checks plus a guided-command
+//! - **PlatformAndroid with JDK missing**: shows component checks plus a guided-command
 //!   section (label, command, optional note) and a `[c] copy` affordance, with a
 //!   "JDK 17 required" caption.
 //! - **Non-executable steps** (`Prerequisites`, `Doctor`):
@@ -89,7 +89,9 @@ const JDK_CAPTION_HEIGHT: u16 = 1;
 /// so the two can never disagree on which steps have a caption.
 fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
     match kind {
-        WizardStepKind::AndroidTools => Some("  JDK 17 required before installing Android tools"),
+        WizardStepKind::PlatformAndroid => {
+            Some("  JDK 17 required before installing Android tools")
+        }
         WizardStepKind::Prerequisites => {
             Some("  Install the OS build tools below, then press r to re-check")
         }
@@ -207,13 +209,13 @@ impl<'a> StepDetailPane<'a> {
 
     /// Whether this step kind is executable (can be triggered with Enter).
     ///
-    /// `AndroidTools` is executable only when JDK is present (no guided commands).
+    /// `PlatformAndroid` is executable only when JDK is present (no guided commands).
     /// When guided commands are present (JDK missing), it is not immediately runnable
     /// — the user must install JDK first.
     fn is_executable(kind: WizardStepKind, has_guided_commands: bool) -> bool {
         match kind {
             WizardStepKind::FlutterSdk | WizardStepKind::PathConfig => true,
-            WizardStepKind::AndroidTools => !has_guided_commands,
+            WizardStepKind::PlatformAndroid => !has_guided_commands,
             _ => false,
         }
     }
@@ -223,7 +225,7 @@ impl<'a> StepDetailPane<'a> {
         match kind {
             WizardStepKind::FlutterSdk => "\u{25b6} Press Enter to install Flutter SDK", // ▶
             WizardStepKind::PathConfig => "\u{25b6} Press Enter to add Flutter to PATH", // ▶
-            WizardStepKind::AndroidTools => "\u{25b6} Press Enter to install Android tools", // ▶
+            WizardStepKind::PlatformAndroid => "\u{25b6} Press Enter to install Android tools", // ▶
             _ => "",
         }
     }
@@ -232,7 +234,7 @@ impl<'a> StepDetailPane<'a> {
     ///
     /// Shows "▶ Press Enter to …" for executable steps, or
     /// "Available in a later phase" for non-executable steps.
-    /// `has_guided_commands` controls whether `AndroidTools` is treated as executable.
+    /// `has_guided_commands` controls whether `PlatformAndroid` is treated as executable.
     fn render_action_hint(
         &self,
         kind: WizardStepKind,
@@ -253,16 +255,16 @@ impl<'a> StepDetailPane<'a> {
                 palette::ACCENT,
                 true,
             )
-        } else if kind == WizardStepKind::Doctor {
-            // Doctor step is a display-only view; no action
+        } else if kind == WizardStepKind::Doctor || kind == WizardStepKind::Platforms {
+            // Doctor/Platforms: display-only views; no action hint.
             return;
         } else if has_guided_commands
             && matches!(
                 kind,
-                WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
+                WizardStepKind::PlatformAndroid | WizardStepKind::Prerequisites
             )
         {
-            // AndroidTools gated (JDK missing) or Prerequisites with guided commands —
+            // PlatformAndroid gated (JDK missing) or Prerequisites with guided commands —
             // the guided-command section is the primary CTA; skip the "later phase" hint.
             return;
         } else {
@@ -329,7 +331,7 @@ impl<'a> StepDetailPane<'a> {
     ///
     /// Accounts for:
     /// - Section header: `GUIDED_SECTION_HEADER_HEIGHT` rows (1)
-    /// - Optional per-step caption (AndroidTools / Prerequisites): `JDK_CAPTION_HEIGHT` rows (1)
+    /// - Optional per-step caption (PlatformAndroid / Prerequisites): `JDK_CAPTION_HEIGHT` rows (1)
     /// - Per-command blocks: label(1) + command(wrapped) + optional note(wrapped) + optional
     ///   leading blank (skipped for command 0 when a caption was rendered, i.e. `has_caption`
     ///   is true).
@@ -433,7 +435,7 @@ impl<'a> StepDetailPane<'a> {
     /// Layout (each row occupies one character-cell row):
     /// ```text
     ///   Guided steps (run these yourself, then press 'r' to re-check):
-    ///   [caption — AndroidTools: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
+    ///   [caption — PlatformAndroid: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
     ///
     ///     Install JDK 17
     ///       $ sudo pacman -S jdk17-openjdk          [c] copy
@@ -1053,7 +1055,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_shows_enter_hint_for_android_step_when_jdk_present() {
-        // AndroidTools with JDK Ok (guided_commands is empty) → executable.
+        // PlatformAndroid with JDK Ok (guided_commands is empty) → executable.
         // Uses a hand-crafted state to ensure the JDK component is explicitly Ok,
         // since a report without any Jdk entry now correctly produces a guided command
         // (m2 fix: is_jdk_actionable returns true when no Jdk entry).
@@ -1066,11 +1068,11 @@ mod tests {
 
         assert!(
             content.contains("Press Enter"),
-            "AndroidTools step without guided commands should show 'Press Enter' hint: '{content}'"
+            "PlatformAndroid step without guided commands should show 'Press Enter' hint: '{content}'"
         );
         assert!(
             content.contains("Android tools"),
-            "AndroidTools Enter hint should mention 'Android tools': '{content}'"
+            "PlatformAndroid Enter hint should mention 'Android tools': '{content}'"
         );
     }
 
@@ -1308,6 +1310,7 @@ mod tests {
                 detail: "not found".to_string(),
             }],
             guided_commands: vec![],
+            indent: 0,
         }];
         state.selected_index = 0;
 
@@ -1352,6 +1355,7 @@ mod tests {
                     command: "sudo apt-get install -y curl git unzip".to_string(),
                     note: Some("or: sudo dnf install -y curl git unzip".to_string()),
                 }],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -1391,20 +1395,21 @@ mod tests {
                         note: None,
                     },
                 ],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
         }
     }
 
-    /// Build an `InstallWizardState` with the AndroidTools step selected and a JDK
+    /// Build an `InstallWizardState` with the PlatformAndroid step selected and a JDK
     /// guided command present (simulates JDK missing scenario).
     fn make_state_android_jdk_missing() -> InstallWizardState {
         InstallWizardState {
             visible: true,
             steps: vec![WizardStep {
-                kind: WizardStepKind::AndroidTools,
-                title: "Android Tools".to_string(),
+                kind: WizardStepKind::PlatformAndroid,
+                title: "Android".to_string(),
                 status: fdemon_app::install_wizard::StepStatus::Missing,
                 components: vec![ComponentCheck {
                     kind: ComponentKind::Jdk,
@@ -1416,20 +1421,21 @@ mod tests {
                     command: "sudo pacman -S jdk17-openjdk".to_string(),
                     note: Some("or: sudo dnf install java-17-openjdk-devel".to_string()),
                 }],
+                indent: 1,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
         }
     }
 
-    /// Build an `InstallWizardState` with the AndroidTools step selected, JDK present
+    /// Build an `InstallWizardState` with the PlatformAndroid step selected, JDK present
     /// (no guided commands), simulating a ready-to-run Android install.
     fn make_state_android_jdk_present() -> InstallWizardState {
         InstallWizardState {
             visible: true,
             steps: vec![WizardStep {
-                kind: WizardStepKind::AndroidTools,
-                title: "Android Tools".to_string(),
+                kind: WizardStepKind::PlatformAndroid,
+                title: "Android".to_string(),
                 status: fdemon_app::install_wizard::StepStatus::Missing,
                 components: vec![
                     ComponentCheck {
@@ -1444,6 +1450,7 @@ mod tests {
                     },
                 ],
                 guided_commands: vec![], // JDK is Ok → no guided command
+                indent: 1,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -1452,7 +1459,7 @@ mod tests {
 
     #[test]
     fn test_detail_renders_jdk_guided_command() {
-        // AndroidTools selected + JDK GuidedCommand present
+        // PlatformAndroid selected + JDK GuidedCommand present
         let state = make_state_android_jdk_missing();
         let pane = StepDetailPane::new(&state, true, 0);
         let area = Rect::new(0, 0, 80, 30);
@@ -1485,7 +1492,7 @@ mod tests {
 
     #[test]
     fn test_detail_android_enter_hint_when_jdk_present() {
-        // AndroidTools with no guided commands (JDK present) → normal Enter hint
+        // PlatformAndroid with no guided commands (JDK present) → normal Enter hint
         let state = make_state_android_jdk_present();
         let pane = StepDetailPane::new(&state, true, 0);
         let area = Rect::new(0, 0, 80, 30);
@@ -1723,6 +1730,7 @@ mod tests {
                         note: None,
                     },
                 ],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -1813,7 +1821,7 @@ mod tests {
         );
     }
 
-    /// Regression test: single-command AndroidTools / Prerequisites path is visually
+    /// Regression test: single-command PlatformAndroid / Prerequisites path is visually
     /// unchanged after the fix.  The bottom section height should be the same as
     /// before for a single command with a note.
     #[test]
@@ -1827,19 +1835,19 @@ mod tests {
 
         assert!(
             content.contains("Install JDK 17"),
-            "single-command AndroidTools must still render label: '{content}'"
+            "single-command PlatformAndroid must still render label: '{content}'"
         );
         assert!(
             content.contains("jdk17-openjdk"),
-            "single-command AndroidTools must still render command: '{content}'"
+            "single-command PlatformAndroid must still render command: '{content}'"
         );
         assert!(
             content.contains("copy"),
-            "single-command AndroidTools must still show [c] copy: '{content}'"
+            "single-command PlatformAndroid must still show [c] copy: '{content}'"
         );
         assert!(
             content.contains("sudo dnf"),
-            "single-command AndroidTools must still render note: '{content}'"
+            "single-command PlatformAndroid must still render note: '{content}'"
         );
     }
 
@@ -1897,11 +1905,11 @@ mod tests {
     }
 
     /// Unit test for `guided_section_full_height` helper: single command with note,
-    /// AndroidTools (has caption).
+    /// PlatformAndroid (has caption).
     ///
     /// Expected breakdown:
     ///   - header: 1
-    ///   - caption (AndroidTools): 1
+    ///   - caption (PlatformAndroid): 1
     ///   - cmd 0 (has_caption=true, no blank): label(1) + cmd(1) + note(1) = 3
     ///
     ///   Total = 5
@@ -1914,11 +1922,14 @@ mod tests {
         }];
         // Pass width=0 to use the pre-wrapping (1 row each) fallback so the test
         // is not sensitive to terminal width — structure check only.
-        let height =
-            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::AndroidTools, 0);
+        let height = StepDetailPane::guided_section_full_height(
+            &commands,
+            WizardStepKind::PlatformAndroid,
+            0,
+        );
         assert_eq!(
             height, 5,
-            "single-command AndroidTools section with note should need 5 rows"
+            "single-command PlatformAndroid section with note should need 5 rows"
         );
     }
 
@@ -1935,11 +1946,11 @@ mod tests {
 
     #[test]
     fn test_step_caption_android_tools_returns_some() {
-        let caption = step_caption(WizardStepKind::AndroidTools);
-        assert!(caption.is_some(), "AndroidTools should have a caption");
+        let caption = step_caption(WizardStepKind::PlatformAndroid);
+        assert!(caption.is_some(), "PlatformAndroid should have a caption");
         assert!(
             caption.unwrap().contains("JDK 17"),
-            "AndroidTools caption should mention JDK 17"
+            "PlatformAndroid caption should mention JDK 17"
         );
     }
 
@@ -2308,6 +2319,7 @@ mod tests {
                             .to_string(),
                     note: None,
                 }],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -2365,6 +2377,7 @@ mod tests {
                         .to_string(),
                 }],
                 guided_commands: vec![],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()

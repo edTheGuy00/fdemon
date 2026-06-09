@@ -17,9 +17,9 @@
 //!   - `handle_rerun_preflight` fires `RunToolchainPreflight`
 //!   - `handle_preflight_completed` fires `ScanInstalledSdks` (FVM cache refresh)
 //!
-//! On `WizardStepCompleted { kind: AndroidTools, sdk_path: Some(root) }`:
+//! On `WizardStepCompleted { kind: PlatformAndroid, sdk_path: Some(root) }`:
 //!   - action  → `PersistSettings`
-//!   - message → `InstallWizardAutoConfigurePath { AndroidTools }`
+//!   - message → `InstallWizardAutoConfigurePath { PlatformAndroid }`
 //!   - `handle_auto_configure_path` starts PathConfig with ANDROID_HOME
 //!   - PathConfig completion / failure → `InstallWizardRerunPreflight`
 
@@ -143,7 +143,7 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
 /// successful managed install.
 ///
 /// Dispatched by `handle_step_completed` after a successful `FlutterSdk` or
-/// `AndroidTools` install.  Reuses the same `RunWizardStep { PathConfig }`
+/// `PlatformAndroid` install.  Reuses the same `RunWizardStep { PathConfig }`
 /// action path as `handle_run_selected_step` so the executor logic is shared.
 ///
 /// ## Scope per origin
@@ -151,7 +151,7 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
 /// - **FlutterSdk origin:** writes the Flutter `<sdk>/bin` PATH entry only.
 ///   `android_sdk_root` is passed as `None` so the Android block is not
 ///   touched — each step's side effects stay scoped to what it installed.
-/// - **AndroidTools origin:** writes both the Flutter PATH (if a Flutter SDK
+/// - **PlatformAndroid origin:** writes both the Flutter PATH (if a Flutter SDK
 ///   is resolvable) and the `ANDROID_HOME` / Android PATH entries.
 ///
 /// ## Fallback
@@ -171,7 +171,7 @@ pub fn handle_rerun_preflight(state: &mut AppState) -> UpdateResult {
 /// ## No-loop guarantee
 ///
 /// PathConfig completion → `InstallWizardRerunPreflight` (existing).
-/// PathConfig completion does NOT re-trigger `FlutterSdk` or `AndroidTools`,
+/// PathConfig completion does NOT re-trigger `FlutterSdk` or `PlatformAndroid`,
 /// and `handle_preflight_completed` does not emit `AutoConfigurePath`.
 pub fn handle_auto_configure_path(state: &mut AppState, kind: WizardStepKind) -> UpdateResult {
     // Guard: only one step at a time.  If a step is already running (e.g. the
@@ -214,26 +214,25 @@ pub fn handle_auto_configure_path(state: &mut AppState, kind: WizardStepKind) ->
 
     // Scope the Android SDK root per origin:
     // - FlutterSdk: None  (don't touch Android block for a Flutter-only install)
-    // - AndroidTools: include the root so ANDROID_HOME is written
-    let android_sdk_root: Option<std::path::PathBuf> =
-        match kind {
-            WizardStepKind::FlutterSdk => None,
-            WizardStepKind::AndroidTools => state
-                .settings
-                .toolchain
-                .android_sdk_root
-                .clone()
-                .or_else(|| {
-                    let p = fdemon_daemon::resolve_android_sdk_root_path(None);
-                    if p.is_dir() {
-                        Some(p)
-                    } else {
-                        None
-                    }
-                }),
-            // Other kinds cannot trigger auto-config; treat as Flutter-only.
-            _ => None,
-        };
+    // - PlatformAndroid: include the root so ANDROID_HOME is written
+    let android_sdk_root: Option<std::path::PathBuf> = match kind {
+        WizardStepKind::FlutterSdk => None,
+        WizardStepKind::PlatformAndroid => state
+            .settings
+            .toolchain
+            .android_sdk_root
+            .clone()
+            .or_else(|| {
+                let p = fdemon_daemon::resolve_android_sdk_root_path(None);
+                if p.is_dir() {
+                    Some(p)
+                } else {
+                    None
+                }
+            }),
+        // Other kinds cannot trigger auto-config; treat as Flutter-only.
+        _ => None,
+    };
 
     // Flip UI to Running immediately (same pattern as handle_run_selected_step).
     state
@@ -326,7 +325,7 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             })
         }
 
-        WizardStepKind::AndroidTools => {
+        WizardStepKind::PlatformAndroid => {
             // JDK gate: sdkmanager requires a JDK 17. Use the shared `is_jdk_actionable`
             // helper — the same predicate that populates the guided command in
             // `build_steps()` — so the gate message and the rendered command always agree:
@@ -372,6 +371,21 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             })
         }
 
+        WizardStepKind::Platforms => {
+            // Platforms parent row: not executable (toggle-only, handled by Task 02).
+            UpdateResult::none()
+        }
+
+        WizardStepKind::PlatformIos
+        | WizardStepKind::PlatformMacos
+        | WizardStepKind::PlatformWeb
+        | WizardStepKind::PlatformWindows => {
+            // Placeholder leaves: not yet implemented.
+            state.install_wizard_state.status_message =
+                Some("Available in a later phase".to_string());
+            UpdateResult::none()
+        }
+
         WizardStepKind::PathConfig => {
             // Prefer the sdk_path stashed by a just-completed FlutterSdk step,
             // then the settings-configured explicit path, then the resolved SDK root.
@@ -393,7 +407,7 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             match bin_dir {
                 Some(bin) => {
                     // Include the Android SDK root so the executor can write ANDROID_HOME.
-                    // Prefer the settings-stored root (set by a completed AndroidTools
+                    // Prefer the settings-stored root (set by a completed PlatformAndroid
                     // step), then fall back to the shared resolver ($ANDROID_HOME /
                     // $ANDROID_SDK_ROOT / platform default). Only show the ordering tip
                     // when no Android SDK exists anywhere — consistent with what the
@@ -483,8 +497,8 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
 /// async task sent its announce).  Discarding it prevents the cross-kind zombie:
 ///
 /// ```text
-/// Run A (AndroidTools, seq=1) → Esc → Run B (FlutterSdk, seq=2)
-/// Delayed WizardStepStarted{AndroidTools, seq=1} arrives:
+/// Run A (PlatformAndroid, seq=1) → Esc → Run B (FlutterSdk, seq=2)
+/// Delayed WizardStepStarted{PlatformAndroid, seq=1} arrives:
 ///   seq 1 ≠ state.run_seq 2  →  no-op  →  Run B survives intact
 /// ```
 ///
@@ -613,7 +627,7 @@ pub fn handle_step_completed(
         }
     }
 
-    if kind == WizardStepKind::AndroidTools {
+    if kind == WizardStepKind::PlatformAndroid {
         // The executor passes the resolved Android SDK root via `sdk_path` so that
         // `settings.toolchain.android_sdk_root` can be updated and persisted.
         if let Some(root) = sdk_path {
@@ -625,7 +639,7 @@ pub fn handle_step_completed(
             let project_path = state.project_path.clone();
             return UpdateResult::message_and_action(
                 Message::InstallWizardAutoConfigurePath {
-                    kind: WizardStepKind::AndroidTools,
+                    kind: WizardStepKind::PlatformAndroid,
                 },
                 UpdateAction::PersistSettings {
                     settings: Box::new(state.settings.clone()),
@@ -671,7 +685,7 @@ pub fn handle_step_failed(state: &mut AppState, reason: String) -> UpdateResult 
     // Capture the running step kind before finish_step is called.
     // For PathConfig failures we re-run preflight so the step list is still
     // refreshed even when the auto-configured PATH write fails (e.g. unknown
-    // shell).  The FlutterSdk / AndroidTools installs themselves were already
+    // shell).  The FlutterSdk / PlatformAndroid installs themselves were already
     // recorded as Succeeded before the auto-config was dispatched, so the
     // step list update is still useful.
     let failing_kind = state.install_wizard_state.execution.kind;
@@ -1032,7 +1046,7 @@ mod tests {
 
         state
             .install_wizard_state
-            .begin_step(WizardStepKind::AndroidTools);
+            .begin_step(WizardStepKind::PlatformAndroid);
         handle_step_failed(&mut state, "Cancelled: user pressed Esc".into());
         assert_eq!(
             state.install_wizard_state.execution.status,
@@ -1109,8 +1123,8 @@ mod tests {
     #[test]
     fn test_run_selected_flutter_step_dispatches_install_action() {
         let mut state = state_with_preflight();
-        // Select the FlutterSdk step (index 2 in the 5-step list).
-        state.install_wizard_state.selected_index = 2;
+        // Select the FlutterSdk step via kind-lookup.
+        select_step(&mut state, WizardStepKind::FlutterSdk);
         assert_eq!(
             state.install_wizard_state.selected_step().map(|s| s.kind),
             Some(WizardStepKind::FlutterSdk),
@@ -1143,7 +1157,7 @@ mod tests {
     fn test_run_selected_noop_while_running() {
         let mut state = state_with_preflight();
         // Select and start the FlutterSdk step.
-        state.install_wizard_state.selected_index = 2;
+        select_step(&mut state, WizardStepKind::FlutterSdk);
         handle_run_selected_step(&mut state);
         assert!(state.install_wizard_state.is_step_running());
 
@@ -1159,8 +1173,8 @@ mod tests {
     #[test]
     fn test_pathconfig_without_known_sdk_sets_status_message() {
         let mut state = state_with_preflight();
-        // Select PathConfig (index 3) with no SDK path set.
-        state.install_wizard_state.selected_index = 3;
+        // Select PathConfig via kind-lookup with no SDK path set.
+        select_step(&mut state, WizardStepKind::PathConfig);
         assert_eq!(
             state.install_wizard_state.selected_step().map(|s| s.kind),
             Some(WizardStepKind::PathConfig),
@@ -1198,7 +1212,7 @@ mod tests {
         // Simulate a just-completed FlutterSdk step that stashed an sdk_path.
         state.install_wizard_state.installed_sdk_path =
             Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 3; // PathConfig
+        select_step(&mut state, WizardStepKind::PathConfig);
 
         let result = handle_run_selected_step(&mut state);
 
@@ -1287,7 +1301,7 @@ mod tests {
             Some("network timeout")
         );
         // A fresh run must now be dispatchable.
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
         let result = handle_run_selected_step(&mut state);
         assert!(
             result.action.is_some(),
@@ -1344,7 +1358,7 @@ mod tests {
     #[test]
     fn test_step_started_preserves_install_task_and_run_seq() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
 
         // Drive handle_run_selected_step — this calls begin_step, mints the
         // token, and stores install_task synchronously.
@@ -1394,16 +1408,16 @@ mod tests {
     /// This is the core guard for the cross-kind zombie race (F-PR53-01):
     ///
     /// ```text
-    /// Run A (AndroidTools, seq=N) starts
+    /// Run A (PlatformAndroid, seq=N) starts
     /// Esc → handle_cancel_step takes install_task, resets to Idle
     /// Enter → Run B (FlutterSdk, seq=N+1) begin_step; install_task=Some{cancelB}
-    /// Delayed WizardStepStarted{AndroidTools, seq=N} arrives:
+    /// Delayed WizardStepStarted{PlatformAndroid, seq=N} arrives:
     ///   seq N ≠ state.run_seq (N+1) → no-op → Run B survives intact
     /// ```
     #[test]
     fn test_stale_cross_kind_step_started_is_noop() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
 
         // Simulate Run B: begin_step(FlutterSdk) with seq = N (e.g. 2).
         // We do this via handle_run_selected_step to get a real install_task.
@@ -1418,8 +1432,8 @@ mod tests {
         // Use a seq that is not equal to the current one.
         let stale_seq = run_seq_b.wrapping_sub(1);
 
-        // Feed the stale cross-kind Started (AndroidTools with Run A's seq).
-        handle_step_started(&mut state, WizardStepKind::AndroidTools, stale_seq);
+        // Feed the stale cross-kind Started (PlatformAndroid with Run A's seq).
+        handle_step_started(&mut state, WizardStepKind::PlatformAndroid, stale_seq);
 
         // install_task must still be Some (Run B's cancelB token is intact).
         assert!(
@@ -1435,7 +1449,7 @@ mod tests {
         assert_eq!(
             state.install_wizard_state.execution.kind,
             Some(WizardStepKind::FlutterSdk),
-            "execution.kind must remain FlutterSdk after stale AndroidTools Started"
+            "execution.kind must remain FlutterSdk after stale PlatformAndroid Started"
         );
         // Step must still be Running.
         assert!(
@@ -1453,7 +1467,7 @@ mod tests {
     #[test]
     fn test_step_started_with_current_seq_same_kind_preserves_task() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
 
         // Drive handle_run_selected_step to get a real install_task.
         let result = handle_run_selected_step(&mut state);
@@ -1492,7 +1506,7 @@ mod tests {
     #[test]
     fn test_completed_inert_step_returns_none() {
         // A step with no completion side-effect (Doctor) chains nothing.
-        // (FlutterSdk/AndroidTools persist+rerun, PathConfig reruns — covered
+        // (FlutterSdk/PlatformAndroid persist+rerun, PathConfig reruns — covered
         // by their own tests.)
         let mut state = state_with_preflight();
         state
@@ -1656,9 +1670,13 @@ mod tests {
     }
 
     /// Build a fresh state with the wizard open and a JDK at the given status.
+    ///
+    /// Sets `platforms_expanded = true` so that `PlatformAndroid` leaf rows
+    /// appear in the step list and can be selected via `select_step`.
     fn wizard_state_with_jdk(jdk_status: ComponentStatus) -> AppState {
         let mut state = AppState::new();
         state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.platforms_expanded = true;
         state
             .install_wizard_state
             .apply_report(make_report_with_jdk(jdk_status));
@@ -1679,7 +1697,7 @@ mod tests {
     #[test]
     fn test_android_step_gated_when_jdk_missing() {
         let mut state = wizard_state_with_jdk(ComponentStatus::Missing);
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -1702,7 +1720,7 @@ mod tests {
     #[test]
     fn test_android_step_gated_when_jdk_partial() {
         let mut state = wizard_state_with_jdk(ComponentStatus::Partial);
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -1717,6 +1735,8 @@ mod tests {
     fn test_android_step_gated_when_no_report() {
         let mut state = AppState::new();
         state.show_install_wizard(WizardOrigin::UserInvoked);
+        // Expand so PlatformAndroid leaf appears in the step list.
+        state.install_wizard_state.platforms_expanded = true;
         // No report applied — loading is true, report is None.
         // Apply an empty report so steps exist but JDK entry is absent.
         state.install_wizard_state.apply_report(ToolchainReport {
@@ -1727,7 +1747,7 @@ mod tests {
             linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
             winget_available: false,
         });
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -1740,7 +1760,7 @@ mod tests {
     #[test]
     fn test_android_step_dispatches_when_jdk_ok() {
         let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -1748,13 +1768,13 @@ mod tests {
             matches!(
                 r.action,
                 Some(UpdateAction::RunWizardStep {
-                    kind: WizardStepKind::AndroidTools,
+                    kind: WizardStepKind::PlatformAndroid,
                     android: Some(_),
                     install: None,
                     ..
                 })
             ),
-            "must dispatch RunWizardStep(AndroidTools) when JDK is Ok; got {:?}",
+            "must dispatch RunWizardStep(PlatformAndroid) when JDK is Ok; got {:?}",
             r.action
         );
         assert!(
@@ -1768,7 +1788,7 @@ mod tests {
         let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
         state.settings.toolchain.android_sdk_root = Some(std::path::PathBuf::from("/opt/android"));
         state.settings.toolchain.android_api_level = 34;
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -1796,12 +1816,12 @@ mod tests {
         let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
         state
             .install_wizard_state
-            .begin_step(WizardStepKind::AndroidTools);
+            .begin_step(WizardStepKind::PlatformAndroid);
         let root = std::path::PathBuf::from("/home/user/.local/share/fdemon/android");
 
         let result = handle_step_completed(
             &mut state,
-            WizardStepKind::AndroidTools,
+            WizardStepKind::PlatformAndroid,
             "Android SDK installed".into(),
             Some(root.clone()),
         );
@@ -1818,16 +1838,16 @@ mod tests {
             "must return PersistSettings action; got {:?}",
             result.action
         );
-        // Follow-up message must be InstallWizardAutoConfigurePath{AndroidTools}.
+        // Follow-up message must be InstallWizardAutoConfigurePath{PlatformAndroid}.
         // (PathConfig completion will subsequently re-run preflight.)
         assert!(
             matches!(
                 result.message,
                 Some(Message::InstallWizardAutoConfigurePath {
-                    kind: WizardStepKind::AndroidTools
+                    kind: WizardStepKind::PlatformAndroid
                 })
             ),
-            "must return InstallWizardAutoConfigurePath{{AndroidTools}} follow-up; got {:?}",
+            "must return InstallWizardAutoConfigurePath{{PlatformAndroid}} follow-up; got {:?}",
             result.message
         );
     }
@@ -1837,11 +1857,11 @@ mod tests {
         let mut state = wizard_state_with_jdk(ComponentStatus::Ok);
         state
             .install_wizard_state
-            .begin_step(WizardStepKind::AndroidTools);
+            .begin_step(WizardStepKind::PlatformAndroid);
 
         let result = handle_step_completed(
             &mut state,
-            WizardStepKind::AndroidTools,
+            WizardStepKind::PlatformAndroid,
             "Partial install".into(),
             None,
         );
@@ -1940,7 +1960,7 @@ mod tests {
         );
     }
 
-    /// After an AndroidTools install, auto-config must start PathConfig with
+    /// After a PlatformAndroid install, auto-config must start PathConfig with
     /// both the Flutter bin dir (from stash / settings) AND the Android SDK root.
     #[test]
     fn test_auto_configure_path_android_dispatches_pathconfig_with_android_root() {
@@ -1952,7 +1972,7 @@ mod tests {
         // Android SDK root was just persisted by handle_step_completed.
         state.settings.toolchain.android_sdk_root = Some(android_root.clone());
 
-        let result = handle_auto_configure_path(&mut state, WizardStepKind::AndroidTools);
+        let result = handle_auto_configure_path(&mut state, WizardStepKind::PlatformAndroid);
 
         // Must dispatch RunWizardStep{PathConfig} with both dirs.
         assert!(
@@ -1965,7 +1985,7 @@ mod tests {
                     ..
                 })
             ),
-            "AndroidTools auto-config must dispatch PathConfig with both dirs; got {:?}",
+            "PlatformAndroid auto-config must dispatch PathConfig with both dirs; got {:?}",
             result.action
         );
         if let Some(UpdateAction::RunWizardStep {
@@ -2041,7 +2061,7 @@ mod tests {
         );
     }
 
-    /// PathConfig completion must NOT re-trigger FlutterSdk or AndroidTools.
+    /// PathConfig completion must NOT re-trigger FlutterSdk or PlatformAndroid.
     /// This is the no-loop guard.
     #[test]
     fn test_pathconfig_completion_does_not_retrigger_installer() {
@@ -2177,7 +2197,7 @@ mod tests {
             Some(std::path::PathBuf::from("/opt/android-sdk"));
         // Give it a Flutter SDK path so PathConfig can resolve a bin dir.
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 3; // PathConfig
+        select_step(&mut state, WizardStepKind::PathConfig);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -2204,9 +2224,9 @@ mod tests {
 
     #[test]
     fn test_copy_command_pushes_write_clipboard() {
-        // AndroidTools step has a JDK guided command when JDK is missing.
+        // PlatformAndroid step has a JDK guided command when JDK is missing.
         let mut state = wizard_state_with_jdk(ComponentStatus::Missing);
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         // Verify precondition: guided command must exist.
         assert!(
@@ -2214,7 +2234,7 @@ mod tests {
                 .install_wizard_state
                 .selected_guided_command()
                 .is_some(),
-            "precondition: AndroidTools step must have a guided command when JDK is missing"
+            "precondition: PlatformAndroid step must have a guided command when JDK is missing"
         );
 
         let result = handle_copy_command(&mut state);
@@ -2241,7 +2261,7 @@ mod tests {
     fn test_copy_command_sets_status_when_no_command() {
         // FlutterSdk step has no guided commands.
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
 
         // Verify precondition: no guided command.
         assert!(
@@ -2286,7 +2306,7 @@ mod tests {
         let mut state = state_with_preflight();
         state.settings.toolchain.android_sdk_root = None;
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 3; // PathConfig
+        select_step(&mut state, WizardStepKind::PathConfig);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -2337,7 +2357,7 @@ mod tests {
         state.settings.toolchain.android_sdk_root =
             Some(std::path::PathBuf::from("/opt/android-sdk"));
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 3; // PathConfig
+        select_step(&mut state, WizardStepKind::PathConfig);
 
         handle_run_selected_step(&mut state);
 
@@ -2363,7 +2383,7 @@ mod tests {
         let mut state = state_with_preflight();
         state.settings.toolchain.android_sdk_root = None; // not set in settings
         state.settings.flutter.sdk_path = Some(std::path::PathBuf::from("/opt/flutter"));
-        state.install_wizard_state.selected_index = 3; // PathConfig
+        select_step(&mut state, WizardStepKind::PathConfig);
 
         let r = handle_run_selected_step(&mut state);
 
@@ -2400,6 +2420,8 @@ mod tests {
         // from `is_jdk_actionable`).
         let mut state = AppState::new();
         state.show_install_wizard(WizardOrigin::UserInvoked);
+        // Expand so PlatformAndroid leaf appears in the step list.
+        state.install_wizard_state.platforms_expanded = true;
         // Report with android tools but no Jdk entry.
         state.install_wizard_state.apply_report(ToolchainReport {
             platform: HostPlatform::Linux,
@@ -2413,7 +2435,7 @@ mod tests {
             linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
             winget_available: false,
         });
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         // Gate must block.
         let r = handle_run_selected_step(&mut state);
@@ -2428,8 +2450,8 @@ mod tests {
             .install_wizard_state
             .steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(
             android_step.guided_commands.len(),
             1,
@@ -2439,9 +2461,9 @@ mod tests {
 
     #[test]
     fn test_copy_command_text_matches_guided_command() {
-        // AndroidTools with missing JDK → guided command is JDK install cmd.
+        // PlatformAndroid with missing JDK → guided command is JDK install cmd.
         let mut state = wizard_state_with_jdk(ComponentStatus::Missing);
-        select_step(&mut state, WizardStepKind::AndroidTools);
+        select_step(&mut state, WizardStepKind::PlatformAndroid);
 
         let expected_cmd = state
             .install_wizard_state
@@ -2935,11 +2957,11 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_kind_mismatch_is_discarded() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
         handle_run_selected_step(&mut state);
 
         let current_seq = state.install_wizard_state.run_seq;
-        // Send a ready for AndroidTools — kind mismatch.
+        // Send a ready for PlatformAndroid — kind mismatch.
         let handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Some(tokio::spawn(
                 std::future::ready(()),
@@ -2947,7 +2969,7 @@ mod tests {
 
         handle_install_task_ready(
             &mut state,
-            WizardStepKind::AndroidTools, // wrong kind
+            WizardStepKind::PlatformAndroid, // wrong kind
             current_seq,
             handle_slot,
         );
@@ -2969,7 +2991,7 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_seq_mismatch_is_discarded() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
         handle_run_selected_step(&mut state);
 
         let stale_seq = state.install_wizard_state.run_seq - 1; // seq before this run
@@ -3001,7 +3023,7 @@ mod tests {
     #[tokio::test]
     async fn install_task_ready_after_terminal_does_not_reinstall_handle() {
         let mut state = state_with_preflight();
-        state.install_wizard_state.selected_index = 2; // FlutterSdk
+        select_step(&mut state, WizardStepKind::FlutterSdk);
         let result = handle_run_selected_step(&mut state);
         let run_seq = state.install_wizard_state.run_seq;
         let _action = result.action;
@@ -3209,7 +3231,7 @@ mod tests {
         let mut state = state_with_preflight();
         state
             .install_wizard_state
-            .begin_step(WizardStepKind::AndroidTools);
+            .begin_step(WizardStepKind::PlatformAndroid);
 
         handle_step_failed(
             &mut state,

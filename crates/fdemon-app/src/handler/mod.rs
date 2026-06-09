@@ -688,7 +688,7 @@ pub enum UpdateAction {
     /// and `None` for all other steps.  `android_sdk_root` is `Some` for the
     /// `PathConfig` step when an Android SDK root is known (so the executor can
     /// also write `ANDROID_HOME`), and `None` otherwise.  `android` is `Some`
-    /// for the `AndroidTools` step and `None` for all other steps.
+    /// for the `PlatformAndroid` step and `None` for all other steps.
     RunWizardStep {
         /// Which wizard step to execute.
         kind: WizardStepKind,
@@ -717,7 +717,7 @@ pub enum UpdateAction {
         android_sdk_root: Option<std::path::PathBuf>,
         /// Resolved Android tools install parameters.
         ///
-        /// `Some` for the `AndroidTools` step, `None` for all other steps.
+        /// `Some` for the `PlatformAndroid` step, `None` for all other steps.
         android: Option<AndroidStepParams>,
     },
 

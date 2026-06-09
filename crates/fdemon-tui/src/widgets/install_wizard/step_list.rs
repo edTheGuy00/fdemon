@@ -299,13 +299,15 @@ mod tests {
                 status: StepStatus::Ok,
                 components: vec![],
                 guided_commands: vec![],
+                indent: 0,
             },
             WizardStep {
-                kind: WizardStepKind::AndroidTools,
-                title: "Android Tools".to_string(),
+                kind: WizardStepKind::PlatformAndroid,
+                title: "Android".to_string(),
                 status: StepStatus::Partial,
                 components: vec![],
                 guided_commands: vec![],
+                indent: 1,
             },
             WizardStep {
                 kind: WizardStepKind::FlutterSdk,
@@ -313,6 +315,7 @@ mod tests {
                 status: StepStatus::Missing,
                 components: vec![],
                 guided_commands: vec![],
+                indent: 0,
             },
             WizardStep {
                 kind: WizardStepKind::Doctor,
@@ -320,6 +323,7 @@ mod tests {
                 status: StepStatus::Pending,
                 components: vec![],
                 guided_commands: vec![],
+                indent: 0,
             },
         ]
     }
@@ -357,8 +361,8 @@ mod tests {
             "should show first step title"
         );
         assert!(
-            content.contains("Android Tools"),
-            "should show android tools title"
+            content.contains("Android"),
+            "should show android platform leaf title"
         );
         assert!(
             content.contains("Flutter SDK"),
@@ -382,7 +386,7 @@ mod tests {
         // We verify the row contains the selected step title
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();
         assert!(
-            content.contains("Android Tools"),
+            content.contains("Android"),
             "selected step title should appear"
         );
         // Check the cell at row y=3 for the selected background
@@ -499,12 +503,12 @@ mod tests {
             "Prerequisites (Ok) badge should stay green; run-failed only applies to FlutterSdk"
         );
 
-        // AndroidTools row (index 1) at y=3; Status=Partial → STATUS_YELLOW.
+        // PlatformAndroid row (index 1) at y=3; Status=Partial → STATUS_YELLOW.
         let android_glyph_cell = &buf[(2, 3)];
         assert_eq!(
             android_glyph_cell.fg,
             palette::STATUS_YELLOW,
-            "AndroidTools (Partial) badge should stay yellow; run-failed only applies to FlutterSdk"
+            "PlatformAndroid (Partial) badge should stay yellow; run-failed only applies to FlutterSdk"
         );
     }
 

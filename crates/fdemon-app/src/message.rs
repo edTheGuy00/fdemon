@@ -1739,7 +1739,7 @@ pub enum Message {
     ///
     /// No-op when the currently selected step has no guided command to copy
     /// (e.g. FlutterSdk and PathConfig steps, which are fully automated).
-    /// Used for steps like `AndroidTools` that may surface a JDK install
+    /// Used for steps like `PlatformAndroid` that may surface a JDK install
     /// command the user should run manually.
     InstallWizardCopyCommand,
 
@@ -1869,7 +1869,7 @@ pub enum Message {
 
     /// Auto-configure PATH after a successful managed install.
     ///
-    /// Emitted by `handle_step_completed` when `FlutterSdk` or `AndroidTools`
+    /// Emitted by `handle_step_completed` when `FlutterSdk` or `PlatformAndroid`
     /// completes with a resolved SDK path.  The handler dispatches
     /// `RunWizardStep { kind: PathConfig, .. }` using the freshly-stashed SDK
     /// root so the shell rc file is updated without a manual step.
@@ -1877,7 +1877,7 @@ pub enum Message {
     /// - For `FlutterSdk` origin: writes the Flutter `<sdk>/bin` PATH entry
     ///   only (`android_sdk_root: None`), keeping FlutterSdk side-effects scoped
     ///   to what was installed.
-    /// - For `AndroidTools` origin: writes both the Flutter PATH (if a Flutter
+    /// - For `PlatformAndroid` origin: writes both the Flutter PATH (if a Flutter
     ///   SDK is known) and the Android `ANDROID_HOME` + PATH entries.
     ///
     /// If no Flutter bin dir can be resolved (unlikely but possible on a fresh

@@ -996,7 +996,7 @@ pub fn handle_action(
                         }
                     }
 
-                    WizardStepKind::AndroidTools => {
+                    WizardStepKind::PlatformAndroid => {
                         // Guard: Android install params are required.
                         let params = match android {
                             Some(p) => p,
@@ -1126,7 +1126,7 @@ pub fn handle_action(
                             // 2) Optionally write ANDROID_HOME / Android PATH entries.
                             // Use the wizard-provided SDK root, else fall back to
                             // $ANDROID_HOME / $ANDROID_SDK_ROOT / platform default
-                            // (same resolver the AndroidTools executor uses). Only
+                            // (same resolver the PlatformAndroid executor uses). Only
                             // write the Android env block if the resolved path exists.
                             let effective_android_root = android_sdk_root.or_else(|| {
                                 let p = fdemon_daemon::resolve_android_sdk_root_path(None);
@@ -1181,7 +1181,13 @@ pub fn handle_action(
                     // Non-executable kinds in this phase: report a clear failure so
                     // the user knows the step is not yet actionable rather than
                     // seeing a stale Running spinner.
-                    WizardStepKind::Prerequisites | WizardStepKind::Doctor => {
+                    WizardStepKind::Prerequisites
+                    | WizardStepKind::Platforms
+                    | WizardStepKind::PlatformIos
+                    | WizardStepKind::PlatformMacos
+                    | WizardStepKind::PlatformWeb
+                    | WizardStepKind::PlatformWindows
+                    | WizardStepKind::Doctor => {
                         let _ = msg_tx
                             .send(crate::message::Message::WizardStepFailed {
                                 kind,
@@ -2158,16 +2164,23 @@ mod tests {
         );
     }
 
-    /// Non-executable step kinds (Prerequisites, Doctor) always produce a
-    /// `WizardStepFailed` with a clear reason message.
+    /// Non-executable step kinds (Prerequisites, Doctor, Platforms, platform leaves)
+    /// always produce a `WizardStepFailed` with a clear reason message.
     ///
-    /// `AndroidTools` is now handled by the real executor (task 06) and is no
-    /// longer in this list.
+    /// `PlatformAndroid` is handled by the real executor and is NOT in this list.
     #[tokio::test]
     async fn test_run_wizard_step_non_executable_kinds_fail() {
         use crate::install_wizard::WizardStepKind;
 
-        for kind in [WizardStepKind::Prerequisites, WizardStepKind::Doctor] {
+        for kind in [
+            WizardStepKind::Prerequisites,
+            WizardStepKind::Platforms,
+            WizardStepKind::PlatformIos,
+            WizardStepKind::PlatformMacos,
+            WizardStepKind::PlatformWeb,
+            WizardStepKind::PlatformWindows,
+            WizardStepKind::Doctor,
+        ] {
             let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
                 kind,
                 run_seq: 1,
@@ -2258,16 +2271,16 @@ mod tests {
         );
     }
 
-    // ── AndroidTools executor dispatch tests ────────────────────────────────────
+    // ── PlatformAndroid executor dispatch tests ────────────────────────────────────
 
-    /// `RunWizardStep { kind: AndroidTools, android: None }` must emit
+    /// `RunWizardStep { kind: PlatformAndroid, android: None }` must emit
     /// `WizardStepStarted` followed by `WizardStepFailed` — never a panic.
     #[tokio::test]
     async fn test_android_tools_missing_params_fails() {
         use crate::install_wizard::WizardStepKind;
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
-            kind: WizardStepKind::AndroidTools,
+            kind: WizardStepKind::PlatformAndroid,
             run_seq: 1,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
@@ -2286,7 +2299,7 @@ mod tests {
             matches!(
                 first,
                 crate::message::Message::WizardStepStarted {
-                    kind: WizardStepKind::AndroidTools,
+                    kind: WizardStepKind::PlatformAndroid,
                     ..
                 }
             ),
@@ -2303,7 +2316,7 @@ mod tests {
             matches!(
                 second,
                 crate::message::Message::WizardStepFailed {
-                    kind: WizardStepKind::AndroidTools,
+                    kind: WizardStepKind::PlatformAndroid,
                     ..
                 }
             ),
@@ -2311,7 +2324,7 @@ mod tests {
         );
     }
 
-    /// `RunWizardStep { kind: AndroidTools, android: Some(..) }` emits
+    /// `RunWizardStep { kind: PlatformAndroid, android: Some(..) }` emits
     /// `WizardStepStarted` as its first message (the install attempt itself is not
     /// unit-tested because it requires network I/O, mirroring Phase 2 `FlutterSdk`).
     #[tokio::test]
@@ -2323,7 +2336,7 @@ mod tests {
         let sdk_root = tmp.path().join("android-sdk");
 
         let mut msg_rx = dispatch_run_wizard_step(crate::UpdateAction::RunWizardStep {
-            kind: WizardStepKind::AndroidTools,
+            kind: WizardStepKind::PlatformAndroid,
             run_seq: 1,
             cancel_token: tokio_util::sync::CancellationToken::new(),
             install: None,
@@ -2347,7 +2360,7 @@ mod tests {
             matches!(
                 first,
                 crate::message::Message::WizardStepStarted {
-                    kind: WizardStepKind::AndroidTools,
+                    kind: WizardStepKind::PlatformAndroid,
                     ..
                 }
             ),

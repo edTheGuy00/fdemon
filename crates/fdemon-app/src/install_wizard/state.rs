@@ -62,8 +62,12 @@ pub struct WizardStep {
     ///
     /// Empty for steps that have no privileged/GUI actions. Populated by
     /// `build_steps()` when a required component is not `Ok`. Phase 3 uses
-    /// this for the JDK install command on the `AndroidTools` step.
+    /// this for the JDK install command on the `PlatformAndroid` step.
     pub guided_commands: Vec<GuidedCommand>,
+    /// Visual indent level: 0 = top-level / parent row, 1 = leaf row nested
+    /// under `Platforms`. Used by the step-list renderer (Task 03) to draw
+    /// tree-style indentation for expanded platform leaves.
+    pub indent: u8,
 }
 
 /// Top-level state for the Install Wizard panel.
@@ -141,6 +145,13 @@ pub struct InstallWizardState {
     ///
     /// Reset to `false` only when the wizard is fully re-opened via `opening()`.
     pub handback_done: bool,
+
+    /// Whether the Platforms submenu is expanded (showing per-platform leaf rows).
+    ///
+    /// Defaults to `false` (collapsed). When `true`, `build_steps` inserts
+    /// host-gated leaf rows (`PlatformAndroid`, `PlatformWeb`, etc.) after the
+    /// `Platforms` parent. Toggled by `InstallWizardToggleExpand` (Task 02).
+    pub platforms_expanded: bool,
 
     /// Why the wizard was opened. Gates the handback (see `close_wizard_and_dispatch_discovery`).
     ///
@@ -232,7 +243,7 @@ impl InstallWizardState {
         {
             self.observed_unhealthy = true;
         }
-        self.steps = build_steps(&report);
+        self.steps = build_steps(&report, self.platforms_expanded);
         self.report = Some(report);
         self.loading = false;
         if self.selected_index >= self.steps.len() {
@@ -436,6 +447,7 @@ impl std::fmt::Debug for InstallWizardState {
             .field("selected_index", &self.selected_index)
             .field("selected_command_index", &self.selected_command_index)
             .field("detail_scroll", &self.detail_scroll)
+            .field("platforms_expanded", &self.platforms_expanded)
             .field("report", &self.report)
             .field("loading", &self.loading)
             .field("status_message", &self.status_message)
@@ -837,8 +849,8 @@ fn prerequisites_guided_commands(
 /// This is the **single source of truth** for the JDK-actionable predicate,
 /// used by both:
 /// - `build_steps()` — to decide whether to populate guided commands for the
-///   `AndroidTools` step.
-/// - `actions.rs` `handle_run_selected_step()` — to gate the `AndroidTools`
+///   `PlatformAndroid` leaf step.
+/// - `actions.rs` `handle_run_selected_step()` — to gate the `PlatformAndroid`
 ///   executor (sdkmanager requires a JDK 17).
 ///
 /// Both callers now agree: if no `Jdk` entry exists, a guided command is shown
@@ -850,20 +862,66 @@ pub(crate) fn is_jdk_actionable(components: &[ComponentCheck]) -> bool {
     }
 }
 
-/// Map a [`ToolchainReport`]'s components into the five ordered UI steps.
+/// Roll up a slice of `StepStatus` values into a single parent `StepStatus`.
 ///
-/// Step order: Prerequisites → AndroidTools → FlutterSdk → PathConfig → Doctor
+/// Rules (in priority order):
+/// 1. Any `Missing` → `StepStatus::Missing`
+/// 2. Any `Partial` → `StepStatus::Partial`
+/// 3. All `Ok` (ignoring `Pending`) → `StepStatus::Ok`
+/// 4. All `Pending` (or empty slice) → `StepStatus::Pending` (neutral)
 ///
-/// Component grouping:
+/// `Pending` is treated as neutral: it represents a placeholder leaf that has
+/// not yet been probed, so it does not degrade the parent status.
+fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
+    let non_pending: Vec<StepStatus> = statuses
+        .iter()
+        .copied()
+        .filter(|s| *s != StepStatus::Pending)
+        .collect();
+    if non_pending.is_empty() {
+        return StepStatus::Pending;
+    }
+    if non_pending.contains(&StepStatus::Missing) {
+        return StepStatus::Missing;
+    }
+    if non_pending.contains(&StepStatus::Partial) {
+        return StepStatus::Partial;
+    }
+    StepStatus::Ok
+}
+
+/// Map a [`ToolchainReport`]'s components into the wizard UI steps.
+///
+/// ## Collapsed (expanded == false)
+///
+/// Returns 5 rows in order:
+/// `Prerequisites` → `Platforms` (parent) → `FlutterSdk` → `PathConfig` → `Doctor`
+///
+/// ## Expanded (expanded == true)
+///
+/// After the `Platforms` parent, inserts host-gated leaf rows (indent = 1):
+/// - `PlatformAndroid` — all hosts
+/// - `PlatformWeb`     — all hosts
+/// - `PlatformIos`     — macOS only
+/// - `PlatformMacos`   — macOS only
+/// - `PlatformWindows` — Windows only
+///
+/// In Phase 2, all leaves except `PlatformAndroid` are **placeholders** with
+/// `StepStatus::Pending`, empty `components`, and no `guided_commands`.
+///
+/// ## Component grouping
+///
 /// - `Prerequisites` — `ComponentKind::Prerequisites`, `ComponentKind::Git`
-/// - `AndroidTools` — `AndroidCmdlineTools`, `AndroidPlatformTools`,
+/// - `PlatformAndroid` — `AndroidCmdlineTools`, `AndroidPlatformTools`,
 ///   `AndroidPlatform`, `AndroidBuildTools`, `AndroidLicenses`, `Jdk`
 /// - `FlutterSdk` — `ComponentKind::FlutterSdk`
 /// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `Doctor` — no components; detail comes from `report.doctor`
-pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
+///
+/// Host gating reads `report.platform` only — no `cfg!` or OS detection.
+pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> {
     let mut prerequisites: Vec<ComponentCheck> = Vec::new();
-    let mut android_tools: Vec<ComponentCheck> = Vec::new();
+    let mut platform_android_components: Vec<ComponentCheck> = Vec::new();
     let mut flutter_sdk: Vec<ComponentCheck> = Vec::new();
 
     for check in &report.components {
@@ -877,7 +935,7 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
             | ComponentKind::AndroidBuildTools
             | ComponentKind::AndroidLicenses
             | ComponentKind::Jdk => {
-                android_tools.push(check.clone());
+                platform_android_components.push(check.clone());
             }
             ComponentKind::FlutterSdk => {
                 flutter_sdk.push(check.clone());
@@ -904,7 +962,7 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
     };
 
     let prerequisites_status = rollup_status(&prerequisites);
-    let android_status = rollup_status(&android_tools);
+    let android_status = rollup_status(&platform_android_components);
     let flutter_status = rollup_status(&flutter_sdk);
 
     // Doctor step: no components; always Ok when doctor data is present,
@@ -915,13 +973,13 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
         StepStatus::Pending
     };
 
-    // Derive guided commands for the AndroidTools step using the shared
+    // Derive guided commands for the PlatformAndroid step using the shared
     // `is_jdk_actionable` helper. This ensures the gate in `actions.rs` and the
     // guided-command population here agree exactly:
     // - No Jdk entry  → actionable (show command + block executor)
     // - Jdk non-Ok    → actionable (show command + block executor)
     // - Jdk Ok        → not actionable (no command, executor allowed)
-    let android_guided: Vec<GuidedCommand> = if is_jdk_actionable(&android_tools) {
+    let android_guided: Vec<GuidedCommand> = if is_jdk_actionable(&platform_android_components) {
         vec![jdk_guided_command(report)]
     } else {
         Vec::new()
@@ -933,43 +991,146 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
     // Pure function of the report — no I/O in the TEA update() path.
     let prereq_guided = prerequisites_guided_commands(report, &prerequisites);
 
-    vec![
-        WizardStep {
-            kind: WizardStepKind::Prerequisites,
-            title: "Prerequisites".to_string(),
-            status: prerequisites_status,
-            components: prerequisites,
-            guided_commands: prereq_guided,
-        },
-        WizardStep {
-            kind: WizardStepKind::AndroidTools,
-            title: "Android Tools".to_string(),
-            status: android_status,
-            components: android_tools,
-            guided_commands: android_guided,
-        },
-        WizardStep {
-            kind: WizardStepKind::FlutterSdk,
-            title: "Flutter SDK".to_string(),
-            status: flutter_status,
-            components: flutter_sdk,
-            guided_commands: Vec::new(),
-        },
-        WizardStep {
-            kind: WizardStepKind::PathConfig,
-            title: "PATH Configuration".to_string(),
-            status: path_config_status,
+    // Build leaf rows (only used when expanded == true).
+    // PlatformAndroid: carries the real components and JDK guided command.
+    let android_leaf = WizardStep {
+        kind: WizardStepKind::PlatformAndroid,
+        title: "Android".to_string(),
+        status: android_status,
+        components: platform_android_components,
+        guided_commands: android_guided,
+        indent: 1,
+    };
+
+    // Compute the Platforms parent status by rolling up the leaf statuses.
+    // In Phase 2 only PlatformAndroid is real; other leaves are Pending placeholders.
+    // rollup_step_statuses treats Pending as neutral, so the parent reflects
+    // only the Android leaf's real status in this phase.
+    let platforms_parent_status = {
+        let leaf_statuses = if expanded {
+            // When expanded, collect all leaf statuses (platform-gated below).
+            let mut statuses = vec![android_status]; // Android always present
+                                                     // Placeholder leaves are Pending — contribute neutrally.
+            match report.platform {
+                HostPlatform::MacOs => {
+                    statuses.push(StepStatus::Pending); // PlatformIos
+                    statuses.push(StepStatus::Pending); // PlatformMacos
+                }
+                HostPlatform::Windows => {
+                    statuses.push(StepStatus::Pending); // PlatformWindows
+                }
+                _ => {}
+            }
+            statuses.push(StepStatus::Pending); // PlatformWeb always present
+            statuses
+        } else {
+            // Collapsed: roll up the android status directly (only real leaf).
+            vec![android_status]
+        };
+        rollup_step_statuses(&leaf_statuses)
+    };
+
+    let mut steps: Vec<WizardStep> = Vec::new();
+
+    // 1. Prerequisites
+    steps.push(WizardStep {
+        kind: WizardStepKind::Prerequisites,
+        title: "Prerequisites".to_string(),
+        status: prerequisites_status,
+        components: prerequisites,
+        guided_commands: prereq_guided,
+        indent: 0,
+    });
+
+    // 2. Platforms parent (always present, collapsed or expanded)
+    steps.push(WizardStep {
+        kind: WizardStepKind::Platforms,
+        title: "Platforms".to_string(),
+        status: platforms_parent_status,
+        components: Vec::new(),
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    // 3. Platform leaves (only when expanded), host-gated by report.platform
+    if expanded {
+        // PlatformAndroid: all hosts
+        steps.push(android_leaf);
+
+        // PlatformWeb: all hosts
+        steps.push(WizardStep {
+            kind: WizardStepKind::PlatformWeb,
+            title: "Web".to_string(),
+            status: StepStatus::Pending,
             components: Vec::new(),
             guided_commands: Vec::new(),
-        },
-        WizardStep {
-            kind: WizardStepKind::Doctor,
-            title: "Flutter Doctor".to_string(),
-            status: doctor_status,
-            components: Vec::new(),
-            guided_commands: Vec::new(),
-        },
-    ]
+            indent: 1,
+        });
+
+        // macOS-only leaves
+        if report.platform == HostPlatform::MacOs {
+            steps.push(WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: StepStatus::Pending,
+                components: Vec::new(),
+                guided_commands: Vec::new(),
+                indent: 1,
+            });
+            steps.push(WizardStep {
+                kind: WizardStepKind::PlatformMacos,
+                title: "macOS".to_string(),
+                status: StepStatus::Pending,
+                components: Vec::new(),
+                guided_commands: Vec::new(),
+                indent: 1,
+            });
+        }
+
+        // Windows-only leaf
+        if report.platform == HostPlatform::Windows {
+            steps.push(WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: StepStatus::Pending,
+                components: Vec::new(),
+                guided_commands: Vec::new(),
+                indent: 1,
+            });
+        }
+    }
+
+    // 4. FlutterSdk
+    steps.push(WizardStep {
+        kind: WizardStepKind::FlutterSdk,
+        title: "Flutter SDK".to_string(),
+        status: flutter_status,
+        components: flutter_sdk,
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    // 5. PathConfig
+    steps.push(WizardStep {
+        kind: WizardStepKind::PathConfig,
+        title: "PATH Configuration".to_string(),
+        status: path_config_status,
+        components: Vec::new(),
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    // 6. Doctor
+    steps.push(WizardStep {
+        kind: WizardStepKind::Doctor,
+        title: "Flutter Doctor".to_string(),
+        status: doctor_status,
+        components: Vec::new(),
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    steps
 }
 
 #[cfg(test)]
@@ -1051,13 +1212,32 @@ mod tests {
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         assert_eq!(steps.len(), 5);
         assert_eq!(steps[0].kind, WizardStepKind::Prerequisites);
-        assert_eq!(steps[1].kind, WizardStepKind::AndroidTools);
+        assert_eq!(steps[1].kind, WizardStepKind::Platforms);
         assert_eq!(steps[2].kind, WizardStepKind::FlutterSdk);
         assert_eq!(steps[3].kind, WizardStepKind::PathConfig);
         assert_eq!(steps[4].kind, WizardStepKind::Doctor);
+    }
+
+    #[test]
+    fn test_build_steps_expanded_inserts_android_leaf() {
+        // Linux report: expanded should include PlatformAndroid + PlatformWeb only.
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+        // Prerequisites, Platforms, PlatformAndroid, PlatformWeb, FlutterSdk, PathConfig, Doctor
+        assert_eq!(steps.len(), 7);
+        assert_eq!(steps[0].kind, WizardStepKind::Prerequisites);
+        assert_eq!(steps[1].kind, WizardStepKind::Platforms);
+        assert_eq!(steps[2].kind, WizardStepKind::PlatformAndroid);
+        assert_eq!(steps[3].kind, WizardStepKind::PlatformWeb);
+        assert_eq!(steps[4].kind, WizardStepKind::FlutterSdk);
+        assert_eq!(steps[5].kind, WizardStepKind::PathConfig);
+        assert_eq!(steps[6].kind, WizardStepKind::Doctor);
     }
 
     #[test]
@@ -1068,7 +1248,7 @@ mod tests {
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -1087,7 +1267,7 @@ mod tests {
             make_check(ComponentKind::Git, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -1113,11 +1293,11 @@ mod tests {
             make_check(ComponentKind::Jdk, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android_step = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(android_step.status, StepStatus::Partial);
     }
 
@@ -1133,6 +1313,7 @@ mod tests {
         state.apply_report(report);
 
         assert!(!state.loading);
+        // Collapsed by default → 5 rows
         assert_eq!(state.steps.len(), 5);
         assert!(state.report.is_some());
     }
@@ -1198,7 +1379,7 @@ mod tests {
     fn test_apply_report_resets_cancelled_execution() {
         let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
-        state.begin_step(WizardStepKind::AndroidTools);
+        state.begin_step(WizardStepKind::PlatformAndroid);
         state.finish_step(
             StepExecStatus::Cancelled,
             "Cancelled: user pressed Esc".to_string(),
@@ -1220,13 +1401,13 @@ mod tests {
     }
 
     /// F-PR53-12 (Succeeded variant): `apply_report` after an auto-triggered
-    /// re-check (e.g. AndroidTools/PathConfig success) must clear the stale
+    /// re-check (e.g. PlatformAndroid/PathConfig success) must clear the stale
     /// `Succeeded` execution.
     #[test]
     fn test_apply_report_resets_succeeded_execution() {
         let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
-        state.begin_step(WizardStepKind::AndroidTools);
+        state.begin_step(WizardStepKind::PlatformAndroid);
         state.finish_step(
             StepExecStatus::Succeeded,
             "Android tools installed".to_string(),
@@ -1288,7 +1469,7 @@ mod tests {
             ComponentKind::FlutterSdk,
             ComponentStatus::Ok,
         )]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let path_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::PathConfig)
@@ -1305,7 +1486,7 @@ mod tests {
             ComponentKind::FlutterSdk,
             ComponentStatus::Missing,
         )]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let doctor_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Doctor)
@@ -1319,7 +1500,7 @@ mod tests {
             make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let flutter_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::FlutterSdk)
@@ -1335,11 +1516,11 @@ mod tests {
             make_check(ComponentKind::Jdk, ComponentStatus::Error),
         ];
         let report = make_report(components);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android_step = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(android_step.status, StepStatus::Partial);
     }
 
@@ -1405,7 +1586,7 @@ mod tests {
     #[test]
     fn test_finish_step_sets_terminal_status_succeeded() {
         let mut s = InstallWizardState::default();
-        s.begin_step(WizardStepKind::AndroidTools);
+        s.begin_step(WizardStepKind::PlatformAndroid);
         assert!(s.is_step_running());
 
         s.finish_step(StepExecStatus::Succeeded, "All done".to_string());
@@ -1499,10 +1680,10 @@ mod tests {
     #[test]
     fn test_android_step_has_jdk_guided_command_when_jdk_missing() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert_eq!(android.guided_commands.len(), 1);
         assert!(android.guided_commands[0].command.contains("17"));
@@ -1511,10 +1692,10 @@ mod tests {
     #[test]
     fn test_no_guided_command_when_jdk_ok() {
         let report = report_with_jdk(ComponentStatus::Ok, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert!(android.guided_commands.is_empty());
     }
@@ -1522,10 +1703,10 @@ mod tests {
     #[test]
     fn test_android_step_has_jdk_guided_command_when_jdk_partial() {
         let report = report_with_jdk(ComponentStatus::Partial, HostPlatform::MacOs);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert_eq!(android.guided_commands.len(), 1);
         assert!(android.guided_commands[0].command.contains("brew"));
@@ -1534,10 +1715,10 @@ mod tests {
     #[test]
     fn test_android_step_has_jdk_guided_command_when_jdk_error() {
         let report = report_with_jdk(ComponentStatus::Error, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert_eq!(android.guided_commands.len(), 1);
     }
@@ -1557,10 +1738,10 @@ mod tests {
             linux_package_manager: Some(LinuxPackageManager::Apt),
             winget_available: false,
         };
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert_eq!(cmd.label, "Install JDK 17");
@@ -1583,10 +1764,10 @@ mod tests {
     #[test]
     fn test_jdk_command_macos_uses_brew() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::MacOs);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(cmd.command.contains("brew"));
@@ -1596,10 +1777,10 @@ mod tests {
     #[test]
     fn test_jdk_command_windows_uses_winget() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Windows);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert!(android.guided_commands[0].command.contains("winget"));
     }
@@ -1607,10 +1788,10 @@ mod tests {
     #[test]
     fn test_jdk_command_unknown_platform_uses_adoptium() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Unknown);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert!(android.guided_commands[0].command.contains("adoptium.net"));
     }
@@ -1622,9 +1803,9 @@ mod tests {
     #[test]
     fn test_non_android_non_prereq_steps_have_no_guided_commands_when_prereqs_absent() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         for step in &steps {
-            if step.kind != WizardStepKind::AndroidTools {
+            if step.kind != WizardStepKind::PlatformAndroid {
                 assert!(
                     step.guided_commands.is_empty(),
                     "Step {:?} should have no guided commands (prereqs absent fixture)",
@@ -1651,7 +1832,7 @@ mod tests {
             make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         for kind in [
             WizardStepKind::PathConfig,
             WizardStepKind::FlutterSdk,
@@ -1730,15 +1911,15 @@ mod tests {
             ComponentKind::AndroidCmdlineTools,
             ComponentStatus::Missing,
         )]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(
             android.guided_commands.len(),
             1,
-            "AndroidTools with no Jdk entry must show a guided command (m2 fix)"
+            "PlatformAndroid with no Jdk entry must show a guided command (m2 fix)"
         );
         assert!(
             android.guided_commands[0].command.contains("17"),
@@ -1758,7 +1939,11 @@ mod tests {
         // Select Prerequisites step (index 0) — no guided commands
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
         state.apply_report(report);
-        state.selected_index = 0; // Prerequisites
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Prerequisites)
+            .unwrap();
         assert!(state.selected_guided_command().is_none());
     }
 
@@ -1766,9 +1951,14 @@ mod tests {
     fn test_selected_guided_command_returns_first_when_android_selected() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid leaf is only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools is index 1
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         let cmd = state.selected_guided_command();
         assert!(cmd.is_some());
         assert_eq!(cmd.unwrap().label, "Install JDK 17");
@@ -1868,9 +2058,14 @@ mod tests {
     fn test_select_next_noop_for_single_command_step() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid has exactly 1 guided command (JDK); only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools (index 1) has exactly 1 guided command.
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_next_command();
         assert_eq!(
@@ -1883,9 +2078,14 @@ mod tests {
     fn test_select_prev_noop_for_single_command_step() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid has exactly 1 guided command (JDK); only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools (index 1) has exactly 1 guided command.
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_prev_command();
         assert_eq!(
@@ -1902,8 +2102,12 @@ mod tests {
             ComponentStatus::Ok,
         )]);
         state.apply_report(report);
-        // PathConfig (index 3) has 0 guided commands.
-        state.selected_index = 3;
+        // PathConfig has 0 guided commands — look it up by kind.
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PathConfig)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_next_command();
         assert_eq!(
@@ -1920,8 +2124,12 @@ mod tests {
             ComponentStatus::Ok,
         )]);
         state.apply_report(report);
-        // PathConfig (index 3) has 0 guided commands.
-        state.selected_index = 3;
+        // PathConfig has 0 guided commands — look it up by kind.
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PathConfig)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_prev_command();
         assert_eq!(
@@ -1956,9 +2164,14 @@ mod tests {
     fn test_selected_guided_command_returns_none_for_out_of_range_index() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid has 1 command; only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools (index 1) has 1 command.
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         // Manually set out-of-range index (defensive clamping).
         state.selected_command_index = 99;
         assert!(
@@ -2563,7 +2776,7 @@ mod tests {
             linux_package_manager: None,
             winget_available: false,
         };
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -2596,7 +2809,7 @@ mod tests {
             linux_package_manager: None,
             winget_available: false,
         };
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -2684,7 +2897,7 @@ mod tests {
     /// - `Prerequisites`, `Git`                                    → `Prerequisites`
     /// - `AndroidCmdlineTools`, `AndroidPlatformTools`,
     ///   `AndroidPlatform`, `AndroidBuildTools`,
-    ///   `AndroidLicenses`, `Jdk`                                  → `AndroidTools`
+    ///   `AndroidLicenses`, `Jdk`                                  → `PlatformAndroid`
     /// - `FlutterSdk`                                              → `FlutterSdk`
     #[test]
     fn all_nine_component_kinds_route_to_correct_step() {
@@ -2701,12 +2914,8 @@ mod tests {
             make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
-        assert_eq!(
-            steps.len(),
-            5,
-            "build_steps must always return exactly 5 steps"
-        );
+        // Build with expanded=true so the PlatformAndroid leaf is visible.
+        let steps = build_steps(&report, true);
 
         let find_step = |kind: WizardStepKind| {
             steps
@@ -2730,12 +2939,12 @@ mod tests {
             "Prerequisites step must contain only Prerequisites and Git components"
         );
 
-        // AndroidTools step: 6 components
-        let android = find_step(WizardStepKind::AndroidTools);
+        // PlatformAndroid leaf: 6 components
+        let android = find_step(WizardStepKind::PlatformAndroid);
         assert_eq!(
             android.components.len(),
             6,
-            "AndroidTools step must have exactly 6 components"
+            "PlatformAndroid step must have exactly 6 components"
         );
         for c in &android.components {
             assert!(
@@ -2748,7 +2957,7 @@ mod tests {
                         | ComponentKind::AndroidLicenses
                         | ComponentKind::Jdk
                 ),
-                "component {:?} must not be in AndroidTools step",
+                "component {:?} must not be in PlatformAndroid step",
                 c.kind
             );
         }
@@ -2838,10 +3047,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_pacman_on_arch() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Pacman);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert_eq!(cmd.label, "Install JDK 17");
@@ -2864,10 +3073,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_dnf_on_fedora() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Dnf);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2885,10 +3094,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_yum_on_rhel7() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Yum);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2911,10 +3120,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_zypper_on_opensuse() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Zypper);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2932,10 +3141,10 @@ mod tests {
     #[test]
     fn test_jdk_command_linux_unknown_pm_uses_adoptium_url() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Unknown);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2950,10 +3159,10 @@ mod tests {
     fn test_jdk_command_macos_windows_unchanged() {
         // macOS and Windows arms must not be affected by the Linux per-manager change.
         let mac_report = report_with_jdk(ComponentStatus::Missing, HostPlatform::MacOs);
-        let steps = build_steps(&mac_report);
+        let steps = build_steps(&mac_report, true);
         let cmd = &steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap()
             .guided_commands[0];
         assert!(
@@ -2963,10 +3172,10 @@ mod tests {
         );
 
         let win_report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Windows);
-        let steps = build_steps(&win_report);
+        let steps = build_steps(&win_report, true);
         let cmd = &steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap()
             .guided_commands[0];
         assert!(
@@ -3587,6 +3796,226 @@ mod tests {
         assert!(
             !state.is_bootstrap(),
             "is_bootstrap must return false when origin is UserInvoked"
+        );
+    }
+
+    // ── Phase 2 Task 01: host-gating tests ─────────────────────────────────────
+
+    #[test]
+    fn test_build_steps_expanded_macos_includes_ios_and_macos_leaves() {
+        let report = make_report_for_platform(HostPlatform::MacOs, vec![]);
+        let steps = build_steps(&report, true);
+        let kinds: Vec<WizardStepKind> = steps.iter().map(|s| s.kind).collect();
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformIos),
+            "macOS expanded must include PlatformIos; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformMacos),
+            "macOS expanded must include PlatformMacos; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformAndroid),
+            "macOS expanded must include PlatformAndroid; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformWeb),
+            "macOS expanded must include PlatformWeb; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformWindows),
+            "macOS expanded must NOT include PlatformWindows; got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_steps_expanded_windows_includes_windows_leaf() {
+        let report = make_report_for_platform(HostPlatform::Windows, vec![]);
+        let steps = build_steps(&report, true);
+        let kinds: Vec<WizardStepKind> = steps.iter().map(|s| s.kind).collect();
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformWindows),
+            "Windows expanded must include PlatformWindows; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformAndroid),
+            "Windows expanded must include PlatformAndroid; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformIos),
+            "Windows expanded must NOT include PlatformIos; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformMacos),
+            "Windows expanded must NOT include PlatformMacos; got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_steps_expanded_linux_excludes_ios_macos_windows() {
+        let report = make_report_for_platform(HostPlatform::Linux, vec![]);
+        let steps = build_steps(&report, true);
+        let kinds: Vec<WizardStepKind> = steps.iter().map(|s| s.kind).collect();
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformIos),
+            "Linux expanded must NOT include PlatformIos; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformMacos),
+            "Linux expanded must NOT include PlatformMacos; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformWindows),
+            "Linux expanded must NOT include PlatformWindows; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformAndroid),
+            "Linux expanded must include PlatformAndroid; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformWeb),
+            "Linux expanded must include PlatformWeb; got: {kinds:?}"
+        );
+    }
+
+    // ── Phase 2 Task 01: parent status rollup tests ────────────────────────────
+
+    #[test]
+    fn test_platforms_parent_status_reflects_android_missing() {
+        // Android leaf is Missing → parent should be Missing.
+        let report = make_report(vec![make_check(
+            ComponentKind::AndroidCmdlineTools,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report, false);
+        let parent = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms parent must exist");
+        assert_eq!(
+            parent.status,
+            StepStatus::Missing,
+            "Platforms parent must be Missing when Android leaf is Missing"
+        );
+    }
+
+    #[test]
+    fn test_platforms_parent_status_reflects_android_ok_with_pending_placeholders() {
+        // Android leaf Ok + other leaves Pending → parent Ok.
+        let report = make_report(vec![
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, false);
+        let parent = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms parent must exist");
+        assert_eq!(
+            parent.status,
+            StepStatus::Ok,
+            "Platforms parent must be Ok when Android leaf is Ok and placeholders are Pending"
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_all_pending_returns_pending() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Pending, StepStatus::Pending]),
+            StepStatus::Pending
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_missing_wins_over_ok() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Ok, StepStatus::Missing, StepStatus::Pending]),
+            StepStatus::Missing
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_partial_wins_over_ok() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Ok, StepStatus::Partial]),
+            StepStatus::Partial
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_empty_returns_pending() {
+        assert_eq!(rollup_step_statuses(&[]), StepStatus::Pending);
+    }
+
+    #[test]
+    fn test_wizard_step_indent_zero_for_top_level() {
+        let report = make_report(vec![]);
+        let steps = build_steps(&report, false);
+        for step in &steps {
+            assert_eq!(
+                step.indent, 0,
+                "collapsed step {:?} must have indent 0",
+                step.kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_wizard_step_indent_one_for_leaves() {
+        let report = make_report(vec![]);
+        let steps = build_steps(&report, true);
+        for step in &steps {
+            if step.kind.is_platform_leaf() {
+                assert_eq!(
+                    step.indent, 1,
+                    "platform leaf {:?} must have indent 1",
+                    step.kind
+                );
+            } else {
+                assert_eq!(
+                    step.indent, 0,
+                    "non-leaf step {:?} must have indent 0",
+                    step.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_platforms_expanded_defaults_to_false() {
+        let state = InstallWizardState::default();
+        assert!(
+            !state.platforms_expanded,
+            "platforms_expanded must default to false"
+        );
+    }
+
+    #[test]
+    fn test_apply_report_uses_platforms_expanded_flag() {
+        let mut state = InstallWizardState {
+            platforms_expanded: true,
+            ..InstallWizardState::default()
+        };
+        let report = make_report(vec![make_check(ComponentKind::Jdk, ComponentStatus::Ok)]);
+        state.apply_report(report);
+        // Expanded on Linux: Prerequisites, Platforms, PlatformAndroid, PlatformWeb,
+        // FlutterSdk, PathConfig, Doctor = 7 steps
+        assert_eq!(
+            state.steps.len(),
+            7,
+            "expanded Linux should have 7 steps; got {}",
+            state.steps.len()
+        );
+        assert!(
+            state
+                .steps
+                .iter()
+                .any(|s| s.kind == WizardStepKind::PlatformAndroid),
+            "expanded steps must include PlatformAndroid"
         );
     }
 }

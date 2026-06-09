@@ -168,6 +168,7 @@ pub fn handle_next_command(state: &mut AppState) -> UpdateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::install_wizard::WizardStepKind;
     use crate::state::{AppState, UiMode};
     use fdemon_daemon::toolchain::{
         ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, HostShell, ToolchainReport,
@@ -451,7 +452,7 @@ mod tests {
     #[test]
     fn test_handle_next_command_noop_for_single_command_step() {
         let mut state = state_with_wizard_open();
-        // Single-component Linux report gives AndroidTools 1 guided command (JDK missing).
+        // Single-component Linux report gives PlatformAndroid 1 guided command (JDK missing).
         let report = ToolchainReport {
             platform: HostPlatform::Linux,
             shell: HostShell::Bash,
@@ -464,8 +465,17 @@ mod tests {
             linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
             winget_available: false,
         };
+        // Expand so PlatformAndroid leaf appears in the step list.
+        state.install_wizard_state.platforms_expanded = true;
         state.install_wizard_state.apply_report(report);
-        state.install_wizard_state.selected_index = 1; // AndroidTools
+        // Select PlatformAndroid via kind-lookup.
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist when expanded");
+        state.install_wizard_state.selected_index = android_idx;
         state.install_wizard_state.selected_command_index = 0;
         handle_next_command(&mut state);
         assert_eq!(
