@@ -26,6 +26,8 @@ mod progress;
 mod step_detail;
 mod step_list;
 
+use step_list::HEADER_HEIGHT;
+
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -74,10 +76,11 @@ const PANEL_HEIGHT_PERCENT: u16 = 85;
 /// 28% provides comfortable display at typical widths and gives the detail pane more room.
 const LEFT_PANE_PERCENT: u16 = 28;
 
-/// Height of the left pane in vertical (stacked) layout.
+/// Padding rows added below the step list items in vertical (stacked) layout.
 ///
-/// Derived from: header(2) + 5 steps × 1 row + 2 padding = 9 rows.
-const VERTICAL_STEP_LIST_HEIGHT: u16 = 9;
+/// Derived from: 2 rows of visual breathing room between the step list and the
+/// horizontal separator below it, keeping the list from appearing cramped.
+const VERTICAL_STEP_LIST_PADDING: u16 = 2;
 
 /// The main Install Wizard panel widget.
 ///
@@ -225,6 +228,7 @@ impl<'a> InstallWizardPanel<'a> {
             self.state.selected_index,
             self.state.focused_pane,
             self.failed_execution_kind(),
+            self.state.platforms_expanded,
         );
         list_pane.render(chunks[0], buf);
 
@@ -236,8 +240,16 @@ impl<'a> InstallWizardPanel<'a> {
 
     /// Render vertical (stacked) pane layout for narrow terminals.
     fn render_vertical_panes(&self, area: Rect, buf: &mut Buffer) {
+        // Dynamic step-list height: header rows + one row per visible step + padding.
+        // Clamped to available area so an unusually long step list does not overflow.
+        let step_list_height = ((HEADER_HEIGHT as usize)
+            + self.state.steps.len()
+            + VERTICAL_STEP_LIST_PADDING as usize)
+            .min(area.height.saturating_sub(6) as usize) // leave at least 6 rows for detail + sep
+            as u16;
+
         let chunks = Layout::vertical([
-            Constraint::Length(VERTICAL_STEP_LIST_HEIGHT),
+            Constraint::Length(step_list_height),
             Constraint::Length(1),
             Constraint::Min(5),
         ])
@@ -248,6 +260,7 @@ impl<'a> InstallWizardPanel<'a> {
             self.state.selected_index,
             self.state.focused_pane,
             self.failed_execution_kind(),
+            self.state.platforms_expanded,
         );
         list_pane.render(chunks[0], buf);
 
@@ -320,14 +333,30 @@ impl<'a> InstallWizardPanel<'a> {
             .render(body, buf);
     }
 
-    /// Render the footer: Phase 1 key hints (and optional status message).
+    /// Render the footer: key hints (and optional status message).
+    ///
+    /// When the selected step is the `Platforms` parent, appends
+    /// `· [Enter] expand/collapse` to the standard hint string.
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
-        let hints = "[Tab] switch \u{00b7} [j/k] move \u{00b7} [r] re-run \u{00b7} [Esc] close";
+        use fdemon_app::install_wizard::WizardStepKind;
+
+        let base_hints =
+            "[Tab] switch \u{00b7} [j/k] move \u{00b7} [r] re-run \u{00b7} [Esc] close";
+
+        // Append expand/collapse hint when the Platforms parent is selected.
+        let selected_is_platforms =
+            self.state.selected_step().map(|s| s.kind) == Some(WizardStepKind::Platforms);
+
+        let hints = if selected_is_platforms {
+            format!("{base_hints} \u{00b7} [Enter] expand/collapse")
+        } else {
+            base_hints.to_string()
+        };
 
         let text = if let Some(ref msg) = self.state.status_message {
             format!("{msg}  \u{2502}  {hints}") // │
         } else {
-            hints.to_string()
+            hints
         };
 
         Paragraph::new(Line::from(Span::styled(
