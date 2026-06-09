@@ -96,6 +96,8 @@ fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
             Some("  Install the OS build tools below, then press r to re-check")
         }
         WizardStepKind::PlatformWeb => Some("  Browser required for flutter run -d chrome"),
+        WizardStepKind::PlatformIos => Some("  Xcode required for iOS development"),
+        WizardStepKind::PlatformMacos => Some("  Xcode required for macOS development"),
         // Add a new leaf caption here when its guided-command logic is implemented.
         // Keep this in sync with the action hints and guided-command logic.
         _ => None,
@@ -267,10 +269,13 @@ impl<'a> StepDetailPane<'a> {
                 WizardStepKind::PlatformAndroid
                     | WizardStepKind::Prerequisites
                     | WizardStepKind::PlatformWeb
+                    | WizardStepKind::PlatformIos
+                    | WizardStepKind::PlatformMacos
             )
         {
-            // PlatformAndroid gated (JDK missing), Prerequisites with guided commands, or
-            // PlatformWeb with guided commands (browser absent/partial) —
+            // PlatformAndroid gated (JDK missing), Prerequisites with guided commands,
+            // PlatformWeb with guided commands (browser absent/partial),
+            // PlatformIos/PlatformMacos with guided commands (Xcode absent) —
             // the guided-command section is the primary CTA; skip the "coming soon" hint.
             return;
         } else {
@@ -2603,5 +2608,245 @@ mod tests {
             1,
             "zero-width pane should return 1 to avoid division by zero"
         );
+    }
+
+    // --- Phase 4 task 04: PlatformIos and PlatformMacos caption + coming-soon suppression ---
+
+    #[test]
+    fn test_step_caption_ios_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformIos);
+        assert!(caption.is_some(), "PlatformIos should have a caption");
+        assert!(
+            caption.unwrap().contains("Xcode"),
+            "PlatformIos caption should mention Xcode: {:?}",
+            caption
+        );
+        assert!(
+            caption.unwrap().contains("iOS"),
+            "PlatformIos caption should mention iOS: {:?}",
+            caption
+        );
+    }
+
+    #[test]
+    fn test_step_caption_macos_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformMacos);
+        assert!(caption.is_some(), "PlatformMacos should have a caption");
+        assert!(
+            caption.unwrap().contains("Xcode"),
+            "PlatformMacos caption should mention Xcode: {:?}",
+            caption
+        );
+        assert!(
+            caption.unwrap().contains("macOS"),
+            "PlatformMacos caption should mention macOS: {:?}",
+            caption
+        );
+    }
+
+    /// Build an `InstallWizardState` with the PlatformIos step selected and a guided
+    /// command present (simulates Xcode missing scenario).
+    fn make_state_ios_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Missing,
+                    detail: "Xcode not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Xcode from the App Store".to_string(),
+                    command: "open https://apps.apple.com/app/xcode/id497799835".to_string(),
+                    note: Some(
+                        "or: xcode-select --install for Command Line Tools only".to_string(),
+                    ),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformIos step selected and no guided
+    /// commands (Xcode all Ok — display-only state).
+    fn make_state_ios_no_guided_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Ok,
+                    detail: "Xcode 15.0".to_string(),
+                }],
+                guided_commands: vec![],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformMacos step selected and a guided
+    /// command present (simulates Xcode missing scenario).
+    fn make_state_macos_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformMacos,
+                title: "macOS".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Missing,
+                    detail: "Xcode not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Xcode from the App Store".to_string(),
+                    command: "open https://apps.apple.com/app/xcode/id497799835".to_string(),
+                    note: Some(
+                        "or: xcode-select --install for Command Line Tools only".to_string(),
+                    ),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    #[test]
+    fn test_ios_leaf_shows_caption_and_guided_block() {
+        // PlatformIos with a guided command → caption present, guided block present,
+        // "coming soon" absent.
+        let state = make_state_ios_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformIos with guided commands should show guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Xcode required for iOS"),
+            "PlatformIos step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformIos step should show [c] copy affordance: '{content}'"
+        );
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformIos with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_macos_leaf_shows_caption_and_guided_block() {
+        // PlatformMacos with a guided command → caption present, guided block present,
+        // "coming soon" absent.
+        let state = make_state_macos_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformMacos with guided commands should show guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Xcode required for macOS"),
+            "PlatformMacos step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformMacos step should show [c] copy affordance: '{content}'"
+        );
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformMacos with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_ios_leaf_no_commands_shows_coming_soon() {
+        // PlatformIos with empty guided_commands (Xcode all Ok) → caption present,
+        // "coming soon" hint renders (display-only).
+        let state = make_state_ios_no_guided_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("coming soon"),
+            "PlatformIos with no guided commands should show 'coming soon' placeholder: '{content}'"
+        );
+        assert!(
+            content.contains("flutter doctor"),
+            "PlatformIos placeholder should mention 'flutter doctor': '{content}'"
+        );
+        // No guided-command block when Xcode is already detected.
+        assert!(
+            !content.contains("Guided steps"),
+            "PlatformIos with no guided commands must NOT show guided-steps header: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_ios_macos_leaves_not_executable() {
+        // Neither PlatformIos nor PlatformMacos is executable — no "Press Enter to install"
+        // hint should ever render for these leaves.
+        let ios_state = make_state_ios_with_guided_command();
+        let pane = StepDetailPane::new(&ios_state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            !content.contains("Press Enter"),
+            "PlatformIos must NOT show 'Press Enter' hint: '{content}'"
+        );
+
+        let macos_state = make_state_macos_with_guided_command();
+        let pane = StepDetailPane::new(&macos_state, true, 0);
+        let mut buf2 = Buffer::empty(area);
+        pane.render(area, &mut buf2);
+        let content2: String = buf2.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            !content2.contains("Press Enter"),
+            "PlatformMacos must NOT show 'Press Enter' hint: '{content2}'"
+        );
+    }
+
+    #[test]
+    fn test_no_panic_ios_guided_tiny_area() {
+        let state = make_state_ios_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic even in tight space
+    }
+
+    #[test]
+    fn test_no_panic_macos_guided_tiny_area() {
+        let state = make_state_macos_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic even in tight space
     }
 }
