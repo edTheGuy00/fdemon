@@ -197,21 +197,39 @@ fn validate_jdk_dir(jdk_dir: &Path) -> Result<()> {
 /// `flutter config --jdk-dir=/usr`, which breaks the Flutter build.
 const NON_JDK_PREFIXES: &[&str] = &["/usr", "/usr/local"];
 
+/// Check whether `home` contains the canonical JDK markers for the given
+/// `javac_name` (either `"javac"` on POSIX or `"javac.exe"` on Windows).
+///
+/// A candidate JDK home is accepted when it has **either**:
+/// - A `release` file (present in every OpenJDK / OracleJDK build since JDK 9), **or**
+/// - A `bin/<javac_name>` binary.
+///
+/// A bare `lib/` subdirectory is no longer accepted on its own because
+/// `/usr/lib` exists on every Unix system and would be a false positive for
+/// stubs at `/usr/bin/java`.
+///
+/// This helper is extracted as a pure function so tests can exercise **both**
+/// platform names (`javac` and `javac.exe`) with a temp-dir fixture on any host
+/// OS, rather than requiring `#[cfg(windows)]`-only coverage.
+pub(crate) fn has_jdk_markers(home: &Path, javac_name: &str) -> bool {
+    home.join("release").is_file() || home.join("bin").join(javac_name).exists()
+}
+
 /// Attempt to resolve the JDK home by locating the `java` binary via `which`
 /// and walking two directories up (bin → java_home).
 ///
 /// Typical layouts:
 /// - Linux: `/usr/lib/jvm/java-21-openjdk/bin/java` → `/usr/lib/jvm/java-21-openjdk`
 /// - macOS: `/usr/bin/java` (stub) → skip; `/Library/Java/JavaVirtualMachines/…/Contents/Home/bin/java`
+/// - Windows: `C:\Program Files\Eclipse Adoptium\jdk-21\bin\java.exe` → `…\jdk-21`
 /// - FVM/asdf: `~/.jdks/corretto-21/bin/java` → `~/.jdks/corretto-21`
 ///
 /// The candidate JDK home must satisfy **both** of these conditions to be
 /// accepted:
 ///
 /// 1. It is not a known non-JDK system prefix (e.g. `/usr`, `/usr/local`).
-/// 2. It contains a canonical JDK marker: a `release` file **or** a `bin/javac`
-///    binary.  A plain `lib/` subdirectory is no longer accepted on its own
-///    because `/usr/lib` exists on every Unix system.
+/// 2. It contains a canonical JDK marker: a `release` file **or** a `bin/javac[.exe]`
+///    binary (platform-aware name, matching `validate_jdk_home`).
 fn java_home_from_which() -> Option<PathBuf> {
     let java_bin = which::which("java").ok()?;
 
@@ -242,16 +260,21 @@ fn java_home_from_which() -> Option<PathBuf> {
     }
 
     // A real JDK home must contain a `release` file (present in every OpenJDK /
-    // OracleJDK build since JDK 9) or a `bin/javac` compiler binary.
-    // We no longer accept a bare `lib/` subdirectory because `/usr/lib` exists
-    // everywhere and would be a false positive for stubs at `/usr/bin/java`.
-    if jdk_home.join("release").is_file() || jdk_home.join("bin").join("javac").exists() {
+    // OracleJDK build since JDK 9) or a `bin/javac[.exe]` compiler binary.
+    // The javac name is platform-aware (`.exe` on Windows, no extension on POSIX)
+    // to match the check in `validate_jdk_home`.
+    #[cfg(windows)]
+    let javac_name = "javac.exe";
+    #[cfg(not(windows))]
+    let javac_name = "javac";
+
+    if has_jdk_markers(jdk_home, javac_name) {
         return Some(jdk_home.to_owned());
     }
 
     tracing::debug!(
         path = %jdk_home.display(),
-        "java_home_from_which: rejected — no release file or bin/javac found"
+        "java_home_from_which: rejected — no release file or bin/{javac_name} found"
     );
     None
 }
@@ -596,6 +619,108 @@ mod tests {
         assert!(
             !has_release && !has_javac,
             "stub dir must not have release or javac"
+        );
+    }
+
+    // ── has_jdk_markers cross-platform helper tests ───────────────────────────
+
+    /// `has_jdk_markers` with POSIX name accepts a home that has `bin/javac`
+    /// (no extension) — tests the Linux/macOS path on any host OS.
+    #[test]
+    fn test_has_jdk_markers_posix_javac_accepted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("javac"), b"#!/bin/sh").unwrap();
+
+        assert!(
+            has_jdk_markers(tmp.path(), "javac"),
+            "bin/javac must satisfy the POSIX marker check"
+        );
+    }
+
+    /// `has_jdk_markers` with Windows name accepts a home that has `bin/javac.exe`
+    /// — tests the Windows path on any host OS (cross-platform testability).
+    #[test]
+    fn test_has_jdk_markers_windows_javac_exe_accepted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("javac.exe"), b"MZ").unwrap();
+
+        assert!(
+            has_jdk_markers(tmp.path(), "javac.exe"),
+            "bin/javac.exe must satisfy the Windows marker check"
+        );
+    }
+
+    /// `has_jdk_markers` accepts a home that has only a `release` file (no javac),
+    /// regardless of the javac name passed — covers the OpenJDK `release`-only layout.
+    #[test]
+    fn test_has_jdk_markers_release_file_accepted_regardless_of_javac_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("release"), b"JAVA_VERSION=\"21\"").unwrap();
+
+        assert!(
+            has_jdk_markers(tmp.path(), "javac"),
+            "release file must satisfy the marker check with POSIX javac name"
+        );
+        assert!(
+            has_jdk_markers(tmp.path(), "javac.exe"),
+            "release file must satisfy the marker check with Windows javac name"
+        );
+    }
+
+    /// `has_jdk_markers` rejects a home that has neither `release` nor any
+    /// `bin/javac*` file — tests the stub/empty layout.
+    #[test]
+    fn test_has_jdk_markers_empty_dir_rejected_for_both_names() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Only create bin/ with java but no javac — simulates a JRE stub.
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("java"), b"#!/bin/sh").unwrap();
+
+        assert!(
+            !has_jdk_markers(tmp.path(), "javac"),
+            "stub dir must be rejected with POSIX javac name"
+        );
+        assert!(
+            !has_jdk_markers(tmp.path(), "javac.exe"),
+            "stub dir must be rejected with Windows javac name"
+        );
+    }
+
+    /// `has_jdk_markers` with POSIX name `"javac"` does NOT accept a dir that
+    /// only has `bin/javac.exe` — the name check is exact (no cross-name
+    /// contamination).
+    #[test]
+    fn test_has_jdk_markers_posix_name_does_not_match_exe_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // Only plant javac.exe, not javac.
+        std::fs::write(bin.join("javac.exe"), b"MZ").unwrap();
+
+        assert!(
+            !has_jdk_markers(tmp.path(), "javac"),
+            "POSIX name 'javac' must not match 'javac.exe'"
+        );
+    }
+
+    /// `has_jdk_markers` with Windows name `"javac.exe"` does NOT accept a dir
+    /// that only has `bin/javac` (no extension).
+    #[test]
+    fn test_has_jdk_markers_windows_name_does_not_match_posix_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // Only plant javac (no .exe).
+        std::fs::write(bin.join("javac"), b"#!/bin/sh").unwrap();
+
+        assert!(
+            !has_jdk_markers(tmp.path(), "javac.exe"),
+            "Windows name 'javac.exe' must not match 'javac'"
         );
     }
 }
