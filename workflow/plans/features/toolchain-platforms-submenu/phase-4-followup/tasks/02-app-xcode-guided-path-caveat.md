@@ -67,4 +67,34 @@ Keep the command string itself unchanged (canonical path is the right default). 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** worktree-agent-ae79deadbdffc0671
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `note: Some(...)` to the "Select Xcode & accept license" GuidedCommand in `xcode_guided_commands` function (line 1125-1128); added unit test `test_xcode_select_command_has_path_caveat_note` to verify note presence and content (lines 4972-5012) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Note Text**: Used "Adjust the path if Xcode is not in /Applications (e.g. a versioned or beta bundle)." to match the exact format suggested in the task spec. The note references both the canonical path and provides concrete examples of non-standard locations.
+
+2. **Test Placement**: Added the test right after `test_ios_leaf_includes_download_platform_macos_does_not()` and before `test_cocoapods_only_missing_emits_only_cocoapods_command()` to keep related xcode/iOS tests grouped together.
+
+3. **Test Assertions**: The test validates that:
+   - The note is present (`Some(..)`)
+   - It mentions the `/Applications` path
+   - It mentions adjusting the path
+   - It provides examples (versioned or beta bundles)
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib` - Passed (3014 tests)
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo check --workspace --all-targets` - Passed
+
+### Risks/Limitations
+
+None. This is a pure data change to a builder function with corresponding test coverage. The change is minimal, scoped, and does not affect other guided commands, status logic, or the Partial-gating mechanism.

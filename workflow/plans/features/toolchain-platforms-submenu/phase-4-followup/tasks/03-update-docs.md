@@ -56,4 +56,27 @@ leaf). This replaces the prior over-claim that the probe checked `simctl`/licens
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Updated line 280: `checks/ios.rs` annotation now describes the five-gate Xcode probe sequence (`xcode-select -p` → `xcodebuild -version` → `xcodebuild -license check` → `xcodebuild -checkFirstLaunchStatus` → `xcrun simctl list devices booted`), clarifies `XcodeTools = Ok` requires all gates to pass, notes `kill_on_drop`/non-interactive process handling, and `Missing → Partial` non-blocking cap |
+
+### Notable Decisions/Tradeoffs
+
+1. **Targeted annotation edit**: Updated the existing inline `checks/ios.rs` description only; no whole-section rewrite per acceptance criteria #2
+2. **Content boundaries respected**: Architecture-level description only; no how-to/command tutorials per schema rules
+3. **Non-blocking semantics cross-referenced**: `Missing → Partial` cap and `FlutterSdk`-only handback gate noted as per Phase 4 design, not restated
+
+### Testing Performed
+
+- Doc-only change; no code/tests involved
+- Content boundaries validated against `~/.claude/skills/doc-standards/schemas.md` rules
+- Annotation matches post-Task-01 implemented behavior in `crates/fdemon-daemon/src/toolchain/checks/ios.rs`
+
+### Risks/Limitations
+
+None — hygiene-only task documenting already-merged implementation (commit ade2f7bc).

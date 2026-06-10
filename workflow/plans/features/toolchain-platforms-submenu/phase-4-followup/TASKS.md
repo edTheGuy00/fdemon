@@ -76,9 +76,9 @@ Exit code **69** on any `xcrun` call specifically signals an unaccepted license.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-daemon-harden-ios-probe](tasks/01-daemon-harden-ios-probe.md) | Not Started | - | 3–4h | `fdemon-daemon/src/toolchain/checks/ios.rs` |
-| 2 | [02-app-xcode-guided-path-caveat](tasks/02-app-xcode-guided-path-caveat.md) | Not Started | - | 0.5–1h | `fdemon-app/src/install_wizard/state.rs` |
-| 3 | [03-update-docs](tasks/03-update-docs.md) | Not Started | 1 | 1h | `docs/ARCHITECTURE.md` |
+| 1 | [01-daemon-harden-ios-probe](tasks/01-daemon-harden-ios-probe.md) | ✅ Done (validated PASS, merged, integration PASS) | - | 3–4h | `fdemon-daemon/src/toolchain/checks/ios.rs` |
+| 2 | [02-app-xcode-guided-path-caveat](tasks/02-app-xcode-guided-path-caveat.md) | ✅ Done (validated PASS, merged, integration PASS) | - | 0.5–1h | `fdemon-app/src/install_wizard/state.rs` |
+| 3 | [03-update-docs](tasks/03-update-docs.md) | ✅ Done (validated CONCERN — hygiene only: Completion Summary initially missing, since filled in; doc content itself verified accurate) | 1 | 1h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 
@@ -122,6 +122,22 @@ Phase 4 follow-up is complete when:
       `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [ ] `docs/ARCHITECTURE.md` describes the real five-gate probe sequence (license/first-launch/simctl now
       implemented), replacing the prior over-claim.
+
+## Phase Review
+
+- **Round 1 (2026-06-10):** ⚠️ NEEDS WORK — `workflow/reviews/features/toolchain-platforms-submenu-phase-4-followup/REVIEW.md`
+  (+ `ACTION_ITEMS.md`). 2 blocking Major items, both isolated to `ios.rs`: (1) gate-1 `xcode-select -p`
+  timeout maps to `ComponentStatus::Unknown` → rollup no-op → leaf can silently show Ok (inconsistent with
+  every other gate's timeout → visible Partial); (2) composed classifier/probe-failed detail strings bypass
+  the `MAX_DETAIL_LEN` / `strip_and_truncate` convention. Plus minor doc-comment and test-pattern cleanups.
+  Followup fix round 1 dispatched.
+- **Fix round 1 (2026-06-10):** ✅ Implemented + validated PASS —
+  `followups/phase-4-followup-fix-1/` (1 task, all in `ios.rs`). Both Major items resolved: gate-1
+  `Unknown` → `ComponentStatus::Error` (visible Partial; pure helper `xcode_select_result_to_check` +
+  test); all composed details `strip_and_truncate`'d with a max-len cap test; doc comments fixed;
+  simctl-remediation, cross-gate Fail-beats-Unknown, and max-len tests added. 22 ios tests / 1209
+  workspace lib tests green, fmt + clippy clean. **Formal re-review skipped at user request** — the
+  fixes were independently validated by task_validator (PASS, no deviations).
 
 ## Notes
 

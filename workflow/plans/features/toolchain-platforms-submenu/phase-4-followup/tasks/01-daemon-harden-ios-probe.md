@@ -182,4 +182,38 @@ New / updated tests in `ios.rs`:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** worktree-agent-abba8232e75df57b0
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/checks/ios.rs` | H1: added `.kill_on_drop(true)` to all 6 `Command::new` spawns (xcode-select, xcodebuild -version, xcodebuild -license check, xcodebuild -checkFirstLaunchStatus, xcrun simctl, pod). M1+L1: fixed non-zero `xcode-select -p` exit to route to `XcodeSelectResult::NoActiveTools` (not `CltOnly`); genuine CLT path is now `strip_and_truncate`'d. Md1: added `GateResult` enum, `probe_xcode_license`, `probe_xcode_first_launch`, `probe_simctl` functions, and `classify_xcode_gates` pure classifier; reworked `probe_xcode_tools` to run all three gates concurrently after a successful `xcodebuild -version` and fold them through the classifier. Updated module header and `probe_xcode_tools` doc-comment to describe the real five-gate sequence. Added 11 new unit tests for `classify_xcode_gates` covering all-pass, each gate fail, precedence, and Unknown cases. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`NoActiveTools` variant (not `NotFound`)**: Added a new `XcodeSelectResult::NoActiveTools` variant for the non-zero-exit case. Reusing `NotFound` would have been semantically wrong (the command ran; it just reported no tools). The variant stays private to the module, so no external API change.
+
+2. **`probe_xcodebuild_version_detail` split**: Extracted the version-string probe into a helper returning `Result<String, ComponentCheck>` rather than a `ComponentCheck`. This lets `probe_xcode_tools` do an early return on failure and cleanly thread the version string into `classify_xcode_gates`.
+
+3. **All three gates run concurrently (no short-circuit)**: `tokio::join!` runs license, first-launch, and simctl at the same time, mirroring Flutter's own validator behavior. Precedence is applied only in `classify_xcode_gates`, which is a pure function.
+
+4. **`ComponentStatus::Missing` for all gate failures**: Per the task spec, present-but-misconfigured Xcode uses `Missing` so the app's existing `Missing → Partial` cap makes it non-blocking. No new `ComponentStatus` variant is added.
+
+5. **Gate precedence**: license > first_launch > simctl > Unknown. `Fail` beats `Unknown` for the same gate (a definitive Fail is more actionable). Documented inline.
+
+6. **Pre-existing test failure noted**: `toolchain::tests::test_run_preflight_nonexistent_sdk_path_does_not_panic` was already failing before this task on this machine (Flutter found via FVM/PATH), confirmed by reverting and retesting. Not introduced by this task.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon --lib toolchain::checks::ios` — PASS (16 tests)
+- `cargo test --workspace --lib` — PASS (1203 passed, 1 pre-existing failure unrelated to this task)
+- `cargo fmt --all -- --check` — PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `test_run_preflight_nonexistent_sdk_path_does_not_panic` fails on this machine because Flutter is installed via FVM and found through the PATH strategy regardless of the nonexistent explicit SDK path. This failure exists on the branch before this task and is not introduced by it. CI (clean environment without Flutter pre-installed) should be unaffected.
+
+2. **`simctl list devices booted` on macOS without any booted simulators**: This command exits 0 even when no devices are booted (it just prints an empty list), so it correctly passes the gate on a fresh macOS system with Xcode installed. The goal is to verify simctl is reachable, not that simulators are running.
