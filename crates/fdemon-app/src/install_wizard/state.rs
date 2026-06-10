@@ -24,6 +24,19 @@ use super::types::{
 /// a Chromium-based browser on any platform.
 const CHROME_DOWNLOAD_URL: &str = "https://www.google.com/chrome/";
 
+// ── Windows guided-command constants ──────────────────────────────────────────
+
+/// Stable prefix used in the gate-1-hit / gate-2-miss detail string produced by
+/// `fdemon_daemon::toolchain::checks::windows::classify_vswhere_gates` (Task 01).
+///
+/// **Cross-crate contract:** this string is duplicated from the `pub(crate)` const
+/// `VS_FOUND_PREFIX` in `fdemon-daemon/src/toolchain/checks/windows.rs` because
+/// that crate has no public re-export path visible to `fdemon-app`. If that
+/// constant ever changes, this duplicate must be updated to match.  Prefix drift
+/// degrades gracefully — it causes the "fresh-install" branch to be taken instead
+/// of the "modify existing VS" branch, which is acceptable (not a panic path).
+const WINDOWS_VS_FOUND_PREFIX: &str = "Visual Studio found";
+
 /// Note appended to every web-browser guided command so users know how to
 /// point Flutter at a non-default browser path.
 ///
@@ -1148,6 +1161,76 @@ fn xcode_guided_commands(
     cmds
 }
 
+/// Guided commands for the Windows platform leaf.
+///
+/// Emits only when the leaf is `Partial` (the capped form of a determined-absent
+/// VS C++ workload); `Ok` and `Pending` yield no commands. Display-only
+/// copy-paste text — never executed.
+///
+/// **Branching on the detail-prefix contract:**
+/// - If the `VisualStudioCpp` component's `detail` starts with
+///   [`WINDOWS_VS_FOUND_PREFIX`] (stable prefix from Task 01 —
+///   `fdemon-daemon/src/toolchain/checks/windows.rs::classify_vswhere_gates`),
+///   VS exists but the C++ workload is missing → emits the **modify** entry first.
+/// - Fresh-install entries are emitted in both branches (primary in the no-VS branch):
+///   - When `report.winget_available`: winget install entry.
+///   - Always: choco install entry.
+///
+/// Ordering: modify → winget → choco (deterministic, matches test expectations).
+///
+/// **`all_components_ok()` intentionally stays strict (Phase 3/4 precedent).**
+/// A Windows host without VS does not show "All set". Do not special-case
+/// `VisualStudioCpp` out of it.
+fn windows_guided_commands(
+    report: &ToolchainReport,
+    status: StepStatus,
+    components: &[ComponentCheck],
+) -> Vec<GuidedCommand> {
+    // Guide only when the VS C++ workload is determined absent (Partial = capped
+    // form of Missing). Ok = found; Pending = no probe data / empty report.
+    if status != StepStatus::Partial {
+        return Vec::new();
+    }
+
+    // Branch on the detail-prefix contract: `VS_FOUND_PREFIX` in
+    // `fdemon-daemon/src/toolchain/checks/windows.rs::classify_vswhere_gates`
+    // sets this prefix when gate 1 hits but gate 2 misses (VS present but C++
+    // workload absent). See WINDOWS_VS_FOUND_PREFIX cross-crate contract note above.
+    let vs_found_workload_missing = components.iter().any(|c| {
+        c.kind == ComponentKind::VisualStudioCpp && c.detail.starts_with(WINDOWS_VS_FOUND_PREFIX)
+    });
+
+    let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+    // Modify entry: only when VS is present but C++ workload is missing.
+    if vs_found_workload_missing {
+        cmds.push(GuidedCommand {
+            label: "Add the C++ workload to the existing Visual Studio".to_string(),
+            command: r#"start "" "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe""#.to_string(),
+            note: Some("Opens Visual Studio Installer — choose Modify and tick 'Desktop development with C++'.".to_string()),
+        });
+    }
+
+    // Fresh-install entries (emitted in both branches).
+    // Winget: only when winget is pre-confirmed available (no which::which I/O here).
+    if report.winget_available {
+        cmds.push(GuidedCommand {
+            label: "Install VS 2022 Build Tools (winget)".to_string(),
+            command: "winget install --id Microsoft.VisualStudio.2022.BuildTools --override \"--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.NativeDesktop;includeRecommended\"".to_string(),
+            note: Some("Requires elevation. After installing, press r to re-check.".to_string()),
+        });
+    }
+
+    // Choco: always emitted as the universal package-manager fallback.
+    cmds.push(GuidedCommand {
+        label: "Install VS 2022 Build Tools (choco)".to_string(),
+        command: "choco install visualstudio2022buildtools --package-parameters \"--add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended\"".to_string(),
+        note: Some("Requires Chocolatey.".to_string()),
+    });
+
+    cmds
+}
+
 /// Map a [`ToolchainReport`]'s components into the wizard UI steps.
 ///
 /// ## Collapsed (expanded == false)
@@ -1162,7 +1245,8 @@ fn xcode_guided_commands(
 /// - `PlatformWeb`     — all hosts (live as of Phase 3)
 /// - `PlatformIos`     — macOS only (live as of Phase 4)
 /// - `PlatformMacos`   — macOS only (live as of Phase 4)
-/// - `PlatformWindows` — Windows only
+/// - `PlatformWindows` — Windows only (live as of Phase 5); `ComponentKind::VisualStudioCpp`,
+///   status capped at `Partial` (non-blocking)
 ///
 /// In Phase 2 and earlier, all leaves except `PlatformAndroid` were **placeholders**
 /// with `StepStatus::Pending`, empty `components`, and no `guided_commands`.
@@ -1174,6 +1258,9 @@ fn xcode_guided_commands(
 /// `ComponentKind::XcodeTools` + `ComponentKind::CocoaPods` checks (cloned into
 /// both buckets), cap `Missing → Partial`, and emit Xcode/CocoaPods guided
 /// commands. The iOS leaf additionally includes `xcodebuild -downloadPlatform iOS`.
+/// As of Phase 5, `PlatformWindows` is live: it routes
+/// `ComponentKind::VisualStudioCpp` checks, caps `Missing → Partial` (non-blocking),
+/// and emits winget / choco / modify-existing-VS guided commands.
 ///
 /// ## Component grouping
 ///
@@ -1186,6 +1273,8 @@ fn xcode_guided_commands(
 ///   `Partial`; macOS-only; non-blocking.
 /// - `PlatformMacos` — `XcodeTools`, `CocoaPods` (cloned); status capped at
 ///   `Partial`; macOS-only; non-blocking.
+/// - `PlatformWindows` — `VisualStudioCpp`; status capped at `Partial`;
+///   Windows-only; non-blocking.
 /// - `FlutterSdk` — `ComponentKind::FlutterSdk`
 /// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `Doctor` — no components; detail comes from `report.doctor`
@@ -1200,6 +1289,7 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
     // independent and the parent rollup is not double-counted.
     let mut platform_ios_components: Vec<ComponentCheck> = Vec::new();
     let mut platform_macos_components: Vec<ComponentCheck> = Vec::new();
+    let mut platform_windows_components: Vec<ComponentCheck> = Vec::new();
     let mut flutter_sdk: Vec<ComponentCheck> = Vec::new();
 
     for check in &report.components {
@@ -1229,8 +1319,9 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
                 platform_ios_components.push(check.clone());
                 platform_macos_components.push(check.clone());
             }
-            // Phase 5 Task 01 stub: routed to the Windows leaf in Task 03.
-            ComponentKind::VisualStudioCpp => {}
+            ComponentKind::VisualStudioCpp => {
+                platform_windows_components.push(check.clone());
+            }
         }
     }
 
@@ -1290,6 +1381,19 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
         StepStatus::Pending
     } else {
         let raw = rollup_status(&platform_macos_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
+    // Windows status: non-blocking cap — `Missing` becomes `Partial` so that an absent
+    // Visual Studio never propagates `Missing` up through the Platforms parent.
+    // Empty (no VisualStudioCpp component, i.e. non-Windows report) → Pending.
+    let windows_status = if platform_windows_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_windows_components);
         if raw == StepStatus::Missing {
             StepStatus::Partial
         } else {
@@ -1381,14 +1485,21 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
             });
         }
 
-        // Windows-only leaf (placeholder — Pending).
+        // Windows-only leaf (live as of Phase 5 — VisualStudioCpp probe).
+        // Non-blocking: Missing→Partial cap applied above so an absent VS never
+        // causes the Platforms parent to surface Missing.
+        // Host gating reads report.platform — not cfg!(target_os).
         if report.platform == HostPlatform::Windows {
             leaves.push(WizardStep {
                 kind: WizardStepKind::PlatformWindows,
                 title: "Windows".to_string(),
-                status: StepStatus::Pending,
-                components: Vec::new(),
-                guided_commands: Vec::new(),
+                status: windows_status,
+                components: platform_windows_components.clone(),
+                guided_commands: windows_guided_commands(
+                    report,
+                    windows_status,
+                    &platform_windows_components,
+                ),
                 indent: 1,
             });
         }
@@ -5202,6 +5313,408 @@ mod tests {
         assert!(
             macos.guided_commands.is_empty(),
             "Pending macOS leaf must have no guided commands"
+        );
+    }
+
+    // ── Windows leaf tests (Phase 5 Task 03) ─────────────────────────────────
+
+    /// Build a minimal Windows `ToolchainReport` with the given components and
+    /// `winget_available` flag.
+    fn make_windows_report(
+        components: Vec<ComponentCheck>,
+        winget_available: bool,
+    ) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::PowerShell,
+            components,
+            doctor: None,
+            linux_package_manager: None,
+            winget_available,
+        }
+    }
+
+    /// Build a `ComponentCheck` for `VisualStudioCpp` with the given status and
+    /// detail string.
+    fn make_vs_check(status: ComponentStatus, detail: &str) -> ComponentCheck {
+        ComponentCheck {
+            kind: ComponentKind::VisualStudioCpp,
+            status,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// AC1a: A Windows report with a `VisualStudioCpp` check routes it into the
+    /// `PlatformWindows` leaf — the leaf must have exactly 1 component.
+    #[test]
+    fn test_build_steps_windows_leaf_routes_visualstudio_component() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Ok,
+                "Visual Studio 2022 17.0",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present on a Windows report");
+
+        assert_eq!(
+            leaf.components.len(),
+            1,
+            "PlatformWindows leaf must contain exactly 1 component (VisualStudioCpp)"
+        );
+        assert_eq!(
+            leaf.components[0].kind,
+            ComponentKind::VisualStudioCpp,
+            "PlatformWindows component must be VisualStudioCpp"
+        );
+        assert_eq!(leaf.indent, 1, "PlatformWindows leaf must have indent 1");
+    }
+
+    /// AC1b: A Missing `VisualStudioCpp` check is capped to `Partial` on the
+    /// `PlatformWindows` leaf — never surfaces as `Missing`.
+    #[test]
+    fn test_build_steps_windows_leaf_caps_missing_to_partial() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Missing,
+                "Visual Studio not found",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present");
+
+        assert_ne!(
+            leaf.status,
+            StepStatus::Missing,
+            "PlatformWindows must never have Missing status (non-blocking cap)"
+        );
+        assert_eq!(
+            leaf.status,
+            StepStatus::Partial,
+            "PlatformWindows with a Missing VisualStudioCpp check must be capped to Partial"
+        );
+    }
+
+    /// AC1c: An Ok `VisualStudioCpp` check produces leaf status `Ok` and no
+    /// guided commands.
+    #[test]
+    fn test_build_steps_windows_leaf_ok_when_component_ok() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Ok,
+                "Visual Studio 2022 17.0",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present");
+
+        assert_eq!(
+            leaf.status,
+            StepStatus::Ok,
+            "Ok VS check must yield Ok leaf"
+        );
+        assert!(
+            leaf.guided_commands.is_empty(),
+            "Ok PlatformWindows leaf must have no guided commands"
+        );
+    }
+
+    /// AC1d: A Windows report without a `VisualStudioCpp` component (legacy-report
+    /// safety) must yield a `PlatformWindows` leaf with `Pending` status and no
+    /// components.
+    #[test]
+    fn test_build_steps_windows_leaf_empty_components_pending() {
+        // Windows report with no VisualStudioCpp component emitted.
+        let report = make_windows_report(vec![], false);
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present on a Windows report");
+
+        assert_eq!(
+            leaf.status,
+            StepStatus::Pending,
+            "PlatformWindows with no VisualStudioCpp component must be Pending"
+        );
+        assert!(
+            leaf.components.is_empty(),
+            "PlatformWindows with no VS component must have empty components"
+        );
+        assert!(
+            leaf.guided_commands.is_empty(),
+            "Pending PlatformWindows leaf must have no guided commands"
+        );
+    }
+
+    // ── windows_guided_commands unit tests ────────────────────────────────────
+
+    /// AC2a + AC3: Fresh-install path (no "Visual Studio found" prefix) with
+    /// `winget_available = true` → both winget and choco entries.
+    #[test]
+    fn test_windows_guided_commands_fresh_install_winget_and_choco() {
+        let components = vec![make_vs_check(
+            ComponentStatus::Missing,
+            "Visual Studio not found",
+        )];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(
+            !cmds.is_empty(),
+            "Partial status (fresh install, winget=true) must emit guided commands"
+        );
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=true must emit a winget command; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("choco")),
+            "fresh install must always emit a choco command; got: {all_commands:?}"
+        );
+
+        // No modify entry: no "Visual Studio found" prefix.
+        let any_modify = cmds
+            .iter()
+            .any(|c| c.label.contains("Add the C++ workload"));
+        assert!(
+            !any_modify,
+            "Fresh-install path must not emit the modify entry"
+        );
+
+        // Ordering: winget before choco (no modify in this path).
+        let winget_pos = cmds
+            .iter()
+            .position(|c| c.command.contains("winget"))
+            .unwrap();
+        let choco_pos = cmds
+            .iter()
+            .position(|c| c.command.contains("choco"))
+            .unwrap();
+        assert!(
+            winget_pos < choco_pos,
+            "winget entry must come before choco entry"
+        );
+    }
+
+    /// AC3: When `winget_available = false`, the winget entry is suppressed but
+    /// choco remains.
+    #[test]
+    fn test_windows_guided_commands_no_winget_falls_back_to_choco() {
+        let components = vec![make_vs_check(
+            ComponentStatus::Missing,
+            "Visual Studio not found",
+        )];
+        let report = make_windows_report(components.clone(), false);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        assert!(
+            !all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=false must suppress the winget entry; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("choco")),
+            "winget=false must still emit a choco entry; got: {all_commands:?}"
+        );
+    }
+
+    /// AC2: When the `VisualStudioCpp` detail starts with the `VS_FOUND_PREFIX`,
+    /// the modify entry is emitted first, followed by the fresh-install entries.
+    #[test]
+    fn test_windows_guided_commands_existing_vs_emits_modify_first() {
+        let detail = format!(
+            "{WINDOWS_VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(
+            !cmds.is_empty(),
+            "Partial status (VS found, workload missing) must emit guided commands"
+        );
+
+        // Modify entry must be first.
+        assert!(
+            cmds[0].label.contains("Add the C++ workload"),
+            "First command must be the modify entry; got: {:?}",
+            cmds[0].label
+        );
+        assert!(
+            cmds[0].command.contains("setup.exe"),
+            "Modify command must reference setup.exe; got: {}",
+            cmds[0].command
+        );
+
+        // Winget and choco follow.
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "modify-path with winget=true must also include the winget entry"
+        );
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("choco")),
+            "modify-path must always include the choco entry"
+        );
+    }
+
+    /// AC1c (guided commands): `Ok` status yields an empty list.
+    #[test]
+    fn test_windows_guided_commands_ok_status_empty() {
+        let components = vec![make_vs_check(
+            ComponentStatus::Ok,
+            "Visual Studio 2022 17.0",
+        )];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Ok, &components);
+        assert!(
+            cmds.is_empty(),
+            "Ok status must yield no guided commands; got: {cmds:?}"
+        );
+    }
+
+    /// Pending status yields an empty list.
+    #[test]
+    fn test_windows_guided_commands_pending_status_empty() {
+        let components: Vec<ComponentCheck> = vec![];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Pending, &components);
+        assert!(
+            cmds.is_empty(),
+            "Pending status must yield no guided commands; got: {cmds:?}"
+        );
+    }
+
+    /// AC5: When VS is missing, the Platforms parent still rolls up to at most
+    /// `Partial` (never `Missing`) because the Windows leaf applies the
+    /// Missing→Partial cap.
+    #[test]
+    fn test_build_steps_windows_parent_rollup_partial_not_missing() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Missing,
+                "Visual Studio not found",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+
+        let windows_leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present");
+        assert_eq!(
+            windows_leaf.status,
+            StepStatus::Partial,
+            "PlatformWindows must be Partial when VS is missing (non-blocking cap)"
+        );
+
+        let platforms = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms parent must be present");
+        assert_ne!(
+            platforms.status,
+            StepStatus::Missing,
+            "Platforms parent must not be Missing when Windows leaf is capped to Partial"
+        );
+    }
+
+    /// AC4: Non-Windows reports must not include a `PlatformWindows` leaf, and no
+    /// other leaf's behaviour changes (existing Linux-report tests stay valid).
+    #[test]
+    fn test_build_steps_non_windows_no_windows_leaf() {
+        // Linux report — no PlatformWindows leaf.
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        let steps = build_steps(&report, true);
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.kind != WizardStepKind::PlatformWindows),
+            "Linux report must not include PlatformWindows leaf"
+        );
+
+        // macOS report — no PlatformWindows leaf.
+        let macos = make_macos_report(vec![]);
+        let macos_steps = build_steps(&macos, true);
+        assert!(
+            macos_steps
+                .iter()
+                .all(|s| s.kind != WizardStepKind::PlatformWindows),
+            "macOS report must not include PlatformWindows leaf"
+        );
+    }
+
+    /// AC5: `flutter_now_live()` returns `true` when FlutterSdk is Ok on a
+    /// Windows report, regardless of the VS C++ workload status.
+    #[test]
+    fn test_flutter_now_live_unaffected_by_windows_partial() {
+        let mut state = InstallWizardState::default();
+        let report = make_windows_report(
+            vec![
+                make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+                make_vs_check(ComponentStatus::Missing, "Visual Studio not found"),
+            ],
+            false,
+        );
+        state.apply_report(report);
+
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk is Ok, \
+             even when VS C++ workload is missing (non-blocking)"
+        );
+    }
+
+    /// Ordering contract: modify → winget → choco (when all three are present).
+    #[test]
+    fn test_windows_guided_commands_ordering_modify_winget_choco() {
+        let detail = format!(
+            "{WINDOWS_VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert_eq!(cmds.len(), 3, "modify + winget + choco = 3 commands");
+
+        assert!(
+            cmds[0].label.contains("Add the C++ workload"),
+            "Index 0 must be the modify entry"
+        );
+        assert!(
+            cmds[1].command.contains("winget"),
+            "Index 1 must be the winget entry"
+        );
+        assert!(
+            cmds[2].command.contains("choco"),
+            "Index 2 must be the choco entry"
         );
     }
 }
