@@ -110,3 +110,39 @@ manifest).
   the saturating/width-guard idioms from `version_list.rs`.
 - Date display: raw ISO prefix is fine (`2024-08-06`); no chrono formatting, no new deps.
 - Master rows have `release_date: None` / `arch: None` — render gaps, not "null".
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aa63fd491dab79635
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/version_picker.rs` | NEW — `VersionPickerOverlay` widget: channel tabs, scrollable list with corrected_scroll, Loading/Failed/Loaded states, git-only badge, footer hints; 18 tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/mod.rs` | Added `mod version_picker;`; render call gated on `version_picker.visible` at end of `InstallWizardPanel::render`; footer hint `[v] versions` when FlutterSdk selected + picker closed; 4 new tests |
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | FlutterSdk `step_caption` added; caption rendered above action hint for executable steps with no guided commands; dynamic Enter hint shows confirmed version; updated 1 existing test; added 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Picker max width raised to 80**: The footer hint string is 72 chars. The original `min(60, …)` cap would always clip "[Esc] close" from the footer. Raised to 80 (inner = 78) to fit the full hint. Still bounded, still consistent with the wizard's dialog.
+
+2. **FlutterSdk caption rendered above action hint**: The task adds `step_caption` for FlutterSdk, but `render_guided_commands` (which normally renders captions) is never called for executable steps with no guided commands. Added a targeted `has_step_caption` path that reserves an extra row and renders the caption at `bottom_y`, shifting the action hint to `bottom_y + 1`. No layout disruption for other steps.
+
+3. **Test for footer width**: The `test_footer_shows_all_hints` test uses a 160-wide area to ensure the 72-char footer isn't truncated (picker max width = 80, so inner = 78 ≥ 72).
+
+4. **`step_caption` for FlutterSdk now used in two places**: in the new bottom-section caption renderer AND in `guided_section_full_height` (which returns 0 early for empty guided commands, so no change in behaviour for FlutterSdk's guided-command height).
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib widgets::install_wizard` — 165 passed, 0 failed
+- `cargo test --workspace --lib` — 3056+514+1236+842+1530 = 7178 passed, 0 failed
+- `cargo fmt --all -- --check` — clean
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+
+### Risks/Limitations
+
+1. **Acceptance criteria 5 — caption in detail pane**: The FlutterSdk caption ("Enter chooses a version to install · v opens the version picker") is rendered one row above the action hint, inside the bottom section. In very short terminals (< 12 rows for the wizard) the bottom section may be squeezed to 0 rows and neither caption nor hint will show — consistent with the existing behavior for all other steps.

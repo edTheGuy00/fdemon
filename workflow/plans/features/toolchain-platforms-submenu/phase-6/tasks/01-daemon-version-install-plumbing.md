@@ -152,3 +152,37 @@ New tests (inline, beside the existing `resolve_channel_release` / fixture tests
 - Keep `resolve_version_release` private; the app never needs it (the picker selects from its own
   fetched manifest).
 - `serial_test`/wiremock conventions: no live CDN calls in tests.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `pub release_date: Option<String>` to `FlutterRelease`; added `pub version_tag: Option<String>` to `FlutterInstallTarget` with channel/precedence doc-comment; updated test-fixture `FlutterRelease` literals with `release_date: None`. |
+| `crates/fdemon-daemon/src/toolchain/flutter_install.rs` | Added `#[serde(default)] release_date` to `RawRelease` and mapped it in the production raw→public conversion; renamed `validate_channel`→`validate_ref` (widened charset to `[A-Za-z0-9._+-]`, rejects leading `-`/`+`/`.`) with a `validate_channel` alias; validate both `channel` and `version_tag` in `install_flutter`; extracted pure `git_clone_args` helper and routed the `-b` ref through `version_tag.as_deref().unwrap_or(&channel)`; added private `resolve_version_release`; pinned archive path (hard error on miss, explicit master/main git-only message); extended `MANIFEST_FIXTURE` with a date-less `1.12.13+hotfix.5` entry; added all required new tests; updated fixture-count assertions 3→4 and test literals with `release_date: None` / `version_tag: None`. |
+| `crates/fdemon-app/src/actions/mod.rs` | One-line stub: `version_tag: None,` in the `FlutterInstallTarget` literal with a `// Task 04 threads the picker selection here.` comment. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`validate_channel` kept as an alias**: Rather than renaming all call sites, `validate_ref` is the implementation and `validate_channel` delegates to it. Existing `test_validate_channel_*` tests stay valid (their `contains` assertions still match the new messages). Low churn, single validator.
+2. **Pinned-miss test exercises the resolver directly**: `archive_install` is network-coupled (calls `fetch_release_manifest`), so the hard-error/no-stable-fallback acceptance is proven against `resolve_version_release` plus a `resolve_stable` sanity check — confirming the None is a true miss, not an empty manifest.
+3. **`master`/`main` handled before the resolver**: an explicit "only installable via git" error is returned before `resolve_version_release` so the message is actionable rather than a generic "version not found".
+4. **Date-less fixture entry uses a `+` version** (`1.12.13+hotfix.5`): doubles as evidence the `+`-bearing version string round-trips through serde and the manifest.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon --lib toolchain` — Passed (458 tests)
+- `cargo test -p fdemon-daemon --lib` — Passed (1236 tests, 3 ignored)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **No end-to-end pinned archive download test**: per the task, the network-coupled `archive_install` path is not exercised with a real download; the resolution branch (the load-bearing logic) is covered. Mitigation: the git-clone arg shape and the resolver are unit-tested directly.

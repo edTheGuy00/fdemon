@@ -54,3 +54,27 @@ all three layers.
   here.
 - Verify final symbol names against the merged code before writing — task files are the plan, not
   the implementation record.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added Phase 6 (version picker) content across 10 targeted edits: `toolchain/types.rs` entry (FlutterRelease.release_date, FlutterInstallTarget.version_tag, channel-vs-pinned precedence); `toolchain/flutter_install.rs` entry (validate_ref rename/widening, resolve_version_release, no-fallback rule for pinned); `install_wizard/` fdemon-app module reference (VersionPickerState module, PickerRow, PickerChannel, PickerFetch, group_releases, InstallWizardState.version_picker); `handler/install_wizard/` entry (version_picker.rs handler, FlutterSdk arm picker gate, FlutterStepParams.version_tag); `install_wizard/` fdemon-tui widgets (VersionPickerOverlay, step_detail FlutterSdk caption/hint, version_picker.rs in tree); Message section (Version picker messages block); UpdateAction section (FetchFlutterReleaseManifest, FlutterStepParams.version_tag annotation); Install Wizard Step Execution Flow diagram (picker gate, version_dir_name derivation); API surface fdemon-daemon (release_date/version_tag annotation); API surface fdemon-app (version_picker: VersionPickerState field, new picker types line); project structure tree (version_picker.rs in install_wizard, handler/install_wizard, and TUI install_wizard) |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: NO (N/A)
+
+### Notable Decisions/Tradeoffs
+
+1. **Targeted edits only**: No sections were rewritten; all changes are append-style additions to existing Phase N progression entries, following the established pattern throughout the document.
+2. **Keybindings excluded**: Per the task note and schema rules, the picker key bindings (`v`, `j`/`k`, `Tab`, `r`, `Enter`, `Esc`) are not documented here — Task 07 owns `docs/KEYBINDINGS.md`.
+3. **Symbol names verified against merged code**: `validate_ref` (renamed from validate_channel), `resolve_version_release` (private), `FlutterRelease.release_date`, `FlutterInstallTarget.version_tag`, `VersionPickerState`, `PickerRow`, `PickerChannel`, `PickerFetch`, `group_releases`, `VersionPickerOverlay` — all confirmed against the actual source files before writing.

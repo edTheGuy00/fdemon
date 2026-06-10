@@ -57,3 +57,36 @@ keybinding hints shown on the page if it lists wizard keys.
 - Verify behaviour against merged code, not the task specs — Enter/`v` semantics were the most
   design-sensitive part of the phase.
 - Keep the page's existing host-gating callout (Phase-5 N7 fix) intact.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a52e420237f01d2ad
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Added `v` to Install Wizard step list controls; updated `Enter` description for FlutterSdk step; added new "Version Picker Overlay" subsection with all 8 picker keys (j/k/↓/↑, Tab, r, Enter, Esc) plus context notes on precedence, install location, git-only rows, and picker-unavailable-while-running. Added ToC entry for the new subsection. |
+| `website/src/pages/docs/toolchain.rs` | Added "Choosing a version" subsection inside the Managed Flutter SDK section (picker overview, Stable/Beta/Master tab grid, Enter/Esc semantics, per-run override note, offline fallback callout). Added `v` row to the main keybindings table. Added updated `Enter` description for FlutterSdk step. Added "Version picker keys" sub-table with all 6 picker keys. All Leptos view! syntax — no raw HTML inside string literals. |
+| `website/Cargo.toml` | Added empty `[workspace]` table to make the package a standalone workspace. Required for `cargo check` to work from the worktree path (cargo otherwise walks up to the parent workspace and fails because the nested worktree path is not in its `exclude` list). Pre-existing behaviour on the main repo is unchanged (main workspace already uses `exclude = ["website"]`). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Enter semantics on FlutterSdk step:** The `Enter` key description was updated to clarify the two cases — no prior choice opens the picker; confirmed choice re-runs the install. This matches the actual `keys.rs` behavior where `Enter` dispatches `InstallWizardRunSelectedStep` (which internally checks whether to open the picker or install).
+2. **Picker keys in KEYBINDINGS.md:** Added an interception note ("while the picker is visible it intercepts ALL keys") matching the exact `tag_filter` pattern in `handle_key_normal` and the picker intercept in `handle_key_install_wizard`.
+3. **Leptos view! compliance:** All new website content uses separate view nodes for `<code>` elements — no raw HTML embedded inside string literals. This avoids the exact failure mode of the previous attempt.
+4. **`website/Cargo.toml` [workspace] addition:** This is a trivial collateral change needed to run `cargo check` from inside the worktree. The main repo's root `Cargo.toml` already has `exclude = ["website"]` which achieves the same effect when running from the main repo. Both are now consistent.
+
+### Testing Performed
+
+- `cargo check` (from `website/`) — Passed (1 pre-existing warning in `debugging.rs`, unrelated to this task)
+- `cargo fmt --all -- --check` — Passed (no Rust source changes in workspace)
+- `cargo check --workspace --all-targets` — Passed (10.81s, no errors)
+
+### Risks/Limitations
+
+1. **`website/Cargo.toml` change:** Adding `[workspace]` is a new change not in the original task file list. It is documented here as an out-of-scope collateral change. It does not affect the main repo's build (which already excludes the website directory). If the orchestrator merges this to the feature branch and the main repo's CI runs from `/website/`, the explicit `[workspace]` table is actually beneficial.
+2. **Pre-existing warning:** The `dead_code` warning in `debugging.rs` (`fn KeyRow`) pre-dates this task and is unrelated.

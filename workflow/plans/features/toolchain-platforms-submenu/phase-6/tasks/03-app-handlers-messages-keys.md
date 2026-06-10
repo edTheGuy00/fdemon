@@ -168,3 +168,49 @@ existing `handle_key_install_wizard` test mod.
 - Do not edit `install_wizard/state.rs` or `version_picker.rs` (Task 02's files) beyond what compiles
   against their API; if the API is missing something, the fix belongs in a tiny follow-up to 02, not
   an in-place fork (flag it in the completion summary).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** agent-af298a46236b8a475 (worktree off `feat/toolchain-platforms-submenu`)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added 9 picker messages: `InstallWizardOpenVersionPicker`, `InstallWizardVersionPickerClose/Up/Down/NextTab/Refetch/Confirm`, `FlutterManifestFetched { manifest }`, `FlutterManifestFetchFailed { error }`. |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::FetchFlutterReleaseManifest` (no payload). Added `FlutterStepParams.version_tag: Option<String>` (per-run pin, overrides channel for dir name + git ref). |
+| `crates/fdemon-app/src/handler/install_wizard/version_picker.rs` | **NEW** handler module: `open_flutter_version_picker` (shared open helper), `handle_open_picker/close_picker/up/down/next_tab/refetch/manifest_fetched/manifest_fetch_failed/confirm` + 15 unit tests. |
+| `crates/fdemon-app/src/handler/install_wizard/mod.rs` | Added `pub mod version_picker;`. |
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | FlutterSdk arm now gates on `version_picker.selected_release`: no choice → open picker; choice present → dispatch via new shared `dispatch_flutter_install(state, selection)` helper (single-sources `begin_step`/token/`run_seq`; sets `version_tag`, `channel = row.channel`, forces `GitClone` on `git_only`). Updated affected token/seq mechanics tests with a `pin_flutter_version` helper; rewrote the immediate-install test to the two-step flow. |
+| `crates/fdemon-app/src/handler/update.rs` | Routed the 9 new messages to the version-picker handlers. |
+| `crates/fdemon-app/src/handler/keys.rs` | Picker-visible key intercept at the top of `handle_key_install_wizard` (Esc/k/j/Up/Down/Tab/r/Enter → picker messages; Ctrl+C quits; everything else swallowed). Added `v` → `InstallWizardOpenVersionPicker` below the intercept. Added picker key-routing tests. |
+| `crates/fdemon-app/src/state.rs` | `hide_install_wizard()` now calls `version_picker.reset()` so wizard hide drops the manifest + selection. |
+| `crates/fdemon-app/src/actions/mod.rs` | Added the no-op `UpdateAction::FetchFlutterReleaseManifest => {}` stub arm (Task 04 fills the body). |
+| `crates/fdemon-tui/src/runner.rs` | Added `FetchFlutterReleaseManifest` to the non-runner-variant catch-all arm (one-line, exhaustiveness). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single dispatch path via `dispatch_flutter_install`**: Extracted the FlutterSdk install dispatch into one `pub(super)` helper that both the picker-confirm path and the post-selection Enter path call. `begin_step`/token minting/`run_seq` are never duplicated, so the stale-message seq guards are unaffected.
+2. **`hide_install_wizard` is the single reset point**: Putting `version_picker.reset()` there means every wizard-hide path (Esc-close, handback auto-close, `HideInstallWizard`) resets the picker without per-handler duplication. The picker-visible key intercept guarantees Esc-with-picker-open routes to `InstallWizardVersionPickerClose` and never reaches the hide path.
+3. **Offline escape hatch**: Confirm in `PickerFetch::Failed` closes the picker and dispatches an un-pinned (`version_tag: None`) default-channel install, so a manifest-download failure never strands the user.
+4. **Test updates, not deletions**: The pre-existing FlutterSdk Enter-runs-immediately tests were updated to the new two-step flow via a `pin_flutter_version` test helper (sets `selected_release`), preserving their token/seq/cancel mechanics coverage.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib handler::install_wizard` — Passed (151 tests)
+- `cargo test --workspace` — Passed (15 "test result: ok" lines, 0 failures)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed (after a stale `check`-mode rmeta fingerprint required a `touch`; `build --workspace --all-targets` always passed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Out-of-Scope Changes
+
+1. **`crates/fdemon-tui/src/runner.rs`** (one line): added `FetchFlutterReleaseManifest` to the existing non-runner-variant catch-all match arm. Required for `UpdateAction` exhaustiveness in the TUI runner; trivial collateral, no logic change.
+
+### Risks/Limitations
+
+1. **Executor stub**: `UpdateAction::FetchFlutterReleaseManifest` is a no-op until Task 04 lands the manifest-download body. A full-engine integration test that opens the picker would hang in `Loading`; unit tests do not run the executor, so this is acceptable per the task notes. Task 04 also threads `FlutterStepParams.version_tag` into the `FlutterInstallTarget` (the `version_tag: None` literal at `actions/mod.rs` ~L933 is theirs to fill).
+2. **Task 02 API was sufficient** — no follow-up to `version_picker.rs` / `state.rs` needed.

@@ -105,3 +105,33 @@ cargo fmt --all && cargo clippy --workspace -- -D warnings
 - Keep the helper-extraction footprint minimal — this file is the executor; logic belongs upstream.
 - `HostPlatform::detect()` at fetch time (not captured at action-creation) matches how the install
   arm already detects the platform.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | Replaced no-op `FetchFlutterReleaseManifest` stub with tokio::spawn body; added `flutter_install_target` pure helper; used helper in `RunWizardStep::FlutterSdk` arm replacing `version_tag: None` stub; removed now-unused `FlutterInstallTarget` from local import; added 4 tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Helper extraction**: Extracted `flutter_install_target(params, install_root) -> FlutterInstallTarget` as a `pub(crate)` pure function to make the target-construction logic directly unit-testable without going through the async executor harness. Kept the function in `actions/mod.rs` per the task's "minimal footprint" guidance.
+2. **Copy vs Clone for InstallMethod**: Used `params.method` (no `.clone()`) since `InstallMethod` implements `Copy` — clippy enforces this.
+3. **Network test acceptance criteria**: The manifest fetch test accepts both `FlutterManifestFetched` and `FlutterManifestFetchFailed` outcomes, making it robust to offline CI environments while still exercising the executor dispatch path.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib actions` — Passed (264 tests)
+- `cargo test --workspace --lib` — Passed (3080 + 514 + 1236 + 842 + 1530 = 7,202 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Network dependency in test**: `test_fetch_flutter_release_manifest_emits_fetched_or_failed` makes a real HTTP call to the Flutter releases API. This is intentional (the arm does no mocking) and the test accepts both outcomes, but it may be slow in air-gapped environments (bounded by the 30s timeout).

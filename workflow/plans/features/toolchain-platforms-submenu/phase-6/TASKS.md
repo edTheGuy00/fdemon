@@ -124,13 +124,13 @@ snapshot — **locate by symbol**.
 
 | # | Task | Status | Depends On | Est. Hours | Complexity | Modules |
 |---|------|--------|------------|------------|------------|---------|
-| 1 | [01-daemon-version-install-plumbing](tasks/01-daemon-version-install-plumbing.md) | Not Started | - | 4–5h | high | `fdemon-daemon/src/toolchain/{types,flutter_install}.rs` (+ minimal `fdemon-app/src/actions/mod.rs` stub line) |
-| 2 | [02-app-version-picker-state](tasks/02-app-version-picker-state.md) | Not Started | 1 | 3–4h | medium | `fdemon-app/src/install_wizard/{version_picker (new), state, mod}.rs` |
-| 3 | [03-app-handlers-messages-keys](tasks/03-app-handlers-messages-keys.md) | Not Started | 1, 2 | 4–5h | high | `fdemon-app/src/{message.rs, handler/mod.rs, handler/keys.rs, handler/update.rs, handler/install_wizard/*}` (+ executor stub arm) |
-| 4 | [04-app-executor-threading](tasks/04-app-executor-threading.md) | Not Started | 1, 3 | 2h | medium | `fdemon-app/src/actions/mod.rs` |
-| 5 | [05-tui-version-picker-overlay](tasks/05-tui-version-picker-overlay.md) | Not Started | 2 | 3–4h | medium | `fdemon-tui/src/widgets/install_wizard/{version_picker (new), mod, step_detail}.rs` |
-| 6 | [06-update-architecture-docs](tasks/06-update-architecture-docs.md) | Not Started | 1–5 | 1h | low | `docs/ARCHITECTURE.md` |
-| 7 | [07-update-keybindings-website-docs](tasks/07-update-keybindings-website-docs.md) | Not Started | 1–5 | 1–2h | low | `docs/KEYBINDINGS.md`, `website/src/pages/docs/toolchain.rs` |
+| 1 | [01-daemon-version-install-plumbing](tasks/01-daemon-version-install-plumbing.md) | ✅ Done (validated PASS) | - | 4–5h | high | `fdemon-daemon/src/toolchain/{types,flutter_install}.rs` (+ minimal `fdemon-app/src/actions/mod.rs` stub line) |
+| 2 | [02-app-version-picker-state](tasks/02-app-version-picker-state.md) | ✅ Done (validated PASS) | 1 | 3–4h | medium | `fdemon-app/src/install_wizard/{version_picker (new), state, mod}.rs` |
+| 3 | [03-app-handlers-messages-keys](tasks/03-app-handlers-messages-keys.md) | ✅ Done (validated PASS, merged) | 1, 2 | 4–5h | high | `fdemon-app/src/{message.rs, handler/mod.rs, handler/keys.rs, handler/update.rs, handler/install_wizard/*}` (+ executor stub arm) |
+| 4 | [04-app-executor-threading](tasks/04-app-executor-threading.md) | ✅ Done (validated PASS) | 1, 3 | 2h | medium | `fdemon-app/src/actions/mod.rs` |
+| 5 | [05-tui-version-picker-overlay](tasks/05-tui-version-picker-overlay.md) | ✅ Done (validated PASS, merged) | 2 | 3–4h | medium | `fdemon-tui/src/widgets/install_wizard/{version_picker (new), mod, step_detail}.rs` |
+| 6 | [06-update-architecture-docs](tasks/06-update-architecture-docs.md) | ✅ Done (validated PASS, merged) | 1–5 | 1h | low | `docs/ARCHITECTURE.md` |
+| 7 | [07-update-keybindings-website-docs](tasks/07-update-keybindings-website-docs.md) | ✅ Done (validated CONCERN¹, merged) | 1–5 | 1–2h | low | `docs/KEYBINDINGS.md`, `website/src/pages/docs/toolchain.rs` |
 
 ## File Overlap Analysis
 
@@ -160,6 +160,12 @@ snapshot — **locate by symbol**.
 > sequential by dependency (01 → 03 → 04). Wave-3 peers 03 + 05 are write-disjoint across crates;
 > Task 05 compiles against Task 02's state types only and renders fields read-only, so it is correct
 > whichever of 03/05 merges first. Wave-5 peers 06 + 07 are write-disjoint docs.
+
+> ¹ Task 07 history: first dispatch (haiku) FAILED validation — `<code>` HTML embedded in Leptos
+> `view!` string literals broke website-crate compilation. Re-dispatched at sonnet; re-validation
+> returned CONCERN only for an out-of-scope empty `[workspace]` table added to `website/Cargo.toml`
+> (proven unnecessary — root workspace already `exclude`s website/). The table was dropped at merge
+> time; both in-scope files merged as validated.
 
 ## Success Criteria
 
@@ -212,7 +218,43 @@ Phase 6 is complete when:
 
 All existing wizard keys are unchanged; while the picker is visible they are intercepted.
 
+## Phase Review
+
+| Round | Verdict | Review | Reviewed HEAD |
+|-------|---------|--------|---------------|
+| 0 | NEEDS_WORK | workflow/reviews/features/toolchain-platforms-submenu-phase-6/REVIEW.md | 0c927d8f |
+| 1 | APPROVED_WITH_CONCERNS | workflow/reviews/features/toolchain-platforms-submenu-phase-6/REVIEW.md (§Re-review Round 1) | c51643eb |
+
 ## Notes
+
+### Phase complete — round-1 fixes merged (2026-06-10)
+
+Round-1 followup (followups/phase-6-fix-1/, 4 tasks) resolved all 4 Major review findings:
+caption-row layout reservation, `#[ignore]` gate on the live-CDN test, char-boundary-safe
+truncation, REVIEW_FOCUS.md Cell registry entry. Final verdict ⚠️ APPROVED WITH CONCERNS.
+
+### Deferred items (Minor — carried for a future phase)
+
+From the phase review (ACTION_ITEMS.md Minor list + round-1 observations), intentionally not fixed:
+
+1. `docs/ARCHITECTURE.md` (~651) names `handle_run_selected_step` where the code uses
+   `dispatch_flutter_install` for picker confirm — one-line doc correction.
+2. `confirm()` double clone in `install_wizard/version_picker.rs`.
+3. Remove the `#[allow(dead_code)]` `_assert_message_variant_exists` probe
+   (`handler/install_wizard/version_picker.rs`).
+4. `clear_manifest` is dead production code (only its own test references it).
+5. `validate_ref` `.expect()` avoidable via `let-else`/`starts_with` (`flutter_install.rs:243`).
+6. Validate `version_dir_name` directly in `install_flutter` (or validated constructor).
+7. Apply the HTTPS-only redirect policy to `fetch_release_manifest_from` (shared client builder).
+8. Picker tab-label spacing inconsistency (`" Stable "` vs `"Beta "`).
+9. Document/test `group_releases` unknown-channel→Beta routing.
+10. Comment on `handle_refetch` explaining the intentionally absent `is_step_running` guard.
+11. (Pre-existing) REVIEW_FOCUS.md "only `version_check.rs` does network I/O" note is stale.
+12. (Round 1) `test_no_panic_multibyte_version_string` doesn't drive the version truncation branch —
+    add a narrow-width variant.
+13. (Round 1) `#[ignore]` doc comment uses a truncated test name (works via substring match).
+14. (Deferred refactor) Injectable manifest-fetch URL + wiremock-backed executor test (requires
+    widening daemon `pub(crate) fetch_release_manifest_from`).
 
 - **Per-run precedence, no persistence.** The picker choice never writes `settings.toolchain.channel`;
   after a successful install the SDK is pinned via the existing `settings.flutter.sdk_path` write in

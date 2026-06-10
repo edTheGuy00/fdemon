@@ -164,3 +164,38 @@ this layer) with: 2 stable (one dual-arch duplicated), 1 beta, 1 dev, 1 arch-les
   types beyond what `fdemon-app` re-exposes — match how `flutter_version/types.rs` re-exports
   `InstalledSdk` if a re-export is preferred.
 - Keep ordering deterministic everywhere — the TUI tests and `[`-style cycling depend on it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/version_picker.rs` | NEW — `PickerChannel`, `PickerRow`, `PickerFetch`, `VersionPickerState`, `group_releases()`, 25 unit tests |
+| `crates/fdemon-app/src/install_wizard/mod.rs` | Added `pub mod version_picker;` declaration and `pub use version_picker::{...}` re-exports |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `pub version_picker: super::version_picker::VersionPickerState` field to `InstallWizardState` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Manual `Debug` impl instead of `#[derive(Debug)]`**: `VersionPickerState` contains `Cell<usize>` which is `Debug`-able, but to avoid printing all row data in debug output (potentially thousands of rows), a custom impl prints row _counts_ and the hint value. This also matches the `VersionListState` precedent in `flutter_version/state.rs`.
+2. **Clippy `field_reassign_with_default`**: Three tests initially used `VersionPickerState::default()` followed by field reassignments. Fixed by using struct initializer syntax with `..VersionPickerState::default()` as clippy demanded.
+3. **`pub mod version_picker` vs `mod version_picker` + `pub use`**: Made the module itself `pub` so downstream crates (TUI, Tasks 03/05) can reference `install_wizard::version_picker::VersionPickerState` directly if needed. The re-exports via `mod.rs` remain the canonical surface.
+4. **No `Clone` on `VersionPickerState`**: `InstallWizardState` does not derive `Clone` (confirmed by checking the `#[derive(Default)]` on it), so `VersionPickerState` does not need `Clone` either. The `Cell<usize>` field is `Clone`-able, but it was not added to avoid unintentional silent Cell-state copying.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib install_wizard::version_picker` — Passed (25 tests)
+- `cargo test -p fdemon-app --lib` — Passed (3,056 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **`test_group_releases_unknown_arch_keeps_all` row count**: With `HostArch::Unknown`, `as_manifest_str()` returns `None`, so the arch filter keeps everything. The deduplication pass then collapses (3.24.0, stable) from both arm64 and x64 entries down to 1 row (first occurrence wins, which is arm64 in the fixture). Combined with 3.22.0 (x64) and 3.10.0 (arch-less), this gives exactly 3 stable rows — the test asserts this correctly.
