@@ -25,6 +25,7 @@ mod doctor_view;
 mod progress;
 mod step_detail;
 mod step_list;
+mod version_picker;
 
 use step_list::HEADER_HEIGHT;
 
@@ -343,6 +344,8 @@ impl<'a> InstallWizardPanel<'a> {
     ///
     /// When the selected step is the `Platforms` parent, appends
     /// `· [Enter] expand/collapse` to the standard hint string.
+    /// When the selected step is `FlutterSdk` and the picker is closed, appends
+    /// `· [v] versions`.
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         use fdemon_app::install_wizard::WizardStepKind;
 
@@ -353,8 +356,15 @@ impl<'a> InstallWizardPanel<'a> {
         let selected_is_platforms =
             self.state.selected_step().map(|s| s.kind) == Some(WizardStepKind::Platforms);
 
+        // Append [v] versions hint when FlutterSdk is selected and picker is closed.
+        let selected_is_flutter_sdk =
+            self.state.selected_step().map(|s| s.kind) == Some(WizardStepKind::FlutterSdk);
+        let picker_closed = !self.state.version_picker.visible;
+
         let hints = if selected_is_platforms {
             format!("{base_hints} \u{00b7} [Enter] expand/collapse")
+        } else if selected_is_flutter_sdk && picker_closed {
+            format!("{base_hints} \u{00b7} [v] versions")
         } else {
             base_hints.to_string()
         };
@@ -458,6 +468,14 @@ impl Widget for InstallWizardPanel<'_> {
 
         self.render_separator(chunks[3], buf);
         self.render_footer(chunks[4], buf);
+
+        // 9. Version picker overlay — rendered on top of the panel body when visible.
+        //    Uses the dialog inner area (not the full terminal area) so it is
+        //    always nested within the wizard borders, per the confirm_dialog pattern.
+        if self.state.version_picker.visible {
+            version_picker::VersionPickerOverlay::new(&self.state.version_picker)
+                .render(inner, buf);
+        }
     }
 }
 
@@ -992,6 +1010,94 @@ mod tests {
         assert!(
             !content.contains("Flutter installed"),
             "must NOT show 'Flutter installed' when healthy throughout; content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): footer shows `[v] versions` when FlutterSdk step is
+    /// selected and the version picker is closed.
+    #[test]
+    fn footer_shows_versions_hint_when_flutter_sdk_selected_and_picker_closed() {
+        let mut state = populated_state();
+        // Find the FlutterSdk step and select it.
+        let flutter_idx = state
+            .steps
+            .iter()
+            .position(|s| s.kind == fdemon_app::install_wizard::WizardStepKind::FlutterSdk)
+            .expect("FlutterSdk step must exist in populated_state");
+        state.selected_index = flutter_idx;
+        // Picker is closed by default.
+        assert!(!state.version_picker.visible, "picker should be closed");
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 160, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("[v] versions"),
+            "footer must show [v] versions hint when FlutterSdk is selected and picker is closed; \
+             content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): footer does NOT show `[v] versions` when a non-FlutterSdk
+    /// step is selected.
+    #[test]
+    fn footer_does_not_show_versions_hint_for_non_flutter_sdk_step() {
+        let mut state = populated_state();
+        // Select the Prerequisites step (index 0 — never FlutterSdk).
+        state.selected_index = 0;
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 160, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            !content.contains("[v] versions"),
+            "footer must NOT show [v] versions for non-FlutterSdk step; content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): version picker overlay is rendered when visible.
+    #[test]
+    fn version_picker_overlay_rendered_when_visible() {
+        let mut state = populated_state();
+        // Open the picker.
+        state.version_picker.visible = true;
+        state.version_picker.fetch = fdemon_app::install_wizard::PickerFetch::Loading;
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Flutter version"),
+            "version picker overlay must render when visible; content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): version picker overlay is NOT rendered when hidden.
+    #[test]
+    fn version_picker_overlay_not_rendered_when_hidden() {
+        let state = populated_state();
+        assert!(!state.version_picker.visible, "picker must be hidden");
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The picker title "Flutter version" should NOT appear when picker is closed.
+        // (The installer title "Install Wizard" is present, but not the picker title.)
+        assert!(
+            !content.contains("Flutter version"),
+            "version picker overlay must NOT render when hidden; content: {content:?}"
         );
     }
 }

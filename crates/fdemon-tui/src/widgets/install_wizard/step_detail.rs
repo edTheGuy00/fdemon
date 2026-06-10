@@ -101,6 +101,9 @@ fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
         WizardStepKind::PlatformWindows => {
             Some("  Visual Studio C++ workload required for Windows desktop builds")
         }
+        WizardStepKind::FlutterSdk => {
+            Some("  Enter chooses a version to install \u{00b7} v opens the version picker")
+        }
         _ => None,
     }
 }
@@ -256,11 +259,19 @@ impl<'a> StepDetailPane<'a> {
         let executable = Self::is_executable(kind, has_guided_commands);
 
         let (text, color, bold) = if executable {
-            (
-                Self::action_hint_text(kind).to_string(),
-                palette::ACCENT,
-                true,
-            )
+            // Dynamic override for FlutterSdk: if a version was confirmed in the
+            // picker, show "▶ Press Enter to install Flutter <version>" instead of
+            // the static fallback.  Leave the &'static str table unchanged.
+            let hint = if kind == WizardStepKind::FlutterSdk {
+                if let Some(ref row) = self.state.version_picker.selected_release {
+                    format!("\u{25b6} Press Enter to install Flutter {}", row.version)
+                } else {
+                    Self::action_hint_text(kind).to_string()
+                }
+            } else {
+                Self::action_hint_text(kind).to_string()
+            };
+            (hint, palette::ACCENT, true)
         } else if kind == WizardStepKind::Doctor || kind == WizardStepKind::Platforms {
             // Doctor/Platforms: display-only views; no action hint.
             return;
@@ -769,8 +780,26 @@ impl Widget for StepDetailPane<'_> {
             y += h;
         }
 
-        // Bottom section: guided commands or action hint
-        let bottom_y = content_area.y + content_area.height.saturating_sub(bottom_section_height);
+        // Bottom section: guided commands or action hint (+ optional step caption)
+        //
+        // For executable steps that have a static caption (e.g. FlutterSdk), we
+        // reserve one extra row above the action hint for the caption text.
+        // `has_step_caption` is true only for executable steps with no guided
+        // commands that return a non-None `step_caption`.
+        let has_step_caption = !has_guided_commands
+            && Self::is_executable(step.kind, has_guided_commands)
+            && step_caption(step.kind).is_some();
+
+        // Recompute bottom_section_height to include the caption row.
+        let effective_bottom_height: u16 = if has_guided_commands {
+            bottom_section_height
+        } else if has_step_caption {
+            ACTION_HINT_HEIGHT + 1 // caption(1) + action_hint(1)
+        } else {
+            ACTION_HINT_HEIGHT
+        };
+        let bottom_y = content_area.y + content_area.height.saturating_sub(effective_bottom_height);
+
         if has_guided_commands {
             // Height derivation: total content height minus the rows already consumed
             // by the component list above (bottom_y - content_area.y rows used).
@@ -783,8 +812,27 @@ impl Widget for StepDetailPane<'_> {
                     .saturating_sub(bottom_y.saturating_sub(content_area.y)),
             );
             self.render_guided_commands(&step.guided_commands, step.kind, bottom_area, buf);
-        } else if content_area.height >= ACTION_HINT_HEIGHT {
-            self.render_action_hint(step.kind, has_guided_commands, bottom_y, content_area, buf);
+        } else {
+            // Render optional caption row, then the action hint below it.
+            let mut hint_y = bottom_y;
+            if has_step_caption {
+                if let Some(caption) = step_caption(step.kind) {
+                    if bottom_y < content_area.y + content_area.height {
+                        let caption_style = Style::default()
+                            .fg(palette::TEXT_SECONDARY)
+                            .add_modifier(Modifier::ITALIC);
+                        let caption_line = Line::from(Span::styled(caption, caption_style));
+                        Paragraph::new(caption_line).render(
+                            Rect::new(content_area.x, bottom_y, content_area.width, 1),
+                            buf,
+                        );
+                    }
+                    hint_y = bottom_y + 1;
+                }
+            }
+            if content_area.height >= ACTION_HINT_HEIGHT {
+                self.render_action_hint(step.kind, has_guided_commands, hint_y, content_area, buf);
+            }
         }
     }
 }
@@ -1989,10 +2037,17 @@ mod tests {
     }
 
     #[test]
-    fn test_step_caption_flutter_sdk_returns_none() {
+    fn test_step_caption_flutter_sdk_returns_version_picker_hint() {
+        // Phase 6: FlutterSdk now has a caption advertising the version picker.
+        let caption = step_caption(WizardStepKind::FlutterSdk);
         assert!(
-            step_caption(WizardStepKind::FlutterSdk).is_none(),
-            "FlutterSdk should have no caption"
+            caption.is_some(),
+            "FlutterSdk should have a caption (version picker hint)"
+        );
+        let caption_text = caption.unwrap();
+        assert!(
+            caption_text.contains("version picker"),
+            "FlutterSdk caption should mention version picker: {caption_text:?}"
         );
     }
 
@@ -2980,5 +3035,90 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic even in tight space
+    }
+
+    // --- Phase 6 (Task 05): FlutterSdk caption + dynamic Enter hint ---
+
+    /// Build a state with the FlutterSdk step selected and no confirmed version.
+    fn make_state_flutter_sdk_selected() -> InstallWizardState {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        state.apply_report(make_report_with_doctor());
+        // Find FlutterSdk step
+        let idx = state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::FlutterSdk)
+            .unwrap_or(2);
+        state.selected_index = idx;
+        state
+    }
+
+    /// Phase 6: The FlutterSdk detail pane must show the version-picker hint caption.
+    #[test]
+    fn test_flutter_sdk_detail_pane_shows_version_picker_caption() {
+        let state = make_state_flutter_sdk_selected();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("version picker"),
+            "FlutterSdk detail pane must show the version picker hint caption: {content:?}"
+        );
+    }
+
+    /// Phase 6: When a version is confirmed via the picker, the Enter hint must
+    /// say "install Flutter <version>" rather than the static "install Flutter SDK".
+    #[test]
+    fn test_flutter_sdk_enter_hint_dynamic_when_version_confirmed() {
+        use fdemon_app::install_wizard::{PickerFetch, PickerRow};
+
+        let mut state = make_state_flutter_sdk_selected();
+        // Simulate a confirmed pick.
+        state.version_picker.fetch = PickerFetch::Loaded;
+        state.version_picker.selected_release = Some(PickerRow {
+            version: "3.24.0".to_string(),
+            channel: "stable".to_string(),
+            release_date: None,
+            arch: None,
+            git_only: false,
+        });
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("3.24.0"),
+            "Enter hint must show the confirmed version: {content:?}"
+        );
+        assert!(
+            content.contains("Press Enter"),
+            "Enter hint must still show 'Press Enter': {content:?}"
+        );
+    }
+
+    /// Phase 6: When no version is confirmed, the Enter hint falls back to the
+    /// static "install Flutter SDK" text.
+    #[test]
+    fn test_flutter_sdk_enter_hint_static_when_no_version_confirmed() {
+        let state = make_state_flutter_sdk_selected();
+        // No confirmed version.
+        assert!(state.version_picker.selected_release.is_none());
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("install Flutter SDK"),
+            "Enter hint must show static 'install Flutter SDK' when no version confirmed: {content:?}"
+        );
     }
 }
