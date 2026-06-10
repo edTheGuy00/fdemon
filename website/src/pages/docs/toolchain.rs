@@ -8,7 +8,7 @@ use crate::components::code_block::CodeBlock;
 pub fn Toolchain() -> impl IntoView {
     view! {
         <Title text="Install Wizard" />
-        <Meta name="description" content="Flutter Demon's guided Install Wizard diagnoses a missing or incomplete Flutter toolchain and installs what it can \u{2014} a managed Flutter SDK, the Android command-line tools, JDK detection, and shell PATH configuration. It also detects and guides iOS/macOS (Xcode, CocoaPods), Web (browser), and Windows (Visual Studio C++) platform requirements, across Linux, macOS, and Windows." />
+        <Meta name="description" content="Flutter Demon's guided Install Wizard diagnoses a missing or incomplete Flutter toolchain and installs what it can \u{2014} a managed Flutter SDK (any version, via a built-in version picker), the Android command-line tools, JDK detection, and shell PATH configuration. It also detects and guides iOS/macOS (Xcode, CocoaPods), Web (browser), and Windows (Visual Studio C++) platform requirements, across Linux, macOS, and Windows." />
         <Link rel="canonical" href="https://fdemon.dev/docs/toolchain" />
         <div class="animate-fade-in space-y-8">
             <h1 class="text-3xl font-bold text-white">"Install Wizard"</h1>
@@ -16,7 +16,8 @@ pub fn Toolchain() -> impl IntoView {
                 "On a fresh machine, \u{201c}Flutter SDK not found\u{201d} is a dead end. The Install Wizard \
                  replaces that one-line error with a guided, "<code class="text-blue-400">"flutter doctor"</code>
                 "-style screen that diagnoses exactly what is missing and walks you through fixing it \
-                 \u{2014} a managed Flutter SDK, the Android command-line tools, a JDK, and your shell PATH. \
+                 \u{2014} a managed Flutter SDK (any version \u{2014} stable, beta, or master \u{2014} via a \
+                 built-in version picker), the Android command-line tools, a JDK, and your shell PATH. \
                  It also diagnoses iOS/macOS (Xcode, CocoaPods), Web (browser), and Windows \
                  (Visual Studio C++) platform requirements and shows you the exact copy-paste commands \
                  for anything it cannot install automatically."
@@ -51,8 +52,9 @@ pub fn Toolchain() -> impl IntoView {
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"Install"</h4>
                         <p class="text-sm text-slate-400">
-                            "Installs a managed Flutter SDK (git clone, archive fallback) and the Android \
-                             toolchain, with live download progress and a streamed log tail."
+                            "Installs a managed Flutter SDK \u{2014} any version you pick from the built-in \
+                             version picker \u{2014} and the Android toolchain, with live download progress \
+                             and a streamed log tail."
                         </p>
                     </div>
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
@@ -142,7 +144,8 @@ pub fn Toolchain() -> impl IntoView {
                                 <td class="p-4 text-green-300 whitespace-nowrap">"Auto"</td>
                                 <td class="p-4 text-slate-300 hidden md:table-cell">
                                     "Installs a managed Flutter SDK via "<code>"git clone"</code>" (default) with an \
-                                     archive-download fallback, then runs "<code>"flutter precache"</code>"."
+                                     archive-download fallback, then runs "<code>"flutter precache"</code>". Press "
+                                    <code>"v"</code>" to pick the exact version to install (stable, beta, or master)."
                                 </td>
                             </tr>
                             <tr class="hover:bg-slate-900/50">
@@ -385,8 +388,9 @@ pub fn Toolchain() -> impl IntoView {
                                 <td class="p-4 font-mono text-blue-400 whitespace-nowrap">"JDK"</td>
                                 <td class="p-4 text-slate-300">
                                     "Resolves a JDK from "<code>"jdk_path"</code>", "<code>"$JAVA_HOME"</code>", or "
-                                    <code>"which java"</code>"; validates it is a full JDK. Missing JDK \u{2192} a guided \
-                                     install command instead of running the step."
+                                    <code>"which java"</code>"; validates it is a full JDK and that it can actually \
+                                     run "<code>"java"</code>" before "<code>"sdkmanager"</code>" starts. Missing JDK \
+                                     \u{2192} a guided install command instead of running the step."
                                 </td>
                             </tr>
                         </tbody>

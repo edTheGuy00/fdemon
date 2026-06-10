@@ -139,6 +139,30 @@ pub fn Home() -> impl IntoView {
                      logs, native platform logs, and your custom source \u{2014} is interleaved in \
                      one unified view. One command boots the whole stack."
                 </p>
+
+                <h2 class="text-2xl font-bold text-white">"From Bare Machine to Running App"</h2>
+
+                <p>
+                    "No Flutter installed? No problem. Press "
+                    <code class="text-blue-400">"I"</code>
+                    " and the "
+                    <A
+                        href="/docs/toolchain"
+                        attr:class="text-blue-400 hover:underline"
+                    >
+                        "Install Wizard"
+                    </A>
+                    " turns \u{201c}Flutter SDK not found\u{201d} into a guided setup: it diagnoses \
+                     your toolchain, installs a managed Flutter SDK \u{2014} any version, picked \
+                     from a built-in version picker \u{2014} sets up the Android SDK and licenses, \
+                     writes your shell PATH, and checks each platform (Android, iOS, macOS, Web, \
+                     Windows) with copy-paste commands for anything that needs "
+                    <code class="text-blue-400">"sudo"</code>
+                    " or a GUI. fdemon never runs "
+                    <code class="text-blue-400">"sudo"</code>
+                    " for you \u{2014} you stay in control, the wizard re-checks until everything \
+                     is green."
+                </p>
             </section>
 
             // Features Grid

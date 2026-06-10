@@ -407,12 +407,29 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "Tab", action: "Switch Pane", description: "Toggle focus between the step list and the detail pane" },
                 Keybinding { key: "k / \u{2191}", action: "Up", description: "Move selection up in the step list, or scroll the detail pane up" },
                 Keybinding { key: "j / \u{2193}", action: "Down", description: "Move selection down in the step list, or scroll the detail pane down" },
-                Keybinding { key: "Enter", action: "Run / Retry Step", description: "Run or retry the selected step (Flutter SDK, Android Tools, PATH config). No-op on guided-only steps like Prerequisites." },
+                Keybinding { key: "Enter", action: "Run / Expand / Pick", description: "Context-dependent: expand or collapse the Platforms submenu; on the Flutter SDK step open the version picker (no prior choice) or re-run with the confirmed version; run or retry other auto-install steps. No-op on guided-only platform leaves." },
+                Keybinding { key: "v", action: "Version Picker", description: "Open (or re-open) the Flutter version picker on the Flutter SDK step. No-op on other steps and while a step is running." },
                 Keybinding { key: "r", action: "Re-run Preflight", description: "Re-run the toolchain preflight check (useful after completing a guided step outside fdemon)" },
                 Keybinding { key: "c", action: "Copy Command", description: "Copy the selected guided command to the clipboard" },
                 Keybinding { key: "[ / ]", action: "Cycle Commands", description: "Select the previous/next guided command when a step offers more than one" },
                 Keybinding { key: "Esc", action: "Cancel / Close", description: "Cancel the running step if one is in flight; otherwise close the wizard" },
                 Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit" },
+            ],
+        },
+
+        // ── Version Picker (Install Wizard overlay) ──────────────────
+        KeybindingSection {
+            title: "Version Picker (Install Wizard overlay)",
+            color: "bg-amber-500",
+            key_color: "text-amber-400",
+            bindings: vec![
+                Keybinding { key: "k / \u{2191}", action: "Cursor Up", description: "Move the version cursor up" },
+                Keybinding { key: "j / \u{2193}", action: "Cursor Down", description: "Move the version cursor down" },
+                Keybinding { key: "Tab", action: "Cycle Channel Tab", description: "Cycle Stable \u{2192} Beta \u{2192} Master" },
+                Keybinding { key: "r", action: "Re-fetch Manifest", description: "Re-fetch the Flutter releases manifest" },
+                Keybinding { key: "Enter", action: "Confirm & Install", description: "Confirm the selected version and start the install. In the fetch-error state: install the configured default channel un-pinned (offline fallback)." },
+                Keybinding { key: "Esc", action: "Close Picker", description: "Close the picker without installing" },
+                Keybinding { key: "Ctrl+C", action: "Force Quit", description: "Emergency exit (always available; all other keys are intercepted while the picker is open)" },
             ],
         },
 
