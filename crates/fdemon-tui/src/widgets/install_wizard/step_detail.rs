@@ -728,10 +728,27 @@ impl Widget for StepDetailPane<'_> {
             return;
         }
 
-        // Components are present: decide how much space to allocate.
-        // When guided commands exist we need room for them below the components.
-        // When not, we need just ACTION_HINT_HEIGHT at the bottom.
-        let bottom_section_height: u16 = if has_guided_commands {
+        // Components are present: decide how much space to allocate for each section.
+        //
+        // IMPORTANT: `has_step_caption` and `effective_bottom_height` are computed HERE,
+        // before the component-height calculation, so the component loop clamp uses the
+        // same reservation as the bottom-section renderer.  Previously `has_step_caption`
+        // was computed AFTER the component loop, which caused the last component row to
+        // overwrite the caption row in tight panels (review finding M1).
+        //
+        // For executable steps that have a static caption (e.g. FlutterSdk), we
+        // reserve one extra row above the action hint for the caption text.
+        // `has_step_caption` is true only for executable steps with no guided
+        // commands that return a non-None `step_caption`.
+        let has_step_caption = !has_guided_commands
+            && Self::is_executable(step.kind, has_guided_commands)
+            && step_caption(step.kind).is_some();
+
+        // Single source of truth for bottom-section height.
+        // When guided commands exist: exact height for the full guided section (clamped).
+        // When a step caption is present (executable, no guided commands): caption(1) + hint(1).
+        // Otherwise: just the action hint row.
+        let effective_bottom_height: u16 = if has_guided_commands {
             // Compute the exact number of rows required to render all guided commands
             // (header + caption + Σ per-command blocks, wrap-aware), then clamp to
             // content_area.height so the reservation never exceeds the available space.
@@ -745,11 +762,13 @@ impl Widget for StepDetailPane<'_> {
                 content_area.width,
             );
             full_height.min(content_area.height)
+        } else if has_step_caption {
+            ACTION_HINT_HEIGHT + 1 // caption(1) + action_hint(1)
         } else {
             ACTION_HINT_HEIGHT
         };
 
-        let component_height = content_area.height.saturating_sub(bottom_section_height) as usize;
+        let component_height = content_area.height.saturating_sub(effective_bottom_height) as usize;
         let effective_visible = if component_height > 0 {
             component_height
         } else {
@@ -780,24 +799,9 @@ impl Widget for StepDetailPane<'_> {
             y += h;
         }
 
-        // Bottom section: guided commands or action hint (+ optional step caption)
-        //
-        // For executable steps that have a static caption (e.g. FlutterSdk), we
-        // reserve one extra row above the action hint for the caption text.
-        // `has_step_caption` is true only for executable steps with no guided
-        // commands that return a non-None `step_caption`.
-        let has_step_caption = !has_guided_commands
-            && Self::is_executable(step.kind, has_guided_commands)
-            && step_caption(step.kind).is_some();
-
-        // Recompute bottom_section_height to include the caption row.
-        let effective_bottom_height: u16 = if has_guided_commands {
-            bottom_section_height
-        } else if has_step_caption {
-            ACTION_HINT_HEIGHT + 1 // caption(1) + action_hint(1)
-        } else {
-            ACTION_HINT_HEIGHT
-        };
+        // Bottom section: guided commands or action hint (+ optional step caption).
+        // `effective_bottom_height` and `has_step_caption` were computed above (single
+        // source of truth — the component loop clamp and this renderer share the same values).
         let bottom_y = content_area.y + content_area.height.saturating_sub(effective_bottom_height);
 
         if has_guided_commands {
@@ -3119,6 +3123,163 @@ mod tests {
         assert!(
             content.contains("install Flutter SDK"),
             "Enter hint must show static 'install Flutter SDK' when no version confirmed: {content:?}"
+        );
+    }
+
+    // --- Fix M1: FlutterSdk caption row must not be overwritten by component list ---
+
+    /// Build a FlutterSdk state with multiple component checks and no guided commands.
+    ///
+    /// The step has `HEADER_HEIGHT`(2) + caption(1) + action_hint(1) = 4 rows of
+    /// overhead, so with a pane of height 8 only 4 rows remain for components.
+    /// With the bug, the component loop clamped at `height - 1 = 7`, allowing it to
+    /// render into the caption row at `height - 2 = 6`.  After the fix the clamp is
+    /// `height - effective_bottom_height = height - 2`, keeping the component area
+    /// strictly above the caption row.
+    fn make_state_flutter_sdk_many_components() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::FlutterSdk,
+                title: "Flutter SDK".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![
+                    ComponentCheck {
+                        kind: ComponentKind::FlutterSdk,
+                        status: ComponentStatus::Ok,
+                        detail: "3.24.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "2.43.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::FlutterSdk,
+                        status: ComponentStatus::Ok,
+                        detail: "dart 3.5.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "extra row A".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "extra row B".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "extra row C".to_string(),
+                    },
+                ],
+                guided_commands: vec![],
+                indent: 0,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Regression test for M1 (phase-6-fix-1 task 01):
+    ///
+    /// FlutterSdk step selected, many component rows, tight pane height that triggers
+    /// the component-loop clamp.  Asserts:
+    /// 1. The caption row (contains `"version picker"`) appears at the second-to-last row.
+    /// 2. The last row contains the Enter action hint (`"Press Enter"`).
+    /// 3. No component text (e.g. `"extra row C"`) appears on the caption row or
+    ///    the action-hint row — the two rows belong exclusively to the bottom section.
+    ///
+    /// The pane height is chosen so the caption would be overwritten by the last
+    /// component row under the buggy code:
+    ///   - `HEADER_HEIGHT = 2`, so `content_area.height = 8 - 2 = 6`.
+    ///   - Bug: `bottom_section_height = ACTION_HINT_HEIGHT = 1`, so component loop
+    ///     could write into row 5 (0-indexed) = the caption row.
+    ///   - Fix: `effective_bottom_height = 2`, so component loop is clamped at row 4,
+    ///     and the caption renders cleanly at row 4.
+    ///
+    /// Width 80 ensures the full caption text fits without truncation.
+    #[test]
+    fn test_flutter_sdk_caption_not_overwritten_by_component_list() {
+        let state = make_state_flutter_sdk_many_components();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Height 8: HEADER_HEIGHT(2) + 4 component rows + caption(1) + hint(1).
+        // Width 80: enough for the full caption text "…v opens the version picker".
+        // With the bug the component loop could write into row height-2 (the caption row).
+        let area = Rect::new(0, 0, 80, 8);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+
+        // The caption text must appear somewhere in the buffer.
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            content.contains("version picker"),
+            "FlutterSdk caption ('version picker') must be present in tight pane: {content:?}"
+        );
+
+        // Collect rows to verify the caption is on the second-to-last rendered row
+        // and the action hint is on the last row.
+        let rows: Vec<String> = (0..area.height)
+            .map(|row| {
+                (0..area.width)
+                    .map(|col| buf.cell((col, row)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect()
+            })
+            .collect();
+
+        let caption_row = rows
+            .iter()
+            .position(|r| r.contains("version picker"))
+            .expect("a row containing 'version picker' must exist");
+        let hint_row = rows
+            .iter()
+            .position(|r| r.contains("Press Enter"))
+            .expect("a row containing 'Press Enter' must exist");
+
+        // The action hint must be the row directly after the caption.
+        assert_eq!(
+            hint_row,
+            caption_row + 1,
+            "action hint (row {hint_row}) must immediately follow the caption (row {caption_row})"
+        );
+
+        // No component text must appear on the caption row or the action-hint row.
+        // (We check both "extra row" strings that represent the last components.)
+        assert!(
+            !rows[caption_row].contains("extra row"),
+            "caption row (row {caption_row}) must NOT contain component text: {:?}",
+            rows[caption_row]
+        );
+        assert!(
+            !rows[hint_row].contains("extra row"),
+            "action-hint row (row {hint_row}) must NOT contain component text: {:?}",
+            rows[hint_row]
+        );
+    }
+
+    /// Edge-case: FlutterSdk step with height exactly equal to `HEADER_HEIGHT + 2`
+    /// (just enough room for caption + action_hint, zero component rows) must not
+    /// panic and must show the caption and hint.
+    #[test]
+    fn test_flutter_sdk_caption_minimal_height_no_panic() {
+        let state = make_state_flutter_sdk_many_components();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // height 4 = HEADER_HEIGHT(2) + caption(1) + hint(1); zero component rows.
+        // Width 80 ensures the full caption text fits.
+        let area = Rect::new(0, 0, 80, 4);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        // Caption and hint should both render when there is exactly enough room.
+        assert!(
+            content.contains("version picker"),
+            "caption must render at minimal height: {content:?}"
+        );
+        assert!(
+            content.contains("Press Enter"),
+            "action hint must render at minimal height: {content:?}"
         );
     }
 }
