@@ -929,6 +929,8 @@ pub fn handle_action(
                             // SDK lands at `~/fvm/versions/stable`.  After install the
                             // `version` file inside the SDK provides the concrete version.
                             version_dir_name: params.channel.clone(),
+                            // Task 04 threads the picker selection here.
+                            version_tag: None,
                         };
 
                         // Clone a sender for the synchronous on_event callback.

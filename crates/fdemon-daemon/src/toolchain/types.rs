@@ -330,6 +330,11 @@ pub struct FlutterRelease {
     /// Architecture label from the manifest (e.g. `"x64"`, `"arm64"`), or
     /// `None` when the manifest entry predates multi-arch fields.
     pub dart_sdk_arch: Option<String>,
+    /// Raw ISO-8601 release date from the manifest (e.g.
+    /// `"2024-08-21T17:10:03.737Z"`), or `None` when the manifest entry omits
+    /// the `release_date` key. The string is kept verbatim — display formatting
+    /// is a TUI concern.
+    pub release_date: Option<String>,
 }
 
 /// The parsed Flutter releases manifest (`releases_<os>.json`).
@@ -377,17 +382,36 @@ impl FlutterReleaseManifest {
 }
 
 /// Resolved parameters for a managed Flutter SDK installation.
+///
+/// ## Channel vs. `version_tag` precedence
+///
+/// `channel` always carries the release's channel (e.g. `"stable"`) and is kept
+/// for metadata and the channel→stable archive fallback. `version_tag` is the
+/// optional pinned-version selector:
+///
+/// - When `version_tag` is `None`, the install resolves by `channel`: the git
+///   path clones `-b <channel>` and the archive path resolves the channel's
+///   release with a `stable` fallback on a miss.
+/// - When `version_tag` is `Some(v)`, the install pins the exact version: the
+///   git path clones `-b <v>` and the archive path resolves by exact version —
+///   a manifest miss is a **hard error**, never the stable fallback.
 #[derive(Debug, Clone)]
 pub struct FlutterInstallTarget {
     /// How the SDK should be installed.
     pub method: InstallMethod,
-    /// Flutter channel to install (e.g. `"stable"`).
+    /// The release's channel (e.g. `"stable"`). Kept for metadata and the
+    /// channel→stable archive fallback used only on the `version_tag: None` path.
     pub channel: String,
     /// Parent directory that will contain the version subdirectory.
     pub install_root: PathBuf,
     /// Name of the directory to create inside `install_root`
     /// (e.g. `"stable"` or the resolved version string like `"3.24.0"`).
     pub version_dir_name: String,
+    /// Exact manifest version (e.g. `"3.24.0"`) or `"master"`/`"main"`. When
+    /// set, the git path clones `-b <version_tag>` and the archive path resolves
+    /// by exact version (hard error on a manifest miss — never the stable
+    /// fallback). When `None`, the install resolves by `channel`.
+    pub version_tag: Option<String>,
 }
 
 /// Progress event emitted during an archive download.
@@ -645,6 +669,7 @@ mod tests {
                     archive: "stable/linux/flutter_linux_3.24.0-stable.tar.xz".to_string(),
                     sha256: "aaaa".to_string(),
                     dart_sdk_arch: Some("x64".to_string()),
+                    release_date: None,
                 },
                 FlutterRelease {
                     version: "3.24.0".to_string(),
@@ -652,6 +677,7 @@ mod tests {
                     archive: "stable/linux/flutter_linux_arm64_3.24.0-stable.tar.xz".to_string(),
                     sha256: "bbbb".to_string(),
                     dart_sdk_arch: Some("arm64".to_string()),
+                    release_date: None,
                 },
             ],
         }
@@ -687,6 +713,7 @@ mod tests {
                 archive: "stable/linux/flutter_linux_3.22.0-stable.tar.xz".to_string(),
                 sha256: "cccc".to_string(),
                 dart_sdk_arch: None, // no arch field — older manifest entry
+                release_date: None,
             }],
         };
 
@@ -738,6 +765,7 @@ mod tests {
                 archive: "beta/linux/flutter_linux_3.25.0-0.1.pre-beta.tar.xz".to_string(),
                 sha256: "dddd".to_string(),
                 dart_sdk_arch: Some("x64".to_string()),
+                release_date: None,
             }],
         };
         assert!(manifest.resolve_stable(HostArch::X64).is_none());
