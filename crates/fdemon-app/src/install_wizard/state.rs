@@ -185,6 +185,13 @@ pub struct InstallWizardState {
     /// Used by [`show_installed_hint`][Self::show_installed_hint] to distinguish
     /// "was broken, now fixed" from "was healthy throughout".
     pub observed_unhealthy: bool,
+
+    /// State for the Flutter version picker overlay (Task 06 Phase 6).
+    ///
+    /// The picker is a sub-modal of the install wizard that lets users choose
+    /// a specific Flutter version before installation. Initialized via
+    /// `Default` (invisible) and `reset()` on full wizard hide.
+    pub version_picker: super::version_picker::VersionPickerState,
 }
 
 impl InstallWizardState {
