@@ -283,6 +283,64 @@ pub fn Toolchain() -> impl IntoView {
                      needed for fdemon itself (you still need to restart your terminal for "
                     <code class="text-blue-400">"flutter"</code>" to be on your shell\u{2019}s PATH)."
                 </p>
+
+                // ── Choosing a version ──────────────────────────────
+                <h3 class="text-lg font-bold text-white mt-6 mb-2">"Choosing a version"</h3>
+                <p class="text-slate-400">
+                    "On the Flutter SDK step, press "<code class="text-blue-400">"Enter"</code>
+                    " (when no version has been confirmed yet) or "<code class="text-blue-400">"v"</code>
+                    " at any time to open the "<strong class="text-white">"version picker overlay"</strong>
+                    ". The picker fetches the Flutter releases manifest lazily (only on first open; "
+                    <code class="text-blue-400">"r"</code>" re-fetches). It groups releases into three tabs:"
+                </p>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                    <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                        <h5 class="font-bold text-green-400 mb-1">"Stable"</h5>
+                        <p class="text-xs text-slate-400">
+                            "Versioned release archives. Defaults the cursor to the newest stable entry. \
+                             Filters by CPU architecture on macOS (arm64 vs x64)."
+                        </p>
+                    </div>
+                    <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                        <h5 class="font-bold text-amber-400 mb-1">"Beta"</h5>
+                        <p class="text-xs text-slate-400">
+                            "Beta-channel release archives, same arch filtering as Stable."
+                        </p>
+                    </div>
+                    <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                        <h5 class="font-bold text-blue-400 mb-1">"Master"</h5>
+                        <p class="text-xs text-slate-400">
+                            "Synthetic git-only rows for "<code>"master"</code>" and "<code>"main"</code>
+                            ". No release archive exists; selecting either forces a "
+                            <code>"git clone"</code>" install regardless of "
+                            <code>"flutter_install_method"</code>". Requires git."
+                        </p>
+                    </div>
+                </div>
+                <p class="text-slate-400 mt-3">
+                    "Press "<code class="text-blue-400">"Enter"</code>
+                    " in the picker to confirm the selected version and immediately start the install. \
+                     A pinned version installs to "
+                    <code class="text-blue-400">"~/fvm/versions/\u{3c}version\u{3e}"</code>
+                    " (FVM-compatible) and appears in the "
+                    <A href="/docs/installation" attr:class="text-blue-400 hover:underline">"Flutter Version panel"</A>
+                    " after the post-install rescan. Press "<code class="text-blue-400">"Esc"</code>
+                    " to close the picker without installing."
+                </p>
+                <div class="bg-amber-900/20 border border-amber-800 p-4 rounded-lg text-amber-100 text-sm mt-3">
+                    <strong>"Per-run override, no persistence."</strong>
+                    " A picker choice overrides "<code>"[toolchain] channel"</code>
+                    " for that run only \u{2014} it is never written to config. After a successful install the \
+                     SDK is pinned via the existing "<code>"[flutter] sdk_path"</code>" write, so fdemon \
+                     resolves it immediately on every subsequent launch."
+                </div>
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm mt-3">
+                    <strong>"Offline fallback."</strong>
+                    " When the manifest fetch fails the picker shows an error message and pressing "
+                    <code>"Enter"</code>
+                    " falls back to installing the configured "<code>"[toolchain] channel"</code>
+                    " un-pinned \u{2014} the git path needs no manifest, so offline installs are preserved."
+                </div>
             </Section>
 
             // ── Android Platform Leaf ─────────────────────────────────
@@ -518,12 +576,36 @@ export PATH=\"$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tool
                             <KeyRow key="Tab" action="Switch focus between the step list and the detail pane" />
                             <KeyRow key="\u{2191} / k" action="Move up in the step list, or scroll the detail pane up" />
                             <KeyRow key="\u{2193} / j" action="Move down in the step list, or scroll the detail pane down" />
-                            <KeyRow key="Enter" action="On the Platforms row: expand or collapse the platform submenu. On an auto-install step: run (or retry) the step. No-op on guided-only leaves." />
+                            <KeyRow key="Enter" action="On the Platforms row: expand or collapse the platform submenu. On the Flutter SDK step: open the version picker (no prior choice) or re-run with the confirmed version. On other auto-install steps: run or retry. No-op on guided-only leaves." />
+                            <KeyRow key="v" action="Open (or re-open) the version picker on the Flutter SDK step. No-op on other steps and while a step is running." />
                             <KeyRow key="r" action="Re-run the preflight check (use after completing a guided step)" />
                             <KeyRow key="c" action="Copy the selected guided command to the clipboard" />
                             <KeyRow key="[ / ]" action="Cycle between guided commands when a step offers more than one" />
                             <KeyRow key="Esc" action="Cancel the running step, or close the wizard when idle" />
                             <KeyRow key="Ctrl+C" action="Force quit Flutter Demon" />
+                        </tbody>
+                    </table>
+                </div>
+                <h4 class="font-bold text-white mt-6 mb-2">"Version picker keys"</h4>
+                <p class="text-slate-400 text-sm mb-3">
+                    "While the version picker overlay is open it intercepts all keys. "
+                    <code class="text-blue-400">"Ctrl+C"</code>" always force-quits."
+                </p>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Action"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="\u{2191} / k" action="Move the version cursor up" />
+                            <KeyRow key="\u{2193} / j" action="Move the version cursor down" />
+                            <KeyRow key="Tab" action="Cycle channel tab: Stable \u{2192} Beta \u{2192} Master" />
+                            <KeyRow key="r" action="Re-fetch the Flutter releases manifest" />
+                            <KeyRow key="Enter" action="Confirm the selected version and start the install. In the error state (manifest fetch failed): install the default channel un-pinned." />
+                            <KeyRow key="Esc" action="Close the picker without installing" />
                         </tbody>
                     </table>
                 </div>
