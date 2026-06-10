@@ -378,13 +378,15 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
             UpdateResult::none()
         }
 
-        // iOS, macOS, and Web are all guided-only (the wizard cannot auto-install
-        // Xcode, CocoaPods, or a browser). When guided commands are present,
-        // direct the user to the detail pane; when none exist (tool already
-        // detected, or detection not yet merged), return silently.
+        // iOS, macOS, Web, and Windows are all guided-only (the wizard cannot
+        // auto-install Xcode, CocoaPods, a browser, or Visual Studio C++).
+        // When guided commands are present, direct the user to the detail pane;
+        // when none exist (tool already detected, or detection not yet merged),
+        // return silently.
         WizardStepKind::PlatformIos
         | WizardStepKind::PlatformMacos
-        | WizardStepKind::PlatformWeb => {
+        | WizardStepKind::PlatformWeb
+        | WizardStepKind::PlatformWindows => {
             let has_guided = state
                 .install_wizard_state
                 .selected_step()
@@ -395,13 +397,6 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
                 state.install_wizard_state.status_message =
                     Some("Run the listed command(s), then press r to re-check.".to_string());
             }
-            UpdateResult::none()
-        }
-
-        WizardStepKind::PlatformWindows => {
-            // Windows platform support is implemented in Phase 5.
-            state.install_wizard_state.status_message =
-                Some("Available in a later phase".to_string());
             UpdateResult::none()
         }
 
@@ -3541,15 +3536,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_windows_still_shows_later_phase() {
-        // PlatformWindows must still return the "Available in a later phase"
-        // message (Phase 5 placeholder).
-        let mut state = AppState::new();
-        state.show_install_wizard(WizardOrigin::UserInvoked);
-        state.install_wizard_state.platforms_expanded = true;
-        // Use a Windows report so PlatformWindows appears in the step list.
-        state.install_wizard_state.apply_report(ToolchainReport {
+    // ── Phase 5, Task 02: Windows guided-only arm ──────────────────────────────
+
+    /// Build a Windows report so that PlatformWindows appears in the step list.
+    fn make_windows_report() -> ToolchainReport {
+        ToolchainReport {
             platform: HostPlatform::Windows,
             shell: HostShell::Bash,
             components: vec![ComponentCheck {
@@ -3560,10 +3551,50 @@ mod tests {
             doctor: None,
             linux_package_manager: None,
             winget_available: false,
-        });
+        }
+    }
 
+    /// Build a state with platforms expanded, a Windows report applied, the given
+    /// platform leaf selected, and a guided command injected onto that step.
+    fn state_with_windows_step_and_guided_command() -> AppState {
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.platforms_expanded = true;
+        state
+            .install_wizard_state
+            .apply_report(make_windows_report());
         select_step(&mut state, WizardStepKind::PlatformWindows);
-        state.install_wizard_state.status_message = None;
+        // Inject a guided command directly (Task 03 populates these for real;
+        // here we simulate the post-Task-03 state so the arm is tested now).
+        let idx = state.install_wizard_state.selected_index;
+        state.install_wizard_state.steps[idx].guided_commands.push(
+            crate::install_wizard::GuidedCommand {
+                label: "Install Visual Studio C++".to_string(),
+                command: "cinst -y visualstudio2022community".to_string(),
+                note: None,
+            },
+        );
+        state
+    }
+
+    /// Build a state with platforms expanded, a Windows report applied, and
+    /// PlatformWindows selected with NO guided commands (already installed).
+    fn state_with_windows_step_no_guided_commands() -> AppState {
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.platforms_expanded = true;
+        state
+            .install_wizard_state
+            .apply_report(make_windows_report());
+        select_step(&mut state, WizardStepKind::PlatformWindows);
+        state
+    }
+
+    #[test]
+    fn test_run_selected_step_windows_with_guided_commands_shows_recheck_message() {
+        // PlatformWindows with a guided command: Enter must set the re-check status
+        // message, dispatch no action, and leave is_step_running() false.
+        let mut state = state_with_windows_step_and_guided_command();
 
         let result = handle_run_selected_step(&mut state);
 
@@ -3572,14 +3603,44 @@ mod tests {
             "PlatformWindows Enter must not dispatch RunWizardStep; got {:?}",
             result.action
         );
+        assert!(
+            result.message.is_none(),
+            "PlatformWindows Enter must not queue a message; got {:?}",
+            result.message
+        );
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "is_step_running() must stay false for PlatformWindows"
+        );
         let msg = state
             .install_wizard_state
             .status_message
             .as_deref()
             .unwrap_or("");
         assert!(
-            msg.contains("later phase"),
-            "PlatformWindows must show 'later phase' message; got: {msg}"
+            msg.contains("re-check"),
+            "status_message must contain 're-check' when PlatformWindows has guided commands; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_run_selected_step_windows_without_guided_commands_is_noop() {
+        // PlatformWindows with no guided commands: Enter must be a silent no-op
+        // (tool already installed), no status message change, result none().
+        let mut state = state_with_windows_step_no_guided_commands();
+        state.install_wizard_state.status_message = None;
+
+        let result = handle_run_selected_step(&mut state);
+
+        assert!(
+            result.action.is_none(),
+            "PlatformWindows Enter with no guided commands must not dispatch an action; got {:?}",
+            result.action
+        );
+        assert!(
+            state.install_wizard_state.status_message.is_none(),
+            "status_message must remain None when PlatformWindows has no guided commands; got: {:?}",
+            state.install_wizard_state.status_message
         );
     }
 
