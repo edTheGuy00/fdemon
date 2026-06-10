@@ -34,11 +34,14 @@ note() { echo "==> $*"; }
 command -v docker >/dev/null || die "docker not found"
 
 show_access() {
+  # Ports bind to BIND_ADDR (compose: ${BIND_ADDR:-127.0.0.1}) — loopback by
+  # default; set BIND_ADDR to the host's tailnet IP to reach the VM remotely.
+  local bind="${BIND_ADDR:-127.0.0.1}"
   cat <<EOF
 
-  Windows VM access:
-    noVNC (browser, any host):  http://localhost:8006   (or http://<this-host>:8006)
-    RDP:                        <host>:3389   user: Docker   pass: admin
+  Windows VM access (bound to $bind):
+    noVNC (browser):  http://$bind:8006
+    RDP:              $bind:3389   user: Docker   pass: admin
     First install takes ~20-30 min (ISO download + setup); watch it via noVNC.
 EOF
 }

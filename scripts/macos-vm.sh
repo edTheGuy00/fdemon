@@ -33,12 +33,15 @@ note() { echo "==> $*"; }
 command -v docker >/dev/null || die "docker not found"
 
 show_access() {
+  # Ports bind to BIND_ADDR (compose: ${BIND_ADDR:-127.0.0.1}) — loopback by
+  # default; set BIND_ADDR to the host's tailnet IP to reach the VM remotely.
+  local bind="${BIND_ADDR:-127.0.0.1}"
   cat <<EOF
 
-  macOS VM access:
-    noVNC (browser):  http://localhost:8006   (or http://<this-host>:8006)
-    VNC:              <host>:5900
-    SSH:              <host>:2222  (only after enabling Remote Login in macOS)
+  macOS VM access (bound to $bind):
+    noVNC (browser):  http://$bind:8006
+    VNC:              $bind:5900
+    SSH:              $bind:2222  (only after enabling Remote Login in macOS)
     First install is MANUAL via noVNC (Disk Utility erase → Reinstall macOS →
     create a user); ~30-90 min. Then install fdemon (see the README).
 EOF

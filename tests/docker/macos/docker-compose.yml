@@ -38,11 +38,13 @@ services:
       - /dev/net/tun
     cap_add:
       - NET_ADMIN
+    # Bind to loopback by default so the VM is NOT exposed to the LAN/WiFi.
+    # To reach it from other tailnet devices: export BIND_ADDR=<your tailnet IP>.
     ports:
-      - "8006:8006"          # noVNC web viewer (primary access)
-      - "5900:5900/tcp"      # VNC
-      - "5900:5900/udp"
-      - "2222:22"            # SSH — only works AFTER you enable Remote Login in macOS
+      - "${BIND_ADDR:-127.0.0.1}:8006:8006"          # noVNC web viewer (primary access)
+      - "${BIND_ADDR:-127.0.0.1}:5900:5900/tcp"      # VNC
+      - "${BIND_ADDR:-127.0.0.1}:5900:5900/udp"
+      - "${BIND_ADDR:-127.0.0.1}:2222:22"            # SSH — only works AFTER you enable Remote Login in macOS
     volumes:
       - ./storage:/storage   # persisted macOS disk (gitignored)
       - ./shared:/shared     # host<->guest exchange (9p; in-guest: `sudo mount_9p shared`)
