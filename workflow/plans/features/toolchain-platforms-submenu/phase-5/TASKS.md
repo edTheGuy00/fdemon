@@ -113,12 +113,14 @@ override), a `choco` alternative, and — when VS exists but the C++ workload is
 
 | # | Task | Status | Depends On | Est. Hours | Complexity | Modules |
 |---|------|--------|------------|------------|------------|---------|
-| 1 | [01-daemon-vswhere-detection](tasks/01-daemon-vswhere-detection.md) | Pending | - | 3–4h | medium | `fdemon-daemon/src/toolchain/{types,mod}.rs`, `toolchain/checks/{windows,mod}.rs` (+ minimal `fdemon-app/install_wizard/state.rs` stub arm) |
-| 2 | [02-app-handler-windows-arm](tasks/02-app-handler-windows-arm.md) | Pending | 1 | 1h | low | `fdemon-app/src/handler/install_wizard/actions.rs` |
-| 3 | [03-app-build-steps-windows-leaf](tasks/03-app-build-steps-windows-leaf.md) | Pending | 1 | 2–3h | medium | `fdemon-app/src/install_wizard/state.rs` |
-| 4 | [04-tui-windows-caption-and-hint](tasks/04-tui-windows-caption-and-hint.md) | Pending | 3 | 1h | low | `fdemon-tui/src/widgets/install_wizard/step_detail.rs` |
-| 5 | [05-update-architecture-docs](tasks/05-update-architecture-docs.md) | Pending | 1, 2, 3, 4 | 1h | low | `docs/ARCHITECTURE.md` |
-| 6 | [06-update-website-docs](tasks/06-update-website-docs.md) | Pending | 1, 2, 3, 4 | 2–3h | medium | `website/src/pages/docs/toolchain.rs` |
+| 1 | [01-daemon-vswhere-detection](tasks/01-daemon-vswhere-detection.md) | ✅ Done (validated PASS) | - | 3–4h | medium | `fdemon-daemon/src/toolchain/{types,mod}.rs`, `toolchain/checks/{windows,mod}.rs` (+ minimal `fdemon-app/install_wizard/state.rs` stub arm) |
+| 2 | [02-app-handler-windows-arm](tasks/02-app-handler-windows-arm.md) | ✅ Done (validated PASS, merged) | 1 | 1h | low | `fdemon-app/src/handler/install_wizard/actions.rs` |
+| 3 | [03-app-build-steps-windows-leaf](tasks/03-app-build-steps-windows-leaf.md) | ✅ Done (validated PASS, merged) | 1 | 2–3h | medium | `fdemon-app/src/install_wizard/state.rs` |
+| 4 | [04-tui-windows-caption-and-hint](tasks/04-tui-windows-caption-and-hint.md) | ✅ Done (validated PASS) | 3 | 1h | low | `fdemon-tui/src/widgets/install_wizard/step_detail.rs` |
+| 5 | [05-update-architecture-docs](tasks/05-update-architecture-docs.md) | ✅ Done (validated PASS, merged) | 1, 2, 3, 4 | 1h | low | `docs/ARCHITECTURE.md` |
+| 6 | [06-update-website-docs](tasks/06-update-website-docs.md) | ✅ Done (validated CONCERN¹, merged) | 1, 2, 3, 4 | 2–3h | medium |
+
+> ¹ Task 06 validator CONCERN (minor, deferred): the ASCII wizard mock in `website/src/pages/docs/toolchain.rs` shows a macOS-host view (4 leaves) without a note that the Windows leaf is host-gated; the iOS `xcodes` note is condensed (omits `xcodes install --latest`). Prose/tables/commands are correct for all five leaves. `website/src/pages/docs/toolchain.rs` |
 
 ## File Overlap Analysis
 
@@ -188,6 +190,30 @@ Phase 5 is complete when:
       `ComponentKind` variant, the detail-prefix contract, and the non-blocking semantics; the website
       toolchain page describes the Platforms submenu (all five leaves) instead of the legacy
       "Android Tools" step.
+
+## Phase Review
+
+| Round | Verdict | Review | Reviewed HEAD |
+|-------|---------|--------|---------------|
+| 0 | APPROVED_WITH_CONCERNS | workflow/reviews/features/toolchain-platforms-submenu-phase-5/REVIEW.md | 4d9eb360 |
+| fix (user-requested) | ✅ ALL FINDINGS FIXED — integration verify PASS, 7,370 tests / 0 failures | (commits 3b4ff259, 6e49365, 769fd2d) | 769fd2d |
+
+### Review Findings — RESOLVED 2026-06-10 (user-requested fix round)
+
+- ✅ **M1** `VS_FOUND_PREFIX` now `pub` in `checks/windows.rs`, re-exported `checks/mod.rs` → `toolchain/mod.rs` → `lib.rs`, imported by `state.rs`; duplicated `WINDOWS_VS_FOUND_PREFIX` deleted.
+- ✅ **M2** Modify-VS guided command branches on `report.shell`: PowerShell gets `Start-Process "${env:ProgramFiles(x86)}\…"`, cmd keeps `start "" "%ProgramFiles(x86)%\…"`; both covered by tests.
+- ✅ **M3** Two vswhere gates now run via `tokio::join!` in `probe_visual_studio_cpp` (worst case capped at one `PROBE_TIMEOUT`).
+- ✅ **N1** Added `test_windows_guided_commands_existing_vs_no_winget_gives_modify_and_choco`.
+- ✅ **N2** Windows Ok-status TUI test now asserts "coming soon" + "flutter doctor" render.
+- ✅ **N3** TUI test helper uses production-reachable `StepStatus::Partial`.
+- ✅ **N4/N5** Single `strip_and_truncate` in gate-2 classify branch; test uses `super::super::MAX_DETAIL_LEN`.
+- ✅ **N7** Website: host-gating callout added beside the ASCII mock; full xcodes note restored verbatim.
+- ✅ **Pre-existing test** `test_run_preflight_nonexistent_sdk_path_does_not_panic` fixed. Root cause: an invalid explicit `sdk_path` intentionally falls through the locator strategies (see `test_explicit_path_invalid_falls_through`), so on hosts with Flutter on PATH the SDK resolves Ok and the old `assert_ne!(status, Ok)` was environment-dependent. Rewritten to assert host-invariant consistency invariants (`flutter_sdk.is_some() ⇔ status == Ok`; `doctor` None when no SDK) — matching the test's "does not panic" intent.
+
+### Still deferred (accepted by design, no action planned)
+
+- **N6** choco guided command emitted unconditionally (no `choco_available` signal); the "Requires Chocolatey." note mitigates.
+- **N8** Security LOWs accepted: env-var/PATH binary-planting surface identical to all other tool probes; `from_utf8_lossy` and spawn-error→"not found" conflation are pre-existing probe patterns.
 
 ## Keyboard Shortcuts
 

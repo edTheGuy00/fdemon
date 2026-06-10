@@ -160,3 +160,35 @@ New tests (mirror the Phase-3 web / Phase-4 ios test names):
 - **Commands are display-only** — verbatim copy-paste text with notes; fdemon never executes them.
 - `all_components_ok()` stays strict (Phase 3/4 precedent): a Windows host without VS doesn't show
   "All set". Do not special-case `VisualStudioCpp` out of it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a825071766acac4a1
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `WINDOWS_VS_FOUND_PREFIX` const; `platform_windows_components` bucket; `VisualStudioCpp` routing arm; `windows_status` cap block; `windows_guided_commands()` function; live `PlatformWindows` leaf body; updated `build_steps` doc-comment; 13 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`WINDOWS_VS_FOUND_PREFIX` duplication**: `VS_FOUND_PREFIX` in `fdemon-daemon` is `pub(crate)`, so it cannot be imported from `fdemon-app`. Duplicated the string as a local `const` with extensive cross-referencing comments at both sites. Prefix drift degrades gracefully to "fresh-install commands shown" rather than a panic.
+2. **Component clone for leaf body**: `platform_windows_components.clone()` is needed in the leaf body because `windows_guided_commands` borrows it as a slice after it's moved into the `WizardStep`. This mirrors the iOS/macOS leaf pattern.
+3. **Ordering (modify → winget → choco)**: Deterministic ordering matches test expectations and the task spec. The modify entry only appears when the `VS_FOUND_PREFIX` detail-prefix contract is matched.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib install_wizard` — Passed (325 tests)
+- `cargo test -p fdemon-app --lib install_wizard::state::tests` — Passed (153 tests)
+- `cargo fmt --all -- --check` — Passed (clean)
+- `cargo clippy --workspace -- -D warnings` — Passed (clean)
+- `cargo test --workspace --lib` — 1222 passed / 1 pre-existing failure in `fdemon-daemon::toolchain::tests::test_run_preflight_nonexistent_sdk_path_does_not_panic` (confirmed pre-existing on base branch before my changes)
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `test_run_preflight_nonexistent_sdk_path_does_not_panic` in `fdemon-daemon` was already failing before this task. Not introduced by this change.
+2. **`VS_FOUND_PREFIX` drift**: If `fdemon-daemon/src/toolchain/checks/windows.rs` changes the prefix, the `WINDOWS_VS_FOUND_PREFIX` const here must be updated. The cross-referencing comments at both sites document this contract.

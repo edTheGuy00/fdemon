@@ -66,3 +66,41 @@ New tests (mirror the existing iOS/macOS/Web ones, ~`step_detail.rs:2074`):
 - `step_list.rs` needs nothing: rows render generically from `indent` + `status_glyph`.
 - Keep the caption wording consistent with Task 03's leaf title (`"Windows"`) and the guided-command
   labels — the reviewer will read them side by side.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+**Commit:** b44c1e39 04-tui-windows-caption-and-hint: Windows leaf detail caption + coming-soon suppression
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added Windows caption to `step_caption()` fn; added `PlatformWindows` to `render_action_hint()` suppress-list; added 3 test helpers + 3 test cases |
+
+### Notable Decisions/Tradeoffs
+
+1. **Windows caption wording**: Used exact wording from task spec ("Visual Studio C++ workload required for Windows desktop builds") to match caption style of other leaf steps and Task 03's guided-command labels.
+2. **Test command simplification**: Shortened the winget install command from a full override string to a concise `-e --id` form to fit within the 80-char test area width and ensure `[c] copy` hint renders on the command line (not wrapped separately).
+3. **ComponentKind use**: Used `ComponentKind::VisualStudioCpp` (the actual enum variant from fdemon_daemon::toolchain) rather than imagining a `VisualStudio` variant.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib widgets::install_wizard` - All 140 install_wizard tests passed, including 3 new Windows tests
+- `cargo test -p fdemon-tui --lib` - All 1505 unit tests passed
+- `cargo fmt --all` - Code formatted per project style
+- `cargo clippy --workspace -- -D warnings` - No warnings
+
+### Risks/Limitations
+
+1. **No new build gate issues**: Step caption and action-hint suppression are render-only changes; Windows step structure unchanged from Task 03.
+2. **Test fixture simplicity**: Test uses a simplified winget command (not the full real-world override string); this is intentional for test clarity and render width predictability. Real commands are handled elsewhere (daemon/app).
+
+All acceptance criteria met:
+✓ Windows leaf renders detail-pane caption
+✓ Windows with guided commands shows guided block + `[c] copy`, suppresses "coming soon"
+✓ Windows Ok-status (no guided commands) shows display-only behavior like iOS/macOS
+✓ `cargo test`, `cargo fmt`, `cargo clippy` all clean

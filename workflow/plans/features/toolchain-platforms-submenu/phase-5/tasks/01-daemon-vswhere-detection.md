@@ -185,3 +185,39 @@ New tests to add in `checks/windows.rs`:
 - **Dev host is Linux** — the live vswhere path cannot be exercised here; all decision logic must sit
   in the pure classifier. The `#[cfg(target_os = "windows")]` tests only run on a real Windows host/CI.
 - This task is the sole owner of the `ComponentKind` enum change; Tasks 02–04 build on the merged result.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `VisualStudioCpp` variant to `ComponentKind`, added `Display` arm, added `test_component_kind_display` assertion |
+| `crates/fdemon-daemon/src/toolchain/checks/windows.rs` | NEW — `check_windows` probe, `classify_vswhere_gates` pure classifier, `VS_FOUND_PREFIX` constant, full unit test suite |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Added `mod windows;` + `pub use windows::check_windows;` |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `check_windows` to `tokio::join!` fan-out, `components.extend(windows_checks)`, updated comments, added Windows presence assertion in test |
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added no-op stub arm `ComponentKind::VisualStudioCpp => {}` in `build_steps` match |
+
+### Notable Decisions/Tradeoffs
+
+1. **`run_vswhere` returns `None` on non-zero exit**: vswhere exits non-zero when no matching instance is found (gate-2 miss). Mapping this to `None` (a miss) is correct — the non-zero exit is the "not found" signal, not an error condition.
+2. **Gate-2 hit tested against the gate-1 input**: `classify_vswhere_gates` evaluates gate 2 first; the gate-2 test `test_classify_gate2_hit_wins_regardless_of_gate1` confirms gate 2 always wins even when gate 1 is empty (consistent with the "gate-2 supersedes gate-1" semantics).
+3. **`VS_FOUND_PREFIX` is `pub(crate)`**: Exposed at the `checks::windows` module level so the Task 03 app-layer consumer can reference the constant without duplicating the string. The cross-crate contract is documented in both the constant's doc comment and the test.
+
+### Testing Performed
+
+- `cargo build --workspace` — Passed (exhaustive Display + build_steps matches both updated)
+- `cargo test -p fdemon-daemon --lib toolchain` — 444 passed, 1 pre-existing failure unrelated to this task (`test_run_preflight_nonexistent_sdk_path_does_not_panic` — Flutter found on system PATH even with fake explicit path; confirmed pre-existing by stashing changes and re-running)
+- `cargo test --workspace --lib` — 1222 passed, 1 pre-existing failure (same)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `test_run_preflight_nonexistent_sdk_path_does_not_panic` was failing before this task (confirmed). It asserts Flutter is not found when a fake explicit path is given, but the 12-strategy locator finds Flutter on the dev host's PATH as a fallback. Not introduced by this task.
+2. **Windows live path not exercised on Linux CI**: `probe_visual_studio_cpp` and `resolve_vswhere` only run on Windows. All decision logic is in the pure `classify_vswhere_gates` which has comprehensive fixture-JSON tests running on Linux CI.

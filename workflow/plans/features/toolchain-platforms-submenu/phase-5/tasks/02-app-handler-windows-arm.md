@@ -100,3 +100,39 @@ cargo fmt --all && cargo clippy --workspace -- -D warnings
 - The guided arm reads `guided_commands` at runtime, so this task is correct whether it merges before
   or after Task 03 (before: the leaf has no commands yet, so Enter is a silent no-op — same as iOS
   between its Tasks 02/03).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a505aa95f07b3d6a2 (synced from feat/toolchain-platforms-submenu)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Merged `PlatformWindows` into the shared guided-only arm; deleted obsolete placeholder test; added two new tests for Windows with/without guided commands |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guided-only unification**: PlatformWindows follows the exact same pattern as PlatformWeb/PlatformIos/PlatformMacos — checks for `guided_commands` at runtime and shows the re-check message only when present. This ensures consistency across all platform leaves and keeps the code maintainable.
+
+2. **Test helper functions**: Created helper functions `make_windows_report()`, `state_with_windows_step_and_guided_command()`, and `state_with_windows_step_no_guided_commands()` to mirror the existing iOS/macOS test patterns, ensuring consistency and avoiding duplication.
+
+3. **Write-disjointness preserved**: All changes are confined to `actions.rs`; no modifications to `install_wizard/state.rs`, maintaining the parallel-task contract with Task 03.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib handler::install_wizard` - Passed (134 tests)
+- `cargo test -p fdemon-app --lib test_run_selected_step_windows_*` - Passed (2 new Windows tests)
+- `cargo test -p fdemon-app --lib` - Passed (3015 tests)
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo check --workspace --all-targets` - Passed (all crates compile)
+
+### Risks/Limitations
+
+1. **No pre-existing failures introduced**: One pre-existing failure exists in fdemon-daemon (`test_run_preflight_nonexistent_sdk_path_does_not_panic`), which is unrelated to this task and remains unchanged.
+
+2. **Task 03 merge order independence**: The implementation correctly handles both merge orders (before or after Task 03 populates guided_commands). If this task merges first, Windows has no guided commands yet, so Enter is a silent no-op. After Task 03, guided commands are present and the re-check message appears. This is identical to how iOS was tested between its Tasks 02 and 03.
