@@ -1122,7 +1122,10 @@ fn xcode_guided_commands(
                       && sudo xcodebuild -runFirstLaunch \
                       && sudo xcodebuild -license accept"
                 .to_string(),
-            note: None,
+            note: Some(
+                "Adjust the path if Xcode is not in /Applications (e.g. a versioned or beta bundle)."
+                    .to_string(),
+            ),
         });
         // Step 3 (iOS only): download the iOS simulator platform.
         if include_ios_platform {
@@ -4963,6 +4966,48 @@ mod tests {
         assert!(
             !macos_has_download,
             "PlatformMacos guided commands must NOT include 'xcodebuild -downloadPlatform iOS'"
+        );
+    }
+
+    /// The "Select Xcode & accept license" guided command includes a caveat note
+    /// about adjusting the path for non-standard Xcode installations.
+    #[test]
+    fn test_xcode_select_command_has_path_caveat_note() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+
+        // Find the "Select Xcode & accept license" command.
+        let select_xcode_cmd = ios
+            .guided_commands
+            .iter()
+            .find(|c| c.label.contains("Select Xcode"))
+            .expect("Must have 'Select Xcode & accept license' command");
+
+        // Assert the note is present and contains guidance about path adjustment.
+        assert!(
+            select_xcode_cmd.note.is_some(),
+            "Select Xcode command must have a note"
+        );
+        let note = select_xcode_cmd.note.as_ref().unwrap();
+        assert!(
+            note.contains("/Applications"),
+            "Note must reference the /Applications path"
+        );
+        assert!(
+            note.contains("Adjust") || note.contains("adjust"),
+            "Note must mention adjusting the path"
+        );
+        assert!(
+            note.contains("versioned") || note.contains("beta"),
+            "Note must mention versioned or beta bundles as examples"
         );
     }
 
