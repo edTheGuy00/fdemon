@@ -2151,7 +2151,7 @@ mod tests {
             steps: vec![WizardStep {
                 kind: WizardStepKind::PlatformWindows,
                 title: "Windows".to_string(),
-                status: fdemon_app::install_wizard::StepStatus::Missing,
+                status: fdemon_app::install_wizard::StepStatus::Partial,
                 components: vec![ComponentCheck {
                     kind: ComponentKind::VisualStudioCpp,
                     status: ComponentStatus::Missing,
@@ -2242,13 +2242,21 @@ mod tests {
             !content.contains("Guided steps"),
             "PlatformWindows with no guided commands must NOT show guided-steps header: '{content}'"
         );
-        // No dual-CTA: only one of "coming soon" or "Guided steps" should appear
-        // (already asserted above), so we just check no crash and sane output.
+        // The "coming soon" placeholder must appear (step is non-executable and no guided commands).
+        assert!(
+            content.contains("coming soon"),
+            "PlatformWindows with no guided commands should show 'coming soon' placeholder: '{content}'"
+        );
+        // The placeholder should mention flutter doctor (for manual checking).
+        assert!(
+            content.contains("flutter doctor"),
+            "PlatformWindows placeholder should mention 'flutter doctor': '{content}'"
+        );
+        // Component detail should still be visible.
         assert!(
             content.contains("2022"),
             "PlatformWindows (Visual Studio Ok) should show the component detail: '{content}'"
         );
-        // Must not panic or show a guided block — already asserted above.
     }
 
     // --- F1 scroll-window: selected command always visible on short terminal ---
