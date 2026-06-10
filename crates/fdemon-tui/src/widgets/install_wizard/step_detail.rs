@@ -98,8 +98,9 @@ fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
         WizardStepKind::PlatformWeb => Some("  Browser required for flutter run -d chrome"),
         WizardStepKind::PlatformIos => Some("  Xcode required for iOS development"),
         WizardStepKind::PlatformMacos => Some("  Xcode required for macOS development"),
-        // Add a new leaf caption here when its guided-command logic is implemented.
-        // Keep this in sync with the action hints and guided-command logic.
+        WizardStepKind::PlatformWindows => {
+            Some("  Visual Studio C++ workload required for Windows desktop builds")
+        }
         _ => None,
     }
 }
@@ -271,11 +272,13 @@ impl<'a> StepDetailPane<'a> {
                     | WizardStepKind::PlatformWeb
                     | WizardStepKind::PlatformIos
                     | WizardStepKind::PlatformMacos
+                    | WizardStepKind::PlatformWindows
             )
         {
             // PlatformAndroid gated (JDK missing), Prerequisites with guided commands,
             // PlatformWeb with guided commands (browser absent/partial),
-            // PlatformIos/PlatformMacos with guided commands (Xcode absent) —
+            // PlatformIos/PlatformMacos with guided commands (Xcode absent),
+            // PlatformWindows with guided commands (Visual Studio absent) —
             // the guided-command section is the primary CTA; skip the "coming soon" hint.
             return;
         } else {
@@ -2123,6 +2126,127 @@ mod tests {
         assert!(
             content.contains("Chrome"),
             "PlatformWeb (browser Ok) should show the component detail: '{content}'"
+        );
+        // Must not panic or show a guided block — already asserted above.
+    }
+
+    // --- Phase 5 task 04: Windows caption + coming-soon suppression ---
+
+    #[test]
+    fn test_step_caption_windows_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformWindows);
+        assert!(caption.is_some(), "PlatformWindows should have a caption");
+        assert!(
+            caption.unwrap().contains("Visual Studio"),
+            "PlatformWindows caption should mention Visual Studio: {:?}",
+            caption
+        );
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWindows step selected and a guided
+    /// command present (simulates Visual Studio absent/partial scenario).
+    fn make_state_windows_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::VisualStudioCpp,
+                    status: ComponentStatus::Missing,
+                    detail: "not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Visual Studio C++ workload".to_string(),
+                    command: "winget install -e --id Microsoft.VisualStudio.2022.Community"
+                        .to_string(),
+                    note: Some(
+                        "or visit: https://visualstudio.microsoft.com/downloads/".to_string(),
+                    ),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWindows step selected and no guided
+    /// commands (Visual Studio already detected — clean state).
+    fn make_state_windows_no_guided_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::VisualStudioCpp,
+                    status: ComponentStatus::Ok,
+                    detail: "2022 Community".to_string(),
+                }],
+                guided_commands: vec![],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    #[test]
+    fn test_step_detail_suppresses_coming_soon_for_windows_with_guided_commands() {
+        // PlatformWindows with a guided command must NOT render the "coming soon" hint.
+        // The guided-command block is the sole CTA (no dual-CTA).
+        let state = make_state_windows_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Guided-command block must be present.
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformWindows with guided commands should show the guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Visual Studio"),
+            "PlatformWindows step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformWindows step should show [c] copy affordance: '{content}'"
+        );
+        // "coming soon" must NOT appear when guided commands are present.
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformWindows with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_windows_without_guided_commands_shows_no_dual_cta() {
+        // PlatformWindows with no guided commands (Visual Studio detected) renders cleanly:
+        // no dual-CTA (both guided block and "coming soon" must not coexist).
+        // The "coming soon" placeholder is acceptable here (step is non-executable).
+        let state = make_state_windows_no_guided_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // No guided-command block when Visual Studio is detected.
+        assert!(
+            !content.contains("Guided steps"),
+            "PlatformWindows with no guided commands must NOT show guided-steps header: '{content}'"
+        );
+        // No dual-CTA: only one of "coming soon" or "Guided steps" should appear
+        // (already asserted above), so we just check no crash and sane output.
+        assert!(
+            content.contains("2022"),
+            "PlatformWindows (Visual Studio Ok) should show the component detail: '{content}'"
         );
         // Must not panic or show a guided block — already asserted above.
     }
