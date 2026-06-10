@@ -291,40 +291,28 @@ pub fn handle_run_selected_step(state: &mut AppState) -> UpdateResult {
 
     match kind {
         WizardStepKind::FlutterSdk => {
-            // Build install parameters from settings.
-            let method = map_install_method(state.settings.toolchain.install_method());
-            let channel = state.settings.toolchain.channel.clone();
-            let install_root = state.settings.toolchain.flutter_install_dir.clone();
+            // Version-picker gate (Phase 6): when no version has been chosen yet
+            // (and the user has not already escaped to the default-channel
+            // fallback this run), Enter opens the picker instead of installing
+            // immediately. This routes Enter and `v` through the same helper.
+            if state
+                .install_wizard_state
+                .version_picker
+                .selected_release
+                .is_none()
+            {
+                return crate::handler::install_wizard::version_picker::open_flutter_version_picker(
+                    state,
+                );
+            }
 
-            let params = FlutterStepParams {
-                method,
-                channel,
-                install_root,
-            };
-
-            // Flip UI to Running immediately before the async round-trip.
-            // begin_step clears any prior install_task and bumps run_seq (F8).
-            state.install_wizard_state.begin_step(kind);
-
-            // Mint the cancellation token synchronously (F3 fix) and store it
-            // in state immediately so `Esc` can fire it even before the
-            // `WizardInstallTaskReady` message arrives.
-            let cancel_token = CancellationToken::new();
-            let run_seq = state.install_wizard_state.run_seq;
-            state.install_wizard_state.install_task = Some(InstallTaskHandle {
-                cancel: cancel_token.clone(),
-                join: None,
-            });
-
-            UpdateResult::action(UpdateAction::RunWizardStep {
-                kind,
-                run_seq,
-                cancel_token,
-                install: Some(params),
-                path_bin_dir: None,
-                android_sdk_root: None,
-                android: None,
-            })
+            // A version has been chosen — dispatch the pinned install.
+            let selection = state
+                .install_wizard_state
+                .version_picker
+                .selected_release
+                .clone();
+            dispatch_flutter_install(state, selection)
         }
 
         WizardStepKind::PlatformAndroid => {
@@ -864,6 +852,83 @@ fn is_jdk_actionable_from_state(state: &AppState) -> bool {
     }
 }
 
+/// Dispatch a managed Flutter SDK install, optionally pinned to a picked version.
+///
+/// This is the **single source of truth** for the `FlutterSdk` install dispatch:
+/// it mints the cancellation token, calls `begin_step`, and returns the
+/// `RunWizardStep` action. Both the version-picker confirm path and the
+/// (post-selection) `Enter`-on-FlutterSdk path call into it so that
+/// `begin_step` / `run_seq` / token minting stay single-sourced.
+///
+/// ## Parameter sourcing
+///
+/// - `selection == Some(row)` — a pinned install:
+///   - `channel` = `row.channel`,
+///   - `version_tag` = `Some(row.version)`,
+///   - `method` = `settings.toolchain.install_method()`, overridden to
+///     `GitClone` when `row.git_only` (the synthetic master/main rows have no
+///     archive),
+/// - `selection == None` — the default/offline-fallback install:
+///   - `channel` = `settings.toolchain.channel`,
+///   - `version_tag` = `None`,
+///   - `method` = `settings.toolchain.install_method()`.
+///
+/// `install_root` is unchanged in both cases.
+pub(super) fn dispatch_flutter_install(
+    state: &mut AppState,
+    selection: Option<crate::install_wizard::PickerRow>,
+) -> UpdateResult {
+    let kind = WizardStepKind::FlutterSdk;
+    let install_root = state.settings.toolchain.flutter_install_dir.clone();
+
+    let params = match selection {
+        Some(row) => {
+            // Synthetic master/main rows can only be installed via git clone.
+            let method = if row.git_only {
+                InstallMethod::GitClone
+            } else {
+                state.settings.toolchain.install_method()
+            };
+            FlutterStepParams {
+                method: map_install_method(method),
+                channel: row.channel,
+                version_tag: Some(row.version),
+                install_root,
+            }
+        }
+        None => FlutterStepParams {
+            method: map_install_method(state.settings.toolchain.install_method()),
+            channel: state.settings.toolchain.channel.clone(),
+            version_tag: None,
+            install_root,
+        },
+    };
+
+    // Flip UI to Running immediately before the async round-trip.
+    // begin_step clears any prior install_task and bumps run_seq (F8).
+    state.install_wizard_state.begin_step(kind);
+
+    // Mint the cancellation token synchronously (F3 fix) and store it
+    // in state immediately so `Esc` can fire it even before the
+    // `WizardInstallTaskReady` message arrives.
+    let cancel_token = CancellationToken::new();
+    let run_seq = state.install_wizard_state.run_seq;
+    state.install_wizard_state.install_task = Some(InstallTaskHandle {
+        cancel: cancel_token.clone(),
+        join: None,
+    });
+
+    UpdateResult::action(UpdateAction::RunWizardStep {
+        kind,
+        run_seq,
+        cancel_token,
+        install: Some(params),
+        path_bin_dir: None,
+        android_sdk_root: None,
+        android: None,
+    })
+}
+
 /// Convert the config-layer `InstallMethod` to the daemon-layer equivalent.
 ///
 /// Both enums have the same variants (`GitClone`, `Archive`) but live in
@@ -1134,6 +1199,9 @@ mod tests {
         state
     }
 
+    /// Phase 6: Enter on FlutterSdk with no version choice opens the picker
+    /// (two-step flow) rather than installing immediately. Once a version is
+    /// pinned, Enter dispatches the install.
     #[test]
     fn test_run_selected_flutter_step_dispatches_install_action() {
         let mut state = state_with_preflight();
@@ -1145,6 +1213,25 @@ mod tests {
             "precondition: selected step must be FlutterSdk"
         );
 
+        // No choice yet → Enter opens the picker and fetches the manifest.
+        let open = handle_run_selected_step(&mut state);
+        assert!(
+            state.install_wizard_state.version_picker.visible,
+            "Enter with no choice must open the picker"
+        );
+        assert!(
+            matches!(open.action, Some(UpdateAction::FetchFlutterReleaseManifest)),
+            "must dispatch the manifest fetch on open; got {:?}",
+            open.action
+        );
+        assert!(
+            !state.install_wizard_state.is_step_running(),
+            "no install should run before a version is chosen"
+        );
+
+        // Pin a choice and close the picker, then Enter dispatches the install.
+        pin_flutter_version(&mut state);
+        state.install_wizard_state.version_picker.close();
         let result = handle_run_selected_step(&mut state);
 
         assert!(
@@ -1157,7 +1244,7 @@ mod tests {
                     ..
                 })
             ),
-            "FlutterSdk step must dispatch RunWizardStep with install params; got {:?}",
+            "FlutterSdk step with a chosen version must dispatch RunWizardStep; got {:?}",
             result.action
         );
         // UI must have already flipped to Running.
@@ -1170,8 +1257,9 @@ mod tests {
     #[test]
     fn test_run_selected_noop_while_running() {
         let mut state = state_with_preflight();
-        // Select and start the FlutterSdk step.
+        // Select the FlutterSdk step, pin a version, and start it.
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state);
         handle_run_selected_step(&mut state);
         assert!(state.install_wizard_state.is_step_running());
 
@@ -1373,6 +1461,7 @@ mod tests {
     fn test_step_started_preserves_install_task_and_run_seq() {
         let mut state = state_with_preflight();
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
 
         // Drive handle_run_selected_step — this calls begin_step, mints the
         // token, and stores install_task synchronously.
@@ -1432,6 +1521,7 @@ mod tests {
     fn test_stale_cross_kind_step_started_is_noop() {
         let mut state = state_with_preflight();
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
 
         // Simulate Run B: begin_step(FlutterSdk) with seq = N (e.g. 2).
         // We do this via handle_run_selected_step to get a real install_task.
@@ -1482,6 +1572,7 @@ mod tests {
     fn test_step_started_with_current_seq_same_kind_preserves_task() {
         let mut state = state_with_preflight();
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
 
         // Drive handle_run_selected_step to get a real install_task.
         let result = handle_run_selected_step(&mut state);
@@ -1706,6 +1797,22 @@ mod tests {
             .position(|s| s.kind == kind)
             .expect("step kind not found in wizard steps");
         state.install_wizard_state.selected_index = idx;
+    }
+
+    /// Phase 6: pin a confirmed version choice on the picker so that
+    /// `handle_run_selected_step` dispatches the install immediately (rather than
+    /// opening the picker). Mirrors the post-confirm state the picker leaves
+    /// behind. Used by tests that exercise the FlutterSdk run/token/seq mechanics
+    /// after a version has been chosen.
+    fn pin_flutter_version(state: &mut AppState) {
+        state.install_wizard_state.version_picker.selected_release =
+            Some(crate::install_wizard::PickerRow {
+                version: "3.24.0".to_string(),
+                channel: "stable".to_string(),
+                release_date: None,
+                arch: None,
+                git_only: false,
+            });
     }
 
     #[test]
@@ -2872,6 +2979,7 @@ mod tests {
     fn run_selected_step_stores_token_synchronously() {
         let mut state = state_with_preflight();
         state.install_wizard_state.selected_index = 2; // FlutterSdk
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
 
         let result = handle_run_selected_step(&mut state);
 
@@ -2900,6 +3008,7 @@ mod tests {
     fn cancel_during_early_window_fires_token_and_resets_to_idle() {
         let mut state = state_with_preflight();
         state.install_wizard_state.selected_index = 2; // FlutterSdk
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
         handle_run_selected_step(&mut state);
         assert!(state.install_wizard_state.is_step_running(), "precondition");
         assert!(
@@ -2940,6 +3049,7 @@ mod tests {
     async fn install_task_ready_matching_seq_upgrades_join() {
         let mut state = state_with_preflight();
         state.install_wizard_state.selected_index = 2; // FlutterSdk
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
         handle_run_selected_step(&mut state);
 
         let current_seq = state.install_wizard_state.run_seq;
@@ -2972,6 +3082,7 @@ mod tests {
     async fn install_task_ready_kind_mismatch_is_discarded() {
         let mut state = state_with_preflight();
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
         handle_run_selected_step(&mut state);
 
         let current_seq = state.install_wizard_state.run_seq;
@@ -3006,6 +3117,7 @@ mod tests {
     async fn install_task_ready_seq_mismatch_is_discarded() {
         let mut state = state_with_preflight();
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
         handle_run_selected_step(&mut state);
 
         let stale_seq = state.install_wizard_state.run_seq - 1; // seq before this run
@@ -3038,6 +3150,7 @@ mod tests {
     async fn install_task_ready_after_terminal_does_not_reinstall_handle() {
         let mut state = state_with_preflight();
         select_step(&mut state, WizardStepKind::FlutterSdk);
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
         let result = handle_run_selected_step(&mut state);
         let run_seq = state.install_wizard_state.run_seq;
         let _action = result.action;
@@ -3073,6 +3186,7 @@ mod tests {
     async fn cancel_retry_same_kind_late_ready_for_a_is_discarded() {
         let mut state = state_with_preflight();
         state.install_wizard_state.selected_index = 2; // FlutterSdk
+        pin_flutter_version(&mut state); // Phase 6: bypass the picker gate
 
         // Start run A.
         handle_run_selected_step(&mut state);

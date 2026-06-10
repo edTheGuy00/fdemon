@@ -1225,6 +1225,13 @@ pub fn handle_action(
             });
         }
 
+        // ── Install Wizard — Version Picker manifest fetch (Phase 6) ───────────
+        // No-op stub: the executor body lands in Task 04 (it downloads the
+        // platform-appropriate release manifest and emits FlutterManifestFetched
+        // / FlutterManifestFetchFailed). Leaving the arm here keeps the
+        // exhaustive UpdateAction match compiling now that the variant exists.
+        UpdateAction::FetchFlutterReleaseManifest => { /* Task 04 fills the body */ }
+
         // ── Flutter Version Panel ─────────────────────────────────────────────
         UpdateAction::ScanInstalledSdks { active_sdk_root } => {
             let msg_tx = msg_tx.clone();

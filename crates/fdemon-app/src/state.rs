@@ -1778,6 +1778,11 @@ impl AppState {
                 j.abort();
             }
         }
+        // Phase 6: fully reset the version picker on wizard hide so a re-open
+        // starts fresh (manifest dropped, selection cleared). Esc with the
+        // picker open never reaches here — the key intercept routes it to
+        // InstallWizardVersionPickerClose instead.
+        self.install_wizard_state.version_picker.reset();
         self.install_wizard_state.visible = false;
         self.ui_mode = UiMode::Normal;
     }

@@ -430,7 +430,37 @@ fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Messag
 /// - `[` — select the previous guided command (`InstallWizardPrevCommand`)
 /// - `]` — select the next guided command (`InstallWizardNextCommand`)
 /// - `+` — open the new-session dialog (`OpenNewSessionDialog`), only when no step is running
+/// - `v` — open the Flutter version picker (`InstallWizardOpenVersionPicker`); no-ops off the
+///   FlutterSdk step (the handler enforces that)
+///
+/// When the version picker overlay is visible it intercepts ALL keys (the
+/// tag-filter intercept pattern), mapping Esc/k/j/Tab/r/Enter to its own
+/// messages, keeping `Ctrl+C` as a force-quit, and swallowing everything else so
+/// no underlying wizard message fires.
 fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message> {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Version picker overlay intercepts ALL keys when visible (Phase 6).
+    // ─────────────────────────────────────────────────────────────────────────
+    if state.install_wizard_state.version_picker.visible {
+        return match key {
+            // Close the picker.
+            InputKey::Esc => Some(Message::InstallWizardVersionPickerClose),
+            // Navigate.
+            InputKey::Up | InputKey::Char('k') => Some(Message::InstallWizardVersionPickerUp),
+            InputKey::Down | InputKey::Char('j') => Some(Message::InstallWizardVersionPickerDown),
+            // Cycle channel tab.
+            InputKey::Tab => Some(Message::InstallWizardVersionPickerNextTab),
+            // Re-fetch the manifest.
+            InputKey::Char('r') => Some(Message::InstallWizardVersionPickerRefetch),
+            // Confirm the selection.
+            InputKey::Enter => Some(Message::InstallWizardVersionPickerConfirm),
+            // Never trap quit.
+            InputKey::CharCtrl('c') => Some(Message::Quit),
+            // Swallow everything else while the picker is open.
+            _ => None,
+        };
+    }
+
     match key {
         // ── Global keys ───────────────────────────────────────────────────────
         InputKey::CharCtrl('c') => Some(Message::Quit),
@@ -479,6 +509,9 @@ fn handle_key_install_wizard(key: InputKey, state: &AppState) -> Option<Message>
         // Cycle through multiple guided commands on a step (Phase 4, Task 04).
         InputKey::Char('[') => Some(Message::InstallWizardPrevCommand),
         InputKey::Char(']') => Some(Message::InstallWizardNextCommand),
+        // Open the Flutter version picker (Phase 6). The handler no-ops this off
+        // the FlutterSdk step and refuses while a step is running.
+        InputKey::Char('v') => Some(Message::InstallWizardOpenVersionPicker),
         // Open the new-session dialog when idle (makes the "press + to start a session"
         // hint truthful). Ignored while a wizard step is actively running, mirroring the
         // Esc guard above.
@@ -3920,5 +3953,86 @@ mod install_wizard_key_tests {
             matches!(msg, Some(Message::InstallWizardCollapse)),
             "Left must emit InstallWizardCollapse, got: {msg:?}"
         );
+    }
+
+    // ── Version Picker key routing (Phase 6) ────────────────────────────────
+
+    /// `v` (picker not visible) must emit the open message.
+    #[test]
+    fn v_emits_open_version_picker() {
+        let state = make_install_wizard_state_with_report();
+        let msg = handle_key(&state, InputKey::Char('v'));
+        assert!(
+            matches!(msg, Some(Message::InstallWizardOpenVersionPicker)),
+            "'v' must emit InstallWizardOpenVersionPicker, got: {msg:?}"
+        );
+    }
+
+    /// Build a state with the picker overlay visible.
+    fn make_state_with_picker_visible() -> AppState {
+        let mut state = make_install_wizard_state_with_report();
+        state.install_wizard_state.version_picker.visible = true;
+        state
+    }
+
+    /// While the picker is visible, every mapped key routes to a picker message
+    /// and Ctrl+C still quits.
+    #[test]
+    fn picker_visible_intercepts_all_keys() {
+        let state = make_state_with_picker_visible();
+
+        assert!(matches!(
+            handle_key(&state, InputKey::Esc),
+            Some(Message::InstallWizardVersionPickerClose)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Up),
+            Some(Message::InstallWizardVersionPickerUp)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('k')),
+            Some(Message::InstallWizardVersionPickerUp)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Down),
+            Some(Message::InstallWizardVersionPickerDown)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('j')),
+            Some(Message::InstallWizardVersionPickerDown)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Tab),
+            Some(Message::InstallWizardVersionPickerNextTab)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('r')),
+            Some(Message::InstallWizardVersionPickerRefetch)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Enter),
+            Some(Message::InstallWizardVersionPickerConfirm)
+        ));
+        // Ctrl+C must still force-quit.
+        assert!(matches!(
+            handle_key(&state, InputKey::CharCtrl('c')),
+            Some(Message::Quit)
+        ));
+    }
+
+    /// While the picker is visible, unmapped keys are swallowed (no underlying
+    /// wizard message fires).
+    #[test]
+    fn picker_visible_swallows_unmapped_keys() {
+        let state = make_state_with_picker_visible();
+        // 'c' would normally copy a command; 'l'/'h' navigate the submenu; '+'
+        // opens the session dialog. None must fire while the picker is visible.
+        for ch in ['c', 'l', 'h', '+', 'v', ']'] {
+            let msg = handle_key(&state, InputKey::Char(ch));
+            assert!(
+                msg.is_none(),
+                "key {ch:?} must be swallowed while the picker is visible, got {msg:?}"
+            );
+        }
     }
 }

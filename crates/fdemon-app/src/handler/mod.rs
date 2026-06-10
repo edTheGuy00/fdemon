@@ -680,6 +680,15 @@ pub enum UpdateAction {
         web_browser_executable: Option<String>,
     },
 
+    /// Fetch the Flutter release manifest for the version picker (Phase 6).
+    ///
+    /// No payload — the host platform/arch is detected executor-side (mirrors the
+    /// `RunToolchainPreflight` precedent). The executor downloads the
+    /// platform-appropriate `releases_*.json` manifest and emits
+    /// `Message::FlutterManifestFetched` on success or
+    /// `Message::FlutterManifestFetchFailed` on error.
+    FetchFlutterReleaseManifest,
+
     /// Execute a wizard step asynchronously (Flutter SDK install or PATH config).
     ///
     /// The executor task (task 08) reads `kind` to decide which sub-executor to
@@ -833,6 +842,14 @@ pub struct FlutterStepParams {
     pub method: fdemon_daemon::toolchain::InstallMethod,
     /// The Flutter channel or version string (e.g. `"stable"`, `"3.24.0"`).
     pub channel: String,
+    /// Optional pinned version selected via the version picker (Phase 6).
+    ///
+    /// When `Some`, it is the exact manifest version (e.g. `"3.24.0"`) or a
+    /// git ref name (`"master"` / `"main"`). It overrides `channel` for both the
+    /// install directory name and the git ref — but **per-run only**: it does not
+    /// mutate `settings.toolchain.channel`. `None` for legacy/default installs,
+    /// which fall back to `channel`.
+    pub version_tag: Option<String>,
     /// Root directory where the SDK should be installed.
     ///
     /// `None` → the executor resolves a platform-appropriate default
