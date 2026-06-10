@@ -2841,7 +2841,17 @@ mod tests {
     /// This test exercises the real network path (or its failure mode), so it
     /// accepts both outcomes.  The important contract is that one of the two
     /// expected messages arrives within a reasonable timeout.
+    ///
+    /// # Note
+    ///
+    /// This test is ignored in the default suite because it performs a live
+    /// HTTPS GET to storage.googleapis.com. For hermetic test coverage of the
+    /// fetch implementation, see the wiremock-backed tests in
+    /// `fdemon-daemon/src/toolchain/flutter_install.rs` (fetch_release_manifest_from).
+    /// To run this test in a connected environment, use:
+    /// `cargo test -p fdemon-app --lib -- --ignored test_fetch_flutter_release_manifest`
     #[tokio::test]
+    #[ignore = "live network: requires outbound HTTPS to storage.googleapis.com; run with --ignored"]
     async fn test_fetch_flutter_release_manifest_emits_fetched_or_failed() {
         let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel(16);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
