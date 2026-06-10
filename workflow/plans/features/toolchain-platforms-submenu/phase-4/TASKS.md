@@ -98,11 +98,11 @@ surfaces as **Partial (warning)**, never **Missing** — non-blocking, exactly l
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-daemon-xcode-cocoapods-detection](tasks/01-daemon-xcode-cocoapods-detection.md) | Not Started | - | 3–4h | `fdemon-daemon/src/toolchain/{types,mod}.rs`, `toolchain/checks/{ios,mod}.rs` (+ minimal `fdemon-app/install_wizard/state.rs` stub arm) |
-| 2 | [02-app-handler-ios-macos-arms](tasks/02-app-handler-ios-macos-arms.md) | Not Started | 1 | 1–2h | `fdemon-app/src/handler/install_wizard/actions.rs` |
-| 3 | [03-app-build-steps-ios-macos-leaves](tasks/03-app-build-steps-ios-macos-leaves.md) | Not Started | 1 | 3–4h | `fdemon-app/src/install_wizard/state.rs` |
-| 4 | [04-tui-ios-macos-caption-and-hint](tasks/04-tui-ios-macos-caption-and-hint.md) | Not Started | 3 | 1–2h | `fdemon-tui/src/widgets/install_wizard/step_detail.rs` |
-| 5 | [05-update-docs](tasks/05-update-docs.md) | Not Started | 1, 2, 3, 4 | 1h | `docs/ARCHITECTURE.md` |
+| 1 | [01-daemon-xcode-cocoapods-detection](tasks/01-daemon-xcode-cocoapods-detection.md) | ✅ Done (validated) | - | 3–4h | `fdemon-daemon/src/toolchain/{types,mod}.rs`, `toolchain/checks/{ios,mod}.rs` (+ minimal `fdemon-app/install_wizard/state.rs` stub arm) |
+| 2 | [02-app-handler-ios-macos-arms](tasks/02-app-handler-ios-macos-arms.md) | ✅ Done (validated, merged) | 1 | 1–2h | `fdemon-app/src/handler/install_wizard/actions.rs` |
+| 3 | [03-app-build-steps-ios-macos-leaves](tasks/03-app-build-steps-ios-macos-leaves.md) | ✅ Done (validated, merged) | 1 | 3–4h | `fdemon-app/src/install_wizard/state.rs` |
+| 4 | [04-tui-ios-macos-caption-and-hint](tasks/04-tui-ios-macos-caption-and-hint.md) | ✅ Done (validated) | 3 | 1–2h | `fdemon-tui/src/widgets/install_wizard/step_detail.rs` |
+| 5 | [05-update-docs](tasks/05-update-docs.md) | ✅ Done (validated) | 1, 2, 3, 4 | 1h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

@@ -132,4 +132,31 @@ New tests in `actions.rs` (mirror `test_run_selected_flutter_step_dispatches_ins
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/install_wizard/actions.rs` | Split `PlatformIos \| PlatformMacos \| PlatformWindows` placeholder arm: folded iOS/macOS into `PlatformWeb` shared guided-only arm; isolated Windows as a standalone "later phase" placeholder; updated existing `test_ios_macos_windows_still_show_later_phase` → `test_windows_still_shows_later_phase`; added three new iOS/macOS tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fold PlatformWeb into shared arm**: The task said folding Web into the shared iOS/macOS arm was "optional but tidy" since the bodies are identical. I folded all three into one arm (`PlatformIos | PlatformMacos | PlatformWeb`) which removes code duplication and matches the stated intent. The existing PlatformWeb tests still pass.
+
+2. **Existing test renamed**: `test_ios_macos_windows_still_show_later_phase` was checking that all three iOS/macOS/Windows variants show "later phase". After the split, iOS/macOS are guided-only. The test was renamed to `test_windows_still_shows_later_phase` and updated to use a Windows report (so `PlatformWindows` appears in the step list), verifying just the Windows "later phase" behaviour.
+
+3. **macOS report needed for iOS/macOS tests**: `PlatformIos` and `PlatformMacos` are host-gated to `HostPlatform::MacOs` in `build_steps`. Tests use a `make_macos_report()` helper that sets `platform: HostPlatform::MacOs` so those steps appear in the expanded step list.
+
+4. **Guided commands injected directly**: Task 03 (which populates real guided commands for iOS/macOS) hasn't landed yet. Tests inject `GuidedCommand` entries directly onto the step after `apply_report`, mirroring the same pattern used by the PlatformWeb tests.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib` — 3005 passed, 0 failed
+- `cargo fmt --all` — clean
+- `cargo clippy -p fdemon-app -- -D warnings` — clean
+
+### Risks/Limitations
+
+1. **No runtime change until Task 03 lands**: The `PlatformIos`/`PlatformMacos` steps currently have empty `guided_commands` (set in `build_steps`). The `has_guided` guard means Enter on those steps is silently a no-op until Task 03 populates real commands — which is the correct behaviour per the task notes.

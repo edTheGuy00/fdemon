@@ -218,4 +218,43 @@ Build `ToolchainReport` fixtures with `platform: HostPlatform::MacOs` and synthe
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** worktree-agent-a6eba1db8a46e26e3
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/install_wizard/state.rs` | Added `platform_ios_components` + `platform_macos_components` Vec declarations; replaced Task 01 stub arm with dual-bucket routing for `XcodeTools | CocoaPods`; added `ios_status` + `macos_status` with `Missing → Partial` cap; added `xcode_guided_commands()` builder function; replaced placeholder macOS leaf pushes with live bodies carrying real components and guided commands; updated `build_steps` doc comment; added 8 unit tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guided commands built before components move**: `xcode_guided_commands(report, ...)` reads `report.components` (not the local Vec), so there's no borrow issue. The local `platform_ios_components` / `platform_macos_components` Vecs are moved into the `WizardStep` struct after guided commands are computed — satisfying the borrow checker cleanly.
+
+2. **Guided command text uses canonical path**: The `xcode-select -s /Applications/Xcode.app/Contents/Developer` path is hardcoded; users with a non-default Xcode location will need to adjust. This matches the task note ("Acceptable — flag in completion summary").
+
+3. **`all_components_ok()` stays strict**: Per the task notes, `XcodeTools`/`CocoaPods` are not special-cased. A missing Xcode makes `all_components_ok()` return `false` on a macOS host — correct and non-blocking since handback gates on `flutter_now_live()` only.
+
+4. **Non-macOS Vecs just get dropped**: On non-macOS reports, `platform_ios_components` and `platform_macos_components` remain empty and are dropped at end of scope — no overhead.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed (clean compile)
+- `cargo test -p fdemon-app --lib` — Passed (3010 tests, 0 failed)
+- `cargo fmt --all` — Passed (clean)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+
+New tests added (8):
+- `test_ios_macos_leaves_present_on_macos_expanded` — both leaves with indent=1 and both components
+- `test_ios_macos_missing_xcode_caps_to_partial` — Missing → Partial cap, guided commands non-empty
+- `test_xcode_ok_yields_no_guided_commands` — both Ok → Ok status, empty guided commands
+- `test_ios_leaf_includes_download_platform_macos_does_not` — iOS has `-downloadPlatform iOS`, macOS does not
+- `test_cocoapods_only_missing_emits_only_cocoapods_command` — only CocoaPods command when XcodeTools Ok
+- `test_no_ios_macos_leaves_on_linux_report` — no iOS/macOS leaves on Linux, no panic
+- `test_platforms_parent_rolls_up_to_partial_from_xcode` — parent Partial, flutter_now_live() true
+- `test_ios_macos_leaves_absent_when_no_xcode_components` — Pending status when no component data, collapsed mode correct
+
+### Risks/Limitations
+
+1. **Hardcoded Xcode path**: The `/Applications/Xcode.app` path in guided commands is canonical but won't match users who installed Xcode elsewhere. Acceptable per task spec — flagged here.
+2. **Shared probe**: Both iOS and macOS leaves always have the same status (`ios_status == macos_status`). This is intentional per the task design — both leaves display the same shared probe data.

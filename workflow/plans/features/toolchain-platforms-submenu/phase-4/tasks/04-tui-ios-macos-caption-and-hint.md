@@ -112,4 +112,26 @@ Mirror `test_step_detail_shows_guided_block_for_prerequisites_step_with_commands
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/install_wizard/step_detail.rs` | Added `PlatformIos` and `PlatformMacos` arms to `step_caption()`; added both variants to the `matches!()` allowlist in `render_action_hint()`; added 10 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact match to task spec**: Both edits are precisely as described in the task — one new arm per variant in `step_caption()` and two new variants in the `matches!()` guard in `render_action_hint()`. No other functions were modified.
+2. **Reuse of existing `_ => false` pattern**: `is_executable()` already returns `false` for `PlatformIos`/`PlatformMacos` via the wildcard arm — no new arm needed, consistent with the task note.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib` — Passed (1502 tests, 0 failed)
+- `cargo fmt --all -- --check` — Passed (clean after `cargo fmt --all`)
+- `cargo clippy -p fdemon-tui -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No iOS/macOS detection yet**: The captions and suppression logic are in place, but actual guided commands for these leaves depend on Task 03 (daemon detection) being reflected in state. Tests use hand-crafted `InstallWizardState` with synthetic guided commands to verify rendering independently of detection.

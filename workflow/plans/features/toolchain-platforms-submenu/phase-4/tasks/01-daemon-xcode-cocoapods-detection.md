@@ -173,4 +173,38 @@ New tests to add in `checks/ios.rs`:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** feat/toolchain-platforms-submenu
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/toolchain/types.rs` | Added `XcodeTools` + `CocoaPods` variants to `ComponentKind`, two `Display` arms, two assertions in `test_component_kind_display` |
+| `crates/fdemon-daemon/src/toolchain/checks/ios.rs` | **NEW** — `check_ios` probe, `probe_xcode_tools`, `probe_cocoapods`, `is_full_xcode_path` classifier, 7 unit tests |
+| `crates/fdemon-daemon/src/toolchain/checks/mod.rs` | Added `mod ios; pub use ios::check_ios;` |
+| `crates/fdemon-daemon/src/toolchain/mod.rs` | Added `check_ios` to `tokio::join!` fan-out; `components.extend(ios_checks)` after base 10; macOS-gated presence assertions in test |
+| `crates/fdemon-app/src/install_wizard/state.rs` | No-op stub arm `ComponentKind::XcodeTools \| ComponentKind::CocoaPods => {}` in `build_steps` match |
+
+### Notable Decisions/Tradeoffs
+
+1. **`is_full_xcode_path` handles versioned app bundles**: The original task spec mentioned `Xcode.app/Contents/Developer` but real installations can use names like `Xcode_15.2.app`. Implemented a more robust classifier that checks for `.app/Contents/Developer` with a bundle name starting with `Xcode`, so versioned bundles are correctly identified as full Xcode installs.
+
+2. **`XcodeSelectResult::FullXcode` is unit type**: The path is only needed for the CLT-only diagnostic message; once confirmed as full Xcode, `xcodebuild -version` provides the version detail. Changed to `FullXcode` (no payload) to eliminate the dead_code warning.
+
+3. **Pre-existing test failure**: `test_run_preflight_nonexistent_sdk_path_does_not_panic` was already failing before this task (confirmed by stash/restore). This host has Flutter on PATH that `find_flutter_sdk` resolves even when a nonexistent explicit path is given plus a blocked FVM cache. Not introduced by this task.
+
+### Testing Performed
+
+- `cargo build --workspace` — Passed (no warnings)
+- `cargo test -p fdemon-daemon --lib toolchain::checks::ios` — Passed (7/7 tests)
+- `cargo test -p fdemon-daemon --lib toolchain` — 416 passed, 1 pre-existing failure (not introduced)
+- `cargo test --workspace --lib` — 1194 passed, 1 pre-existing failure (not introduced)
+- `cargo fmt --all` — Passed (clean)
+- `cargo clippy --workspace -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `test_run_preflight_nonexistent_sdk_path_does_not_panic` fails on this Linux dev host because Flutter is found via PATH strategies even when the explicit path is nonexistent and FVM cache is blocked. This was pre-existing before this task and is not related to the iOS probe changes.
+
+2. **macOS tests not exercised on Linux CI**: The `test_check_ios_macos_returns_two_components` and macOS-gated preflight presence assertions are `#[cfg(target_os = "macos")]` — they run only on macOS. The cross-host tests (empty Vec on Linux/Windows, Unknown checks, path classifier) run everywhere.
