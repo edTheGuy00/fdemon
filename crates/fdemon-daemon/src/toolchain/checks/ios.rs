@@ -112,6 +112,43 @@ pub async fn check_ios(platform: &HostPlatform) -> Vec<ComponentCheck> {
 
 // ─── Xcode probe (five-gate sequence) ────────────────────────────────────────
 
+/// Map a [`XcodeSelectResult`] to an early-exit [`ComponentCheck`], or `None`
+/// if the result is [`XcodeSelectResult::FullXcode`] and probing should
+/// continue to gate 2.
+///
+/// Extracted as a pure helper so the gate-1 status mapping can be unit-tested
+/// on any host without spawning processes.  Called exclusively by
+/// [`probe_xcode_tools`].
+fn xcode_select_result_to_check(result: XcodeSelectResult) -> Option<ComponentCheck> {
+    match result {
+        XcodeSelectResult::NotFound => Some(ComponentCheck {
+            kind: ComponentKind::XcodeTools,
+            status: ComponentStatus::Missing,
+            detail: "xcode-select not found — Xcode or CLT not installed".to_string(),
+        }),
+        XcodeSelectResult::NoActiveTools => Some(ComponentCheck {
+            kind: ComponentKind::XcodeTools,
+            status: ComponentStatus::Missing,
+            detail: "xcode-select reports no active developer directory — Xcode or CLT not installed"
+                .to_string(),
+        }),
+        XcodeSelectResult::CltOnly(path) => Some(ComponentCheck {
+            kind: ComponentKind::XcodeTools,
+            status: ComponentStatus::Missing,
+            detail: format!(
+                "Only Xcode Command Line Tools found ({}). Install full Xcode from the App Store.",
+                path
+            ),
+        }),
+        XcodeSelectResult::Unknown => Some(ComponentCheck {
+            kind: ComponentKind::XcodeTools,
+            status: ComponentStatus::Error,
+            detail: "xcode-select -p timed out or failed — could not determine the active developer directory".to_string(),
+        }),
+        XcodeSelectResult::FullXcode => None,
+    }
+}
+
 /// Probe full Xcode IDE installation.
 ///
 /// Five-gate detection sequence:
@@ -130,43 +167,8 @@ async fn probe_xcode_tools() -> ComponentCheck {
     // Gate 1: check what xcode-select resolves to.
     let select_path = probe_xcode_select_path().await;
 
-    match select_path {
-        XcodeSelectResult::NotFound => {
-            return ComponentCheck {
-                kind: ComponentKind::XcodeTools,
-                status: ComponentStatus::Missing,
-                detail: "xcode-select not found — Xcode or CLT not installed".to_string(),
-            };
-        }
-        XcodeSelectResult::NoActiveTools => {
-            return ComponentCheck {
-                kind: ComponentKind::XcodeTools,
-                status: ComponentStatus::Missing,
-                detail:
-                    "xcode-select reports no active developer directory — Xcode or CLT not installed"
-                        .to_string(),
-            };
-        }
-        XcodeSelectResult::CltOnly(path) => {
-            return ComponentCheck {
-                kind: ComponentKind::XcodeTools,
-                status: ComponentStatus::Missing,
-                detail: format!(
-                    "Only Xcode Command Line Tools found ({}). Install full Xcode from the App Store.",
-                    path
-                ),
-            };
-        }
-        XcodeSelectResult::Unknown => {
-            return ComponentCheck {
-                kind: ComponentKind::XcodeTools,
-                status: ComponentStatus::Unknown,
-                detail: "xcode-select -p timed out or failed".to_string(),
-            };
-        }
-        XcodeSelectResult::FullXcode => {
-            // Full Xcode path found — proceed to gate 2 (xcodebuild -version).
-        }
+    if let Some(check) = xcode_select_result_to_check(select_path) {
+        return check;
     }
 
     // Gate 2: run xcodebuild -version to verify Xcode is reachable + get version.
@@ -283,8 +285,9 @@ pub(super) fn is_full_xcode_path(path: &str) -> bool {
 /// or an early-exit `ComponentCheck` on failure.
 ///
 /// This is a helper called by [`probe_xcode_tools`] between gate 1 and the
-/// three usability gates.  Separating it from [`probe_xcodebuild_version_detail`]
-/// lets the caller handle the error path with an early `return`.
+/// three usability gates.  Returning `Result<String, ComponentCheck>` lets
+/// [`probe_xcode_tools`] early-return on a gate-2 failure and thread the
+/// version string into [`classify_xcode_gates`].
 async fn probe_xcodebuild_version_detail() -> Result<String, ComponentCheck> {
     let result = tokio::time::timeout(PROBE_TIMEOUT, async {
         Command::new("xcodebuild")
@@ -334,7 +337,7 @@ async fn probe_xcodebuild_version_detail() -> Result<String, ComponentCheck> {
         Ok(Err(e)) => Err(ComponentCheck {
             kind: ComponentKind::XcodeTools,
             status: ComponentStatus::Error,
-            detail: format!("xcodebuild probe failed: {e}"),
+            detail: strip_and_truncate(&format!("xcodebuild probe failed: {e}")),
         }),
         Err(_) => Err(ComponentCheck {
             kind: ComponentKind::XcodeTools,
@@ -402,8 +405,8 @@ async fn probe_xcode_first_launch() -> GateResult {
 ///
 /// The `booted` filter avoids the known `simctl list` hang on some Xcode
 /// versions while still exercising the simctl path.  Exit 0 = reachable
-/// (`Pass`). Non-zero or timeout = `Unknown` (or `Fail` for definitive
-/// non-zero exits).
+/// (`Pass`). Non-zero exit = unreachable (`Fail`). Timeout or spawn error
+/// = `Unknown`.
 async fn probe_simctl() -> GateResult {
     let result = tokio::time::timeout(PROBE_TIMEOUT, async {
         Command::new("xcrun")
@@ -466,10 +469,10 @@ fn classify_xcode_gates(
         return ComponentCheck {
             kind: ComponentKind::XcodeTools,
             status: ComponentStatus::Missing,
-            detail: format!(
+            detail: strip_and_truncate(&format!(
                 "{} — license not accepted; run: sudo xcodebuild -license accept",
                 version_detail
-            ),
+            )),
         };
     }
 
@@ -478,10 +481,10 @@ fn classify_xcode_gates(
         return ComponentCheck {
             kind: ComponentKind::XcodeTools,
             status: ComponentStatus::Missing,
-            detail: format!(
+            detail: strip_and_truncate(&format!(
                 "{} — first-launch incomplete; run: sudo xcodebuild -runFirstLaunch",
                 version_detail
-            ),
+            )),
         };
     }
 
@@ -490,10 +493,10 @@ fn classify_xcode_gates(
         return ComponentCheck {
             kind: ComponentKind::XcodeTools,
             status: ComponentStatus::Missing,
-            detail: format!(
+            detail: strip_and_truncate(&format!(
                 "{} — simctl unreachable; run: sudo xcodebuild -runFirstLaunch",
                 version_detail
-            ),
+            )),
         };
     }
 
@@ -510,10 +513,10 @@ fn classify_xcode_gates(
     ComponentCheck {
         kind: ComponentKind::XcodeTools,
         status: ComponentStatus::Missing,
-        detail: format!(
+        detail: strip_and_truncate(&format!(
             "{} — could not verify {}; re-run preflight or check Xcode manually",
             version_detail, gate_name
-        ),
+        )),
     }
 }
 
@@ -565,7 +568,7 @@ async fn probe_cocoapods() -> ComponentCheck {
         Ok(Err(e)) => ComponentCheck {
             kind: ComponentKind::CocoaPods,
             status: ComponentStatus::Error,
-            detail: format!("pod probe failed: {e}"),
+            detail: strip_and_truncate(&format!("pod probe failed: {e}")),
         },
         Err(_) => ComponentCheck {
             kind: ComponentKind::CocoaPods,
@@ -934,5 +937,167 @@ mod tests {
             ComponentStatus::Ok,
             "all-Unknown must not yield Ok"
         );
+    }
+
+    // ── AI-4: simctl remediation assertion ────────────────────────────────────
+
+    /// simctl Fail detail must include the sudo xcodebuild -runFirstLaunch
+    /// remediation command (mirrors the license / first-launch test pattern).
+    #[test]
+    fn test_classify_xcode_gates_simctl_fail_detail_contains_remediation() {
+        let version = "Xcode 15.2";
+        let check = classify_xcode_gates(
+            version,
+            GateResult::Pass,
+            GateResult::Pass,
+            GateResult::Fail,
+        );
+        assert_eq!(check.status, ComponentStatus::Missing);
+        assert!(
+            check.detail.contains("sudo xcodebuild -runFirstLaunch"),
+            "simctl-fail detail must contain the remediation command; got: {}",
+            check.detail
+        );
+    }
+
+    // ── AI-4: Fail beats Unknown across gates ─────────────────────────────────
+
+    /// A Fail in any position takes precedence over an Unknown in an earlier
+    /// position when the earlier non-passing gate is Unknown.
+    ///
+    /// `(license=Unknown, first_launch=Fail, simctl=Pass)` → `Missing` with
+    /// the first-launch detail (not the "could not verify license" Unknown detail).
+    #[test]
+    fn test_classify_xcode_gates_fail_beats_unknown_across_gates() {
+        let version = "Xcode 15.2";
+
+        // license=Unknown, first_launch=Fail, simctl=Pass → first-launch detail wins.
+        let check = classify_xcode_gates(
+            version,
+            GateResult::Unknown,
+            GateResult::Fail,
+            GateResult::Pass,
+        );
+        assert_eq!(
+            check.status,
+            ComponentStatus::Missing,
+            "first_launch Fail must yield Missing; got {:?}",
+            check.status
+        );
+        assert!(
+            check.detail.contains("first-launch incomplete"),
+            "detail must name the first-launch gate (Fail beats Unknown); got: {}",
+            check.detail
+        );
+        assert!(
+            !check.detail.contains("could not verify"),
+            "detail must not say 'could not verify' when a Fail is present; got: {}",
+            check.detail
+        );
+
+        // license=Pass, first_launch=Unknown, simctl=Fail → simctl detail wins.
+        let check2 = classify_xcode_gates(
+            version,
+            GateResult::Pass,
+            GateResult::Unknown,
+            GateResult::Fail,
+        );
+        assert_eq!(check2.status, ComponentStatus::Missing);
+        assert!(
+            check2.detail.contains("simctl unreachable"),
+            "detail must name the simctl gate (Fail beats Unknown); got: {}",
+            check2.detail
+        );
+    }
+
+    // ── AI-4: detail respects MAX_DETAIL_LEN ──────────────────────────────────
+
+    /// Composed `classify_xcode_gates` details must be capped at `MAX_DETAIL_LEN`
+    /// (256 — defined in `checks/mod.rs`) even when a very long `version_detail`
+    /// is supplied.
+    #[test]
+    fn test_classify_xcode_gates_detail_respects_max_len() {
+        // MAX_DETAIL_LEN is 256 (checks/mod.rs); keep in sync if that changes.
+        const MAX_LEN: usize = 256;
+
+        // Build a version_detail of exactly MAX_LEN chars.
+        // The composed detail will be longer (suffix appended) → triggers truncation.
+        let long_version = "x".repeat(MAX_LEN);
+
+        // Test each failing arm (license, first_launch, simctl, unknown-gate).
+        let arms: [(GateResult, GateResult, GateResult); 4] = [
+            (GateResult::Fail, GateResult::Pass, GateResult::Pass),
+            (GateResult::Pass, GateResult::Fail, GateResult::Pass),
+            (GateResult::Pass, GateResult::Pass, GateResult::Fail),
+            (GateResult::Unknown, GateResult::Pass, GateResult::Pass),
+        ];
+
+        for (license, first_launch, simctl) in arms {
+            let check = classify_xcode_gates(
+                &long_version,
+                license.clone(),
+                first_launch.clone(),
+                simctl.clone(),
+            );
+            assert_ne!(
+                check.status,
+                ComponentStatus::Ok,
+                "failing-gate must not yield Ok"
+            );
+            assert!(
+                check.detail.len() <= MAX_LEN,
+                "detail len {} exceeds MAX_DETAIL_LEN {} for arm ({:?},{:?},{:?}); detail: {}",
+                check.detail.len(),
+                MAX_LEN,
+                license,
+                first_launch,
+                simctl,
+                check.detail
+            );
+        }
+    }
+
+    // ── AI-4: gate-1 Unknown maps to ComponentStatus::Error ──────────────────
+
+    /// `XcodeSelectResult::Unknown` (gate-1 timeout/failure) must map to
+    /// `ComponentStatus::Error`, not `ComponentStatus::Unknown`, so the leaf
+    /// rolls up to a visible `Partial` rather than being silently ignored.
+    #[test]
+    fn test_xcode_select_result_unknown_yields_error_status() {
+        let check = xcode_select_result_to_check(XcodeSelectResult::Unknown);
+        let check = check.expect("Unknown must produce a ComponentCheck (not None)");
+        assert_eq!(
+            check.status,
+            ComponentStatus::Error,
+            "XcodeSelectResult::Unknown must yield ComponentStatus::Error; got {:?}",
+            check.status
+        );
+        assert_eq!(check.kind, ComponentKind::XcodeTools);
+        assert!(
+            !check.detail.is_empty(),
+            "detail must be non-empty for the Error check"
+        );
+    }
+
+    /// `XcodeSelectResult::FullXcode` must return `None` (probe continues).
+    #[test]
+    fn test_xcode_select_result_full_xcode_yields_none() {
+        let result = xcode_select_result_to_check(XcodeSelectResult::FullXcode);
+        assert!(
+            result.is_none(),
+            "FullXcode must return None (continue to gate 2)"
+        );
+    }
+
+    /// `XcodeSelectResult::NotFound` and `NoActiveTools` must yield `Missing`.
+    #[test]
+    fn test_xcode_select_result_not_found_and_no_active_tools_yield_missing() {
+        let not_found = xcode_select_result_to_check(XcodeSelectResult::NotFound)
+            .expect("NotFound must produce a check");
+        assert_eq!(not_found.status, ComponentStatus::Missing);
+
+        let no_active = xcode_select_result_to_check(XcodeSelectResult::NoActiveTools)
+            .expect("NoActiveTools must produce a check");
+        assert_eq!(no_active.status, ComponentStatus::Missing);
     }
 }
