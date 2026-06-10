@@ -98,6 +98,13 @@ pub fn Toolchain() -> impl IntoView {
 \u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2534}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}"}</pre>
                 </div>
 
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm mt-4">
+                    <strong>"Host-gated platform leaves:"</strong>
+                    " the ASCII mock above shows a macOS host (Android, Web, iOS, and macOS leaves \
+                     visible). On Windows hosts, the Windows leaf appears instead of iOS and macOS; \
+                     iOS and macOS leaves appear only when running fdemon on macOS."
+                </div>
+
                 <div class="overflow-hidden rounded-lg border border-slate-800 mt-4">
                     <table class="w-full text-left text-sm">
                         <thead class="bg-slate-900 text-slate-200">
@@ -384,7 +391,7 @@ pub fn Toolchain() -> impl IntoView {
                                         <td class="p-3 font-mono text-blue-400 whitespace-nowrap">"Install Xcode"</td>
                                         <td class="p-3 text-slate-400">
                                             <code>"open \"https://apps.apple.com/us/app/xcode/id497799835\""</code>
-                                            " (or "<code>"brew install --cask xcodes"</code>")."
+                                            " (or "<code>"brew install --cask xcodes && xcodes install --latest"</code>")."
                                         </td>
                                     </tr>
                                     <tr class="hover:bg-slate-900/50">
