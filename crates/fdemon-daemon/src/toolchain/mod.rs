@@ -184,6 +184,8 @@ pub async fn run_preflight(
     // Run async checks concurrently.
     // `check_ios` is independent of the Android-root checks and slots in safely
     // beside `check_web`. On non-macOS it returns an empty Vec (no-op extend).
+    // `check_windows` is independent of all other probes and slots in safely
+    // beside `check_ios`. On non-Windows it returns an empty Vec (no-op extend).
     let (
         git_check,
         jdk_check,
@@ -191,6 +193,7 @@ pub async fn run_preflight(
         prereq_check,
         web_check,
         ios_checks,
+        windows_checks,
         doctor_output,
     ) = tokio::join!(
         checks::check_git(),
@@ -199,6 +202,7 @@ pub async fn run_preflight(
         checks::check_prerequisites(&platform),
         checks::check_web(&platform, web_browser_executable),
         checks::check_ios(&platform),
+        checks::check_windows(&platform),
         capture_doctor_if_available(&maybe_exe),
     );
 
@@ -206,6 +210,7 @@ pub async fn run_preflight(
     // Flutter → Git → JDK → Android (cmdline, platform-tools, platform, build-tools, licenses)
     //   → Prerequisites → WebBrowser
     //   → XcodeTools, CocoaPods (macOS-only trailing entries via ios_checks extend)
+    //   → VisualStudioCpp (Windows-only trailing entry via windows_checks extend)
     let mut components = vec![
         flutter_check,
         git_check,
@@ -221,6 +226,9 @@ pub async fn run_preflight(
     // On macOS, appends XcodeTools + CocoaPods (12 total).
     // On Linux/Windows, ios_checks is empty — no-op.
     components.extend(ios_checks);
+    // On Windows, appends VisualStudioCpp (11 total on Windows).
+    // On Linux/macOS, windows_checks is empty — no-op.
+    components.extend(windows_checks);
 
     let report = ToolchainReport {
         platform,
@@ -321,6 +329,18 @@ mod tests {
                     .iter()
                     .any(|c| c.kind == ComponentKind::CocoaPods),
                 "macOS: expected CocoaPods component in preflight report"
+            );
+        }
+
+        // Windows-only: VisualStudioCpp must be present (Phase 5).
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                report
+                    .components
+                    .iter()
+                    .any(|c| c.kind == ComponentKind::VisualStudioCpp),
+                "Windows: expected VisualStudioCpp component in preflight report"
             );
         }
     }

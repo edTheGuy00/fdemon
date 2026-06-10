@@ -110,6 +110,11 @@ pub enum ComponentKind {
     ///
     /// macOS-only — this component is never emitted on Linux or Windows.
     CocoaPods,
+    /// Visual Studio IDE with the "Desktop development with C++" workload, required
+    /// for Windows-desktop Flutter development.
+    ///
+    /// Windows-only — this component is never emitted on Linux or macOS.
+    VisualStudioCpp,
 }
 
 impl std::fmt::Display for ComponentKind {
@@ -127,6 +132,7 @@ impl std::fmt::Display for ComponentKind {
             Self::WebBrowser => write!(f, "Web Browser"),
             Self::XcodeTools => write!(f, "Xcode"),
             Self::CocoaPods => write!(f, "CocoaPods"),
+            Self::VisualStudioCpp => write!(f, "Visual Studio (C++ workload)"),
         }
     }
 }
@@ -560,6 +566,10 @@ mod tests {
         assert_eq!(ComponentKind::WebBrowser.to_string(), "Web Browser");
         assert_eq!(ComponentKind::XcodeTools.to_string(), "Xcode");
         assert_eq!(ComponentKind::CocoaPods.to_string(), "CocoaPods");
+        assert_eq!(
+            ComponentKind::VisualStudioCpp.to_string(),
+            "Visual Studio (C++ workload)"
+        );
     }
 
     #[test]

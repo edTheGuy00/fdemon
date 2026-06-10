@@ -1229,6 +1229,8 @@ pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> 
                 platform_ios_components.push(check.clone());
                 platform_macos_components.push(check.clone());
             }
+            // Phase 5 Task 01 stub: routed to the Windows leaf in Task 03.
+            ComponentKind::VisualStudioCpp => {}
         }
     }
 

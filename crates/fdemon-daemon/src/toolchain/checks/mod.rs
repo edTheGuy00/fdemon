@@ -18,6 +18,7 @@ mod android;
 mod ios;
 mod prerequisites;
 mod web;
+mod windows;
 
 pub use android::{
     android_sdk_root_with_override, check_android_build_tools, check_android_cmdline_tools,
@@ -31,6 +32,7 @@ pub use prerequisites::{
     PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 pub use web::check_web;
+pub use windows::check_windows;
 
 use std::path::Path;
 use std::process::Stdio;
