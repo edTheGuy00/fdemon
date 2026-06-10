@@ -55,6 +55,15 @@ build_and_stage_exe() {
   docker cp "$cid":/build/target/x86_64-pc-windows-gnu/release/fdemon.exe "$win_dir/oem/fdemon.exe"
   docker rm "$cid" >/dev/null
   note "staged fdemon.exe → shared/ (live, for the running VM) and oem/ (auto-stage on fresh install)"
+  cat <<'EOF'
+
+  To update the RUNNING VM (PowerShell, in the RDP session — NOT cmd syntax):
+    1. Quit any running fdemon first (Windows locks running .exe files).
+    2. Copy-Item -Force "$env:USERPROFILE\Desktop\Shared\fdemon.exe" C:\fdemon\fdemon.exe
+    3. Verify (compare with host: sha256sum tests/docker/windows/shared/fdemon.exe):
+       Get-FileHash C:\fdemon\fdemon.exe -Algorithm SHA256
+  Note: `fdemon --version` only changes when Cargo.toml is bumped — trust the hash.
+EOF
 }
 
 cmd_up() {
@@ -75,7 +84,6 @@ cmd_status() {
 
 cmd_rebuild() {
   build_and_stage_exe
-  note "for the RUNNING VM, copy it in-guest from the shared folder to C:\\fdemon\\fdemon.exe"
 }
 
 cmd_fresh() {
