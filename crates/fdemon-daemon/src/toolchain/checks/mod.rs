@@ -32,7 +32,7 @@ pub use prerequisites::{
     PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
 pub use web::check_web;
-pub use windows::check_windows;
+pub use windows::{check_windows, VS_FOUND_PREFIX};
 
 use std::path::Path;
 use std::process::Stdio;

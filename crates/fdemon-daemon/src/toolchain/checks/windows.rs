@@ -34,12 +34,14 @@ use super::{strip_and_truncate, PROBE_TIMEOUT};
 
 /// Stable prefix used in the gate-1-hit / gate-2-miss detail string.
 ///
-/// **Cross-crate contract:** `windows_guided_commands` in
-/// `fdemon-app/src/install_wizard/state.rs` (Task 03) branches on this exact
-/// prefix to emit "modify the existing install" guidance — keep it in sync if
-/// ever changed.  A test in this module asserts the classifier's output starts
-/// with this prefix when gate 1 hits but gate 2 misses.
-pub(crate) const VS_FOUND_PREFIX: &str = "Visual Studio found";
+/// **Shared constant:** re-exported through `checks/mod.rs` → `toolchain/mod.rs`
+/// → `fdemon-daemon/lib.rs` so `fdemon-app` can import it directly instead of
+/// duplicating it. `windows_guided_commands` in
+/// `fdemon-app/src/install_wizard/state.rs` branches on this exact prefix to
+/// emit "modify the existing install" guidance — a test in this module asserts
+/// the classifier's output starts with this prefix when gate 1 hits but gate 2
+/// misses.
+pub const VS_FOUND_PREFIX: &str = "Visual Studio found";
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
@@ -148,20 +150,21 @@ async fn probe_visual_studio_cpp() -> ComponentCheck {
         }
     };
 
-    // Gate 1: any VS instance present?
-    let gate1_json = run_vswhere(&vswhere_path, &[]).await.unwrap_or_default();
-
-    // Gate 2: C++ workload present?
-    let gate2_json = run_vswhere(
-        &vswhere_path,
-        &[
-            "-requires",
-            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "Microsoft.VisualStudio.Component.VC.CMake.Project",
-        ],
-    )
-    .await
-    .unwrap_or_default();
+    // Gate 1 (any VS instance) and Gate 2 (C++ workload) are independent —
+    // run them concurrently, mirroring `check_ios` in checks/ios.rs.
+    let (gate1_result, gate2_result) = tokio::join!(
+        run_vswhere(&vswhere_path, &[]),
+        run_vswhere(
+            &vswhere_path,
+            &[
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "Microsoft.VisualStudio.Component.VC.CMake.Project",
+            ],
+        ),
+    );
+    let gate1_json = gate1_result.unwrap_or_default();
+    let gate2_json = gate2_result.unwrap_or_default();
 
     classify_vswhere_gates(&gate1_json, &gate2_json)
 }
@@ -199,9 +202,10 @@ struct VswhereEntry {
 pub(crate) fn classify_vswhere_gates(gate1_json: &str, gate2_json: &str) -> ComponentCheck {
     // Try to parse gate-2 JSON first (full workload present).
     if let Some(entry) = parse_first_entry(gate2_json) {
-        let display = strip_and_truncate(&entry.display_name);
-        let version = strip_and_truncate(&entry.installation_version);
-        let detail = strip_and_truncate(&format!("{display} {version}"));
+        let detail = strip_and_truncate(&format!(
+            "{} {}",
+            entry.display_name, entry.installation_version
+        ));
         return ComponentCheck {
             kind: ComponentKind::VisualStudioCpp,
             status: ComponentStatus::Ok,
@@ -454,8 +458,9 @@ mod tests {
     // Over-long displayName is capped by strip_and_truncate.
     #[test]
     fn test_classify_over_long_display_name_is_truncated() {
-        // MAX_DETAIL_LEN is 256 (defined in checks/mod.rs).
-        const MAX_DETAIL_LEN: usize = 256;
+        // Use the canonical constant from the checks module (checks/mod.rs).
+        // `super` = windows module, `super::super` = checks module.
+        use super::super::MAX_DETAIL_LEN;
 
         // Build a displayName longer than MAX_DETAIL_LEN.
         let long_name = "x".repeat(MAX_DETAIL_LEN + 100);

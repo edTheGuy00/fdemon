@@ -9,7 +9,7 @@ use std::cell::Cell;
 use fdemon_daemon::toolchain::{
     parse_missing_prereq_keys, ComponentCheck, ComponentKind, ComponentStatus, HostPlatform,
     LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
-    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT, VS_FOUND_PREFIX,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -23,19 +23,6 @@ use super::types::{
 /// Chrome download URL — the canonical, package-manager-independent way to get
 /// a Chromium-based browser on any platform.
 const CHROME_DOWNLOAD_URL: &str = "https://www.google.com/chrome/";
-
-// ── Windows guided-command constants ──────────────────────────────────────────
-
-/// Stable prefix used in the gate-1-hit / gate-2-miss detail string produced by
-/// `fdemon_daemon::toolchain::checks::windows::classify_vswhere_gates` (Task 01).
-///
-/// **Cross-crate contract:** this string is duplicated from the `pub(crate)` const
-/// `VS_FOUND_PREFIX` in `fdemon-daemon/src/toolchain/checks/windows.rs` because
-/// that crate has no public re-export path visible to `fdemon-app`. If that
-/// constant ever changes, this duplicate must be updated to match.  Prefix drift
-/// degrades gracefully — it causes the "fresh-install" branch to be taken instead
-/// of the "modify existing VS" branch, which is acceptable (not a panic path).
-const WINDOWS_VS_FOUND_PREFIX: &str = "Visual Studio found";
 
 /// Note appended to every web-browser guided command so users know how to
 /// point Flutter at a non-default browser path.
@@ -1169,8 +1156,8 @@ fn xcode_guided_commands(
 ///
 /// **Branching on the detail-prefix contract:**
 /// - If the `VisualStudioCpp` component's `detail` starts with
-///   [`WINDOWS_VS_FOUND_PREFIX`] (stable prefix from Task 01 —
-///   `fdemon-daemon/src/toolchain/checks/windows.rs::classify_vswhere_gates`),
+///   [`VS_FOUND_PREFIX`] (shared constant from `fdemon_daemon::toolchain`,
+///   produced by `classify_vswhere_gates` in `checks/windows.rs`),
 ///   VS exists but the C++ workload is missing → emits the **modify** entry first.
 /// - Fresh-install entries are emitted in both branches (primary in the no-VS branch):
 ///   - When `report.winget_available`: winget install entry.
@@ -1192,21 +1179,33 @@ fn windows_guided_commands(
         return Vec::new();
     }
 
-    // Branch on the detail-prefix contract: `VS_FOUND_PREFIX` in
-    // `fdemon-daemon/src/toolchain/checks/windows.rs::classify_vswhere_gates`
-    // sets this prefix when gate 1 hits but gate 2 misses (VS present but C++
-    // workload absent). See WINDOWS_VS_FOUND_PREFIX cross-crate contract note above.
-    let vs_found_workload_missing = components.iter().any(|c| {
-        c.kind == ComponentKind::VisualStudioCpp && c.detail.starts_with(WINDOWS_VS_FOUND_PREFIX)
-    });
+    // Branch on the detail-prefix contract: `VS_FOUND_PREFIX` is the shared
+    // constant from `fdemon_daemon::toolchain` (defined in
+    // `fdemon-daemon/src/toolchain/checks/windows.rs::classify_vswhere_gates`).
+    // It is set when gate 1 hits but gate 2 misses (VS present but C++ workload
+    // absent).
+    let vs_found_workload_missing = components
+        .iter()
+        .any(|c| c.kind == ComponentKind::VisualStudioCpp && c.detail.starts_with(VS_FOUND_PREFIX));
 
     let mut cmds: Vec<GuidedCommand> = Vec::new();
 
     // Modify entry: only when VS is present but C++ workload is missing.
+    // Branch on shell: PowerShell uses `Start-Process` with `${env:...}` syntax
+    // because `%ProgramFiles(x86)%` env-var expansion is cmd.exe-only.
+    // The brace form `${env:ProgramFiles(x86)}` is required for variable names
+    // that contain parentheses in PowerShell.
     if vs_found_workload_missing {
+        use fdemon_daemon::toolchain::HostShell;
+        let command = if report.shell == HostShell::PowerShell {
+            r#"Start-Process "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe""#.to_string()
+        } else {
+            r#"start "" "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe""#
+                .to_string()
+        };
         cmds.push(GuidedCommand {
             label: "Add the C++ workload to the existing Visual Studio".to_string(),
-            command: r#"start "" "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe""#.to_string(),
+            command,
             note: Some("Opens Visual Studio Installer — choose Modify and tick 'Desktop development with C++'.".to_string()),
         });
     }
@@ -5540,7 +5539,7 @@ mod tests {
     #[test]
     fn test_windows_guided_commands_existing_vs_emits_modify_first() {
         let detail = format!(
-            "{WINDOWS_VS_FOUND_PREFIX} (Visual Studio 2022), \
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
              but the 'Desktop development with C++' workload is missing"
         );
         let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
@@ -5694,7 +5693,7 @@ mod tests {
     #[test]
     fn test_windows_guided_commands_ordering_modify_winget_choco() {
         let detail = format!(
-            "{WINDOWS_VS_FOUND_PREFIX} (Visual Studio 2022), \
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
              but the 'Desktop development with C++' workload is missing"
         );
         let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
@@ -5715,6 +5714,111 @@ mod tests {
         assert!(
             cmds[2].command.contains("choco"),
             "Index 2 must be the choco entry"
+        );
+    }
+
+    /// M2: PowerShell shell → modify command uses `Start-Process` syntax with
+    /// `${env:ProgramFiles(x86)}` (because `%VAR%` does not expand in PowerShell).
+    #[test]
+    fn test_windows_guided_commands_modify_uses_powershell_syntax_for_powershell() {
+        use fdemon_daemon::toolchain::HostShell;
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let mut report = make_windows_report(components.clone(), false);
+        report.shell = HostShell::PowerShell;
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(
+            !cmds.is_empty(),
+            "PowerShell path must emit at least one command"
+        );
+        let modify_cmd = &cmds[0];
+        assert!(
+            modify_cmd.command.contains("Start-Process"),
+            "PowerShell modify command must use Start-Process; got: {}",
+            modify_cmd.command
+        );
+        assert!(
+            modify_cmd.command.contains("${env:ProgramFiles(x86)}"),
+            "PowerShell modify command must use ${{env:ProgramFiles(x86)}} syntax; got: {}",
+            modify_cmd.command
+        );
+        assert!(
+            !modify_cmd.command.contains("%ProgramFiles(x86)%"),
+            "PowerShell modify command must not use cmd.exe %VAR% syntax; got: {}",
+            modify_cmd.command
+        );
+    }
+
+    /// M2: cmd.exe shell → modify command uses `start` with `%ProgramFiles(x86)%` syntax.
+    #[test]
+    fn test_windows_guided_commands_modify_uses_cmd_syntax_for_cmd() {
+        use fdemon_daemon::toolchain::HostShell;
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let mut report = make_windows_report(components.clone(), false);
+        report.shell = HostShell::Cmd;
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(!cmds.is_empty(), "Cmd path must emit at least one command");
+        let modify_cmd = &cmds[0];
+        assert!(
+            modify_cmd.command.contains("%ProgramFiles(x86)%"),
+            "Cmd modify command must use %ProgramFiles(x86)% syntax; got: {}",
+            modify_cmd.command
+        );
+        assert!(
+            !modify_cmd.command.contains("Start-Process"),
+            "Cmd modify command must not use Start-Process; got: {}",
+            modify_cmd.command
+        );
+    }
+
+    /// N1: VS-found detail + `winget_available: false` + `StepStatus::Partial`
+    /// → exactly 2 commands in [modify, choco] order.
+    #[test]
+    fn test_windows_guided_commands_existing_vs_no_winget_gives_modify_and_choco() {
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        // winget_available = false → winget entry suppressed.
+        let report = make_windows_report(components.clone(), false);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert_eq!(
+            cmds.len(),
+            2,
+            "VS-found + no winget must yield exactly 2 commands (modify + choco); got: {cmds:?}"
+        );
+
+        // Index 0: modify entry.
+        assert!(
+            cmds[0].label.contains("Add the C++ workload"),
+            "Index 0 must be the modify entry; got: {:?}",
+            cmds[0].label
+        );
+        assert!(
+            cmds[0].command.contains("setup.exe"),
+            "Modify command must reference setup.exe; got: {}",
+            cmds[0].command
+        );
+
+        // Index 1: choco entry (winget suppressed).
+        assert!(
+            cmds[1].command.contains("choco"),
+            "Index 1 must be the choco entry; got: {}",
+            cmds[1].command
         );
     }
 }
