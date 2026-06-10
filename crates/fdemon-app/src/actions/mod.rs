@@ -851,8 +851,8 @@ pub fn handle_action(
             use crate::install_wizard::WizardStepKind;
             use fdemon_daemon::toolchain::{
                 add_android_env, add_to_path, install_android_tools, install_flutter,
-                resolve_install_dir, AndroidInstallTarget, FlutterInstallTarget, HostPlatform,
-                HostShell, InstallEvent, DEFAULT_CMDLINE_TOOLS_BUILD,
+                resolve_install_dir, AndroidInstallTarget, HostPlatform, HostShell, InstallEvent,
+                DEFAULT_CMDLINE_TOOLS_BUILD,
             };
 
             // Clone msg_tx: one for the spawned task, one for the ready message.
@@ -921,17 +921,7 @@ pub fn handle_action(
                         };
 
                         // Build the install target.
-                        let target = FlutterInstallTarget {
-                            method: params.method,
-                            channel: params.channel.clone(),
-                            install_root,
-                            // Use the channel name as the version directory name so the
-                            // SDK lands at `~/fvm/versions/stable`.  After install the
-                            // `version` file inside the SDK provides the concrete version.
-                            version_dir_name: params.channel.clone(),
-                            // Task 04 threads the picker selection here.
-                            version_tag: None,
-                        };
+                        let target = flutter_install_target(&params, install_root);
 
                         // Clone a sender for the synchronous on_event callback.
                         let tx_for_events = msg_tx.clone();
@@ -1226,11 +1216,32 @@ pub fn handle_action(
         }
 
         // ── Install Wizard — Version Picker manifest fetch (Phase 6) ───────────
-        // No-op stub: the executor body lands in Task 04 (it downloads the
-        // platform-appropriate release manifest and emits FlutterManifestFetched
-        // / FlutterManifestFetchFailed). Leaving the arm here keeps the
-        // exhaustive UpdateAction match compiling now that the variant exists.
-        UpdateAction::FetchFlutterReleaseManifest => { /* Task 04 fills the body */ }
+        // Spawns a background task that fetches the Flutter release manifest for
+        // the current host platform and emits FlutterManifestFetched on success or
+        // FlutterManifestFetchFailed on error.
+        //
+        // No cancellation token: the fetch is short, read-only, and idempotent;
+        // a stale result landing after picker close is cached harmlessly.
+        UpdateAction::FetchFlutterReleaseManifest => {
+            let msg_tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let platform = fdemon_daemon::toolchain::HostPlatform::detect();
+                match fdemon_daemon::toolchain::fetch_release_manifest(platform).await {
+                    Ok(manifest) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterManifestFetched { manifest })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterManifestFetchFailed {
+                                error: format!("{e}"),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
 
         // ── Flutter Version Panel ─────────────────────────────────────────────
         UpdateAction::ScanInstalledSdks { active_sdk_root } => {
@@ -1717,6 +1728,29 @@ pub(crate) fn resolve_effective_jdk_path(
 }
 
 // ── PathConfig summary helper ─────────────────────────────────────────────────
+
+/// Build a [`FlutterInstallTarget`] from wizard step parameters and a resolved install root.
+///
+/// When `params.version_tag` is `Some(v)`, the SDK lands at
+/// `<install_root>/<v>` (pinned install).  When `None`, it falls back to
+/// `<install_root>/<channel>` (legacy channel install, e.g. `stable`).
+pub(crate) fn flutter_install_target(
+    params: &crate::handler::FlutterStepParams,
+    install_root: std::path::PathBuf,
+) -> fdemon_daemon::toolchain::FlutterInstallTarget {
+    fdemon_daemon::toolchain::FlutterInstallTarget {
+        method: params.method,
+        channel: params.channel.clone(),
+        install_root,
+        // Pinned installs land at `~/fvm/versions/<version>`; channel installs keep
+        // landing at `~/fvm/versions/<channel>` (legacy behaviour when no pick was made).
+        version_dir_name: params
+            .version_tag
+            .clone()
+            .unwrap_or_else(|| params.channel.clone()),
+        version_tag: params.version_tag.clone(),
+    }
+}
 
 /// Build the completion summary string for a `PathConfig` wizard step.
 ///
@@ -2730,6 +2764,123 @@ mod tests {
         assert!(
             summary.ends_with('.'),
             "summary must end with a single period; got: {summary:?}"
+        );
+    }
+
+    // ── flutter_install_target helper tests ──────────────────────────────────
+
+    fn make_flutter_step_params(
+        channel: &str,
+        version_tag: Option<&str>,
+    ) -> crate::handler::FlutterStepParams {
+        crate::handler::FlutterStepParams {
+            method: fdemon_daemon::toolchain::InstallMethod::GitClone,
+            channel: channel.to_string(),
+            version_tag: version_tag.map(|s| s.to_string()),
+            install_root: None,
+        }
+    }
+
+    /// When `version_tag` is `Some`, the target's `version_dir_name` and
+    /// `version_tag` must both reflect the pinned version.
+    #[test]
+    fn test_flutter_install_target_with_version_tag() {
+        let params = make_flutter_step_params("stable", Some("3.24.0"));
+        let root = std::path::PathBuf::from("/home/user/fvm/versions");
+        let target = flutter_install_target(&params, root.clone());
+
+        assert_eq!(
+            target.version_dir_name, "3.24.0",
+            "pinned version_tag must be used as version_dir_name"
+        );
+        assert_eq!(
+            target.version_tag,
+            Some("3.24.0".to_string()),
+            "version_tag must be threaded through to the target"
+        );
+        assert_eq!(target.channel, "stable");
+        assert_eq!(target.install_root, root);
+    }
+
+    /// When `version_tag` is `None`, the target's `version_dir_name` must fall
+    /// back to the channel name and `version_tag` must be `None`.
+    #[test]
+    fn test_flutter_install_target_without_version_tag_falls_back_to_channel() {
+        let params = make_flutter_step_params("stable", None);
+        let root = std::path::PathBuf::from("/home/user/fvm/versions");
+        let target = flutter_install_target(&params, root.clone());
+
+        assert_eq!(
+            target.version_dir_name, "stable",
+            "version_dir_name must fall back to channel when no version_tag"
+        );
+        assert_eq!(
+            target.version_tag, None,
+            "version_tag must be None when no version was selected"
+        );
+        assert_eq!(target.channel, "stable");
+        assert_eq!(target.install_root, root);
+    }
+
+    /// `version_dir_name` for a beta channel without a pinned tag must be `"beta"`.
+    #[test]
+    fn test_flutter_install_target_beta_channel_fallback() {
+        let params = make_flutter_step_params("beta", None);
+        let root = std::path::PathBuf::from("/opt/flutter");
+        let target = flutter_install_target(&params, root);
+
+        assert_eq!(target.version_dir_name, "beta");
+        assert_eq!(target.version_tag, None);
+    }
+
+    // ── FetchFlutterReleaseManifest executor tests ───────────────────────────
+
+    /// `FetchFlutterReleaseManifest` must emit either `FlutterManifestFetched` or
+    /// `FlutterManifestFetchFailed` — never hang or panic.
+    ///
+    /// This test exercises the real network path (or its failure mode), so it
+    /// accepts both outcomes.  The important contract is that one of the two
+    /// expected messages arrives within a reasonable timeout.
+    #[tokio::test]
+    async fn test_fetch_flutter_release_manifest_emits_fetched_or_failed() {
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel(16);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let dap_server_handle: DapHandleSlot = Arc::new(std::sync::Mutex::new(None));
+        let vm_handle_for_dap: Arc<
+            std::sync::Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>,
+        > = Arc::new(std::sync::Mutex::new(None));
+        let dap_debug_senders: Arc<
+            std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let project_path = std::path::PathBuf::from("/tmp");
+
+        handle_action(
+            crate::UpdateAction::FetchFlutterReleaseManifest,
+            msg_tx,
+            None,
+            vec![],
+            session_tasks,
+            shutdown_rx,
+            &project_path,
+            fdemon_daemon::ToolAvailability::default(),
+            dap_server_handle,
+            vm_handle_for_dap,
+            dap_debug_senders,
+        );
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(30), msg_rx.recv())
+            .await
+            .expect("timed out waiting for manifest fetch result")
+            .expect("channel closed before message arrived");
+
+        assert!(
+            matches!(
+                msg,
+                crate::message::Message::FlutterManifestFetched { .. }
+                    | crate::message::Message::FlutterManifestFetchFailed { .. }
+            ),
+            "expected FlutterManifestFetched or FlutterManifestFetchFailed; got: {msg:?}"
         );
     }
 }
