@@ -84,6 +84,8 @@ sha2 = "0.10"
 
 # Misc
 rand = "0.8"
+# base64: OSC 52 clipboard payload encoding (RFC 4648 standard alphabet)
+base64 = "0.22"
 
 # Dev
 tempfile = "3"

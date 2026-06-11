@@ -417,6 +417,7 @@ theme = "default"               # Color theme name
 stack_trace_collapsed = true    # Start stack traces collapsed by default
 stack_trace_max_frames = 3      # Number of frames to show when collapsed
 enable_mouse = true             # Capture mouse events for clickable UI; restart required
+clipboard_mode = "auto"         # Copy backend: "auto", "system", "osc52", or "off"; restart required
 ```
 
 | Property | Type | Default | Description |
@@ -429,10 +430,13 @@ enable_mouse = true             # Capture mouse events for clickable UI; restart
 | `stack_trace_collapsed` | `boolean` | `true` | If `true`, stack traces start collapsed showing only the first few frames. |
 | `stack_trace_max_frames` | `integer` | `3` | Number of stack trace frames to show when collapsed. Press `Enter` to expand. |
 | `enable_mouse` | `boolean` | `true` | Sets the **initial** mouse-capture state at startup. When `true`, fdemon enables clickable UI and wheel scroll from the first frame. When `false`, no capture sequences are emitted and native terminal behavior (text selection, wheel scrollback) is preserved. **Restart required after changing this setting.** At runtime, press `Alt+m` to toggle capture on or off without restarting — the status bar shows `[mouse]` / `[mouse-off]` to reflect the current state. The runtime toggle never persists back to this setting. See [MOUSE.md](MOUSE.md) for per-mode wheel behavior, modifier reference, and platform caveats. |
+| `clipboard_mode` | `string` | `"auto"` | Backend for copy-to-clipboard actions. `"auto"` detects the environment: SSH sessions and machines without a display server use OSC 52 terminal escape sequences (the clipboard is set on *your local machine* by your terminal emulator), while desktop sessions use the OS clipboard. `"system"` forces the OS clipboard (X11/Wayland/macOS/Windows), `"osc52"` forces escape sequences, `"off"` disables copy. **Restart required after changing this setting.** |
 
 > **Environment variable override:** Set `FDEMON_ICONS=unicode` or `FDEMON_ICONS=nerd_fonts` to override the config file setting for the current session.
 
 > **No Nerd Font?** If icons appear as missing characters or boxes, your terminal font does not include Nerd Font glyphs. Add `icons = "unicode"` to your `[ui]` section in `.fdemon/config.toml`, or run with `FDEMON_ICONS=unicode` to switch to safe Unicode characters that work in all terminals. See [nerdfonts.com](https://www.nerdfonts.com/) to install a patched font.
+
+> **Copying over SSH (OSC 52):** With the default `clipboard_mode = "auto"`, copying inside an SSH session emits an OSC 52 escape sequence that your *local* terminal emulator translates into a clipboard write on your machine — no X forwarding needed. Most modern terminals support this out of the box (kitty, WezTerm, foot, Ghostty, Windows Terminal); some require opt-in (Alacritty ≥ 0.13: `osc52 = "OnlyCopy"`, iTerm2: *Preferences → General → Selection*, xterm: `allowWindowOps`), and VTE-based terminals (GNOME Terminal, XFCE Terminal) do not support it at all. Inside tmux, set `set-clipboard on` in `.tmux.conf` so tmux forwards the sequence to your terminal (the default `external` silently swallows it). Payloads are capped at ~75 KB; longer copies are truncated.
 
 > **When to disable mouse capture:** Most modern terminals (Windows Terminal, iTerm2, WezTerm, gnome-terminal) pass `Shift+drag` through to native text selection even when capture is on, so the default `true` works for most users. For an ad-hoc suspend without restarting fdemon, press `Alt+m` to toggle capture off at runtime (the `[mouse-off]` badge appears in the status bar). For a permanent opt-out — e.g. if your terminal does not support `Shift+drag`, if you find the wheel-intercept-vs-host-scrollback behavior disorienting, or if you are running on legacy Windows conhost (which silently ignores mouse capture entirely) — set `enable_mouse = false` and restart. The setting is read once at startup; `Alt+m` changes runtime state only, without persisting it. See [MOUSE.md](MOUSE.md) for the full per-mode wheel reference, modifier key rules, and the Windows 11 Shift-drop caveat.
 
@@ -1144,6 +1148,7 @@ compact_logs = false
 theme = "default"
 stack_trace_collapsed = true
 stack_trace_max_frames = 3
+clipboard_mode = "auto"
 
 [devtools]
 auto_open = false

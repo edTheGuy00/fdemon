@@ -171,6 +171,29 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             .value(SettingValue::Bool(settings.ui.enable_mouse))
             .default(SettingValue::Bool(true))
             .section("UI"),
+        SettingItem::new("ui.clipboard_mode", "Clipboard Mode")
+            .description(
+                "Copy backend: auto (detect), system (OS clipboard), osc52 (terminal escape, works over SSH), off. Restart required.",
+            )
+            .value(SettingValue::Enum {
+                value: settings.ui.clipboard_mode.to_string(),
+                options: vec![
+                    "auto".to_string(),
+                    "system".to_string(),
+                    "osc52".to_string(),
+                    "off".to_string(),
+                ],
+            })
+            .default(SettingValue::Enum {
+                value: "auto".to_string(),
+                options: vec![
+                    "auto".to_string(),
+                    "system".to_string(),
+                    "osc52".to_string(),
+                    "off".to_string(),
+                ],
+            })
+            .section("UI"),
         SettingItem::new("ui.stack_trace_collapsed", "Collapse Stack Traces")
             .description("Start stack traces collapsed")
             .value(SettingValue::Bool(settings.ui.stack_trace_collapsed))
@@ -564,6 +587,23 @@ mod tests {
             assert!(!options.contains(&"layout".to_string()));
         } else {
             panic!("devtools.default_panel default should be SettingValue::Enum");
+        }
+    }
+
+    #[test]
+    fn test_clipboard_mode_item_present_with_all_options() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+        let item = items
+            .iter()
+            .find(|i| i.id == "ui.clipboard_mode")
+            .expect("ui.clipboard_mode item should be present in UI section");
+        assert_eq!(item.section, "UI");
+        if let SettingValue::Enum { value, options } = &item.value {
+            assert_eq!(value, "auto");
+            assert_eq!(options, &["auto", "system", "osc52", "off"]);
+        } else {
+            panic!("ui.clipboard_mode value should be SettingValue::Enum");
         }
     }
 

@@ -13,7 +13,7 @@ use tracing::{error, warn};
 use fdemon_app::config::should_auto_start_dap;
 use fdemon_app::install_wizard::WizardOrigin;
 use fdemon_app::message::Message;
-use fdemon_app::services::{Clipboard, NullClipboard, SystemClipboard};
+use fdemon_app::services::{create_clipboard, Clipboard, NullClipboard};
 use fdemon_app::spawn;
 use fdemon_app::{Engine, ToastLevel, UpdateAction};
 use fdemon_core::prelude::*;
@@ -25,28 +25,10 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Create the engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
-    // Initialize clipboard. Failures fall back to NullClipboard so that every
-    // clipboard write returns an error, firing the runner's failure-toast path
-    // and showing the user that copy is non-functional. The warn! log gives
-    // operators a breadcrumb when this fallback is active.
-    let (mut clipboard, clipboard_unavailable_reason): (Box<dyn Clipboard>, Option<String>) =
-        match SystemClipboard::new() {
-            Ok(cb) => (Box::new(cb), None),
-            Err(e) => {
-                let reason = format!("{e}");
-                warn!("system clipboard unavailable: {reason}");
-                (Box::new(NullClipboard), Some(reason))
-            }
-        };
-
-    // Push a startup toast if the clipboard is unavailable so the user knows
-    // before they attempt to right-click copy.
-    if let Some(reason) = clipboard_unavailable_reason {
-        engine.state.push_toast(
-            ToastLevel::Warn,
-            format!("Clipboard unavailable; right-click copy is disabled ({reason})"),
-        );
-    }
+    // Initialize clipboard: backend chosen from config + environment (OS
+    // clipboard on desktop, OSC 52 over SSH/headless). Pushes a warning toast
+    // when no backend can work so the user knows before attempting to copy.
+    let mut clipboard = init_clipboard(&mut engine);
 
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
@@ -158,25 +140,8 @@ pub async fn run_with_project_and_dap(
         engine.process_message(Message::StartDapServer);
     }
 
-    // Initialize clipboard (same fallback policy as run_with_project).
-    let (mut clipboard, clipboard_unavailable_reason): (Box<dyn Clipboard>, Option<String>) =
-        match SystemClipboard::new() {
-            Ok(cb) => (Box::new(cb), None),
-            Err(e) => {
-                let reason = format!("{e}");
-                warn!("system clipboard unavailable: {reason}");
-                (Box::new(NullClipboard), Some(reason))
-            }
-        };
-
-    // Push a startup toast if the clipboard is unavailable so the user knows
-    // before they attempt to right-click copy.
-    if let Some(reason) = clipboard_unavailable_reason {
-        engine.state.push_toast(
-            ToastLevel::Warn,
-            format!("Clipboard unavailable; right-click copy is disabled ({reason})"),
-        );
-    }
+    // Initialize clipboard (same backend selection as run_with_project).
+    let mut clipboard = init_clipboard(&mut engine);
 
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
@@ -268,6 +233,25 @@ pub async fn run() -> Result<()> {
     // Restore terminal
     ratatui::restore();
     result
+}
+
+/// Select and construct the clipboard backend for this session.
+///
+/// Delegates backend choice to [`create_clipboard`] (config `ui.clipboard_mode`
+/// plus environment detection: OS clipboard on desktop sessions, OSC 52 escape
+/// sequences over SSH or without a display server). When no backend can work,
+/// pushes a startup warning toast so the user knows before attempting to copy;
+/// writes on the returned clipboard then fail, firing the runner's
+/// failure-toast path.
+fn init_clipboard(engine: &mut Engine) -> Box<dyn Clipboard> {
+    let init = create_clipboard(engine.settings.ui.clipboard_mode);
+    if let Some(reason) = init.unavailable_reason {
+        engine.state.push_toast(
+            ToastLevel::Warn,
+            format!("Clipboard unavailable; copy is disabled ({reason})"),
+        );
+    }
+    init.clipboard
 }
 
 /// Dispatch the startup action returned by [`startup::startup_flutter`].
