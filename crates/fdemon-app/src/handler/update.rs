@@ -1257,6 +1257,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             update(state, Message::NewSessionDialogBootCompleted { device_id })
         }
 
+        Message::NewSessionDialogQrPairingProgress { seq, event } => {
+            new_session::handle_qr_pairing_progress(state, seq, event)
+        }
+
+        Message::NewSessionDialogQrPairingCompleted {
+            seq,
+            ip,
+            connect_port,
+        } => new_session::handle_qr_pairing_completed(state, seq, ip, connect_port),
+
+        Message::NewSessionDialogQrPairingFailed { seq, error } => {
+            new_session::handle_qr_pairing_failed(state, seq, error)
+        }
+
         Message::ShowNewSessionDialog
         | Message::NewSessionDialogUp
         | Message::NewSessionDialogDown

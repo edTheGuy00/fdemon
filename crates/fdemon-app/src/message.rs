@@ -558,6 +558,22 @@ pub enum Message {
     /// Clear error message
     NewSessionDialogClearError,
 
+    /// QR pairing progress event from the background mDNS/adb task
+    NewSessionDialogQrPairingProgress {
+        seq: u64,
+        event: fdemon_daemon::QrPairingEvent,
+    },
+
+    /// QR pairing finished — the device is now connected via `adb connect`
+    NewSessionDialogQrPairingCompleted {
+        seq: u64,
+        ip: String,
+        connect_port: u16,
+    },
+
+    /// QR pairing failed
+    NewSessionDialogQrPairingFailed { seq: u64, error: String },
+
     // ─────────────────────────────────────────────────────────
     // Launch Context Messages
     // ─────────────────────────────────────────────────────────

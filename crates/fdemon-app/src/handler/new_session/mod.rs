@@ -13,10 +13,12 @@ mod dart_defines_modal;
 mod fuzzy_modal;
 mod launch_context;
 mod navigation;
+mod qr_pairing;
 mod target_selector;
 
 pub use dart_defines_modal::*;
 pub use fuzzy_modal::*;
 pub use launch_context::*;
 pub use navigation::*;
+pub use qr_pairing::*;
 pub use target_selector::*;

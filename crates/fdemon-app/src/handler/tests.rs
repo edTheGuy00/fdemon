@@ -2898,6 +2898,15 @@ mod auto_launch_tests {
             .ios_simulators = vec![]; // Add dummy to prevent discovery
         state.new_session_dialog_state.target_selector.android_avds = vec![]; // Add dummy to prevent discovery
 
+        // Three-way cycle: Connected → Bootable → PairQr → Connected.
+        // (Default tool_availability has no adb, so entering PairQr does not
+        // start a pairing task here.)
+        let _ = update(&mut state, Message::NewSessionDialogToggleTab);
+        assert_eq!(
+            state.new_session_dialog_state.target_selector.active_tab,
+            TargetTab::PairQr
+        );
+
         let _ = update(&mut state, Message::NewSessionDialogToggleTab);
         assert_eq!(
             state.new_session_dialog_state.target_selector.active_tab,

@@ -853,6 +853,8 @@ dependencies = [
  "fs4",
  "futures-util",
  "lzma-rs",
+ "mdns-sd",
+ "rand 0.8.6",
  "regex",
  "reqwest",
  "serde",
@@ -899,11 +901,14 @@ dependencies = [
  "fdemon-core",
  "fdemon-daemon",
  "insta",
+ "qrcode",
  "ratatui",
  "serial_test",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tui-qrcode",
  "unicode-width",
 ]
 
@@ -963,6 +968,17 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+]
+
+[[package]]
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin",
 ]
 
 [[package]]
@@ -1523,6 +1539,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "indenter"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,6 +1822,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "mdns-sd"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "892f96f6d2ebe1ea641279f986ac52a2a6bac71e8f743bb258315cfe2bd7e88e"
+dependencies = [
+ "fastrand",
+ "flume",
+ "if-addrs",
+ "log",
+ "mio",
+ "socket-pktinfo",
+ "socket2",
 ]
 
 [[package]]
@@ -2371,6 +2412,12 @@ checksum = "7e05aef7befb11a210468a2d77d978dde2c6381a0381e33beb575e91f57fe8cf"
 dependencies = [
  "nix 0.26.4",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quinn"
@@ -2991,6 +3038,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "socket-pktinfo"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "927136cc2ae6a1b0e66ac6b1210902b75c3f726db004a73bc18686dcd0dcd22f"
+dependencies = [
+ "libc",
+ "socket2",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2998,6 +3056,15 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]
@@ -3564,6 +3631,17 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "tui-qrcode"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "671a8f22484c5b43bfb4ab90bfa52a81d823c05ee9ae321e5c6b2fefad4bfcb9"
+dependencies = [
+ "color-eyre",
+ "qrcode",
+ "ratatui-core",
+]
 
 [[package]]
 name = "tungstenite"

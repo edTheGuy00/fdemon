@@ -13,6 +13,7 @@ mod device_groups;
 mod device_list;
 pub mod fuzzy_modal; // Public for App layer to access fuzzy_filter function
 mod launch_context;
+mod qr_pairing;
 mod state;
 mod tab_bar;
 pub mod target_selector; // Public for App layer to re-export TargetSelectorState
@@ -22,6 +23,7 @@ pub use device_groups::*;
 pub use device_list::*;
 pub use fuzzy_modal::*;
 pub use launch_context::*;
+pub use qr_pairing::*;
 pub use state::*; // Re-exports from App layer
 pub use tab_bar::*;
 pub use target_selector::*;
@@ -983,8 +985,17 @@ impl NewSessionDialog<'_> {
             .animation_frame(self.animation_frame);
             tab_bar::render_with_regions(chunks[0], buf, tb, ctx.as_deref_mut());
 
-            // Device list with regions
-            if state.loading {
+            // Device list with regions.
+            // The Pair QR panel renders regardless of connected-discovery
+            // loading/error state — pairing is independent of the Flutter SDK.
+            if state.active_tab == TargetTab::PairQr {
+                let panel = qr_pairing::QrPairingPanel::new(
+                    state.qr_pairing.as_ref(),
+                    self.tool_availability.adb,
+                )
+                .animation_frame(self.animation_frame);
+                panel.render(chunks[1], buf);
+            } else if state.loading {
                 use ratatui::widgets::Paragraph;
                 let glyph = crate::widgets::spinner::spinner_char(
                     self.animation_frame / crate::widgets::spinner::SPINNER_TICKS_PER_FRAME,
@@ -1029,6 +1040,8 @@ impl NewSessionDialog<'_> {
                             chunks[1], buf, &dl, ctx,
                         );
                     }
+                    // PairQr is rendered before the loading/error branches above.
+                    TargetTab::PairQr => {}
                 }
             }
 
@@ -1046,6 +1059,7 @@ impl NewSessionDialog<'_> {
                     }
                 }
                 TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
+                TargetTab::PairQr => "Scan with your Android device  [r] New code".to_string(),
             };
             use ratatui::widgets::Paragraph;
             Paragraph::new(hints.as_str())

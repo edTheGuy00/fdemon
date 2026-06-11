@@ -79,33 +79,37 @@ pub fn render_with_regions(
     let inner = container_block.inner(area);
     container_block.render(area, buf);
 
-    // Split into two equal halves for tabs
-    let tabs =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
+    // Split into three equal thirds for tabs
+    let tabs = Layout::horizontal([
+        Constraint::Percentage(33),
+        Constraint::Percentage(34),
+        Constraint::Percentage(33),
+    ])
+    .split(inner);
 
-    // Record click regions for each tab half (z=1, main dialog layer)
+    const TAB_ORDER: [TargetTab; 3] =
+        [TargetTab::Connected, TargetTab::Bootable, TargetTab::PairQr];
+
+    // Record click regions for each tab third (z=1, main dialog layer)
     if let Some(c) = ctx {
-        c.click_at_z(
-            MouseRect::new(tabs[0].x, tabs[0].y, tabs[0].width, tabs[0].height),
-            MouseAction::emit(Message::NewSessionDialogSwitchTab(TargetTab::Connected)),
-            1,
-        );
-        c.click_at_z(
-            MouseRect::new(tabs[1].x, tabs[1].y, tabs[1].width, tabs[1].height),
-            MouseAction::emit(Message::NewSessionDialogSwitchTab(TargetTab::Bootable)),
-            1,
-        );
+        for (rect, tab) in tabs.iter().zip(TAB_ORDER) {
+            c.click_at_z(
+                MouseRect::new(rect.x, rect.y, rect.width, rect.height),
+                MouseAction::emit(Message::NewSessionDialogSwitchTab(tab)),
+                1,
+            );
+        }
     }
 
     // Render each tab label
-    for (i, tab) in [TargetTab::Connected, TargetTab::Bootable]
-        .iter()
-        .enumerate()
-    {
+    for (i, tab) in TAB_ORDER.iter().enumerate() {
         let is_active = *tab == tab_bar.active_tab;
         let refreshing = match tab {
             TargetTab::Connected => tab_bar.connected_refreshing,
             TargetTab::Bootable => tab_bar.bootable_refreshing,
+            // The Pair QR tab has no list refresh; pairing progress is shown
+            // in the panel itself.
+            TargetTab::PairQr => false,
         };
 
         let label = if refreshing {
@@ -148,18 +152,21 @@ mod tests {
     fn test_target_tab_label() {
         assert_eq!(TargetTab::Connected.label(), "1 Connected");
         assert_eq!(TargetTab::Bootable.label(), "2 Bootable");
+        assert_eq!(TargetTab::PairQr.label(), "3 Pair QR");
     }
 
     #[test]
     fn test_target_tab_toggle() {
         assert_eq!(TargetTab::Connected.toggle(), TargetTab::Bootable);
-        assert_eq!(TargetTab::Bootable.toggle(), TargetTab::Connected);
+        assert_eq!(TargetTab::Bootable.toggle(), TargetTab::PairQr);
+        assert_eq!(TargetTab::PairQr.toggle(), TargetTab::Connected);
     }
 
     #[test]
     fn test_target_tab_shortcut() {
         assert_eq!(TargetTab::Connected.shortcut(), '1');
         assert_eq!(TargetTab::Bootable.shortcut(), '2');
+        assert_eq!(TargetTab::PairQr.shortcut(), '3');
     }
 
     #[test]
@@ -306,36 +313,41 @@ mod tests {
     // ─── render_with_regions tests ───────────────────────────────────────────
 
     #[test]
-    fn render_with_regions_records_two_tab_regions_at_z1() {
+    fn render_with_regions_records_three_tab_regions_at_z1() {
         let tab_bar = TabBar::new(TargetTab::Connected, true, false, false);
 
-        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 3));
         let mut regions = MouseRegions::default();
         {
             let builder = regions.builder();
             let mut ctx = MouseCtx::new(builder);
-            render_with_regions(Rect::new(0, 0, 40, 3), &mut buf, tab_bar, Some(&mut ctx));
+            render_with_regions(Rect::new(0, 0, 60, 3), &mut buf, tab_bar, Some(&mut ctx));
         }
 
-        assert_eq!(regions.len(), 2, "expected exactly 2 tab regions");
+        assert_eq!(regions.len(), 3, "expected exactly 3 tab regions");
 
-        let connected_present = regions.iter().any(|e| {
-            e.on_left
-                .as_ref()
-                .and_then(|a| a.as_emit())
-                .map(|m| matches!(m, Message::NewSessionDialogSwitchTab(TargetTab::Connected)))
-                .unwrap_or(false)
-        });
-        let bootable_present = regions.iter().any(|e| {
-            e.on_left
-                .as_ref()
-                .and_then(|a| a.as_emit())
-                .map(|m| matches!(m, Message::NewSessionDialogSwitchTab(TargetTab::Bootable)))
-                .unwrap_or(false)
-        });
+        let has_region_for = |tab: TargetTab| {
+            regions.iter().any(|e| {
+                e.on_left
+                    .as_ref()
+                    .and_then(|a| a.as_emit())
+                    .map(|m| matches!(m, Message::NewSessionDialogSwitchTab(t) if *t == tab))
+                    .unwrap_or(false)
+            })
+        };
 
-        assert!(connected_present, "expected Connected tab region");
-        assert!(bootable_present, "expected Bootable tab region");
+        assert!(
+            has_region_for(TargetTab::Connected),
+            "expected Connected tab region"
+        );
+        assert!(
+            has_region_for(TargetTab::Bootable),
+            "expected Bootable tab region"
+        );
+        assert!(
+            has_region_for(TargetTab::PairQr),
+            "expected Pair QR tab region"
+        );
 
         for entry in regions.iter() {
             assert_eq!(entry.z_index, 1, "all tab regions must be at z=1");

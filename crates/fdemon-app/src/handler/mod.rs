@@ -200,6 +200,18 @@ pub enum UpdateAction {
         platform: fdemon_core::Platform,
     },
 
+    /// Start an ADB wireless QR pairing session (Pair QR tab).
+    ///
+    /// The QR payload derived from `credentials` is already displayed; the
+    /// spawned task browses mDNS for the phone, then runs
+    /// `adb pair` / `adb connect`, reporting back via the
+    /// `NewSessionDialogQrPairing*` messages tagged with `seq`.
+    StartQrPairing {
+        seq: u64,
+        credentials: fdemon_daemon::QrPairingCredentials,
+        cancel_token: tokio_util::sync::CancellationToken,
+    },
+
     /// Auto-save FDemon config after field changes (Phase 6, Task 05)
     AutoSaveConfig { configs: LoadedConfigs },
 

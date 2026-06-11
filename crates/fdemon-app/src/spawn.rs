@@ -451,6 +451,52 @@ pub fn spawn_device_boot(
     });
 }
 
+/// Spawn the ADB wireless QR pairing flow in background.
+///
+/// Progress events are forwarded as `NewSessionDialogQrPairingProgress`; the
+/// terminal outcome arrives as `...QrPairingCompleted` / `...QrPairingFailed`.
+/// Cancellation (dialog closed, code regenerated) produces no message — the
+/// handler already cleared the pairing state when it fired the token.
+pub fn spawn_qr_pairing(
+    msg_tx: mpsc::Sender<Message>,
+    seq: u64,
+    credentials: fdemon_daemon::QrPairingCredentials,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    tokio::spawn(async move {
+        let event_tx = msg_tx.clone();
+        let result = fdemon_daemon::pair_with_qr(&credentials, cancel, move |event| {
+            // try_send: the event callback must not block; a full channel only
+            // costs a missed phase update, never a stuck pairing task.
+            let _ = event_tx.try_send(Message::NewSessionDialogQrPairingProgress { seq, event });
+        })
+        .await;
+
+        match result {
+            Ok(device) => {
+                let _ = msg_tx
+                    .send(Message::NewSessionDialogQrPairingCompleted {
+                        seq,
+                        ip: device.ip,
+                        connect_port: device.connect_port,
+                    })
+                    .await;
+            }
+            Err(e) if e.is_cancelled() => {
+                tracing::debug!("QR pairing task cancelled (seq {seq})");
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::NewSessionDialogQrPairingFailed {
+                        seq,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
 /// Spawn entry point discovery in background (Phase 3, Task 09)
 pub fn spawn_entry_point_discovery(msg_tx: mpsc::Sender<Message>, project_path: PathBuf) {
     tokio::spawn(async move {

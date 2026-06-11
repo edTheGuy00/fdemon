@@ -30,6 +30,8 @@ lzma-rs.workspace = true
 sha2.workspace = true
 fs4.workspace = true
 tempfile.workspace = true
+mdns-sd.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true

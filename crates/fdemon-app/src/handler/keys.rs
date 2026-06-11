@@ -1439,6 +1439,7 @@ fn handle_key_new_session_dialog(key: InputKey, state: &AppState) -> Option<Mess
         InputKey::Tab => Some(Message::NewSessionDialogSwitchPane),
         InputKey::Char('1') => Some(Message::NewSessionDialogSwitchTab(TargetTab::Connected)),
         InputKey::Char('2') => Some(Message::NewSessionDialogSwitchTab(TargetTab::Bootable)),
+        InputKey::Char('3') => Some(Message::NewSessionDialogSwitchTab(TargetTab::PairQr)),
 
         // Route based on focused pane
         _ => match dialog.focused_pane {

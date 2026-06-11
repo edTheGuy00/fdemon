@@ -961,12 +961,16 @@ impl NewSessionDialogState {
     pub fn hide(&mut self) {
         self.visible = false;
         self.close_modal();
+        // Stop the background mDNS/adb task; a QR code that is no longer on
+        // screen can't be scanned, and its credentials shouldn't stay armed.
+        self.target_selector.cancel_qr_pairing();
     }
 
     /// Reset dialog to initial state
     pub fn reset(&mut self) {
         self.focused_pane = DialogPane::TargetSelector;
         self.close_modal();
+        self.target_selector.cancel_qr_pairing();
         self.target_selector.set_tab(TargetTab::Connected);
     }
 }
@@ -976,6 +980,40 @@ mod tests {
     use super::*;
     use crate::config::priority::SourcedConfig;
     use crate::config::types::{ConfigSource, FlutterMode, LaunchConfig};
+
+    #[test]
+    fn test_hide_cancels_qr_pairing() {
+        use tokio_util::sync::CancellationToken;
+
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        let token = CancellationToken::new();
+        state
+            .target_selector
+            .begin_qr_pairing("payload".to_string(), token.clone());
+
+        state.hide();
+
+        assert!(token.is_cancelled());
+        assert!(state.target_selector.qr_pairing.is_none());
+    }
+
+    #[test]
+    fn test_reset_cancels_qr_pairing() {
+        use tokio_util::sync::CancellationToken;
+
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        let token = CancellationToken::new();
+        state
+            .target_selector
+            .begin_qr_pairing("payload".to_string(), token.clone());
+        state.target_selector.set_tab(TargetTab::PairQr);
+
+        state.reset();
+
+        assert!(token.is_cancelled());
+        assert!(state.target_selector.qr_pairing.is_none());
+        assert_eq!(state.target_selector.active_tab, TargetTab::Connected);
+    }
 
     #[test]
     fn test_create_and_select_default_config_empty_list() {

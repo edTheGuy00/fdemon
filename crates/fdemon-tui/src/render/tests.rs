@@ -1017,8 +1017,8 @@ fn phase5_view_renders_expected_new_session_dialog_regions() {
         .count();
 
     assert_eq!(
-        tab_count, 2,
-        "NewSessionDialog must register exactly 2 tab regions, got {}",
+        tab_count, 3,
+        "NewSessionDialog must register exactly 3 tab regions, got {}",
         tab_count
     );
     assert_eq!(

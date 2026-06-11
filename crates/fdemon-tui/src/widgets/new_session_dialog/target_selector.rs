@@ -131,8 +131,12 @@ impl TargetSelector<'_> {
         .animation_frame(self.animation_frame);
         tab_bar.render(chunks[0], buf);
 
-        // Render content based on active tab
-        if self.state.loading {
+        // Render content based on active tab.
+        // The Pair QR panel renders regardless of connected-discovery
+        // loading/error state — pairing is independent of the Flutter SDK.
+        if self.state.active_tab == TargetTab::PairQr {
+            self.render_qr_pairing(chunks[1], buf);
+        } else if self.state.loading {
             self.render_loading(chunks[1], buf);
         } else if let Some(ref error) = self.state.error {
             self.render_error(chunks[1], buf, error);
@@ -159,6 +163,7 @@ impl TargetSelector<'_> {
                     );
                     list.render(chunks[1], buf);
                 }
+                TargetTab::PairQr => {}
             }
         }
 
@@ -218,8 +223,11 @@ impl TargetSelector<'_> {
         // Render compact tab bar
         self.render_tabs_compact(chunks[0], buf);
 
-        // Render content based on active tab
-        if self.state.loading {
+        // Render content based on active tab (Pair QR ignores connected
+        // loading/error state, same as render_full).
+        if self.state.active_tab == TargetTab::PairQr {
+            self.render_qr_pairing(chunks[1], buf);
+        } else if self.state.loading {
             self.render_loading(chunks[1], buf);
         } else if let Some(ref error) = self.state.error {
             self.render_error(chunks[1], buf, error);
@@ -246,6 +254,7 @@ impl TargetSelector<'_> {
                     );
                     list.render(chunks[1], buf);
                 }
+                TargetTab::PairQr => {}
             }
         }
 
@@ -267,6 +276,7 @@ impl TargetSelector<'_> {
 
         let connected_active = self.state.active_tab == TargetTab::Connected;
         let bootable_active = self.state.active_tab == TargetTab::Bootable;
+        let pair_qr_active = self.state.active_tab == TargetTab::PairQr;
 
         // Both focused and unfocused use same style for active tab in compact mode
         let style_active = Style::default()
@@ -299,6 +309,12 @@ impl TargetSelector<'_> {
             bootable_base.to_string()
         };
 
+        let pair_qr_label = if pair_qr_active {
+            "[3 Pair QR]"
+        } else {
+            "3 Pair QR"
+        };
+
         // Pill-style compact: use brackets for active tab
         let tabs = vec![
             Span::styled(
@@ -313,6 +329,15 @@ impl TargetSelector<'_> {
             Span::styled(
                 bootable_label,
                 if bootable_active {
+                    style_active
+                } else {
+                    style_inactive
+                },
+            ),
+            Span::raw("  "),
+            Span::styled(
+                pair_qr_label,
+                if pair_qr_active {
                     style_active
                 } else {
                     style_inactive
@@ -343,6 +368,15 @@ impl TargetSelector<'_> {
         text.render(area, buf);
     }
 
+    fn render_qr_pairing(&self, area: Rect, buf: &mut Buffer) {
+        let panel = super::qr_pairing::QrPairingPanel::new(
+            self.state.qr_pairing.as_ref(),
+            self.tool_availability.adb,
+        )
+        .animation_frame(self.animation_frame);
+        panel.render(area, buf);
+    }
+
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         let hints = match self.state.active_tab {
             TargetTab::Connected => {
@@ -357,6 +391,7 @@ impl TargetSelector<'_> {
                 }
             }
             TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
+            TargetTab::PairQr => "Scan with your Android device  [r] New code".to_string(),
         };
 
         let text = Paragraph::new(hints.as_str())
@@ -408,6 +443,9 @@ mod tests {
 
         state.toggle_tab();
         assert_eq!(state.active_tab, TargetTab::Bootable);
+
+        state.toggle_tab();
+        assert_eq!(state.active_tab, TargetTab::PairQr);
 
         state.toggle_tab();
         assert_eq!(state.active_tab, TargetTab::Connected);

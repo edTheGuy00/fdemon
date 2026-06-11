@@ -506,6 +506,9 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
                             "Please select a device from the list."
                         }
                     }
+                    TargetTab::PairQr => {
+                        "Pair your device first, then select it on the Connected tab."
+                    }
                 };
 
                 state
