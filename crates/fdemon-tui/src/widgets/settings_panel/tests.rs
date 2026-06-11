@@ -180,9 +180,10 @@ fn test_project_settings_items_count() {
     let settings = Settings::default();
     let items = project_settings_items(&settings);
 
-    // Should have 35 items across 8 sections (includes DevTools + DevTools Logging + DAP Server +
-    // behavior.auto_launch added in cache-auto-launch-gate + ui.enable_mouse added in mouse-support)
-    assert_eq!(items.len(), 35);
+    // Should have 36 items across 8 sections (includes DevTools + DevTools Logging + DAP Server +
+    // behavior.auto_launch added in cache-auto-launch-gate + ui.enable_mouse added in mouse-support
+    // + ui.clipboard_mode added in clipboard-osc52)
+    assert_eq!(items.len(), 36);
 }
 
 #[test]

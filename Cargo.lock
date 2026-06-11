@@ -798,6 +798,7 @@ name = "fdemon-app"
 version = "0.5.9"
 dependencies = [
  "arboard",
+ "base64",
  "chrono",
  "color-eyre",
  "dirs",

@@ -87,6 +87,17 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.ui.enable_mouse = *v;
             }
         }
+        "ui.clipboard_mode" => {
+            if let SettingValue::Enum { value, .. } = &item.value {
+                use crate::config::ClipboardMode;
+                settings.ui.clipboard_mode = match value.as_str() {
+                    "system" => ClipboardMode::System,
+                    "osc52" => ClipboardMode::Osc52,
+                    "off" => ClipboardMode::Off,
+                    _ => ClipboardMode::Auto,
+                };
+            }
+        }
 
         // DevTools
         "devtools.auto_open" => {
@@ -341,6 +352,30 @@ mod tests {
             SettingItem::new("ui.enable_mouse", "Mouse Support").value(SettingValue::Bool(true));
         apply_project_setting(&mut settings, &item);
         assert!(settings.ui.enable_mouse);
+    }
+
+    #[test]
+    fn test_apply_setting_clipboard_mode() {
+        use crate::config::ClipboardMode;
+
+        let mut settings = Settings::default();
+        assert_eq!(settings.ui.clipboard_mode, ClipboardMode::Auto);
+
+        for (raw, expected) in [
+            ("system", ClipboardMode::System),
+            ("osc52", ClipboardMode::Osc52),
+            ("off", ClipboardMode::Off),
+            ("auto", ClipboardMode::Auto),
+            ("bogus", ClipboardMode::Auto),
+        ] {
+            let item =
+                SettingItem::new("ui.clipboard_mode", "Clipboard Mode").value(SettingValue::Enum {
+                    value: raw.to_string(),
+                    options: vec![],
+                });
+            apply_project_setting(&mut settings, &item);
+            assert_eq!(settings.ui.clipboard_mode, expected, "raw value: {raw}");
+        }
     }
 
     #[test]

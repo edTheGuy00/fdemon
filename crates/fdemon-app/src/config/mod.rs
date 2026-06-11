@@ -30,10 +30,11 @@ pub use settings::{
 };
 // Re-export public config types used by TUI and other crates
 pub use types::{
-    BehaviorSettings, ConfigSource, CustomSourceConfig, DapSettings, DevToolsLoggingSettings,
-    DevToolsSettings, EditorSettings, FlutterMode, IconMode, LaunchConfig, LaunchFile,
-    NativeLogsSettings, ParentIde, ReadyCheck, ResolvedLaunchConfig, SettingItem, SettingValue,
-    Settings, SettingsTab, TagConfig, UiSettings, UserPreferences, WatcherSettings, WindowPrefs,
+    BehaviorSettings, ClipboardMode, ConfigSource, CustomSourceConfig, DapSettings,
+    DevToolsLoggingSettings, DevToolsSettings, EditorSettings, FlutterMode, IconMode, LaunchConfig,
+    LaunchFile, NativeLogsSettings, ParentIde, ReadyCheck, ResolvedLaunchConfig, SettingItem,
+    SettingValue, Settings, SettingsTab, TagConfig, UiSettings, UserPreferences, WatcherSettings,
+    WindowPrefs,
 };
 pub use vscode::load_vscode_configs;
 pub use writer::{

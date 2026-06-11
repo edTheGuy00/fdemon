@@ -420,6 +420,37 @@ impl std::fmt::Display for IconMode {
     }
 }
 
+/// Clipboard backend selection for the copy-to-clipboard feature.
+///
+/// `Auto` (the default) picks a backend from the runtime environment: the OS
+/// clipboard on a desktop session, or OSC 52 terminal escape sequences when
+/// running over SSH or without a display server (the terminal emulator on the
+/// user's local machine receives the sequence and sets the local clipboard).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardMode {
+    /// Detect the environment: OS clipboard locally, OSC 52 over SSH/headless (default)
+    #[default]
+    Auto,
+    /// Always use the OS clipboard (X11/Wayland/macOS/Windows via arboard)
+    System,
+    /// Always emit OSC 52 escape sequences to the terminal
+    Osc52,
+    /// Disable copy-to-clipboard entirely
+    Off,
+}
+
+impl std::fmt::Display for ClipboardMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClipboardMode::Auto => write!(f, "auto"),
+            ClipboardMode::System => write!(f, "system"),
+            ClipboardMode::Osc52 => write!(f, "osc52"),
+            ClipboardMode::Off => write!(f, "off"),
+        }
+    }
+}
+
 /// UI settings
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UiSettings {
@@ -460,6 +491,13 @@ pub struct UiSettings {
     /// next fdemon launch.
     #[serde(default = "default_true")]
     pub enable_mouse: bool,
+
+    /// Clipboard backend for copy actions: "auto" (default), "system",
+    /// "osc52", or "off". Auto prefers the OS clipboard on desktop sessions
+    /// and falls back to OSC 52 escape sequences over SSH or when no display
+    /// server is available. Changes take effect on the next fdemon launch.
+    #[serde(default)]
+    pub clipboard_mode: ClipboardMode,
 }
 
 impl Default for UiSettings {
@@ -473,6 +511,7 @@ impl Default for UiSettings {
             stack_trace_max_frames: default_stack_trace_max_frames(),
             icons: IconMode::default(),
             enable_mouse: true,
+            clipboard_mode: ClipboardMode::default(),
         }
     }
 }
@@ -2009,6 +2048,75 @@ height = 1080
         assert!(prefs.window.is_some());
         assert_eq!(prefs.window.as_ref().unwrap().width, Some(1920));
         assert_eq!(prefs.window.as_ref().unwrap().height, Some(1080));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ClipboardMode Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_clipboard_mode_default_is_auto() {
+        assert_eq!(ClipboardMode::default(), ClipboardMode::Auto);
+    }
+
+    #[test]
+    fn test_clipboard_mode_display() {
+        assert_eq!(ClipboardMode::Auto.to_string(), "auto");
+        assert_eq!(ClipboardMode::System.to_string(), "system");
+        assert_eq!(ClipboardMode::Osc52.to_string(), "osc52");
+        assert_eq!(ClipboardMode::Off.to_string(), "off");
+    }
+
+    #[test]
+    fn test_clipboard_mode_deserialize_all_variants() {
+        #[derive(Deserialize)]
+        struct W {
+            mode: ClipboardMode,
+        }
+        for (raw, expected) in [
+            ("auto", ClipboardMode::Auto),
+            ("system", ClipboardMode::System),
+            ("osc52", ClipboardMode::Osc52),
+            ("off", ClipboardMode::Off),
+        ] {
+            let w: W = toml::from_str(&format!(r#"mode = "{raw}""#)).unwrap();
+            assert_eq!(w.mode, expected);
+        }
+    }
+
+    #[test]
+    fn test_clipboard_mode_serialize_round_trip() {
+        let settings = Settings {
+            ui: UiSettings {
+                clipboard_mode: ClipboardMode::Osc52,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let toml_str = toml::to_string(&settings).unwrap();
+        let parsed: Settings = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.ui.clipboard_mode, ClipboardMode::Osc52);
+    }
+
+    #[test]
+    fn test_ui_settings_deserializes_without_clipboard_mode_field() {
+        let toml = r#"enable_mouse = true"#;
+        let s: UiSettings = toml::from_str(toml).unwrap();
+        assert_eq!(
+            s.clipboard_mode,
+            ClipboardMode::Auto,
+            "missing field should default to auto"
+        );
+    }
+
+    #[test]
+    fn test_settings_with_clipboard_mode_field() {
+        let toml = r#"
+[ui]
+clipboard_mode = "osc52"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.ui.clipboard_mode, ClipboardMode::Osc52);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

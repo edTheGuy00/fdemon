@@ -38,7 +38,7 @@ mod state_service;
 
 #[cfg(test)]
 pub use clipboard::MemoryClipboard;
-pub use clipboard::{Clipboard, NullClipboard, SystemClipboard};
+pub use clipboard::{create_clipboard, Clipboard, ClipboardInit, NullClipboard, SystemClipboard};
 
 pub use flutter_controller::{
     CommandSenderController, DaemonFlutterController, FlutterCommand, FlutterController,
