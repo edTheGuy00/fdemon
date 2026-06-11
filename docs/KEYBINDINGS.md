@@ -47,6 +47,7 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Pane Navigation](#pane-navigation-1)
   - [Step List Controls](#step-list-controls-when-step-list-pane-is-focused)
   - [Detail Pane Controls](#detail-pane-controls-when-detail-pane-is-focused)
+  - [Version Picker Overlay](#version-picker-overlay-flutter-sdk-step)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -658,7 +659,10 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 |-----|--------|-------------|
 | `k` / `↑` | Navigate Up | Move selection up in the step list |
 | `j` / `↓` | Navigate Down | Move selection down in the step list |
-| `Enter` | Run / Retry Step | Run or retry the selected step (Flutter SDK install, Android Tools install — gated on a present JDK 17 — or PATH config write). No-op on guided-only steps (e.g. Prerequisites). |
+| `Enter` | Run / Retry Step / Toggle | On the **Platforms parent**: toggle the Platforms submenu expand/collapse. On the **Flutter SDK step**: open the version picker when no version has been confirmed yet; re-run the install with the confirmed version if one was already chosen. On any other auto-install step: run or retry it. No-op on guided-only steps (e.g. Prerequisites). |
+| `v` | Open Version Picker | Open (or re-open) the Flutter SDK version picker on the Flutter SDK step. No-op on all other steps and while a step is running. |
+| `l` / `→` | Expand Platforms submenu | Expand the Platforms submenu when the `Platforms` parent row is selected and the submenu is currently collapsed. No-op when on any other step or when already expanded. |
+| `h` / `←` | Collapse Platforms submenu | Collapse the Platforms submenu whenever it is expanded, from the parent row **or** any platform leaf. Re-anchors the cursor to the `Platforms` parent row when collapsing from a leaf. No-op when already collapsed. |
 | `[` | Previous Command | Select the previous guided command on the current step (e.g. cycle backward through macOS Prerequisites: Xcode CLT → Rosetta). No-op when only one command is available. |
 | `]` | Next Command | Select the next guided command on the current step (e.g. cycle forward through macOS Prerequisites: Xcode CLT → CocoaPods → Rosetta). No-op when only one command is available. |
 | `c` | Copy Selected Guided Command | Copy the currently selected guided command to the clipboard (e.g. the JDK install command or a per-OS prerequisite install command). No-op when the step has no guided command. |
@@ -671,6 +675,30 @@ Preflight runs automatically when the wizard opens. Press `r` to re-run at any t
 | `k` / `↑` | Scroll Up | Scroll the detail pane up |
 | `j` / `↓` | Scroll Down | Scroll the detail pane down |
 | `r` | Re-run Preflight | Re-run the toolchain preflight check |
+
+### Version Picker Overlay (Flutter SDK step)
+
+The version picker is a modal overlay that appears over the wizard on the Flutter SDK step. It fetches the Flutter release manifest, groups releases into **Stable / Beta / Master** tabs (Master holds synthetic git-only `master` and `main` rows), and filters by CPU architecture on macOS. The picker defaults the cursor to the newest stable release.
+
+**While the picker is visible, it intercepts ALL keys** — no underlying wizard key fires. The only exception is `Ctrl+C`, which always force-quits.
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `k` / `↑` | Move Up | Move the version cursor up |
+| `j` / `↓` | Move Down | Move the version cursor down |
+| `Tab` | Cycle Channel Tab | Cycle through Stable → Beta → Master channel tabs |
+| `r` | Re-fetch | Re-fetch the Flutter releases manifest |
+| `Enter` | Confirm and Install | Confirm the selected version and immediately start the install. In the **error state** (manifest fetch failed), installs the default `[toolchain] channel` un-pinned (offline path preserved). |
+| `Esc` | Close | Close the picker without installing |
+| `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
+
+> **Precedence:** a picker choice overrides `[toolchain] channel` for that run only — it is never persisted. After a successful install, the SDK is pinned via `[flutter] sdk_path` as usual.
+
+> **Install location:** a pinned version installs to `~/fvm/versions/<version>` (FVM-compatible); a channel-only install (picker never opened or error-state fallback) uses `~/fvm/versions/<channel>`. Both appear in the Flutter Version panel's FVM cache.
+
+> **git-only rows:** `master` and `main` entries in the Master tab have no release archive; selecting one forces a `git clone` install regardless of `flutter_install_method`. Without git, these rows cannot be installed.
+
+> **Picker unavailable while running:** the picker cannot be opened while a wizard step is actively running. The `v` key and the Enter-opens-picker behaviour are both suppressed in that case.
 
 ---
 

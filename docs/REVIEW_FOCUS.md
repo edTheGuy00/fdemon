@@ -36,6 +36,7 @@ handler layer. These fields:
 - `PerformanceState::frame_chart_visible_width` — the renderer writes the visible bar count each frame; the chart-scroll, page, and jump handlers read it to clamp `frame_chart_scroll_offset` and size page-step navigation. Default 0 (safe fallback when no render has happened yet).
 - `PerformanceState::timeline_visible_row_count` — the Gantt renderer writes the actual visible thread-row count each frame; the `↑/↓` timeline thread-row scroll handler reads it to bound `timeline_thread_scroll_offset`. Default 0 (safe fallback when no render has happened yet). Write site annotated with the standard `// EXCEPTION:` comment in `timeline_events/mod.rs`.
 - `InstallWizardState::last_known_visible_height` — the renderer writes the detail-pane content height each frame; the `handle_down` handler / render-time clamp use it to keep the detail view in range. Default 0 (safe fallback when no render has happened yet). Write site annotated in `widgets/install_wizard/step_detail.rs`.
+- `VersionPickerState::last_known_visible_height` — the renderer writes the visible list-row count each frame inside `VersionPickerOverlay`'s list render; the picker's scroll-adjust logic (`adjust_scroll`, used by `move_up`/`move_down`/`apply_manifest`) reads it to keep the selected row visible. Default 0 (safe fallback when no render has happened yet). Write site annotated in `widgets/install_wizard/version_picker.rs`.
 
 New `Cell`-based render-hint fields require explicit review and documentation here.
 

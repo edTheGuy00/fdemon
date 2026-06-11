@@ -34,11 +34,14 @@ note() { echo "==> $*"; }
 command -v docker >/dev/null || die "docker not found"
 
 show_access() {
+  # Ports bind to BIND_ADDR (compose: ${BIND_ADDR:-127.0.0.1}) — loopback by
+  # default; set BIND_ADDR to the host's tailnet IP to reach the VM remotely.
+  local bind="${BIND_ADDR:-127.0.0.1}"
   cat <<EOF
 
-  Windows VM access:
-    noVNC (browser, any host):  http://localhost:8006   (or http://<this-host>:8006)
-    RDP:                        <host>:3389   user: Docker   pass: admin
+  Windows VM access (bound to $bind):
+    noVNC (browser):  http://$bind:8006
+    RDP:              $bind:3389   user: Docker   pass: admin
     First install takes ~20-30 min (ISO download + setup); watch it via noVNC.
 EOF
 }
@@ -52,6 +55,15 @@ build_and_stage_exe() {
   docker cp "$cid":/build/target/x86_64-pc-windows-gnu/release/fdemon.exe "$win_dir/oem/fdemon.exe"
   docker rm "$cid" >/dev/null
   note "staged fdemon.exe → shared/ (live, for the running VM) and oem/ (auto-stage on fresh install)"
+  cat <<'EOF'
+
+  To update the RUNNING VM (PowerShell, in the RDP session — NOT cmd syntax):
+    1. Quit any running fdemon first (Windows locks running .exe files).
+    2. Copy-Item -Force "$env:USERPROFILE\Desktop\Shared\fdemon.exe" C:\fdemon\fdemon.exe
+    3. Verify (compare with host: sha256sum tests/docker/windows/shared/fdemon.exe):
+       Get-FileHash C:\fdemon\fdemon.exe -Algorithm SHA256
+  Note: `fdemon --version` only changes when Cargo.toml is bumped — trust the hash.
+EOF
 }
 
 cmd_up() {
@@ -72,7 +84,6 @@ cmd_status() {
 
 cmd_rebuild() {
   build_and_stage_exe
-  note "for the RUNNING VM, copy it in-guest from the shared folder to C:\\fdemon\\fdemon.exe"
 }
 
 cmd_fresh() {

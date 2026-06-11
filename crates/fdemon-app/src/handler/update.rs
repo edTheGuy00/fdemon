@@ -3250,6 +3250,40 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::InstallWizardPrevCommand => install_wizard::handle_prev_command(state),
         Message::InstallWizardNextCommand => install_wizard::handle_next_command(state),
 
+        // Toggle the Platforms submenu expand/collapse (Phase 2, Task 02).
+        Message::InstallWizardToggleExpand => install_wizard::handle_toggle_expand(state),
+
+        // Directional expand/collapse (followup — navigation correctness).
+        Message::InstallWizardExpand => install_wizard::handle_expand(state),
+        Message::InstallWizardCollapse => install_wizard::handle_collapse(state),
+
+        // ── Install Wizard — Version Picker (Phase 6) ────────────────────────
+        Message::InstallWizardOpenVersionPicker => {
+            install_wizard::version_picker::handle_open_picker(state)
+        }
+        Message::InstallWizardVersionPickerClose => {
+            install_wizard::version_picker::handle_close_picker(state)
+        }
+        Message::InstallWizardVersionPickerUp => install_wizard::version_picker::handle_up(state),
+        Message::InstallWizardVersionPickerDown => {
+            install_wizard::version_picker::handle_down(state)
+        }
+        Message::InstallWizardVersionPickerNextTab => {
+            install_wizard::version_picker::handle_next_tab(state)
+        }
+        Message::InstallWizardVersionPickerRefetch => {
+            install_wizard::version_picker::handle_refetch(state)
+        }
+        Message::InstallWizardVersionPickerConfirm => {
+            install_wizard::version_picker::handle_confirm(state)
+        }
+        Message::FlutterManifestFetched { manifest } => {
+            install_wizard::version_picker::handle_manifest_fetched(state, manifest)
+        }
+        Message::FlutterManifestFetchFailed { error } => {
+            install_wizard::version_picker::handle_manifest_fetch_failed(state, error)
+        }
+
         Message::ToolchainPreflightCompleted { report } => {
             install_wizard::handle_preflight_completed(state, report)
         }

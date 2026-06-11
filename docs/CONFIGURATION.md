@@ -775,6 +775,12 @@ android_api_level = 36
 
 # Explicit JDK 17 directory, passed to `flutter config --jdk-dir`.
 # jdk_path = "/usr/lib/jvm/java-17-openjdk"
+
+# Custom Chromium-based browser for `flutter run -d chrome` and the Web doctor check.
+# When set, takes precedence over the CHROME_EXECUTABLE environment variable and
+# per-OS default browser locations when fdemon probes for a web browser.
+# Leave unset to use the standard probe order (CHROME_EXECUTABLE env → per-OS defaults).
+# web_browser_executable = "/usr/bin/chromium-browser"
 ```
 
 | Property | Type | Default | Description |
@@ -786,6 +792,7 @@ android_api_level = 36
 | `android_api_level` | `integer` | `36` | Android API level for `platforms/` and `build-tools/` installation. |
 | `cmdline_tools_build` | `string` | (current) | `cmdline-tools` build number override, used in the download URL. Leave unset to use the current default. Override when the default URL 404s — find the latest build number at [developer.android.com/studio#command-tools](https://developer.android.com/studio#command-tools). |
 | `jdk_path` | `string` | (auto-detect) | Explicit JDK 17 directory, passed to `flutter config --jdk-dir`. When unset, fdemon auto-detects via `$JAVA_HOME` and `which java`. |
+| `web_browser_executable` | `string` | (unset) | Path to a Chromium-based browser used for `flutter run -d chrome` and the Web doctor check in the Install Wizard. Takes precedence over the `CHROME_EXECUTABLE` environment variable and the per-OS default browser locations when fdemon probes for a web browser. Leave unset to rely on the standard probe order. Note: this is distinct from `[devtools] browser`, which controls which browser opens the DevTools UI. |
 
 #### Android install assumptions
 
@@ -1158,6 +1165,7 @@ suppress_reload_on_pause = true
 [toolchain]
 channel = "stable"
 flutter_install_method = "git"
+# web_browser_executable = "/usr/bin/chromium-browser"  # Optional: custom browser for flutter run -d chrome
 
 [editor]
 command = ""  # Auto-detect

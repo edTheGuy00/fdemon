@@ -15,18 +15,24 @@
 //! from an optional override, env vars, and OS-specific default locations.
 
 mod android;
+mod ios;
 mod prerequisites;
+mod web;
+mod windows;
 
 pub use android::{
     android_sdk_root_with_override, check_android_build_tools, check_android_cmdline_tools,
     check_android_licenses, check_android_platform, check_android_platform_tools,
     resolve_android_sdk_root_path, sdkmanager_bin_name,
 };
+pub use ios::check_ios;
 pub use prerequisites::{
     check_prerequisites, detect_linux_package_manager, parse_missing_prereq_keys,
     LinuxPackageManager, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
     PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
 };
+pub use web::check_web;
+pub use windows::{check_windows, VS_FOUND_PREFIX};
 
 use std::path::Path;
 use std::process::Stdio;

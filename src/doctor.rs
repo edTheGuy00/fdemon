@@ -18,6 +18,12 @@
 //! contribute to a failing exit code — allowing pure Flutter web/desktop/iOS
 //! projects and CI runners without an Android SDK to exit 0.
 //!
+//! **`WebBrowser`** is **never** gating: a missing or absent Chromium-based
+//! browser is optional for the CLI doctor.  The component is printed in the
+//! listing for information, but a `Missing` or `Partial` browser does **not**
+//! fail the exit code.  This mirrors the wizard's non-blocking treatment of the
+//! Web leaf (`Missing → Partial` cap, no handback gate).
+//!
 //! This subcommand never starts the TUI or the Engine — it is a pure
 //! diagnostic tool intended for CI pipelines and manual toolchain debugging.
 
@@ -43,6 +49,22 @@ fn is_android_component(kind: &ComponentKind) -> bool {
             | ComponentKind::AndroidBuildTools
             | ComponentKind::AndroidLicenses
     )
+}
+
+/// Return `true` when a component contributes to the `fdemon doctor` exit code.
+///
+/// - Android components gate only when the Android SDK is present (`android_gates`).
+/// - [`ComponentKind::WebBrowser`] is **never** gating: a browser is optional,
+///   mirroring the wizard's non-blocking `Missing → Partial` treatment of the
+///   Web leaf.  It is printed for information but does not fail the exit code.
+/// - All other (core) components always gate.
+fn component_gates(kind: &ComponentKind, android_gates: bool) -> bool {
+    if is_android_component(kind) {
+        android_gates
+    } else {
+        // WebBrowser is never gating; all other (core) components always gate.
+        !matches!(kind, ComponentKind::WebBrowser)
+    }
 }
 
 /// Return `true` when the Android SDK appears to be present on this host.
@@ -84,7 +106,7 @@ pub async fn run_doctor(cwd: PathBuf, explicit_sdk: Option<PathBuf>) -> ExitCode
 
     // Headless doctor has no persisted wizard settings — rely on env/default
     // Android SDK resolution (no override).
-    let outcome = run_preflight(&cwd, explicit_sdk.as_deref(), None).await;
+    let outcome = run_preflight(&cwd, explicit_sdk.as_deref(), None, None).await;
     let report = outcome.report;
 
     // Determine whether Android components should gate the exit code.
@@ -92,12 +114,7 @@ pub async fn run_doctor(cwd: PathBuf, explicit_sdk: Option<PathBuf>) -> ExitCode
 
     let mut all_ok = true;
     for c in &report.components {
-        // Android components only fail the exit code when the SDK is present.
-        let gates = if is_android_component(&c.kind) {
-            android_gates
-        } else {
-            true
-        };
+        let gates = component_gates(&c.kind, android_gates);
         if gates && is_failing(&c.status) {
             all_ok = false;
         }
@@ -128,7 +145,7 @@ mod tests {
         ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, HostShell, ToolchainReport,
     };
 
-    use super::{android_sdk_present, is_android_component, is_failing};
+    use super::{android_sdk_present, component_gates, is_android_component, is_failing};
 
     // ── helper ────────────────────────────────────────────────────────────────
 
@@ -176,6 +193,93 @@ mod tests {
         assert!(!is_android_component(&ComponentKind::Git));
         assert!(!is_android_component(&ComponentKind::Jdk));
         assert!(!is_android_component(&ComponentKind::Prerequisites));
+        assert!(!is_android_component(&ComponentKind::WebBrowser));
+    }
+
+    // ── component_gates ───────────────────────────────────────────────────────
+
+    /// WebBrowser must never gate regardless of `android_gates`.
+    #[test]
+    fn component_gates_web_browser_never_gates() {
+        assert!(!component_gates(&ComponentKind::WebBrowser, false));
+        assert!(!component_gates(&ComponentKind::WebBrowser, true));
+    }
+
+    /// Core components must always gate the exit code.
+    #[test]
+    fn component_gates_core_always_gates() {
+        for kind in &[
+            ComponentKind::FlutterSdk,
+            ComponentKind::Git,
+            ComponentKind::Jdk,
+            ComponentKind::Prerequisites,
+        ] {
+            assert!(
+                component_gates(kind, false),
+                "{kind:?} should gate even when android_gates=false"
+            );
+            assert!(
+                component_gates(kind, true),
+                "{kind:?} should gate when android_gates=true"
+            );
+        }
+    }
+
+    /// Android components mirror the `android_gates` flag exactly.
+    #[test]
+    fn component_gates_android_follows_android_gates() {
+        let android_kinds = [
+            ComponentKind::AndroidCmdlineTools,
+            ComponentKind::AndroidPlatformTools,
+            ComponentKind::AndroidPlatform,
+            ComponentKind::AndroidBuildTools,
+            ComponentKind::AndroidLicenses,
+        ];
+        for kind in &android_kinds {
+            assert!(
+                !component_gates(kind, false),
+                "{kind:?} should not gate when android_gates=false"
+            );
+            assert!(
+                component_gates(kind, true),
+                "{kind:?} should gate when android_gates=true"
+            );
+        }
+    }
+
+    /// A report with all-Ok core, no Android SDK, and a Missing WebBrowser
+    /// must keep `all_ok == true` — the browser never fails the exit code.
+    #[test]
+    fn web_browser_missing_does_not_fail_exit() {
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Unknown),
+            make_check(
+                ComponentKind::AndroidPlatformTools,
+                ComponentStatus::Unknown,
+            ),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Unknown),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Unknown),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Unknown),
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Missing),
+        ]);
+
+        let android_gates = android_sdk_present(&report);
+        assert!(!android_gates, "Android should not gate when SDK absent");
+
+        let mut all_ok = true;
+        for c in &report.components {
+            if component_gates(&c.kind, android_gates) && is_failing(&c.status) {
+                all_ok = false;
+            }
+        }
+        assert!(
+            all_ok,
+            "Missing WebBrowser must not cause a failing exit code"
+        );
     }
 
     // ── android_sdk_present ───────────────────────────────────────────────────
@@ -274,12 +378,7 @@ mod tests {
 
         let mut all_ok = true;
         for c in &report.components {
-            let gates = if is_android_component(&c.kind) {
-                android_gates
-            } else {
-                true
-            };
-            if gates && is_failing(&c.status) {
+            if component_gates(&c.kind, android_gates) && is_failing(&c.status) {
                 all_ok = false;
             }
         }
@@ -307,12 +406,7 @@ mod tests {
         let android_gates = android_sdk_present(&report);
         let mut all_ok = true;
         for c in &report.components {
-            let gates = if is_android_component(&c.kind) {
-                android_gates
-            } else {
-                true
-            };
-            if gates && is_failing(&c.status) {
+            if component_gates(&c.kind, android_gates) && is_failing(&c.status) {
                 all_ok = false;
             }
         }
@@ -339,12 +433,7 @@ mod tests {
 
         let mut all_ok = true;
         for c in &report.components {
-            let gates = if is_android_component(&c.kind) {
-                android_gates
-            } else {
-                true
-            };
-            if gates && is_failing(&c.status) {
+            if component_gates(&c.kind, android_gates) && is_failing(&c.status) {
                 all_ok = false;
             }
         }

@@ -48,7 +48,7 @@ use super::checks::sdkmanager_bin_name;
 use super::download::{download_to_file, ensure_disk_space, extract_zip, verify_sha256};
 use super::flutter_install::InstallEvent;
 use super::jdk::{resolve_jdk_home, validate_jdk_home};
-use super::process_stream::run_streaming_with_input;
+use super::process_stream::{run_streaming, run_streaming_with_input};
 use super::types::{
     cmdline_tools_url, sdkmanager_packages, AndroidInstallOutcome, AndroidInstallTarget,
     DownloadProgress,
@@ -148,6 +148,19 @@ const LICENSES_ACCEPTED_MARKER: &str = "All SDK package licenses accepted";
 /// platform-tools) the total on-disk footprint typically exceeds 1.5 GiB.
 /// A 2 GiB budget provides a safe margin for the initial install.
 const ANDROID_DISK_BUDGET_BYTES: u64 = 2_147_483_648; // 2 GiB
+
+/// Maximum number of trailing lines included in a failure error message.
+///
+/// Keeps `WizardStepFailed.reason` readable while still surfacing the most
+/// actionable part of sdkmanager output (the last few lines usually contain
+/// the root cause).
+const OUTPUT_TAIL_MAX_LINES: usize = 10;
+
+/// Maximum total character length of the tail string embedded in an error.
+///
+/// Caps the error message at a human-readable length even when sdkmanager
+/// emits very long lines.
+const OUTPUT_TAIL_MAX_CHARS: usize = 800;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -351,19 +364,70 @@ where
     //
     // Delegate to `build_sdkmanager_env` which handles the resolution /
     // validation / env-pair assembly in one pure step (also unit-testable).
+    // It now also returns the resolved jdk_home so we can validate it before
+    // running sdkmanager.
     tracing::debug!(
         explicit = target.jdk_path.is_some(),
         "Android install: resolving JDK home for sdkmanager"
     );
-    let env_pairs = build_sdkmanager_env(&target.sdk_root, target.jdk_path.clone())?;
+    let (env_pairs, jdk_home) = build_sdkmanager_env(&target.sdk_root, target.jdk_path.clone())?;
 
-    let license_stdin = "y\n".repeat(LICENSE_YES_COUNT);
+    // ── Pre-run JDK validation ───────────────────────────────────────────────
+    //
+    // Run `<jdk_home>/bin/java[.exe] -version` with the same env as sdkmanager
+    // to confirm the resolved JDK can actually execute before invoking the bat
+    // script.  A stale `[toolchain] jdk_path` / bad `JAVA_HOME` is caught here
+    // with a clear diagnostic rather than inside sdkmanager.bat with a cryptic
+    // cmd.exe "system cannot find the path specified" error.
+    on_event(InstallEvent::Phase("Validating JDK"));
 
-    // Convert to Vec<(&str, &str)> for run_streaming_with_input.
-    let env_refs: Vec<(&str, &str)> = env_pairs
+    let java_exe_path = java_exe_path(&jdk_home);
+    let java_exe_str = java_exe_path.to_string_lossy().to_string();
+
+    let env_refs_owned: Vec<(&str, &str)> = env_pairs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
+
+    tracing::debug!(java = %java_exe_path.display(), "Android install: validating JDK with -version");
+
+    let java_version_result = run_streaming(
+        &java_exe_str,
+        &["-version"],
+        Some(&target.sdk_root),
+        |line| {
+            tracing::debug!("java -version: {line}");
+        },
+    )
+    .await;
+
+    match java_version_result {
+        Err(spawn_err) => {
+            return Err(Error::process(format!(
+                "resolved JDK at '{}' cannot execute java \
+                 ('{java_exe_str} -version' failed: {spawn_err}); \
+                 set [toolchain] jdk_path in .fdemon/config.toml to a valid JDK 17+ home",
+                jdk_home.display()
+            )));
+        }
+        Ok(status) if !status.success() => {
+            return Err(Error::process(format!(
+                "resolved JDK at '{}' cannot execute java \
+                 ('{java_exe_str} -version' exited with {status}); \
+                 set [toolchain] jdk_path in .fdemon/config.toml to a valid JDK 17+ home",
+                jdk_home.display()
+            )));
+        }
+        Ok(_) => {
+            tracing::debug!("JDK validation passed for '{}'", jdk_home.display());
+        }
+    }
+
+    let license_stdin = "y\n".repeat(LICENSE_YES_COUNT);
+
+    // env_refs_owned was already built above during JDK validation; reuse it
+    // for all sdkmanager invocations.
+    let env_refs = env_refs_owned;
 
     let sdkmanager_str = sdkmanager.to_string_lossy().to_string();
 
@@ -383,8 +447,9 @@ where
         .await?;
 
         if !status.success() {
+            let tail = output_tail(&log_lines, OUTPUT_TAIL_MAX_LINES, OUTPUT_TAIL_MAX_CHARS);
             return Err(Error::process(format!(
-                "sdkmanager --licenses exited with {status}; see log above for details"
+                "sdkmanager --licenses exited with {status}; last output: {tail}"
             )));
         }
 
@@ -416,6 +481,7 @@ where
     // package install are also answered with 'y'.
     let install_stdin = "y\n".repeat(LICENSE_YES_COUNT);
 
+    let mut install_log_lines: Vec<String> = Vec::new();
     let install_status = run_streaming_with_input(
         &sdkmanager_str,
         &install_args,
@@ -423,14 +489,20 @@ where
         &env_refs,
         install_stdin.as_bytes(),
         |line| {
-            on_event(InstallEvent::Log(line));
+            on_event(InstallEvent::Log(line.clone()));
+            install_log_lines.push(line);
         },
     )
     .await?;
 
     if !install_status.success() {
+        let tail = output_tail(
+            &install_log_lines,
+            OUTPUT_TAIL_MAX_LINES,
+            OUTPUT_TAIL_MAX_CHARS,
+        );
         return Err(Error::process(format!(
-            "sdkmanager package install exited with {install_status}; see log above for details"
+            "sdkmanager package install exited with {install_status}; last output: {tail}"
         )));
     }
 
@@ -627,7 +699,8 @@ pub(crate) fn check_sdkmanager_guard(sdk_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Build the environment variable pairs required for `sdkmanager` child processes.
+/// Build the environment variable pairs required for `sdkmanager` child processes,
+/// and return the resolved JDK home alongside them.
 ///
 /// This is a pure, synchronous helper that:
 /// 1. Resolves the JDK home: uses `jdk_path` if `Some`, otherwise falls back to
@@ -640,7 +713,8 @@ pub(crate) fn check_sdkmanager_guard(sdk_root: &Path) -> Result<()> {
 ///    - `PATH` = `<jdk_home>/bin` prepended to the current process `PATH`
 ///
 /// Both the `--licenses` call and the package-install call use the same env
-/// pairs returned by this function.
+/// pairs returned by this function.  The returned `PathBuf` is the validated
+/// JDK home, which the caller uses for pre-run java validation.
 ///
 /// # Errors
 ///
@@ -650,7 +724,7 @@ pub(crate) fn check_sdkmanager_guard(sdk_root: &Path) -> Result<()> {
 pub(crate) fn build_sdkmanager_env(
     sdk_root: &Path,
     jdk_path: Option<PathBuf>,
-) -> Result<Vec<(String, String)>> {
+) -> Result<(Vec<(String, String)>, PathBuf)> {
     let raw_jdk_home: Option<PathBuf> = jdk_path.or_else(resolve_jdk_home);
 
     let jdk_home: PathBuf = match raw_jdk_home {
@@ -690,7 +764,52 @@ pub(crate) fn build_sdkmanager_env(
     let mut env_pairs: Vec<(String, String)> = vec![("ANDROID_HOME".to_string(), sdk_root_str)];
     env_pairs.push(("JAVA_HOME".to_string(), java_home_str));
     env_pairs.push(("PATH".to_string(), new_path));
-    Ok(env_pairs)
+    Ok((env_pairs, jdk_home))
+}
+
+/// Return the platform-correct path to the `java` executable within `jdk_home`.
+///
+/// On Windows the binary is `bin\java.exe`; on POSIX it is `bin/java`.
+///
+/// This is extracted as a pure helper so unit tests can assert the correct name
+/// is constructed for both platform names without spawning a real process.
+pub(crate) fn java_exe_path(jdk_home: &Path) -> PathBuf {
+    #[cfg(windows)]
+    let java_name = "java.exe";
+    #[cfg(not(windows))]
+    let java_name = "java";
+    jdk_home.join("bin").join(java_name)
+}
+
+/// Format the last `max_lines` non-empty lines from `lines` as a single
+/// `" | "`-joined string, capped at `max_chars` total characters.
+///
+/// This is used to embed a human-readable tail of sdkmanager output inside
+/// a `WizardStepFailed.reason` so the user sees the actual error from the
+/// bat script rather than "see log above for details".
+///
+/// Empty lines are filtered out before selecting the tail so that a block of
+/// blank trailing lines does not push the meaningful output off the end.
+///
+/// When the joined tail exceeds `max_chars`, it is truncated to exactly
+/// `max_chars` characters and a `"…"` suffix is appended.
+pub(crate) fn output_tail(lines: &[String], max_lines: usize, max_chars: usize) -> String {
+    let non_empty: Vec<&str> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+
+    let tail_start = non_empty.len().saturating_sub(max_lines);
+    let tail = non_empty[tail_start..].join(" | ");
+
+    if tail.len() <= max_chars {
+        tail
+    } else {
+        // Truncate to max_chars and append ellipsis.
+        let truncated: String = tail.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1336,8 +1455,9 @@ mod tests {
         let jdk_tmp = tempfile::TempDir::new().unwrap();
         make_jdk_fixture(jdk_tmp.path());
 
-        let env_pairs = build_sdkmanager_env(sdk_tmp.path(), Some(jdk_tmp.path().to_owned()))
-            .expect("explicit valid jdk_path must succeed");
+        let (env_pairs, returned_jdk_home) =
+            build_sdkmanager_env(sdk_tmp.path(), Some(jdk_tmp.path().to_owned()))
+                .expect("explicit valid jdk_path must succeed");
 
         let java_home = env_pairs
             .iter()
@@ -1351,6 +1471,12 @@ mod tests {
             jdk_tmp.path(),
             "JAVA_HOME must match the explicit jdk_path fixture, got: {java_home}"
         );
+        // The returned jdk_home PathBuf must also match.
+        assert_eq!(
+            returned_jdk_home,
+            jdk_tmp.path(),
+            "returned jdk_home must match fixture path"
+        );
     }
 
     // ── build_sdkmanager_env: env-pair contents ───────────────────────────────
@@ -1363,8 +1489,9 @@ mod tests {
         let jdk_tmp = tempfile::TempDir::new().unwrap();
         make_jdk_fixture(jdk_tmp.path());
 
-        let env_pairs = build_sdkmanager_env(sdk_tmp.path(), Some(jdk_tmp.path().to_owned()))
-            .expect("must succeed with valid JDK fixture");
+        let (env_pairs, _jdk_home) =
+            build_sdkmanager_env(sdk_tmp.path(), Some(jdk_tmp.path().to_owned()))
+                .expect("must succeed with valid JDK fixture");
 
         // ANDROID_HOME must be set to sdk_root.
         let android_home = env_pairs
@@ -1537,6 +1664,175 @@ mod tests {
         assert!(
             msg.contains("does not exist") || msg.contains("not found"),
             "error must indicate directory absence: {msg}"
+        );
+    }
+
+    // ── output_tail helper ────────────────────────────────────────────────────
+
+    /// Empty input returns an empty string.
+    #[test]
+    fn test_output_tail_empty_returns_empty() {
+        assert_eq!(output_tail(&[], 10, 800), "");
+    }
+
+    /// When there are fewer lines than max_lines, all non-empty lines are
+    /// included.
+    #[test]
+    fn test_output_tail_short_input_returns_all_non_empty() {
+        let lines: Vec<String> = vec![
+            "line 1".to_string(),
+            "line 2".to_string(),
+            "line 3".to_string(),
+        ];
+        let tail = output_tail(&lines, 10, 800);
+        assert!(tail.contains("line 1"), "all lines must appear: {tail}");
+        assert!(tail.contains("line 2"), "all lines must appear: {tail}");
+        assert!(tail.contains("line 3"), "all lines must appear: {tail}");
+    }
+
+    /// When there are more lines than max_lines, only the last max_lines are
+    /// included and early lines are excluded.
+    #[test]
+    fn test_output_tail_long_input_returns_last_n_lines() {
+        // Use zero-padded names so "item-001" is not a substring of "item-016".
+        let lines: Vec<String> = (1..=20).map(|i| format!("item-{i:03}")).collect();
+        let tail = output_tail(&lines, 5, 800);
+        // Last 5 lines must be present.
+        for i in 16..=20 {
+            assert!(
+                tail.contains(&format!("item-{i:03}")),
+                "item-{i:03} must be in tail: {tail}"
+            );
+        }
+        // Early lines must be absent.
+        assert!(
+            !tail.contains("item-001"),
+            "early item-001 must not appear in tail: {tail}"
+        );
+        assert!(
+            !tail.contains("item-015"),
+            "item-015 must not appear in tail: {tail}"
+        );
+    }
+
+    /// Blank lines are filtered out before selecting the tail.
+    #[test]
+    fn test_output_tail_filters_blank_lines() {
+        let lines: Vec<String> = vec![
+            "error: something bad".to_string(),
+            "".to_string(),
+            "   ".to_string(),
+            "".to_string(),
+        ];
+        let tail = output_tail(&lines, 10, 800);
+        // Only the non-blank line should appear.
+        assert!(
+            tail.contains("error: something bad"),
+            "non-blank line must be present: {tail}"
+        );
+        // The result must not contain the blank lines as standalone content.
+        // (join uses " | " so blanks would appear as empty segments — they
+        // should be absent entirely after filtering.)
+        assert!(
+            !tail.contains(" |  | "),
+            "blank lines must be filtered: {tail}"
+        );
+    }
+
+    /// When all lines are blank, output_tail returns an empty string.
+    #[test]
+    fn test_output_tail_all_blank_returns_empty() {
+        let lines: Vec<String> = vec!["".to_string(), "   ".to_string(), "\t".to_string()];
+        assert_eq!(output_tail(&lines, 10, 800), "");
+    }
+
+    /// When the joined tail exceeds max_chars, it is truncated and appended
+    /// with an ellipsis.
+    #[test]
+    fn test_output_tail_truncates_at_max_chars() {
+        // Create a single very long line.
+        let long_line: String = "x".repeat(2000);
+        let lines = vec![long_line];
+        let tail = output_tail(&lines, 10, 100);
+        // Tail must be capped at 100 chars + "…".
+        assert!(
+            tail.ends_with('…'),
+            "truncated tail must end with ellipsis: {tail}"
+        );
+        // The body (before "…") must be exactly 100 chars.
+        let body: String = tail.chars().take_while(|&c| c != '…').collect();
+        assert_eq!(
+            body.len(),
+            100,
+            "truncated body must be exactly max_chars long"
+        );
+    }
+
+    /// A tail that is exactly max_chars long is returned without truncation.
+    #[test]
+    fn test_output_tail_exactly_max_chars_not_truncated() {
+        let line: String = "a".repeat(100);
+        let lines = vec![line.clone()];
+        let tail = output_tail(&lines, 10, 100);
+        assert_eq!(
+            tail, line,
+            "tail must not be truncated at exactly max_chars"
+        );
+    }
+
+    // ── java_exe_path helper ──────────────────────────────────────────────────
+
+    /// On any host OS, `java_exe_path` with a POSIX-style JDK home produces
+    /// `bin/java` (the POSIX name) when compiled for non-Windows.
+    ///
+    /// We test the output name via the last path component so the test is
+    /// meaningful on both Linux and macOS CI runners.
+    #[cfg(not(windows))]
+    #[test]
+    fn test_java_exe_path_posix_name() {
+        let jdk_home = PathBuf::from("/home/user/.jdks/corretto-21");
+        let path = java_exe_path(&jdk_home);
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(file_name, "java", "POSIX java exe name must be 'java'");
+        assert!(
+            path.to_string_lossy().contains("bin"),
+            "path must include bin/: {}",
+            path.display()
+        );
+    }
+
+    /// On Windows (or when simulating the Windows path), `java_exe_path`
+    /// produces `bin/java.exe`.
+    ///
+    /// This test runs on all hosts but uses a manually constructed path to
+    /// verify the Windows file name is correctly derived.
+    #[cfg(windows)]
+    #[test]
+    fn test_java_exe_path_windows_name() {
+        let jdk_home = PathBuf::from(r"C:\Program Files\Eclipse Adoptium\jdk-21");
+        let path = java_exe_path(&jdk_home);
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            file_name, "java.exe",
+            "Windows java exe name must be 'java.exe'"
+        );
+    }
+
+    /// Cross-platform: verify the `bin/` component is always present in the
+    /// constructed path regardless of OS.
+    #[test]
+    fn test_java_exe_path_always_has_bin_component() {
+        let jdk_home = PathBuf::from("/some/jdk/home");
+        let path = java_exe_path(&jdk_home);
+
+        let components: Vec<_> = path
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            components.contains(&"bin".to_string()),
+            "java_exe_path must always include a 'bin' component: {}",
+            path.display()
         );
     }
 }

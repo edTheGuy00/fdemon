@@ -489,6 +489,7 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::SpawnPreAppSources { .. }
             | UpdateAction::RunToolchainPreflight { .. }
             | UpdateAction::RunWizardStep { .. }
+            | UpdateAction::FetchFlutterReleaseManifest
             | UpdateAction::ScanInstalledSdks { .. }
             | UpdateAction::SwitchFlutterVersion { .. }
             | UpdateAction::RemoveFlutterVersion { .. }

@@ -1739,7 +1739,7 @@ pub enum Message {
     ///
     /// No-op when the currently selected step has no guided command to copy
     /// (e.g. FlutterSdk and PathConfig steps, which are fully automated).
-    /// Used for steps like `AndroidTools` that may surface a JDK install
+    /// Used for steps like `PlatformAndroid` that may surface a JDK install
     /// command the user should run manually.
     InstallWizardCopyCommand,
 
@@ -1756,6 +1756,70 @@ pub enum Message {
     /// Steps with multiple commands (e.g. macOS Prerequisites: CLT / CocoaPods /
     /// Rosetta) cycle forwards through the list.
     InstallWizardNextCommand,
+
+    /// Toggle expand/collapse of the Platforms submenu parent row.
+    ///
+    /// No-op unless the selected step is the `Platforms` parent. When the
+    /// submenu expands, host-gated leaf rows (`PlatformAndroid`, `PlatformWeb`,
+    /// etc.) are inserted after the parent in the step list. The cursor stays on
+    /// the parent row; the user presses `j` to descend into the leaves.
+    InstallWizardToggleExpand,
+
+    /// Expand the Platforms submenu (directional `l`/`Right`). Sets `platforms_expanded = true`.
+    /// No-op unless the selected step is the collapsed `Platforms` parent.
+    InstallWizardExpand,
+
+    /// Collapse the Platforms submenu (directional `h`/`Left`). Sets `platforms_expanded = false`.
+    /// No-op unless the submenu is currently expanded; re-anchors the cursor to the parent.
+    InstallWizardCollapse,
+
+    // ── Install Wizard — Version Picker (Phase 6) ────────────────────────────
+    /// Open the Flutter version picker overlay.
+    ///
+    /// Dispatched by the `v` key in `UiMode::InstallWizard`, or by `Enter` on the
+    /// `FlutterSdk` step when no version choice exists yet. The handler refuses
+    /// while a step is running and no-ops unless the selected step is `FlutterSdk`;
+    /// otherwise it opens the picker and, when a manifest fetch is needed, returns
+    /// `UpdateAction::FetchFlutterReleaseManifest`.
+    InstallWizardOpenVersionPicker,
+
+    /// Close the version picker overlay without confirming (Esc).
+    InstallWizardVersionPickerClose,
+
+    /// Move the picker selection up one row (`k` / Up).
+    InstallWizardVersionPickerUp,
+
+    /// Move the picker selection down one row (`j` / Down).
+    InstallWizardVersionPickerDown,
+
+    /// Cycle to the next channel tab: Stable → Beta → Master (Tab).
+    InstallWizardVersionPickerNextTab,
+
+    /// Re-fetch the release manifest while the picker is visible (`r`).
+    InstallWizardVersionPickerRefetch,
+
+    /// Confirm the current picker selection (Enter).
+    ///
+    /// On a stable/beta/master row this dispatches the pinned install through the
+    /// shared `FlutterSdk` run path. In the `Failed` fetch state it closes the
+    /// picker and dispatches an un-pinned default-channel install (offline path).
+    InstallWizardVersionPickerConfirm,
+
+    /// A Flutter release manifest fetch succeeded.
+    ///
+    /// The handler groups the releases (arch-filtered for the host) and populates
+    /// the picker. Applying with the picker already closed is harmless (the rows
+    /// are cached for the next open).
+    FlutterManifestFetched {
+        manifest: fdemon_daemon::toolchain::FlutterReleaseManifest,
+    },
+
+    /// A Flutter release manifest fetch failed.
+    ///
+    /// The handler records the error and transitions the picker to the `Failed`
+    /// state so the user can retry with `r` or fall back to a default-channel
+    /// install with Enter.
+    FlutterManifestFetchFailed { error: String },
 
     /// Preflight task completed — populate the wizard with the report
     ToolchainPreflightCompleted {
@@ -1869,7 +1933,7 @@ pub enum Message {
 
     /// Auto-configure PATH after a successful managed install.
     ///
-    /// Emitted by `handle_step_completed` when `FlutterSdk` or `AndroidTools`
+    /// Emitted by `handle_step_completed` when `FlutterSdk` or `PlatformAndroid`
     /// completes with a resolved SDK path.  The handler dispatches
     /// `RunWizardStep { kind: PathConfig, .. }` using the freshly-stashed SDK
     /// root so the shell rc file is updated without a manual step.
@@ -1877,7 +1941,7 @@ pub enum Message {
     /// - For `FlutterSdk` origin: writes the Flutter `<sdk>/bin` PATH entry
     ///   only (`android_sdk_root: None`), keeping FlutterSdk side-effects scoped
     ///   to what was installed.
-    /// - For `AndroidTools` origin: writes both the Flutter PATH (if a Flutter
+    /// - For `PlatformAndroid` origin: writes both the Flutter PATH (if a Flutter
     ///   SDK is known) and the Android `ANDROID_HOME` + PATH entries.
     ///
     /// If no Flutter bin dir can be resolved (unlikely but possible on a fresh

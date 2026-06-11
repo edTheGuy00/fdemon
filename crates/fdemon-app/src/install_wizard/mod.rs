@@ -9,12 +9,16 @@
 
 mod state;
 mod types;
+pub mod version_picker;
 
 pub(crate) use state::is_jdk_actionable;
 pub use state::*;
 pub use types::{
     GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardOrigin, WizardPane,
     WizardStepKind, MAX_LOG_TAIL,
+};
+pub use version_picker::{
+    group_releases, PickerChannel, PickerFetch, PickerRow, VersionPickerState,
 };
 
 // Re-export the daemon toolchain *display* types so presentation-layer widgets can

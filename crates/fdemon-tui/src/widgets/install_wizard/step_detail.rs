@@ -4,14 +4,14 @@
 //! Renders the detail for the currently selected [`WizardStep`]:
 //!
 //! - **Doctor step**: delegates to [`DoctorView`].
-//! - **Executable steps** (`FlutterSdk`, `PathConfig`, `AndroidTools` when JDK present):
+//! - **Executable steps** (`FlutterSdk`, `PathConfig`, `PlatformAndroid` when JDK present):
 //!   shows component checks plus an "▶ Press Enter to …" action hint; switches to the live
 //!   [`StepProgress`] view while a run is in progress.
-//! - **AndroidTools with JDK missing**: shows component checks plus a guided-command
+//! - **PlatformAndroid with JDK missing**: shows component checks plus a guided-command
 //!   section (label, command, optional note) and a `[c] copy` affordance, with a
 //!   "JDK 17 required" caption.
 //! - **Non-executable steps** (`Prerequisites`, `Doctor`):
-//!   shows component checks plus "Available in a later phase" note.
+//!   shows component checks plus a "coming soon" placeholder note.
 //!
 //! Vertical scroll is driven by `state.detail_scroll`.  The actual visible
 //! height is written back to `state.last_known_visible_height` each frame
@@ -55,7 +55,7 @@ const HEADER_HEIGHT: u16 = 2;
 
 /// Height of the action hint row at the bottom of the detail body.
 ///
-/// Derived from: 1 row for the "▶ Press Enter to …" / "Available in a later phase" hint.
+/// Derived from: 1 row for the "▶ Press Enter to …" / "coming soon" hint.
 const ACTION_HINT_HEIGHT: u16 = 1;
 
 /// Height of the guided-command section header line.
@@ -89,9 +89,20 @@ const JDK_CAPTION_HEIGHT: u16 = 1;
 /// so the two can never disagree on which steps have a caption.
 fn step_caption(kind: WizardStepKind) -> Option<&'static str> {
     match kind {
-        WizardStepKind::AndroidTools => Some("  JDK 17 required before installing Android tools"),
+        WizardStepKind::PlatformAndroid => {
+            Some("  JDK 17 required before installing Android tools")
+        }
         WizardStepKind::Prerequisites => {
             Some("  Install the OS build tools below, then press r to re-check")
+        }
+        WizardStepKind::PlatformWeb => Some("  Browser required for flutter run -d chrome"),
+        WizardStepKind::PlatformIos => Some("  Xcode required for iOS development"),
+        WizardStepKind::PlatformMacos => Some("  Xcode required for macOS development"),
+        WizardStepKind::PlatformWindows => {
+            Some("  Visual Studio C++ workload required for Windows desktop builds")
+        }
+        WizardStepKind::FlutterSdk => {
+            Some("  Enter chooses a version to install \u{00b7} v opens the version picker")
         }
         _ => None,
     }
@@ -207,13 +218,13 @@ impl<'a> StepDetailPane<'a> {
 
     /// Whether this step kind is executable (can be triggered with Enter).
     ///
-    /// `AndroidTools` is executable only when JDK is present (no guided commands).
+    /// `PlatformAndroid` is executable only when JDK is present (no guided commands).
     /// When guided commands are present (JDK missing), it is not immediately runnable
     /// — the user must install JDK first.
     fn is_executable(kind: WizardStepKind, has_guided_commands: bool) -> bool {
         match kind {
             WizardStepKind::FlutterSdk | WizardStepKind::PathConfig => true,
-            WizardStepKind::AndroidTools => !has_guided_commands,
+            WizardStepKind::PlatformAndroid => !has_guided_commands,
             _ => false,
         }
     }
@@ -223,16 +234,16 @@ impl<'a> StepDetailPane<'a> {
         match kind {
             WizardStepKind::FlutterSdk => "\u{25b6} Press Enter to install Flutter SDK", // ▶
             WizardStepKind::PathConfig => "\u{25b6} Press Enter to add Flutter to PATH", // ▶
-            WizardStepKind::AndroidTools => "\u{25b6} Press Enter to install Android tools", // ▶
+            WizardStepKind::PlatformAndroid => "\u{25b6} Press Enter to install Android tools", // ▶
             _ => "",
         }
     }
 
     /// Render the action hint line for the bottom of the content area.
     ///
-    /// Shows "▶ Press Enter to …" for executable steps, or
-    /// "Available in a later phase" for non-executable steps.
-    /// `has_guided_commands` controls whether `AndroidTools` is treated as executable.
+    /// Shows "▶ Press Enter to …" for executable steps, or a "coming soon"
+    /// placeholder for inert placeholder steps.
+    /// `has_guided_commands` controls whether `PlatformAndroid` is treated as executable.
     fn render_action_hint(
         &self,
         kind: WizardStepKind,
@@ -248,26 +259,42 @@ impl<'a> StepDetailPane<'a> {
         let executable = Self::is_executable(kind, has_guided_commands);
 
         let (text, color, bold) = if executable {
-            (
-                Self::action_hint_text(kind).to_string(),
-                palette::ACCENT,
-                true,
-            )
-        } else if kind == WizardStepKind::Doctor {
-            // Doctor step is a display-only view; no action
+            // Dynamic override for FlutterSdk: if a version was confirmed in the
+            // picker, show "▶ Press Enter to install Flutter <version>" instead of
+            // the static fallback.  Leave the &'static str table unchanged.
+            let hint = if kind == WizardStepKind::FlutterSdk {
+                if let Some(ref row) = self.state.version_picker.selected_release {
+                    format!("\u{25b6} Press Enter to install Flutter {}", row.version)
+                } else {
+                    Self::action_hint_text(kind).to_string()
+                }
+            } else {
+                Self::action_hint_text(kind).to_string()
+            };
+            (hint, palette::ACCENT, true)
+        } else if kind == WizardStepKind::Doctor || kind == WizardStepKind::Platforms {
+            // Doctor/Platforms: display-only views; no action hint.
             return;
         } else if has_guided_commands
             && matches!(
                 kind,
-                WizardStepKind::AndroidTools | WizardStepKind::Prerequisites
+                WizardStepKind::PlatformAndroid
+                    | WizardStepKind::Prerequisites
+                    | WizardStepKind::PlatformWeb
+                    | WizardStepKind::PlatformIos
+                    | WizardStepKind::PlatformMacos
+                    | WizardStepKind::PlatformWindows
             )
         {
-            // AndroidTools gated (JDK missing) or Prerequisites with guided commands —
-            // the guided-command section is the primary CTA; skip the "later phase" hint.
+            // PlatformAndroid gated (JDK missing), Prerequisites with guided commands,
+            // PlatformWeb with guided commands (browser absent/partial),
+            // PlatformIos/PlatformMacos with guided commands (Xcode absent),
+            // PlatformWindows with guided commands (Visual Studio absent) —
+            // the guided-command section is the primary CTA; skip the "coming soon" hint.
             return;
         } else {
             (
-                "  Available in a later phase".to_string(),
+                "  Setup for this platform is coming soon \u{2014} run flutter doctor to check it manually".to_string(),
                 palette::TEXT_MUTED,
                 false,
             )
@@ -329,7 +356,7 @@ impl<'a> StepDetailPane<'a> {
     ///
     /// Accounts for:
     /// - Section header: `GUIDED_SECTION_HEADER_HEIGHT` rows (1)
-    /// - Optional per-step caption (AndroidTools / Prerequisites): `JDK_CAPTION_HEIGHT` rows (1)
+    /// - Optional per-step caption (PlatformAndroid / Prerequisites): `JDK_CAPTION_HEIGHT` rows (1)
     /// - Per-command blocks: label(1) + command(wrapped) + optional note(wrapped) + optional
     ///   leading blank (skipped for command 0 when a caption was rendered, i.e. `has_caption`
     ///   is true).
@@ -433,7 +460,7 @@ impl<'a> StepDetailPane<'a> {
     /// Layout (each row occupies one character-cell row):
     /// ```text
     ///   Guided steps (run these yourself, then press 'r' to re-check):
-    ///   [caption — AndroidTools: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
+    ///   [caption — PlatformAndroid: "JDK 17 required …"; Prerequisites: "Install the OS build tools …"]
     ///
     ///     Install JDK 17
     ///       $ sudo pacman -S jdk17-openjdk          [c] copy
@@ -701,10 +728,27 @@ impl Widget for StepDetailPane<'_> {
             return;
         }
 
-        // Components are present: decide how much space to allocate.
-        // When guided commands exist we need room for them below the components.
-        // When not, we need just ACTION_HINT_HEIGHT at the bottom.
-        let bottom_section_height: u16 = if has_guided_commands {
+        // Components are present: decide how much space to allocate for each section.
+        //
+        // IMPORTANT: `has_step_caption` and `effective_bottom_height` are computed HERE,
+        // before the component-height calculation, so the component loop clamp uses the
+        // same reservation as the bottom-section renderer.  Previously `has_step_caption`
+        // was computed AFTER the component loop, which caused the last component row to
+        // overwrite the caption row in tight panels (review finding M1).
+        //
+        // For executable steps that have a static caption (e.g. FlutterSdk), we
+        // reserve one extra row above the action hint for the caption text.
+        // `has_step_caption` is true only for executable steps with no guided
+        // commands that return a non-None `step_caption`.
+        let has_step_caption = !has_guided_commands
+            && Self::is_executable(step.kind, has_guided_commands)
+            && step_caption(step.kind).is_some();
+
+        // Single source of truth for bottom-section height.
+        // When guided commands exist: exact height for the full guided section (clamped).
+        // When a step caption is present (executable, no guided commands): caption(1) + hint(1).
+        // Otherwise: just the action hint row.
+        let effective_bottom_height: u16 = if has_guided_commands {
             // Compute the exact number of rows required to render all guided commands
             // (header + caption + Σ per-command blocks, wrap-aware), then clamp to
             // content_area.height so the reservation never exceeds the available space.
@@ -718,11 +762,13 @@ impl Widget for StepDetailPane<'_> {
                 content_area.width,
             );
             full_height.min(content_area.height)
+        } else if has_step_caption {
+            ACTION_HINT_HEIGHT + 1 // caption(1) + action_hint(1)
         } else {
             ACTION_HINT_HEIGHT
         };
 
-        let component_height = content_area.height.saturating_sub(bottom_section_height) as usize;
+        let component_height = content_area.height.saturating_sub(effective_bottom_height) as usize;
         let effective_visible = if component_height > 0 {
             component_height
         } else {
@@ -753,8 +799,11 @@ impl Widget for StepDetailPane<'_> {
             y += h;
         }
 
-        // Bottom section: guided commands or action hint
-        let bottom_y = content_area.y + content_area.height.saturating_sub(bottom_section_height);
+        // Bottom section: guided commands or action hint (+ optional step caption).
+        // `effective_bottom_height` and `has_step_caption` were computed above (single
+        // source of truth — the component loop clamp and this renderer share the same values).
+        let bottom_y = content_area.y + content_area.height.saturating_sub(effective_bottom_height);
+
         if has_guided_commands {
             // Height derivation: total content height minus the rows already consumed
             // by the component list above (bottom_y - content_area.y rows used).
@@ -767,8 +816,27 @@ impl Widget for StepDetailPane<'_> {
                     .saturating_sub(bottom_y.saturating_sub(content_area.y)),
             );
             self.render_guided_commands(&step.guided_commands, step.kind, bottom_area, buf);
-        } else if content_area.height >= ACTION_HINT_HEIGHT {
-            self.render_action_hint(step.kind, has_guided_commands, bottom_y, content_area, buf);
+        } else {
+            // Render optional caption row, then the action hint below it.
+            let mut hint_y = bottom_y;
+            if has_step_caption {
+                if let Some(caption) = step_caption(step.kind) {
+                    if bottom_y < content_area.y + content_area.height {
+                        let caption_style = Style::default()
+                            .fg(palette::TEXT_SECONDARY)
+                            .add_modifier(Modifier::ITALIC);
+                        let caption_line = Line::from(Span::styled(caption, caption_style));
+                        Paragraph::new(caption_line).render(
+                            Rect::new(content_area.x, bottom_y, content_area.width, 1),
+                            buf,
+                        );
+                    }
+                    hint_y = bottom_y + 1;
+                }
+            }
+            if content_area.height >= ACTION_HINT_HEIGHT {
+                self.render_action_hint(step.kind, has_guided_commands, hint_y, content_area, buf);
+            }
         }
     }
 }
@@ -941,7 +1009,7 @@ mod tests {
     fn make_state_components() -> InstallWizardState {
         let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
         state.apply_report(make_report_with_doctor());
-        state.selected_index = 3; // FlutterSdk step (has components)
+        state.selected_index = 2; // FlutterSdk step (has components)
         state
     }
 
@@ -1014,7 +1082,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_shows_enter_hint_for_flutter_step() {
-        let state = make_state_components(); // FlutterSdk step selected (index 3)
+        let state = make_state_components(); // FlutterSdk step selected (index 2)
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -1034,7 +1102,7 @@ mod tests {
     #[test]
     fn test_step_detail_shows_enter_hint_for_path_config_step() {
         let mut state = make_state_components();
-        state.selected_index = 2; // PathConfig step
+        state.selected_index = 3; // PathConfig step
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -1053,7 +1121,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_shows_enter_hint_for_android_step_when_jdk_present() {
-        // AndroidTools with JDK Ok (guided_commands is empty) → executable.
+        // PlatformAndroid with JDK Ok (guided_commands is empty) → executable.
         // Uses a hand-crafted state to ensure the JDK component is explicitly Ok,
         // since a report without any Jdk entry now correctly produces a guided command
         // (m2 fix: is_jdk_actionable returns true when no Jdk entry).
@@ -1066,11 +1134,11 @@ mod tests {
 
         assert!(
             content.contains("Press Enter"),
-            "AndroidTools step without guided commands should show 'Press Enter' hint: '{content}'"
+            "PlatformAndroid step without guided commands should show 'Press Enter' hint: '{content}'"
         );
         assert!(
             content.contains("Android tools"),
-            "AndroidTools Enter hint should mention 'Android tools': '{content}'"
+            "PlatformAndroid Enter hint should mention 'Android tools': '{content}'"
         );
     }
 
@@ -1105,25 +1173,35 @@ mod tests {
     }
 
     #[test]
-    fn test_step_detail_shows_later_phase_for_prerequisites_step_with_no_commands() {
-        // Prerequisites step with no guided commands (all Ok) still shows "later phase".
+    fn test_step_detail_shows_coming_soon_for_prerequisites_step_with_no_commands() {
+        // Prerequisites step with no guided commands (all Ok) shows the softened
+        // "coming soon" placeholder instead of the old "Available in a later phase".
+        // Use an 80-wide area so the full hint text (≈82 chars) is visible.
         let mut state = make_state_components();
         state.selected_index = 0; // Prerequisites step (no guided commands in this report)
         let pane = StepDetailPane::new(&state, true, 0);
-        let area = make_area();
+        let area = Rect::new(0, 0, 80, 20);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
         let content: String = buf.content().iter().map(|c| c.symbol()).collect();
 
         assert!(
-            content.contains("later phase"),
-            "Prerequisites step with no guided commands should still show 'Available in a later phase': '{content}'"
+            content.contains("coming soon"),
+            "Prerequisites step with no guided commands should show the 'coming soon' placeholder: '{content}'"
+        );
+        assert!(
+            content.contains("flutter doctor"),
+            "Prerequisites step placeholder should mention 'flutter doctor': '{content}'"
+        );
+        assert!(
+            !content.contains("later phase"),
+            "old 'Available in a later phase' text must not appear: '{content}'"
         );
     }
 
     #[test]
     fn test_step_detail_shows_progress_view_when_running() {
-        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        let mut state = make_state_components(); // FlutterSdk selected (index 2)
                                                  // Start a run for FlutterSdk
         state.execution = StepExecution {
             kind: Some(WizardStepKind::FlutterSdk),
@@ -1206,7 +1284,7 @@ mod tests {
 
     #[test]
     fn test_step_detail_progress_not_shown_for_different_step() {
-        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        let mut state = make_state_components(); // FlutterSdk selected (index 2)
                                                  // But execution is for a different step (PathConfig)
         state.execution = StepExecution {
             kind: Some(WizardStepKind::PathConfig),
@@ -1231,8 +1309,8 @@ mod tests {
     #[test]
     fn test_empty_step_shows_no_components_message() {
         let mut state = make_state_with_doctor_step_selected();
-        // Override selected_index to PathConfig (index 2) which has no components
-        state.selected_index = 2;
+        // Override selected_index to PathConfig (index 3) which has no components
+        state.selected_index = 3;
         let pane = StepDetailPane::new(&state, true, 0);
         let area = make_area();
         let mut buf = Buffer::empty(area);
@@ -1308,6 +1386,7 @@ mod tests {
                 detail: "not found".to_string(),
             }],
             guided_commands: vec![],
+            indent: 0,
         }];
         state.selected_index = 0;
 
@@ -1352,6 +1431,7 @@ mod tests {
                     command: "sudo apt-get install -y curl git unzip".to_string(),
                     note: Some("or: sudo dnf install -y curl git unzip".to_string()),
                 }],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -1391,20 +1471,21 @@ mod tests {
                         note: None,
                     },
                 ],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
         }
     }
 
-    /// Build an `InstallWizardState` with the AndroidTools step selected and a JDK
+    /// Build an `InstallWizardState` with the PlatformAndroid step selected and a JDK
     /// guided command present (simulates JDK missing scenario).
     fn make_state_android_jdk_missing() -> InstallWizardState {
         InstallWizardState {
             visible: true,
             steps: vec![WizardStep {
-                kind: WizardStepKind::AndroidTools,
-                title: "Android Tools".to_string(),
+                kind: WizardStepKind::PlatformAndroid,
+                title: "Android".to_string(),
                 status: fdemon_app::install_wizard::StepStatus::Missing,
                 components: vec![ComponentCheck {
                     kind: ComponentKind::Jdk,
@@ -1416,20 +1497,21 @@ mod tests {
                     command: "sudo pacman -S jdk17-openjdk".to_string(),
                     note: Some("or: sudo dnf install java-17-openjdk-devel".to_string()),
                 }],
+                indent: 1,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
         }
     }
 
-    /// Build an `InstallWizardState` with the AndroidTools step selected, JDK present
+    /// Build an `InstallWizardState` with the PlatformAndroid step selected, JDK present
     /// (no guided commands), simulating a ready-to-run Android install.
     fn make_state_android_jdk_present() -> InstallWizardState {
         InstallWizardState {
             visible: true,
             steps: vec![WizardStep {
-                kind: WizardStepKind::AndroidTools,
-                title: "Android Tools".to_string(),
+                kind: WizardStepKind::PlatformAndroid,
+                title: "Android".to_string(),
                 status: fdemon_app::install_wizard::StepStatus::Missing,
                 components: vec![
                     ComponentCheck {
@@ -1444,6 +1526,7 @@ mod tests {
                     },
                 ],
                 guided_commands: vec![], // JDK is Ok → no guided command
+                indent: 1,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -1452,7 +1535,7 @@ mod tests {
 
     #[test]
     fn test_detail_renders_jdk_guided_command() {
-        // AndroidTools selected + JDK GuidedCommand present
+        // PlatformAndroid selected + JDK GuidedCommand present
         let state = make_state_android_jdk_missing();
         let pane = StepDetailPane::new(&state, true, 0);
         let area = Rect::new(0, 0, 80, 30);
@@ -1485,7 +1568,7 @@ mod tests {
 
     #[test]
     fn test_detail_android_enter_hint_when_jdk_present() {
-        // AndroidTools with no guided commands (JDK present) → normal Enter hint
+        // PlatformAndroid with no guided commands (JDK present) → normal Enter hint
         let state = make_state_android_jdk_present();
         let pane = StepDetailPane::new(&state, true, 0);
         let area = Rect::new(0, 0, 80, 30);
@@ -1723,6 +1806,7 @@ mod tests {
                         note: None,
                     },
                 ],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -1813,7 +1897,7 @@ mod tests {
         );
     }
 
-    /// Regression test: single-command AndroidTools / Prerequisites path is visually
+    /// Regression test: single-command PlatformAndroid / Prerequisites path is visually
     /// unchanged after the fix.  The bottom section height should be the same as
     /// before for a single command with a note.
     #[test]
@@ -1827,19 +1911,19 @@ mod tests {
 
         assert!(
             content.contains("Install JDK 17"),
-            "single-command AndroidTools must still render label: '{content}'"
+            "single-command PlatformAndroid must still render label: '{content}'"
         );
         assert!(
             content.contains("jdk17-openjdk"),
-            "single-command AndroidTools must still render command: '{content}'"
+            "single-command PlatformAndroid must still render command: '{content}'"
         );
         assert!(
             content.contains("copy"),
-            "single-command AndroidTools must still show [c] copy: '{content}'"
+            "single-command PlatformAndroid must still show [c] copy: '{content}'"
         );
         assert!(
             content.contains("sudo dnf"),
-            "single-command AndroidTools must still render note: '{content}'"
+            "single-command PlatformAndroid must still render note: '{content}'"
         );
     }
 
@@ -1897,11 +1981,11 @@ mod tests {
     }
 
     /// Unit test for `guided_section_full_height` helper: single command with note,
-    /// AndroidTools (has caption).
+    /// PlatformAndroid (has caption).
     ///
     /// Expected breakdown:
     ///   - header: 1
-    ///   - caption (AndroidTools): 1
+    ///   - caption (PlatformAndroid): 1
     ///   - cmd 0 (has_caption=true, no blank): label(1) + cmd(1) + note(1) = 3
     ///
     ///   Total = 5
@@ -1914,11 +1998,14 @@ mod tests {
         }];
         // Pass width=0 to use the pre-wrapping (1 row each) fallback so the test
         // is not sensitive to terminal width — structure check only.
-        let height =
-            StepDetailPane::guided_section_full_height(&commands, WizardStepKind::AndroidTools, 0);
+        let height = StepDetailPane::guided_section_full_height(
+            &commands,
+            WizardStepKind::PlatformAndroid,
+            0,
+        );
         assert_eq!(
             height, 5,
-            "single-command AndroidTools section with note should need 5 rows"
+            "single-command PlatformAndroid section with note should need 5 rows"
         );
     }
 
@@ -1935,11 +2022,11 @@ mod tests {
 
     #[test]
     fn test_step_caption_android_tools_returns_some() {
-        let caption = step_caption(WizardStepKind::AndroidTools);
-        assert!(caption.is_some(), "AndroidTools should have a caption");
+        let caption = step_caption(WizardStepKind::PlatformAndroid);
+        assert!(caption.is_some(), "PlatformAndroid should have a caption");
         assert!(
             caption.unwrap().contains("JDK 17"),
-            "AndroidTools caption should mention JDK 17"
+            "PlatformAndroid caption should mention JDK 17"
         );
     }
 
@@ -1954,10 +2041,17 @@ mod tests {
     }
 
     #[test]
-    fn test_step_caption_flutter_sdk_returns_none() {
+    fn test_step_caption_flutter_sdk_returns_version_picker_hint() {
+        // Phase 6: FlutterSdk now has a caption advertising the version picker.
+        let caption = step_caption(WizardStepKind::FlutterSdk);
         assert!(
-            step_caption(WizardStepKind::FlutterSdk).is_none(),
-            "FlutterSdk should have no caption"
+            caption.is_some(),
+            "FlutterSdk should have a caption (version picker hint)"
+        );
+        let caption_text = caption.unwrap();
+        assert!(
+            caption_text.contains("version picker"),
+            "FlutterSdk caption should mention version picker: {caption_text:?}"
         );
     }
 
@@ -1974,6 +2068,253 @@ mod tests {
         assert!(
             step_caption(WizardStepKind::Doctor).is_none(),
             "Doctor should have no caption"
+        );
+    }
+
+    // --- Phase 3 task 04: PlatformWeb caption + coming-soon suppression ---
+
+    #[test]
+    fn test_step_caption_web_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformWeb);
+        assert!(caption.is_some(), "PlatformWeb should have a caption");
+        assert!(
+            caption.unwrap().contains("Browser"),
+            "PlatformWeb caption should mention Browser: {:?}",
+            caption
+        );
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWeb step selected and a guided
+    /// command present (simulates a browser absent/partial scenario).
+    fn make_state_web_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWeb,
+                title: "Web".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::WebBrowser,
+                    status: ComponentStatus::Missing,
+                    detail: "not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Google Chrome".to_string(),
+                    command: "sudo apt-get install -y google-chrome-stable".to_string(),
+                    note: Some("or: sudo snap install google-chrome".to_string()),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWeb step selected and no guided
+    /// commands (browser already detected — clean state).
+    fn make_state_web_no_guided_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWeb,
+                title: "Web".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::WebBrowser,
+                    status: ComponentStatus::Ok,
+                    detail: "Google Chrome 120".to_string(),
+                }],
+                guided_commands: vec![],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    #[test]
+    fn test_step_detail_suppresses_coming_soon_for_web_with_guided_commands() {
+        // PlatformWeb with a guided command must NOT render the "coming soon" hint.
+        // The guided-command block is the sole CTA (no dual-CTA).
+        let state = make_state_web_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Guided-command block must be present.
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformWeb with guided commands should show the guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Browser"),
+            "PlatformWeb step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformWeb step should show [c] copy affordance: '{content}'"
+        );
+        // "coming soon" must NOT appear when guided commands are present.
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformWeb with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_web_no_guided_commands_no_dual_cta() {
+        // PlatformWeb with no guided commands (browser detected) renders cleanly:
+        // no dual-CTA (both guided block and "coming soon" must not coexist).
+        // The "coming soon" placeholder is acceptable here (step is non-executable).
+        let state = make_state_web_no_guided_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // No guided-command block when browser is detected.
+        assert!(
+            !content.contains("Guided steps"),
+            "PlatformWeb with no guided commands must NOT show guided-steps header: '{content}'"
+        );
+        // No dual-CTA: only one of "coming soon" or "Guided steps" should appear
+        // (already asserted above), so we just check no crash and sane output.
+        assert!(
+            content.contains("Chrome"),
+            "PlatformWeb (browser Ok) should show the component detail: '{content}'"
+        );
+        // Must not panic or show a guided block — already asserted above.
+    }
+
+    // --- Phase 5 task 04: Windows caption + coming-soon suppression ---
+
+    #[test]
+    fn test_step_caption_windows_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformWindows);
+        assert!(caption.is_some(), "PlatformWindows should have a caption");
+        assert!(
+            caption.unwrap().contains("Visual Studio"),
+            "PlatformWindows caption should mention Visual Studio: {:?}",
+            caption
+        );
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWindows step selected and a guided
+    /// command present (simulates Visual Studio absent/partial scenario).
+    fn make_state_windows_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Partial,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::VisualStudioCpp,
+                    status: ComponentStatus::Missing,
+                    detail: "not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Visual Studio C++ workload".to_string(),
+                    command: "winget install -e --id Microsoft.VisualStudio.2022.Community"
+                        .to_string(),
+                    note: Some(
+                        "or visit: https://visualstudio.microsoft.com/downloads/".to_string(),
+                    ),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformWindows step selected and no guided
+    /// commands (Visual Studio already detected — clean state).
+    fn make_state_windows_no_guided_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::VisualStudioCpp,
+                    status: ComponentStatus::Ok,
+                    detail: "2022 Community".to_string(),
+                }],
+                guided_commands: vec![],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    #[test]
+    fn test_step_detail_suppresses_coming_soon_for_windows_with_guided_commands() {
+        // PlatformWindows with a guided command must NOT render the "coming soon" hint.
+        // The guided-command block is the sole CTA (no dual-CTA).
+        let state = make_state_windows_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // Guided-command block must be present.
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformWindows with guided commands should show the guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Visual Studio"),
+            "PlatformWindows step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformWindows step should show [c] copy affordance: '{content}'"
+        );
+        // "coming soon" must NOT appear when guided commands are present.
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformWindows with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_step_detail_windows_without_guided_commands_shows_no_dual_cta() {
+        // PlatformWindows with no guided commands (Visual Studio detected) renders cleanly:
+        // no dual-CTA (both guided block and "coming soon" must not coexist).
+        // The "coming soon" placeholder is acceptable here (step is non-executable).
+        let state = make_state_windows_no_guided_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // No guided-command block when Visual Studio is detected.
+        assert!(
+            !content.contains("Guided steps"),
+            "PlatformWindows with no guided commands must NOT show guided-steps header: '{content}'"
+        );
+        // The "coming soon" placeholder must appear (step is non-executable and no guided commands).
+        assert!(
+            content.contains("coming soon"),
+            "PlatformWindows with no guided commands should show 'coming soon' placeholder: '{content}'"
+        );
+        // The placeholder should mention flutter doctor (for manual checking).
+        assert!(
+            content.contains("flutter doctor"),
+            "PlatformWindows placeholder should mention 'flutter doctor': '{content}'"
+        );
+        // Component detail should still be visible.
+        assert!(
+            content.contains("2022"),
+            "PlatformWindows (Visual Studio Ok) should show the component detail: '{content}'"
         );
     }
 
@@ -2176,7 +2517,7 @@ mod tests {
     fn detail_shows_esc_cancels_hint_while_running() {
         // While execution status is Running for the selected step, the detail pane
         // must show an "Esc" cancel hint (passed through StepProgress).
-        let mut state = make_state_components(); // FlutterSdk selected (index 3)
+        let mut state = make_state_components(); // FlutterSdk selected (index 2)
         state.execution = StepExecution {
             kind: Some(WizardStepKind::FlutterSdk),
             status: StepExecStatus::Running,
@@ -2308,6 +2649,7 @@ mod tests {
                             .to_string(),
                     note: None,
                 }],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -2365,6 +2707,7 @@ mod tests {
                         .to_string(),
                 }],
                 guided_commands: vec![],
+                indent: 0,
             }],
             selected_index: 0,
             ..InstallWizardState::default()
@@ -2455,6 +2798,488 @@ mod tests {
             wrapped_height("anything", 0),
             1,
             "zero-width pane should return 1 to avoid division by zero"
+        );
+    }
+
+    // --- Phase 4 task 04: PlatformIos and PlatformMacos caption + coming-soon suppression ---
+
+    #[test]
+    fn test_step_caption_ios_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformIos);
+        assert!(caption.is_some(), "PlatformIos should have a caption");
+        assert!(
+            caption.unwrap().contains("Xcode"),
+            "PlatformIos caption should mention Xcode: {:?}",
+            caption
+        );
+        assert!(
+            caption.unwrap().contains("iOS"),
+            "PlatformIos caption should mention iOS: {:?}",
+            caption
+        );
+    }
+
+    #[test]
+    fn test_step_caption_macos_returns_some() {
+        let caption = step_caption(WizardStepKind::PlatformMacos);
+        assert!(caption.is_some(), "PlatformMacos should have a caption");
+        assert!(
+            caption.unwrap().contains("Xcode"),
+            "PlatformMacos caption should mention Xcode: {:?}",
+            caption
+        );
+        assert!(
+            caption.unwrap().contains("macOS"),
+            "PlatformMacos caption should mention macOS: {:?}",
+            caption
+        );
+    }
+
+    /// Build an `InstallWizardState` with the PlatformIos step selected and a guided
+    /// command present (simulates Xcode missing scenario).
+    fn make_state_ios_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Missing,
+                    detail: "Xcode not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Xcode from the App Store".to_string(),
+                    command: "open https://apps.apple.com/app/xcode/id497799835".to_string(),
+                    note: Some(
+                        "or: xcode-select --install for Command Line Tools only".to_string(),
+                    ),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformIos step selected and no guided
+    /// commands (Xcode all Ok — display-only state).
+    fn make_state_ios_no_guided_commands() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Ok,
+                    detail: "Xcode 15.0".to_string(),
+                }],
+                guided_commands: vec![],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Build an `InstallWizardState` with the PlatformMacos step selected and a guided
+    /// command present (simulates Xcode missing scenario).
+    fn make_state_macos_with_guided_command() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::PlatformMacos,
+                title: "macOS".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Missing,
+                components: vec![ComponentCheck {
+                    kind: ComponentKind::Prerequisites,
+                    status: ComponentStatus::Missing,
+                    detail: "Xcode not found".to_string(),
+                }],
+                guided_commands: vec![GuidedCommand {
+                    label: "Install Xcode from the App Store".to_string(),
+                    command: "open https://apps.apple.com/app/xcode/id497799835".to_string(),
+                    note: Some(
+                        "or: xcode-select --install for Command Line Tools only".to_string(),
+                    ),
+                }],
+                indent: 1,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    #[test]
+    fn test_ios_leaf_shows_caption_and_guided_block() {
+        // PlatformIos with a guided command → caption present, guided block present,
+        // "coming soon" absent.
+        let state = make_state_ios_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformIos with guided commands should show guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Xcode required for iOS"),
+            "PlatformIos step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformIos step should show [c] copy affordance: '{content}'"
+        );
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformIos with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_macos_leaf_shows_caption_and_guided_block() {
+        // PlatformMacos with a guided command → caption present, guided block present,
+        // "coming soon" absent.
+        let state = make_state_macos_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Guided steps"),
+            "PlatformMacos with guided commands should show guided-steps header: '{content}'"
+        );
+        assert!(
+            content.contains("Xcode required for macOS"),
+            "PlatformMacos step should show its caption: '{content}'"
+        );
+        assert!(
+            content.contains("copy"),
+            "PlatformMacos step should show [c] copy affordance: '{content}'"
+        );
+        assert!(
+            !content.contains("coming soon"),
+            "PlatformMacos with guided commands must NOT show 'coming soon': '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_ios_leaf_no_commands_shows_coming_soon() {
+        // PlatformIos with empty guided_commands (Xcode all Ok) → caption present,
+        // "coming soon" hint renders (display-only).
+        let state = make_state_ios_no_guided_commands();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("coming soon"),
+            "PlatformIos with no guided commands should show 'coming soon' placeholder: '{content}'"
+        );
+        assert!(
+            content.contains("flutter doctor"),
+            "PlatformIos placeholder should mention 'flutter doctor': '{content}'"
+        );
+        // No guided-command block when Xcode is already detected.
+        assert!(
+            !content.contains("Guided steps"),
+            "PlatformIos with no guided commands must NOT show guided-steps header: '{content}'"
+        );
+    }
+
+    #[test]
+    fn test_ios_macos_leaves_not_executable() {
+        // Neither PlatformIos nor PlatformMacos is executable — no "Press Enter to install"
+        // hint should ever render for these leaves.
+        let ios_state = make_state_ios_with_guided_command();
+        let pane = StepDetailPane::new(&ios_state, true, 0);
+        let area = Rect::new(0, 0, 80, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            !content.contains("Press Enter"),
+            "PlatformIos must NOT show 'Press Enter' hint: '{content}'"
+        );
+
+        let macos_state = make_state_macos_with_guided_command();
+        let pane = StepDetailPane::new(&macos_state, true, 0);
+        let mut buf2 = Buffer::empty(area);
+        pane.render(area, &mut buf2);
+        let content2: String = buf2.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            !content2.contains("Press Enter"),
+            "PlatformMacos must NOT show 'Press Enter' hint: '{content2}'"
+        );
+    }
+
+    #[test]
+    fn test_no_panic_ios_guided_tiny_area() {
+        let state = make_state_ios_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic even in tight space
+    }
+
+    #[test]
+    fn test_no_panic_macos_guided_tiny_area() {
+        let state = make_state_macos_with_guided_command();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic even in tight space
+    }
+
+    // --- Phase 6 (Task 05): FlutterSdk caption + dynamic Enter hint ---
+
+    /// Build a state with the FlutterSdk step selected and no confirmed version.
+    fn make_state_flutter_sdk_selected() -> InstallWizardState {
+        let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
+        state.apply_report(make_report_with_doctor());
+        // Find FlutterSdk step
+        let idx = state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::FlutterSdk)
+            .unwrap_or(2);
+        state.selected_index = idx;
+        state
+    }
+
+    /// Phase 6: The FlutterSdk detail pane must show the version-picker hint caption.
+    #[test]
+    fn test_flutter_sdk_detail_pane_shows_version_picker_caption() {
+        let state = make_state_flutter_sdk_selected();
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("version picker"),
+            "FlutterSdk detail pane must show the version picker hint caption: {content:?}"
+        );
+    }
+
+    /// Phase 6: When a version is confirmed via the picker, the Enter hint must
+    /// say "install Flutter <version>" rather than the static "install Flutter SDK".
+    #[test]
+    fn test_flutter_sdk_enter_hint_dynamic_when_version_confirmed() {
+        use fdemon_app::install_wizard::{PickerFetch, PickerRow};
+
+        let mut state = make_state_flutter_sdk_selected();
+        // Simulate a confirmed pick.
+        state.version_picker.fetch = PickerFetch::Loaded;
+        state.version_picker.selected_release = Some(PickerRow {
+            version: "3.24.0".to_string(),
+            channel: "stable".to_string(),
+            release_date: None,
+            arch: None,
+            git_only: false,
+        });
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("3.24.0"),
+            "Enter hint must show the confirmed version: {content:?}"
+        );
+        assert!(
+            content.contains("Press Enter"),
+            "Enter hint must still show 'Press Enter': {content:?}"
+        );
+    }
+
+    /// Phase 6: When no version is confirmed, the Enter hint falls back to the
+    /// static "install Flutter SDK" text.
+    #[test]
+    fn test_flutter_sdk_enter_hint_static_when_no_version_confirmed() {
+        let state = make_state_flutter_sdk_selected();
+        // No confirmed version.
+        assert!(state.version_picker.selected_release.is_none());
+
+        let pane = StepDetailPane::new(&state, true, 0);
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("install Flutter SDK"),
+            "Enter hint must show static 'install Flutter SDK' when no version confirmed: {content:?}"
+        );
+    }
+
+    // --- Fix M1: FlutterSdk caption row must not be overwritten by component list ---
+
+    /// Build a FlutterSdk state with multiple component checks and no guided commands.
+    ///
+    /// The step has `HEADER_HEIGHT`(2) + caption(1) + action_hint(1) = 4 rows of
+    /// overhead, so with a pane of height 8 only 4 rows remain for components.
+    /// With the bug, the component loop clamped at `height - 1 = 7`, allowing it to
+    /// render into the caption row at `height - 2 = 6`.  After the fix the clamp is
+    /// `height - effective_bottom_height = height - 2`, keeping the component area
+    /// strictly above the caption row.
+    fn make_state_flutter_sdk_many_components() -> InstallWizardState {
+        InstallWizardState {
+            visible: true,
+            steps: vec![WizardStep {
+                kind: WizardStepKind::FlutterSdk,
+                title: "Flutter SDK".to_string(),
+                status: fdemon_app::install_wizard::StepStatus::Ok,
+                components: vec![
+                    ComponentCheck {
+                        kind: ComponentKind::FlutterSdk,
+                        status: ComponentStatus::Ok,
+                        detail: "3.24.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "2.43.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::FlutterSdk,
+                        status: ComponentStatus::Ok,
+                        detail: "dart 3.5.0".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "extra row A".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "extra row B".to_string(),
+                    },
+                    ComponentCheck {
+                        kind: ComponentKind::Git,
+                        status: ComponentStatus::Ok,
+                        detail: "extra row C".to_string(),
+                    },
+                ],
+                guided_commands: vec![],
+                indent: 0,
+            }],
+            selected_index: 0,
+            ..InstallWizardState::default()
+        }
+    }
+
+    /// Regression test for M1 (phase-6-fix-1 task 01):
+    ///
+    /// FlutterSdk step selected, many component rows, tight pane height that triggers
+    /// the component-loop clamp.  Asserts:
+    /// 1. The caption row (contains `"version picker"`) appears at the second-to-last row.
+    /// 2. The last row contains the Enter action hint (`"Press Enter"`).
+    /// 3. No component text (e.g. `"extra row C"`) appears on the caption row or
+    ///    the action-hint row — the two rows belong exclusively to the bottom section.
+    ///
+    /// The pane height is chosen so the caption would be overwritten by the last
+    /// component row under the buggy code:
+    ///   - `HEADER_HEIGHT = 2`, so `content_area.height = 8 - 2 = 6`.
+    ///   - Bug: `bottom_section_height = ACTION_HINT_HEIGHT = 1`, so component loop
+    ///     could write into row 5 (0-indexed) = the caption row.
+    ///   - Fix: `effective_bottom_height = 2`, so component loop is clamped at row 4,
+    ///     and the caption renders cleanly at row 4.
+    ///
+    /// Width 80 ensures the full caption text fits without truncation.
+    #[test]
+    fn test_flutter_sdk_caption_not_overwritten_by_component_list() {
+        let state = make_state_flutter_sdk_many_components();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // Height 8: HEADER_HEIGHT(2) + 4 component rows + caption(1) + hint(1).
+        // Width 80: enough for the full caption text "…v opens the version picker".
+        // With the bug the component loop could write into row height-2 (the caption row).
+        let area = Rect::new(0, 0, 80, 8);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+
+        // The caption text must appear somewhere in the buffer.
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            content.contains("version picker"),
+            "FlutterSdk caption ('version picker') must be present in tight pane: {content:?}"
+        );
+
+        // Collect rows to verify the caption is on the second-to-last rendered row
+        // and the action hint is on the last row.
+        let rows: Vec<String> = (0..area.height)
+            .map(|row| {
+                (0..area.width)
+                    .map(|col| buf.cell((col, row)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect()
+            })
+            .collect();
+
+        let caption_row = rows
+            .iter()
+            .position(|r| r.contains("version picker"))
+            .expect("a row containing 'version picker' must exist");
+        let hint_row = rows
+            .iter()
+            .position(|r| r.contains("Press Enter"))
+            .expect("a row containing 'Press Enter' must exist");
+
+        // The action hint must be the row directly after the caption.
+        assert_eq!(
+            hint_row,
+            caption_row + 1,
+            "action hint (row {hint_row}) must immediately follow the caption (row {caption_row})"
+        );
+
+        // No component text must appear on the caption row or the action-hint row.
+        // (We check both "extra row" strings that represent the last components.)
+        assert!(
+            !rows[caption_row].contains("extra row"),
+            "caption row (row {caption_row}) must NOT contain component text: {:?}",
+            rows[caption_row]
+        );
+        assert!(
+            !rows[hint_row].contains("extra row"),
+            "action-hint row (row {hint_row}) must NOT contain component text: {:?}",
+            rows[hint_row]
+        );
+    }
+
+    /// Edge-case: FlutterSdk step with height exactly equal to `HEADER_HEIGHT + 2`
+    /// (just enough room for caption + action_hint, zero component rows) must not
+    /// panic and must show the caption and hint.
+    #[test]
+    fn test_flutter_sdk_caption_minimal_height_no_panic() {
+        let state = make_state_flutter_sdk_many_components();
+        let pane = StepDetailPane::new(&state, true, 0);
+        // height 4 = HEADER_HEIGHT(2) + caption(1) + hint(1); zero component rows.
+        // Width 80 ensures the full caption text fits.
+        let area = Rect::new(0, 0, 80, 4);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf); // must not panic
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+        // Caption and hint should both render when there is exactly enough room.
+        assert!(
+            content.contains("version picker"),
+            "caption must render at minimal height: {content:?}"
+        );
+        assert!(
+            content.contains("Press Enter"),
+            "action hint must render at minimal height: {content:?}"
         );
     }
 }

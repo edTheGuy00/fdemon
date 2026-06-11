@@ -33,6 +33,13 @@ dockur/macos has **no unattended/oem hook** — first boot is interactive.
 cd tests/docker/macos
 docker compose up -d          # or: scripts/macos-vm.sh up
 ```
+
+> **Network exposure:** all VM ports (noVNC 8006, VNC 5900, SSH 2222) bind to
+> `127.0.0.1` by default so nothing is reachable from the LAN/WiFi. To use the
+> VM from another tailnet device, set `BIND_ADDR` to this host's tailnet address
+> before `up`: `export BIND_ADDR=<tailnet IP>` — then connect to that address
+> instead of `localhost`.
+
 Open <http://localhost:8006> (noVNC) and in the macOS installer:
 1. **Disk Utility** → select the largest QEMU HARDDISK → **Erase** (APFS) → quit.
 2. **Reinstall macOS** → install onto that disk (~30-90 min, several reboots).

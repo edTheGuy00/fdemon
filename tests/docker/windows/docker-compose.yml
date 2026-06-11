@@ -36,10 +36,13 @@ services:
       - /dev/net/tun
     cap_add:
       - NET_ADMIN
+    # Bind to loopback by default so the VM is NOT exposed to the LAN/WiFi —
+    # especially important here since RDP credentials are the defaults above.
+    # To reach it from other tailnet devices: export BIND_ADDR=<your tailnet IP>.
     ports:
-      - "8006:8006"          # noVNC web viewer (watch the install)
-      - "3389:3389/tcp"      # RDP (real terminal for the TUI wizard)
-      - "3389:3389/udp"
+      - "${BIND_ADDR:-127.0.0.1}:8006:8006"          # noVNC web viewer (watch the install)
+      - "${BIND_ADDR:-127.0.0.1}:3389:3389/tcp"      # RDP (real terminal for the TUI wizard)
+      - "${BIND_ADDR:-127.0.0.1}:3389:3389/udp"
     volumes:
       - ./storage:/storage   # persist the installed VM disk (gitignored)
       - ./oem:/oem           # copied to C:\OEM; install.bat auto-runs post-install

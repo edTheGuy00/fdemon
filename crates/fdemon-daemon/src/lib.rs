@@ -112,6 +112,7 @@ pub use toolchain::{
     run_preflight, ComponentCheck, ComponentKind, ComponentStatus, DoctorLine, DoctorMarker,
     HostPlatform, HostShell, LinuxPackageManager, PreflightOutcome, ToolchainReport,
     PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+    VS_FOUND_PREFIX,
 };
 
 use fdemon_core::prelude::*;

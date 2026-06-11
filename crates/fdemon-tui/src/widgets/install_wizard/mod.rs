@@ -25,6 +25,9 @@ mod doctor_view;
 mod progress;
 mod step_detail;
 mod step_list;
+mod version_picker;
+
+use step_list::HEADER_HEIGHT;
 
 use ratatui::{
     buffer::Buffer,
@@ -74,10 +77,17 @@ const PANEL_HEIGHT_PERCENT: u16 = 85;
 /// 28% provides comfortable display at typical widths and gives the detail pane more room.
 const LEFT_PANE_PERCENT: u16 = 28;
 
-/// Height of the left pane in vertical (stacked) layout.
+/// Padding rows added below the step list items in vertical (stacked) layout.
 ///
-/// Derived from: header(2) + 5 steps × 1 row + 2 padding = 9 rows.
-const VERTICAL_STEP_LIST_HEIGHT: u16 = 9;
+/// Derived from: 2 rows of visual breathing room between the step list and the
+/// horizontal separator below it, keeping the list from appearing cramped.
+const VERTICAL_STEP_LIST_PADDING: u16 = 2;
+
+/// Minimum rows reserved below the step-list pane in vertical layout for the
+/// detail pane + separator, so an expanded step list never starves the detail view.
+///
+/// Derived from: detail-pane `Constraint::Min(5)` + 1 separator row = 6.
+const MIN_DETAIL_RESERVE_ROWS: u16 = 6;
 
 /// The main Install Wizard panel widget.
 ///
@@ -225,6 +235,7 @@ impl<'a> InstallWizardPanel<'a> {
             self.state.selected_index,
             self.state.focused_pane,
             self.failed_execution_kind(),
+            self.state.platforms_expanded,
         );
         list_pane.render(chunks[0], buf);
 
@@ -236,8 +247,16 @@ impl<'a> InstallWizardPanel<'a> {
 
     /// Render vertical (stacked) pane layout for narrow terminals.
     fn render_vertical_panes(&self, area: Rect, buf: &mut Buffer) {
+        // Dynamic step-list height: header rows + one row per visible step + padding.
+        // Clamped to available area so an unusually long step list does not overflow.
+        let step_list_height = ((HEADER_HEIGHT as usize)
+            + self.state.steps.len()
+            + VERTICAL_STEP_LIST_PADDING as usize)
+            .min(area.height.saturating_sub(MIN_DETAIL_RESERVE_ROWS) as usize) // leave MIN_DETAIL_RESERVE_ROWS for detail + sep
+            as u16;
+
         let chunks = Layout::vertical([
-            Constraint::Length(VERTICAL_STEP_LIST_HEIGHT),
+            Constraint::Length(step_list_height),
             Constraint::Length(1),
             Constraint::Min(5),
         ])
@@ -248,6 +267,7 @@ impl<'a> InstallWizardPanel<'a> {
             self.state.selected_index,
             self.state.focused_pane,
             self.failed_execution_kind(),
+            self.state.platforms_expanded,
         );
         list_pane.render(chunks[0], buf);
 
@@ -320,14 +340,39 @@ impl<'a> InstallWizardPanel<'a> {
             .render(body, buf);
     }
 
-    /// Render the footer: Phase 1 key hints (and optional status message).
+    /// Render the footer: key hints (and optional status message).
+    ///
+    /// When the selected step is the `Platforms` parent, appends
+    /// `· [Enter] expand/collapse` to the standard hint string.
+    /// When the selected step is `FlutterSdk` and the picker is closed, appends
+    /// `· [v] versions`.
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
-        let hints = "[Tab] switch \u{00b7} [j/k] move \u{00b7} [r] re-run \u{00b7} [Esc] close";
+        use fdemon_app::install_wizard::WizardStepKind;
+
+        let base_hints =
+            "[Tab] switch \u{00b7} [j/k] move \u{00b7} [r] re-run \u{00b7} [Esc] close";
+
+        // Append expand/collapse hint when the Platforms parent is selected.
+        let selected_is_platforms =
+            self.state.selected_step().map(|s| s.kind) == Some(WizardStepKind::Platforms);
+
+        // Append [v] versions hint when FlutterSdk is selected and picker is closed.
+        let selected_is_flutter_sdk =
+            self.state.selected_step().map(|s| s.kind) == Some(WizardStepKind::FlutterSdk);
+        let picker_closed = !self.state.version_picker.visible;
+
+        let hints = if selected_is_platforms {
+            format!("{base_hints} \u{00b7} [Enter] expand/collapse")
+        } else if selected_is_flutter_sdk && picker_closed {
+            format!("{base_hints} \u{00b7} [v] versions")
+        } else {
+            base_hints.to_string()
+        };
 
         let text = if let Some(ref msg) = self.state.status_message {
             format!("{msg}  \u{2502}  {hints}") // │
         } else {
-            hints.to_string()
+            hints
         };
 
         Paragraph::new(Line::from(Span::styled(
@@ -423,6 +468,14 @@ impl Widget for InstallWizardPanel<'_> {
 
         self.render_separator(chunks[3], buf);
         self.render_footer(chunks[4], buf);
+
+        // 9. Version picker overlay — rendered on top of the panel body when visible.
+        //    Uses the dialog inner area (not the full terminal area) so it is
+        //    always nested within the wizard borders, per the confirm_dialog pattern.
+        if self.state.version_picker.visible {
+            version_picker::VersionPickerOverlay::new(&self.state.version_picker)
+                .render(inner, buf);
+        }
     }
 }
 
@@ -957,6 +1010,94 @@ mod tests {
         assert!(
             !content.contains("Flutter installed"),
             "must NOT show 'Flutter installed' when healthy throughout; content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): footer shows `[v] versions` when FlutterSdk step is
+    /// selected and the version picker is closed.
+    #[test]
+    fn footer_shows_versions_hint_when_flutter_sdk_selected_and_picker_closed() {
+        let mut state = populated_state();
+        // Find the FlutterSdk step and select it.
+        let flutter_idx = state
+            .steps
+            .iter()
+            .position(|s| s.kind == fdemon_app::install_wizard::WizardStepKind::FlutterSdk)
+            .expect("FlutterSdk step must exist in populated_state");
+        state.selected_index = flutter_idx;
+        // Picker is closed by default.
+        assert!(!state.version_picker.visible, "picker should be closed");
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 160, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("[v] versions"),
+            "footer must show [v] versions hint when FlutterSdk is selected and picker is closed; \
+             content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): footer does NOT show `[v] versions` when a non-FlutterSdk
+    /// step is selected.
+    #[test]
+    fn footer_does_not_show_versions_hint_for_non_flutter_sdk_step() {
+        let mut state = populated_state();
+        // Select the Prerequisites step (index 0 — never FlutterSdk).
+        state.selected_index = 0;
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 160, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            !content.contains("[v] versions"),
+            "footer must NOT show [v] versions for non-FlutterSdk step; content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): version picker overlay is rendered when visible.
+    #[test]
+    fn version_picker_overlay_rendered_when_visible() {
+        let mut state = populated_state();
+        // Open the picker.
+        state.version_picker.visible = true;
+        state.version_picker.fetch = fdemon_app::install_wizard::PickerFetch::Loading;
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Flutter version"),
+            "version picker overlay must render when visible; content: {content:?}"
+        );
+    }
+
+    /// Phase 6 (Task 05): version picker overlay is NOT rendered when hidden.
+    #[test]
+    fn version_picker_overlay_not_rendered_when_hidden() {
+        let state = populated_state();
+        assert!(!state.version_picker.visible, "picker must be hidden");
+
+        let widget = InstallWizardPanel::new(&state, 0);
+        let area = Rect::new(0, 0, 120, 50);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+
+        // The picker title "Flutter version" should NOT appear when picker is closed.
+        // (The installer title "Install Wizard" is present, but not the picker title.)
+        assert!(
+            !content.contains("Flutter version"),
+            "version picker overlay must NOT render when hidden; content: {content:?}"
         );
     }
 }

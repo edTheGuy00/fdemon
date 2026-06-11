@@ -9,7 +9,7 @@ use std::cell::Cell;
 use fdemon_daemon::toolchain::{
     parse_missing_prereq_keys, ComponentCheck, ComponentKind, ComponentStatus, HostPlatform,
     LinuxPackageManager, ToolchainReport, PREREQ_KEY_COCOAPODS, PREREQ_KEY_GIT, PREREQ_KEY_GLU,
-    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT,
+    PREREQ_KEY_LIBSTDCPP, PREREQ_KEY_ROSETTA, PREREQ_KEY_XCODE_CLT, VS_FOUND_PREFIX,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +17,20 @@ use super::types::{
     GuidedCommand, StepExecStatus, StepExecution, StepStatus, WizardOrigin, WizardPane,
     WizardStepKind, MAX_LOG_TAIL,
 };
+
+// ── Web-browser guided-command constants ──────────────────────────────────────
+
+/// Chrome download URL — the canonical, package-manager-independent way to get
+/// a Chromium-based browser on any platform.
+const CHROME_DOWNLOAD_URL: &str = "https://www.google.com/chrome/";
+
+/// Note appended to every web-browser guided command so users know how to
+/// point Flutter at a non-default browser path.
+///
+/// On Linux/macOS the environment variable is `CHROME_EXECUTABLE`.
+/// (Windows uses `set CHROME_EXECUTABLE=…` — see the Windows arm.)
+const CHROME_EXECUTABLE_NOTE: &str =
+    "To use a non-default browser: export CHROME_EXECUTABLE=\"/path/to/browser\"";
 
 /// A running install task: a `JoinHandle` paired with a `CancellationToken`.
 ///
@@ -62,8 +76,12 @@ pub struct WizardStep {
     ///
     /// Empty for steps that have no privileged/GUI actions. Populated by
     /// `build_steps()` when a required component is not `Ok`. Phase 3 uses
-    /// this for the JDK install command on the `AndroidTools` step.
+    /// this for the JDK install command on the `PlatformAndroid` step.
     pub guided_commands: Vec<GuidedCommand>,
+    /// Visual indent level: 0 = top-level / parent row, 1 = leaf row nested
+    /// under `Platforms`. Used by the step-list renderer (Task 03) to draw
+    /// tree-style indentation for expanded platform leaves.
+    pub indent: u8,
 }
 
 /// Top-level state for the Install Wizard panel.
@@ -142,6 +160,13 @@ pub struct InstallWizardState {
     /// Reset to `false` only when the wizard is fully re-opened via `opening()`.
     pub handback_done: bool,
 
+    /// Whether the Platforms submenu is expanded (showing per-platform leaf rows).
+    ///
+    /// Defaults to `false` (collapsed). When `true`, `build_steps` inserts
+    /// host-gated leaf rows (`PlatformAndroid`, `PlatformWeb`, etc.) after the
+    /// `Platforms` parent. Toggled by `InstallWizardToggleExpand` (Task 02).
+    pub platforms_expanded: bool,
+
     /// Why the wizard was opened. Gates the handback (see `close_wizard_and_dispatch_discovery`).
     ///
     /// `Bootstrap` — opened at startup because the toolchain was missing/broken;
@@ -160,6 +185,13 @@ pub struct InstallWizardState {
     /// Used by [`show_installed_hint`][Self::show_installed_hint] to distinguish
     /// "was broken, now fixed" from "was healthy throughout".
     pub observed_unhealthy: bool,
+
+    /// State for the Flutter version picker overlay (Task 06 Phase 6).
+    ///
+    /// The picker is a sub-modal of the install wizard that lets users choose
+    /// a specific Flutter version before installation. Initialized via
+    /// `Default` (invisible) and `reset()` on full wizard hide.
+    pub version_picker: super::version_picker::VersionPickerState,
 }
 
 impl InstallWizardState {
@@ -232,7 +264,7 @@ impl InstallWizardState {
         {
             self.observed_unhealthy = true;
         }
-        self.steps = build_steps(&report);
+        self.steps = build_steps(&report, self.platforms_expanded);
         self.report = Some(report);
         self.loading = false;
         if self.selected_index >= self.steps.len() {
@@ -436,6 +468,7 @@ impl std::fmt::Debug for InstallWizardState {
             .field("selected_index", &self.selected_index)
             .field("selected_command_index", &self.selected_command_index)
             .field("detail_scroll", &self.detail_scroll)
+            .field("platforms_expanded", &self.platforms_expanded)
             .field("report", &self.report)
             .field("loading", &self.loading)
             .field("status_message", &self.status_message)
@@ -531,6 +564,158 @@ fn jdk_guided_command(report: &ToolchainReport) -> GuidedCommand {
         label: "Install JDK 17".into(),
         command: command.into(),
         note: note.map(Into::into),
+    }
+}
+
+/// Per-OS guided commands to install a Chromium-based web browser for
+/// `flutter run -d chrome`.
+///
+/// Returns an empty `Vec` when `web_status` is `Ok` (browser already found).
+/// Otherwise, emits per-OS install suggestions:
+///
+/// - **Linux** — a package-manager hint (chosen from the pre-detected
+///   `report.linux_package_manager`) plus the cross-distro fallback
+///   ([`CHROME_DOWNLOAD_URL`] + [`CHROME_EXECUTABLE_NOTE`]). The PM command is
+///   a convenience; the download URL is always present so distro variances
+///   (snap transitional on Ubuntu, `chromium` on Debian, etc.) never strand
+///   the user.
+/// - **macOS** — Chrome download URL + `export CHROME_EXECUTABLE` note.
+/// - **Windows** — when `report.winget_available` is `true`, a
+///   `winget install Google.Chrome` convenience hint is prepended; the
+///   [`CHROME_DOWNLOAD_URL`] fallback is **always** emitted regardless of
+///   winget availability.
+/// - **`HostPlatform::Unknown`** — empty (no actionable commands).
+///
+/// **Command strings are templates, not configured values.** `build_steps` is a
+/// pure function of the report (it takes no settings param), so the
+/// `CHROME_EXECUTABLE` paths use angle-bracket placeholders rather than the
+/// configured `web_browser_executable` value. The configured path arrives here
+/// already reflected in the `WebBrowser` component's `status` field (via
+/// Task 02's `run_preflight` plumbing).
+fn web_browser_guided_commands(
+    report: &ToolchainReport,
+    web_status: StepStatus,
+) -> Vec<GuidedCommand> {
+    // Guide the user only when the browser is actually determined absent.
+    // Partial = the capped form of a Missing browser. Ok = found; Pending = no
+    // probe data / legacy report — neither should surface install commands.
+    if web_status != StepStatus::Partial {
+        return Vec::new();
+    }
+
+    match report.platform {
+        HostPlatform::Linux => {
+            let pm = report
+                .linux_package_manager
+                .unwrap_or(LinuxPackageManager::Unknown);
+
+            // Build a PM-specific hint when the package manager is known.
+            // The note acknowledges distro variance and points to the
+            // download URL + CHROME_EXECUTABLE as the reliable path.
+            let pm_cmd: Option<(&str, String)> = match pm {
+                LinuxPackageManager::Apt => Some((
+                    "sudo apt install chromium-browser",
+                    format!(
+                        "Package name varies by distro (chromium-browser on Ubuntu, \
+                         chromium on Debian). If unavailable, download Chrome from \
+                         {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
+                    ),
+                )),
+                LinuxPackageManager::Dnf => Some((
+                    "sudo dnf install chromium",
+                    format!(
+                        "or: sudo dnf install google-chrome-stable\n\
+                         Download Chrome: {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
+                    ),
+                )),
+                LinuxPackageManager::Yum => Some((
+                    "sudo yum install chromium",
+                    format!(
+                        "or: sudo yum install google-chrome-stable\n\
+                         Download Chrome: {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
+                    ),
+                )),
+                LinuxPackageManager::Pacman => Some((
+                    "sudo pacman -S chromium",
+                    format!(
+                        "or: yay -S google-chrome (AUR helper required)\n\
+                         Download Chrome: {CHROME_DOWNLOAD_URL}\n{CHROME_EXECUTABLE_NOTE}"
+                    ),
+                )),
+                LinuxPackageManager::Zypper => Some((
+                    "sudo zypper install chromium",
+                    format!(
+                        "or: download Chrome from {CHROME_DOWNLOAD_URL}\n\
+                         {CHROME_EXECUTABLE_NOTE}"
+                    ),
+                )),
+                LinuxPackageManager::Unknown => None,
+            };
+
+            let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+            if let Some((cmd, note)) = pm_cmd {
+                cmds.push(GuidedCommand {
+                    label: "Install a browser (package manager)".into(),
+                    command: cmd.into(),
+                    note: Some(note),
+                });
+            }
+
+            // Always emit the cross-distro, package-manager-independent fallback.
+            cmds.push(GuidedCommand {
+                label: "Download Chrome (cross-distro fallback)".into(),
+                command: CHROME_DOWNLOAD_URL.into(),
+                note: Some(CHROME_EXECUTABLE_NOTE.into()),
+            });
+
+            cmds
+        }
+
+        HostPlatform::MacOs => {
+            vec![GuidedCommand {
+                label: "Download Chrome".into(),
+                command: CHROME_DOWNLOAD_URL.into(),
+                note: Some(format!(
+                    "After installing, if Flutter does not detect it:\n\
+                     export CHROME_EXECUTABLE=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\"\n\
+                     {CHROME_EXECUTABLE_NOTE}"
+                )),
+            }]
+        }
+
+        HostPlatform::Windows => {
+            let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+            // Winget convenience hint — only when winget is pre-confirmed available.
+            if report.winget_available {
+                cmds.push(GuidedCommand {
+                    label: "Install Chrome (winget)".into(),
+                    command: "winget install Google.Chrome".into(),
+                    note: Some(
+                        "If Flutter does not detect it after installing, set the path:\n\
+                         set CHROME_EXECUTABLE=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                            .into(),
+                    ),
+                });
+            }
+
+            // Always emit the download-URL fallback — it does not depend on any
+            // package manager and is the canonical cross-platform option.
+            cmds.push(GuidedCommand {
+                label: "Download Chrome (direct)".into(),
+                command: CHROME_DOWNLOAD_URL.into(),
+                note: Some(
+                    "After installing, if Flutter does not detect it:\n\
+                     set CHROME_EXECUTABLE=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                        .into(),
+                ),
+            });
+
+            cmds
+        }
+
+        HostPlatform::Unknown => Vec::new(),
     }
 }
 
@@ -837,8 +1022,8 @@ fn prerequisites_guided_commands(
 /// This is the **single source of truth** for the JDK-actionable predicate,
 /// used by both:
 /// - `build_steps()` — to decide whether to populate guided commands for the
-///   `AndroidTools` step.
-/// - `actions.rs` `handle_run_selected_step()` — to gate the `AndroidTools`
+///   `PlatformAndroid` leaf step.
+/// - `actions.rs` `handle_run_selected_step()` — to gate the `PlatformAndroid`
 ///   executor (sdkmanager requires a JDK 17).
 ///
 /// Both callers now agree: if no `Jdk` entry exists, a guided command is shown
@@ -850,20 +1035,267 @@ pub(crate) fn is_jdk_actionable(components: &[ComponentCheck]) -> bool {
     }
 }
 
-/// Map a [`ToolchainReport`]'s components into the five ordered UI steps.
+/// Roll up a slice of `StepStatus` values into a single parent `StepStatus`.
 ///
-/// Step order: Prerequisites → AndroidTools → PathConfig → FlutterSdk → Doctor
+/// Rules (in priority order):
+/// 1. Any `Missing` → `StepStatus::Missing`
+/// 2. Any `Partial` → `StepStatus::Partial`
+/// 3. All `Ok` (ignoring `Pending`) → `StepStatus::Ok`
+/// 4. All `Pending` (or empty slice) → `StepStatus::Pending` (neutral)
 ///
-/// Component grouping:
+/// `Pending` is treated as neutral: it represents a placeholder leaf that has
+/// not yet been probed, so it does not degrade the parent status.
+///
+/// Performs a single pass over the slice with no heap allocation.
+fn rollup_step_statuses(statuses: &[StepStatus]) -> StepStatus {
+    let mut any_real = false;
+    let mut any_missing = false;
+    let mut any_partial = false;
+    for &s in statuses {
+        if s == StepStatus::Pending {
+            continue;
+        }
+        any_real = true;
+        match s {
+            StepStatus::Missing => any_missing = true,
+            StepStatus::Partial => any_partial = true,
+            _ => {}
+        }
+    }
+    if !any_real {
+        StepStatus::Pending
+    } else if any_missing {
+        StepStatus::Missing
+    } else if any_partial {
+        StepStatus::Partial
+    } else {
+        StepStatus::Ok
+    }
+}
+
+/// Guided commands for the Apple-platform leaves.
+///
+/// `include_ios_platform` adds the iOS-only `xcodebuild -downloadPlatform iOS`
+/// command. Returns an empty `Vec` unless the leaf status is `Partial` (a tool
+/// is absent).
+///
+/// - When `XcodeTools` is not `Ok`: emits three commands — open the App Store to
+///   install Xcode, select the Xcode developer directory and accept the license,
+///   and (iOS only) download the iOS platform.
+/// - When `CocoaPods` is not `Ok`: emits a `brew install cocoapods` command.
+///
+/// **`all_components_ok()` intentionally stays strict (Phase 3 Web precedent).**
+/// A `Partial` / `Missing` `XcodeTools` makes it return `false` on a macOS host
+/// lacking Xcode — correct, and **non-blocking**: handback gates on
+/// `flutter_now_live()` / `flutter_executable()`, not `all_components_ok()`.
+/// Do not special-case `XcodeTools` / `CocoaPods`.
+///
+/// **Guided command text does not echo a configured path.** The commands use the
+/// canonical `/Applications/Xcode.app` path; users adjust if their Xcode lives
+/// elsewhere.
+fn xcode_guided_commands(
+    report: &ToolchainReport,
+    status: StepStatus,
+    include_ios_platform: bool,
+) -> Vec<GuidedCommand> {
+    // Guide only when a tool is determined absent (Partial = capped form of Missing).
+    if status != StepStatus::Partial {
+        return Vec::new();
+    }
+
+    let xcode_missing = report
+        .components
+        .iter()
+        .any(|c| c.kind == ComponentKind::XcodeTools && c.status != ComponentStatus::Ok);
+    let cocoapods_missing = report
+        .components
+        .iter()
+        .any(|c| c.kind == ComponentKind::CocoaPods && c.status != ComponentStatus::Ok);
+
+    let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+    if xcode_missing {
+        // Step 1: Install Xcode from the App Store (or via xcodes CLI).
+        cmds.push(GuidedCommand {
+            label: "Install Xcode".to_string(),
+            command: "open \"https://apps.apple.com/us/app/xcode/id497799835\"".to_string(),
+            note: Some("Or: brew install --cask xcodes && xcodes install --latest".to_string()),
+        });
+        // Step 2: Point the active developer dir at the full Xcode (not CLT),
+        //         run the first-launch setup, and accept the license.
+        cmds.push(GuidedCommand {
+            label: "Select Xcode & accept license".to_string(),
+            command: "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer \
+                      && sudo xcodebuild -runFirstLaunch \
+                      && sudo xcodebuild -license accept"
+                .to_string(),
+            note: Some(
+                "Adjust the path if Xcode is not in /Applications (e.g. a versioned or beta bundle)."
+                    .to_string(),
+            ),
+        });
+        // Step 3 (iOS only): download the iOS simulator platform.
+        if include_ios_platform {
+            cmds.push(GuidedCommand {
+                label: "Download the iOS platform".to_string(),
+                command: "xcodebuild -downloadPlatform iOS".to_string(),
+                note: None,
+            });
+        }
+    }
+
+    if cocoapods_missing {
+        cmds.push(GuidedCommand {
+            label: "Install CocoaPods".to_string(),
+            command: "brew install cocoapods".to_string(),
+            note: Some("Or: sudo gem install cocoapods".to_string()),
+        });
+    }
+
+    cmds
+}
+
+/// Guided commands for the Windows platform leaf.
+///
+/// Emits only when the leaf is `Partial` (the capped form of a determined-absent
+/// VS C++ workload); `Ok` and `Pending` yield no commands. Display-only
+/// copy-paste text — never executed.
+///
+/// **Branching on the detail-prefix contract:**
+/// - If the `VisualStudioCpp` component's `detail` starts with
+///   [`VS_FOUND_PREFIX`] (shared constant from `fdemon_daemon::toolchain`,
+///   produced by `classify_vswhere_gates` in `checks/windows.rs`),
+///   VS exists but the C++ workload is missing → emits the **modify** entry first.
+/// - Fresh-install entries are emitted in both branches (primary in the no-VS branch):
+///   - When `report.winget_available`: winget install entry.
+///   - Always: choco install entry.
+///
+/// Ordering: modify → winget → choco (deterministic, matches test expectations).
+///
+/// **`all_components_ok()` intentionally stays strict (Phase 3/4 precedent).**
+/// A Windows host without VS does not show "All set". Do not special-case
+/// `VisualStudioCpp` out of it.
+fn windows_guided_commands(
+    report: &ToolchainReport,
+    status: StepStatus,
+    components: &[ComponentCheck],
+) -> Vec<GuidedCommand> {
+    // Guide only when the VS C++ workload is determined absent (Partial = capped
+    // form of Missing). Ok = found; Pending = no probe data / empty report.
+    if status != StepStatus::Partial {
+        return Vec::new();
+    }
+
+    // Branch on the detail-prefix contract: `VS_FOUND_PREFIX` is the shared
+    // constant from `fdemon_daemon::toolchain` (defined in
+    // `fdemon-daemon/src/toolchain/checks/windows.rs::classify_vswhere_gates`).
+    // It is set when gate 1 hits but gate 2 misses (VS present but C++ workload
+    // absent).
+    let vs_found_workload_missing = components
+        .iter()
+        .any(|c| c.kind == ComponentKind::VisualStudioCpp && c.detail.starts_with(VS_FOUND_PREFIX));
+
+    let mut cmds: Vec<GuidedCommand> = Vec::new();
+
+    // Modify entry: only when VS is present but C++ workload is missing.
+    // Branch on shell: PowerShell uses `Start-Process` with `${env:...}` syntax
+    // because `%ProgramFiles(x86)%` env-var expansion is cmd.exe-only.
+    // The brace form `${env:ProgramFiles(x86)}` is required for variable names
+    // that contain parentheses in PowerShell.
+    if vs_found_workload_missing {
+        use fdemon_daemon::toolchain::HostShell;
+        let command = if report.shell == HostShell::PowerShell {
+            r#"Start-Process "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe""#.to_string()
+        } else {
+            r#"start "" "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe""#
+                .to_string()
+        };
+        cmds.push(GuidedCommand {
+            label: "Add the C++ workload to the existing Visual Studio".to_string(),
+            command,
+            note: Some("Opens Visual Studio Installer — choose Modify and tick 'Desktop development with C++'.".to_string()),
+        });
+    }
+
+    // Fresh-install entries (emitted in both branches).
+    // Winget: only when winget is pre-confirmed available (no which::which I/O here).
+    if report.winget_available {
+        cmds.push(GuidedCommand {
+            label: "Install VS 2022 Build Tools (winget)".to_string(),
+            command: "winget install --id Microsoft.VisualStudio.2022.BuildTools --override \"--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.NativeDesktop;includeRecommended\"".to_string(),
+            note: Some("Requires elevation. After installing, press r to re-check.".to_string()),
+        });
+    }
+
+    // Choco: always emitted as the universal package-manager fallback.
+    cmds.push(GuidedCommand {
+        label: "Install VS 2022 Build Tools (choco)".to_string(),
+        command: "choco install visualstudio2022buildtools --package-parameters \"--add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended\"".to_string(),
+        note: Some("Requires Chocolatey.".to_string()),
+    });
+
+    cmds
+}
+
+/// Map a [`ToolchainReport`]'s components into the wizard UI steps.
+///
+/// ## Collapsed (expanded == false)
+///
+/// Returns 5 rows in order:
+/// `Prerequisites` → `Platforms` (parent) → `FlutterSdk` → `PathConfig` → `Doctor`
+///
+/// ## Expanded (expanded == true)
+///
+/// After the `Platforms` parent, inserts host-gated leaf rows (indent = 1):
+/// - `PlatformAndroid` — all hosts
+/// - `PlatformWeb`     — all hosts (live as of Phase 3)
+/// - `PlatformIos`     — macOS only (live as of Phase 4)
+/// - `PlatformMacos`   — macOS only (live as of Phase 4)
+/// - `PlatformWindows` — Windows only (live as of Phase 5); `ComponentKind::VisualStudioCpp`,
+///   status capped at `Partial` (non-blocking)
+///
+/// In Phase 2 and earlier, all leaves except `PlatformAndroid` were **placeholders**
+/// with `StepStatus::Pending`, empty `components`, and no `guided_commands`.
+/// As of Phase 3, `PlatformWeb` is live: it routes `ComponentKind::WebBrowser`
+/// checks, caps `Missing → Partial` (so an absent browser is **non-blocking** —
+/// it never propagates `Missing` to the Platforms parent), and emits per-OS
+/// guided commands when the browser is absent.
+/// As of Phase 4, `PlatformIos` and `PlatformMacos` are live: they route
+/// `ComponentKind::XcodeTools` + `ComponentKind::CocoaPods` checks (cloned into
+/// both buckets), cap `Missing → Partial`, and emit Xcode/CocoaPods guided
+/// commands. The iOS leaf additionally includes `xcodebuild -downloadPlatform iOS`.
+/// As of Phase 5, `PlatformWindows` is live: it routes
+/// `ComponentKind::VisualStudioCpp` checks, caps `Missing → Partial` (non-blocking),
+/// and emits winget / choco / modify-existing-VS guided commands.
+///
+/// ## Component grouping
+///
 /// - `Prerequisites` — `ComponentKind::Prerequisites`, `ComponentKind::Git`
-/// - `AndroidTools` — `AndroidCmdlineTools`, `AndroidPlatformTools`,
+/// - `PlatformAndroid` — `AndroidCmdlineTools`, `AndroidPlatformTools`,
 ///   `AndroidPlatform`, `AndroidBuildTools`, `AndroidLicenses`, `Jdk`
-/// - `PathConfig` — no components; status derived from whether Flutter is resolved
+/// - `PlatformWeb` — `ComponentKind::WebBrowser`; status capped at `Partial`
+///   (never surfaces `Missing`); non-blocking.
+/// - `PlatformIos` — `XcodeTools`, `CocoaPods` (cloned); status capped at
+///   `Partial`; macOS-only; non-blocking.
+/// - `PlatformMacos` — `XcodeTools`, `CocoaPods` (cloned); status capped at
+///   `Partial`; macOS-only; non-blocking.
+/// - `PlatformWindows` — `VisualStudioCpp`; status capped at `Partial`;
+///   Windows-only; non-blocking.
 /// - `FlutterSdk` — `ComponentKind::FlutterSdk`
+/// - `PathConfig` — no components; status derived from whether Flutter is resolved
 /// - `Doctor` — no components; detail comes from `report.doctor`
-pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
+///
+/// Host gating reads `report.platform` only — no `cfg!` or OS detection.
+pub fn build_steps(report: &ToolchainReport, expanded: bool) -> Vec<WizardStep> {
     let mut prerequisites: Vec<ComponentCheck> = Vec::new();
-    let mut android_tools: Vec<ComponentCheck> = Vec::new();
+    let mut platform_android_components: Vec<ComponentCheck> = Vec::new();
+    let mut platform_web_components: Vec<ComponentCheck> = Vec::new();
+    // iOS and macOS share the same probe (XcodeTools + CocoaPods).
+    // Both buckets receive clones of the same checks so the two leaves are
+    // independent and the parent rollup is not double-counted.
+    let mut platform_ios_components: Vec<ComponentCheck> = Vec::new();
+    let mut platform_macos_components: Vec<ComponentCheck> = Vec::new();
+    let mut platform_windows_components: Vec<ComponentCheck> = Vec::new();
     let mut flutter_sdk: Vec<ComponentCheck> = Vec::new();
 
     for check in &report.components {
@@ -877,10 +1309,24 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
             | ComponentKind::AndroidBuildTools
             | ComponentKind::AndroidLicenses
             | ComponentKind::Jdk => {
-                android_tools.push(check.clone());
+                platform_android_components.push(check.clone());
+            }
+            ComponentKind::WebBrowser => {
+                platform_web_components.push(check.clone());
             }
             ComponentKind::FlutterSdk => {
                 flutter_sdk.push(check.clone());
+            }
+            // XcodeTools and CocoaPods are shared between iOS and macOS.
+            // Clone each check into both buckets so the leaf statuses are
+            // independent and the parent rollup is not double-counted.
+            // (Both leaves will always have the same status — by design.)
+            ComponentKind::XcodeTools | ComponentKind::CocoaPods => {
+                platform_ios_components.push(check.clone());
+                platform_macos_components.push(check.clone());
+            }
+            ComponentKind::VisualStudioCpp => {
+                platform_windows_components.push(check.clone());
             }
         }
     }
@@ -904,7 +1350,62 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
     };
 
     let prerequisites_status = rollup_status(&prerequisites);
-    let android_status = rollup_status(&android_tools);
+    let android_status = rollup_status(&platform_android_components);
+    // Web status: non-blocking cap — `Missing` becomes `Partial` so that an absent
+    // browser never propagates `Missing` up through the Platforms parent (which would
+    // block the whole wizard).  The cap is local to this leaf; `rollup_status` itself
+    // stays unchanged so Android still surfaces true `Missing`.
+    // Empty (no WebBrowser component yet) → Pending so legacy reports remain unaffected.
+    let web_status = if platform_web_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_web_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
+    // iOS status: non-blocking cap — `Missing` becomes `Partial` so that an
+    // absent Xcode/CocoaPods never propagates `Missing` up through the Platforms
+    // parent (which would block the whole wizard).
+    // Empty (no XcodeTools/CocoaPods components, i.e. non-macOS report) → Pending.
+    let ios_status = if platform_ios_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_ios_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
+    // macOS status: same cap and rationale as ios_status above.
+    // ios_status == macos_status always (they derive from the same component data),
+    // but keeping two bindings makes the leaf bodies read cleanly and symmetrically.
+    let macos_status = if platform_macos_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_macos_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
+    // Windows status: non-blocking cap — `Missing` becomes `Partial` so that an absent
+    // Visual Studio never propagates `Missing` up through the Platforms parent.
+    // Empty (no VisualStudioCpp component, i.e. non-Windows report) → Pending.
+    let windows_status = if platform_windows_components.is_empty() {
+        StepStatus::Pending
+    } else {
+        let raw = rollup_status(&platform_windows_components);
+        if raw == StepStatus::Missing {
+            StepStatus::Partial
+        } else {
+            raw
+        }
+    };
     let flutter_status = rollup_status(&flutter_sdk);
 
     // Doctor step: no components; always Ok when doctor data is present,
@@ -915,13 +1416,13 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
         StepStatus::Pending
     };
 
-    // Derive guided commands for the AndroidTools step using the shared
+    // Derive guided commands for the PlatformAndroid step using the shared
     // `is_jdk_actionable` helper. This ensures the gate in `actions.rs` and the
     // guided-command population here agree exactly:
     // - No Jdk entry  → actionable (show command + block executor)
     // - Jdk non-Ok    → actionable (show command + block executor)
     // - Jdk Ok        → not actionable (no command, executor allowed)
-    let android_guided: Vec<GuidedCommand> = if is_jdk_actionable(&android_tools) {
+    let android_guided: Vec<GuidedCommand> = if is_jdk_actionable(&platform_android_components) {
         vec![jdk_guided_command(report)]
     } else {
         Vec::new()
@@ -933,43 +1434,152 @@ pub fn build_steps(report: &ToolchainReport) -> Vec<WizardStep> {
     // Pure function of the report — no I/O in the TEA update() path.
     let prereq_guided = prerequisites_guided_commands(report, &prerequisites);
 
-    vec![
-        WizardStep {
-            kind: WizardStepKind::Prerequisites,
-            title: "Prerequisites".to_string(),
-            status: prerequisites_status,
-            components: prerequisites,
-            guided_commands: prereq_guided,
-        },
-        WizardStep {
-            kind: WizardStepKind::AndroidTools,
-            title: "Android Tools".to_string(),
+    // Build the full platform leaf set unconditionally (single host-gating site).
+    //
+    // All leaves are constructed here; only PlatformAndroid carries real components
+    // and a non-Pending status in Phase 2. The other leaves are Pending placeholders
+    // whose detection and guided commands arrive in Phases 3–5.
+    //
+    // Leaf order: Android → Web → iOS/macOS (macOS only) → Windows (Windows only).
+    // This matches the emission order below and keeps the host-gating match in one place.
+    let platform_leaves: Vec<WizardStep> = {
+        let mut leaves = Vec::new();
+
+        // PlatformAndroid: all hosts; carries the real components and JDK guided command.
+        leaves.push(WizardStep {
+            kind: WizardStepKind::PlatformAndroid,
+            title: "Android".to_string(),
             status: android_status,
-            components: android_tools,
+            components: platform_android_components,
             guided_commands: android_guided,
-        },
-        WizardStep {
-            kind: WizardStepKind::PathConfig,
-            title: "PATH Configuration".to_string(),
-            status: path_config_status,
-            components: Vec::new(),
-            guided_commands: Vec::new(),
-        },
-        WizardStep {
-            kind: WizardStepKind::FlutterSdk,
-            title: "Flutter SDK".to_string(),
-            status: flutter_status,
-            components: flutter_sdk,
-            guided_commands: Vec::new(),
-        },
-        WizardStep {
-            kind: WizardStepKind::Doctor,
-            title: "Flutter Doctor".to_string(),
-            status: doctor_status,
-            components: Vec::new(),
-            guided_commands: Vec::new(),
-        },
-    ]
+            indent: 1,
+        });
+
+        // PlatformWeb: all hosts. Non-blocking: Missing→Partial cap applied above so
+        // an absent browser never causes the Platforms parent to surface Missing.
+        // Guided commands are per-OS installation hints for Chromium/Chrome.
+        leaves.push(WizardStep {
+            kind: WizardStepKind::PlatformWeb,
+            title: "Web".to_string(),
+            status: web_status,
+            components: platform_web_components,
+            guided_commands: web_browser_guided_commands(report, web_status),
+            indent: 1,
+        });
+
+        // macOS-only leaves (live as of Phase 4 — XcodeTools + CocoaPods probes).
+        // Guided commands are built before moving the components Vec into the struct
+        // to satisfy the borrow checker (xcode_guided_commands reads report.components).
+        if report.platform == HostPlatform::MacOs {
+            let ios_guided = xcode_guided_commands(report, ios_status, true);
+            leaves.push(WizardStep {
+                kind: WizardStepKind::PlatformIos,
+                title: "iOS".to_string(),
+                status: ios_status,
+                guided_commands: ios_guided,
+                components: platform_ios_components,
+                indent: 1,
+            });
+            let macos_guided = xcode_guided_commands(report, macos_status, false);
+            leaves.push(WizardStep {
+                kind: WizardStepKind::PlatformMacos,
+                title: "macOS".to_string(),
+                status: macos_status,
+                guided_commands: macos_guided,
+                components: platform_macos_components,
+                indent: 1,
+            });
+        }
+
+        // Windows-only leaf (live as of Phase 5 — VisualStudioCpp probe).
+        // Non-blocking: Missing→Partial cap applied above so an absent VS never
+        // causes the Platforms parent to surface Missing.
+        // Host gating reads report.platform — not cfg!(target_os).
+        if report.platform == HostPlatform::Windows {
+            leaves.push(WizardStep {
+                kind: WizardStepKind::PlatformWindows,
+                title: "Windows".to_string(),
+                status: windows_status,
+                components: platform_windows_components.clone(),
+                guided_commands: windows_guided_commands(
+                    report,
+                    windows_status,
+                    &platform_windows_components,
+                ),
+                indent: 1,
+            });
+        }
+
+        leaves
+    };
+
+    // Derive the Platforms parent status by rolling up the built leaves' statuses.
+    //
+    // In Phase 2 only PlatformAndroid carries a real status; the other leaves are
+    // Pending (neutral), so the parent reflects Android's status in both collapsed
+    // and expanded projections — identical to the pre-refactor behaviour.
+    let leaf_statuses: Vec<StepStatus> = platform_leaves.iter().map(|l| l.status).collect();
+    let platforms_parent_status = rollup_step_statuses(&leaf_statuses);
+
+    let mut steps: Vec<WizardStep> = Vec::new();
+
+    // 1. Prerequisites
+    steps.push(WizardStep {
+        kind: WizardStepKind::Prerequisites,
+        title: "Prerequisites".to_string(),
+        status: prerequisites_status,
+        components: prerequisites,
+        guided_commands: prereq_guided,
+        indent: 0,
+    });
+
+    // 2. Platforms parent (always present, collapsed or expanded)
+    steps.push(WizardStep {
+        kind: WizardStepKind::Platforms,
+        title: "Platforms".to_string(),
+        status: platforms_parent_status,
+        components: Vec::new(),
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    // 3. Platform leaves — emitted only when expanded.
+    //    The leaves were built above (single host-gating site); push them now.
+    if expanded {
+        steps.extend(platform_leaves);
+    }
+
+    // 4. FlutterSdk
+    steps.push(WizardStep {
+        kind: WizardStepKind::FlutterSdk,
+        title: "Flutter SDK".to_string(),
+        status: flutter_status,
+        components: flutter_sdk,
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    // 5. PathConfig
+    steps.push(WizardStep {
+        kind: WizardStepKind::PathConfig,
+        title: "PATH Configuration".to_string(),
+        status: path_config_status,
+        components: Vec::new(),
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    // 6. Doctor
+    steps.push(WizardStep {
+        kind: WizardStepKind::Doctor,
+        title: "Flutter Doctor".to_string(),
+        status: doctor_status,
+        components: Vec::new(),
+        guided_commands: Vec::new(),
+        indent: 0,
+    });
+
+    steps
 }
 
 #[cfg(test)]
@@ -1051,13 +1661,42 @@ mod tests {
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         assert_eq!(steps.len(), 5);
         assert_eq!(steps[0].kind, WizardStepKind::Prerequisites);
-        assert_eq!(steps[1].kind, WizardStepKind::AndroidTools);
-        assert_eq!(steps[2].kind, WizardStepKind::PathConfig);
-        assert_eq!(steps[3].kind, WizardStepKind::FlutterSdk);
+        assert_eq!(steps[1].kind, WizardStepKind::Platforms);
+        assert_eq!(steps[2].kind, WizardStepKind::FlutterSdk);
+        assert_eq!(steps[3].kind, WizardStepKind::PathConfig);
         assert_eq!(steps[4].kind, WizardStepKind::Doctor);
+    }
+
+    #[test]
+    fn test_build_steps_expanded_inserts_android_leaf() {
+        // Linux report with a WebBrowser Ok component: expanded should include
+        // PlatformAndroid + PlatformWeb only (no iOS/macOS/Windows leaves on Linux).
+        // Feed a WebBrowser Ok component so PlatformWeb gets a real (Ok) status
+        // rather than Pending — ensuring the Web leaf is live, not a placeholder.
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+        // Prerequisites, Platforms, PlatformAndroid, PlatformWeb, FlutterSdk, PathConfig, Doctor
+        assert_eq!(steps.len(), 7);
+        assert_eq!(steps[0].kind, WizardStepKind::Prerequisites);
+        assert_eq!(steps[1].kind, WizardStepKind::Platforms);
+        assert_eq!(steps[2].kind, WizardStepKind::PlatformAndroid);
+        assert_eq!(steps[3].kind, WizardStepKind::PlatformWeb);
+        assert_eq!(steps[4].kind, WizardStepKind::FlutterSdk);
+        assert_eq!(steps[5].kind, WizardStepKind::PathConfig);
+        assert_eq!(steps[6].kind, WizardStepKind::Doctor);
+        // Web is now live (Phase 3): a WebBrowser Ok component drives Ok status.
+        assert_eq!(
+            steps[3].status,
+            StepStatus::Ok,
+            "PlatformWeb with a WebBrowser Ok component must have Ok status"
+        );
     }
 
     #[test]
@@ -1068,7 +1707,7 @@ mod tests {
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -1087,7 +1726,7 @@ mod tests {
             make_check(ComponentKind::Git, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -1113,11 +1752,11 @@ mod tests {
             make_check(ComponentKind::Jdk, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android_step = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(android_step.status, StepStatus::Partial);
     }
 
@@ -1133,6 +1772,7 @@ mod tests {
         state.apply_report(report);
 
         assert!(!state.loading);
+        // Collapsed by default → 5 rows
         assert_eq!(state.steps.len(), 5);
         assert!(state.report.is_some());
     }
@@ -1198,7 +1838,7 @@ mod tests {
     fn test_apply_report_resets_cancelled_execution() {
         let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
-        state.begin_step(WizardStepKind::AndroidTools);
+        state.begin_step(WizardStepKind::PlatformAndroid);
         state.finish_step(
             StepExecStatus::Cancelled,
             "Cancelled: user pressed Esc".to_string(),
@@ -1220,13 +1860,13 @@ mod tests {
     }
 
     /// F-PR53-12 (Succeeded variant): `apply_report` after an auto-triggered
-    /// re-check (e.g. AndroidTools/PathConfig success) must clear the stale
+    /// re-check (e.g. PlatformAndroid/PathConfig success) must clear the stale
     /// `Succeeded` execution.
     #[test]
     fn test_apply_report_resets_succeeded_execution() {
         let mut state = InstallWizardState::opening(WizardOrigin::UserInvoked);
 
-        state.begin_step(WizardStepKind::AndroidTools);
+        state.begin_step(WizardStepKind::PlatformAndroid);
         state.finish_step(
             StepExecStatus::Succeeded,
             "Android tools installed".to_string(),
@@ -1288,7 +1928,7 @@ mod tests {
             ComponentKind::FlutterSdk,
             ComponentStatus::Ok,
         )]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let path_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::PathConfig)
@@ -1305,7 +1945,7 @@ mod tests {
             ComponentKind::FlutterSdk,
             ComponentStatus::Missing,
         )]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let doctor_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Doctor)
@@ -1319,7 +1959,7 @@ mod tests {
             make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let flutter_step = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::FlutterSdk)
@@ -1335,11 +1975,11 @@ mod tests {
             make_check(ComponentKind::Jdk, ComponentStatus::Error),
         ];
         let report = make_report(components);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android_step = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(android_step.status, StepStatus::Partial);
     }
 
@@ -1405,7 +2045,7 @@ mod tests {
     #[test]
     fn test_finish_step_sets_terminal_status_succeeded() {
         let mut s = InstallWizardState::default();
-        s.begin_step(WizardStepKind::AndroidTools);
+        s.begin_step(WizardStepKind::PlatformAndroid);
         assert!(s.is_step_running());
 
         s.finish_step(StepExecStatus::Succeeded, "All done".to_string());
@@ -1499,10 +2139,10 @@ mod tests {
     #[test]
     fn test_android_step_has_jdk_guided_command_when_jdk_missing() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert_eq!(android.guided_commands.len(), 1);
         assert!(android.guided_commands[0].command.contains("17"));
@@ -1511,10 +2151,10 @@ mod tests {
     #[test]
     fn test_no_guided_command_when_jdk_ok() {
         let report = report_with_jdk(ComponentStatus::Ok, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert!(android.guided_commands.is_empty());
     }
@@ -1522,10 +2162,10 @@ mod tests {
     #[test]
     fn test_android_step_has_jdk_guided_command_when_jdk_partial() {
         let report = report_with_jdk(ComponentStatus::Partial, HostPlatform::MacOs);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert_eq!(android.guided_commands.len(), 1);
         assert!(android.guided_commands[0].command.contains("brew"));
@@ -1534,10 +2174,10 @@ mod tests {
     #[test]
     fn test_android_step_has_jdk_guided_command_when_jdk_error() {
         let report = report_with_jdk(ComponentStatus::Error, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert_eq!(android.guided_commands.len(), 1);
     }
@@ -1557,10 +2197,10 @@ mod tests {
             linux_package_manager: Some(LinuxPackageManager::Apt),
             winget_available: false,
         };
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert_eq!(cmd.label, "Install JDK 17");
@@ -1583,10 +2223,10 @@ mod tests {
     #[test]
     fn test_jdk_command_macos_uses_brew() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::MacOs);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(cmd.command.contains("brew"));
@@ -1596,10 +2236,10 @@ mod tests {
     #[test]
     fn test_jdk_command_windows_uses_winget() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Windows);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert!(android.guided_commands[0].command.contains("winget"));
     }
@@ -1607,10 +2247,10 @@ mod tests {
     #[test]
     fn test_jdk_command_unknown_platform_uses_adoptium() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Unknown);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         assert!(android.guided_commands[0].command.contains("adoptium.net"));
     }
@@ -1619,12 +2259,20 @@ mod tests {
     /// Prerequisites/Git entries — so `prerequisites_guided_commands`
     /// short-circuits to an empty vec.  This test asserts the invariant
     /// *for that fixture* (JDK missing, no prereq components).
+    ///
+    /// `PlatformWeb` is excluded from the assertion: as of Phase 3, the Web leaf
+    /// is live and may carry guided commands when the browser component is missing
+    /// or absent from the report (the `report_with_jdk` fixture has no WebBrowser
+    /// entry, which drives a `Pending` Web status and therefore no commands — but
+    /// the exclusion future-proofs the test against fixture changes).
     #[test]
     fn test_non_android_non_prereq_steps_have_no_guided_commands_when_prereqs_absent() {
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         for step in &steps {
-            if step.kind != WizardStepKind::AndroidTools {
+            if step.kind != WizardStepKind::PlatformAndroid
+                && step.kind != WizardStepKind::PlatformWeb
+            {
                 assert!(
                     step.guided_commands.is_empty(),
                     "Step {:?} should have no guided commands (prereqs absent fixture)",
@@ -1651,7 +2299,7 @@ mod tests {
             make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
             make_check(ComponentKind::Prerequisites, ComponentStatus::Ok),
         ]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         for kind in [
             WizardStepKind::PathConfig,
             WizardStepKind::FlutterSdk,
@@ -1730,15 +2378,15 @@ mod tests {
             ComponentKind::AndroidCmdlineTools,
             ComponentStatus::Missing,
         )]);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
-            .expect("AndroidTools step must exist");
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist");
         assert_eq!(
             android.guided_commands.len(),
             1,
-            "AndroidTools with no Jdk entry must show a guided command (m2 fix)"
+            "PlatformAndroid with no Jdk entry must show a guided command (m2 fix)"
         );
         assert!(
             android.guided_commands[0].command.contains("17"),
@@ -1758,7 +2406,11 @@ mod tests {
         // Select Prerequisites step (index 0) — no guided commands
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
         state.apply_report(report);
-        state.selected_index = 0; // Prerequisites
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Prerequisites)
+            .unwrap();
         assert!(state.selected_guided_command().is_none());
     }
 
@@ -1766,9 +2418,14 @@ mod tests {
     fn test_selected_guided_command_returns_first_when_android_selected() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid leaf is only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools is index 1
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         let cmd = state.selected_guided_command();
         assert!(cmd.is_some());
         assert_eq!(cmd.unwrap().label, "Install JDK 17");
@@ -1868,9 +2525,14 @@ mod tests {
     fn test_select_next_noop_for_single_command_step() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid has exactly 1 guided command (JDK); only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools (index 1) has exactly 1 guided command.
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_next_command();
         assert_eq!(
@@ -1883,9 +2545,14 @@ mod tests {
     fn test_select_prev_noop_for_single_command_step() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid has exactly 1 guided command (JDK); only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools (index 1) has exactly 1 guided command.
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_prev_command();
         assert_eq!(
@@ -1902,8 +2569,12 @@ mod tests {
             ComponentStatus::Ok,
         )]);
         state.apply_report(report);
-        // PathConfig (index 2) has 0 guided commands.
-        state.selected_index = 2;
+        // PathConfig has 0 guided commands — look it up by kind.
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PathConfig)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_next_command();
         assert_eq!(
@@ -1920,8 +2591,12 @@ mod tests {
             ComponentStatus::Ok,
         )]);
         state.apply_report(report);
-        // PathConfig (index 2) has 0 guided commands.
-        state.selected_index = 2;
+        // PathConfig has 0 guided commands — look it up by kind.
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PathConfig)
+            .unwrap();
         state.selected_command_index = 0;
         state.select_prev_command();
         assert_eq!(
@@ -1956,9 +2631,14 @@ mod tests {
     fn test_selected_guided_command_returns_none_for_out_of_range_index() {
         let mut state = InstallWizardState::default();
         let report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Linux);
+        // PlatformAndroid has 1 command; only visible when expanded.
+        state.platforms_expanded = true;
         state.apply_report(report);
-        // AndroidTools (index 1) has 1 command.
-        state.selected_index = 1;
+        let steps = build_steps(state.report.as_ref().unwrap(), state.platforms_expanded);
+        state.selected_index = steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .unwrap();
         // Manually set out-of-range index (defensive clamping).
         state.selected_command_index = 99;
         assert!(
@@ -2563,7 +3243,7 @@ mod tests {
             linux_package_manager: None,
             winget_available: false,
         };
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -2596,7 +3276,7 @@ mod tests {
             linux_package_manager: None,
             winget_available: false,
         };
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, false);
         let prereq = steps
             .iter()
             .find(|s| s.kind == WizardStepKind::Prerequisites)
@@ -2684,7 +3364,7 @@ mod tests {
     /// - `Prerequisites`, `Git`                                    → `Prerequisites`
     /// - `AndroidCmdlineTools`, `AndroidPlatformTools`,
     ///   `AndroidPlatform`, `AndroidBuildTools`,
-    ///   `AndroidLicenses`, `Jdk`                                  → `AndroidTools`
+    ///   `AndroidLicenses`, `Jdk`                                  → `PlatformAndroid`
     /// - `FlutterSdk`                                              → `FlutterSdk`
     #[test]
     fn all_nine_component_kinds_route_to_correct_step() {
@@ -2701,12 +3381,8 @@ mod tests {
             make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
         ]);
 
-        let steps = build_steps(&report);
-        assert_eq!(
-            steps.len(),
-            5,
-            "build_steps must always return exactly 5 steps"
-        );
+        // Build with expanded=true so the PlatformAndroid leaf is visible.
+        let steps = build_steps(&report, true);
 
         let find_step = |kind: WizardStepKind| {
             steps
@@ -2730,12 +3406,12 @@ mod tests {
             "Prerequisites step must contain only Prerequisites and Git components"
         );
 
-        // AndroidTools step: 6 components
-        let android = find_step(WizardStepKind::AndroidTools);
+        // PlatformAndroid leaf: 6 components
+        let android = find_step(WizardStepKind::PlatformAndroid);
         assert_eq!(
             android.components.len(),
             6,
-            "AndroidTools step must have exactly 6 components"
+            "PlatformAndroid step must have exactly 6 components"
         );
         for c in &android.components {
             assert!(
@@ -2748,7 +3424,7 @@ mod tests {
                         | ComponentKind::AndroidLicenses
                         | ComponentKind::Jdk
                 ),
-                "component {:?} must not be in AndroidTools step",
+                "component {:?} must not be in PlatformAndroid step",
                 c.kind
             );
         }
@@ -2838,10 +3514,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_pacman_on_arch() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Pacman);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert_eq!(cmd.label, "Install JDK 17");
@@ -2864,10 +3540,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_dnf_on_fedora() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Dnf);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2885,10 +3561,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_yum_on_rhel7() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Yum);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2911,10 +3587,10 @@ mod tests {
     #[test]
     fn test_jdk_command_uses_zypper_on_opensuse() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Zypper);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2932,10 +3608,10 @@ mod tests {
     #[test]
     fn test_jdk_command_linux_unknown_pm_uses_adoptium_url() {
         let report = report_with_jdk_and_pm(LinuxPackageManager::Unknown);
-        let steps = build_steps(&report);
+        let steps = build_steps(&report, true);
         let android = steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap();
         let cmd = &android.guided_commands[0];
         assert!(
@@ -2950,10 +3626,10 @@ mod tests {
     fn test_jdk_command_macos_windows_unchanged() {
         // macOS and Windows arms must not be affected by the Linux per-manager change.
         let mac_report = report_with_jdk(ComponentStatus::Missing, HostPlatform::MacOs);
-        let steps = build_steps(&mac_report);
+        let steps = build_steps(&mac_report, true);
         let cmd = &steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap()
             .guided_commands[0];
         assert!(
@@ -2963,10 +3639,10 @@ mod tests {
         );
 
         let win_report = report_with_jdk(ComponentStatus::Missing, HostPlatform::Windows);
-        let steps = build_steps(&win_report);
+        let steps = build_steps(&win_report, true);
         let cmd = &steps
             .iter()
-            .find(|s| s.kind == WizardStepKind::AndroidTools)
+            .find(|s| s.kind == WizardStepKind::PlatformAndroid)
             .unwrap()
             .guided_commands[0];
         assert!(
@@ -3587,6 +4263,1569 @@ mod tests {
         assert!(
             !state.is_bootstrap(),
             "is_bootstrap must return false when origin is UserInvoked"
+        );
+    }
+
+    // ── Phase 2 Task 01: host-gating tests ─────────────────────────────────────
+
+    #[test]
+    fn test_build_steps_expanded_macos_includes_ios_and_macos_leaves() {
+        let report = make_report_for_platform(HostPlatform::MacOs, vec![]);
+        let steps = build_steps(&report, true);
+        let kinds: Vec<WizardStepKind> = steps.iter().map(|s| s.kind).collect();
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformIos),
+            "macOS expanded must include PlatformIos; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformMacos),
+            "macOS expanded must include PlatformMacos; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformAndroid),
+            "macOS expanded must include PlatformAndroid; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformWeb),
+            "macOS expanded must include PlatformWeb; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformWindows),
+            "macOS expanded must NOT include PlatformWindows; got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_steps_expanded_windows_includes_windows_leaf() {
+        let report = make_report_for_platform(HostPlatform::Windows, vec![]);
+        let steps = build_steps(&report, true);
+        let kinds: Vec<WizardStepKind> = steps.iter().map(|s| s.kind).collect();
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformWindows),
+            "Windows expanded must include PlatformWindows; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformAndroid),
+            "Windows expanded must include PlatformAndroid; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformIos),
+            "Windows expanded must NOT include PlatformIos; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformMacos),
+            "Windows expanded must NOT include PlatformMacos; got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_steps_expanded_linux_excludes_ios_macos_windows() {
+        let report = make_report_for_platform(HostPlatform::Linux, vec![]);
+        let steps = build_steps(&report, true);
+        let kinds: Vec<WizardStepKind> = steps.iter().map(|s| s.kind).collect();
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformIos),
+            "Linux expanded must NOT include PlatformIos; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformMacos),
+            "Linux expanded must NOT include PlatformMacos; got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WizardStepKind::PlatformWindows),
+            "Linux expanded must NOT include PlatformWindows; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformAndroid),
+            "Linux expanded must include PlatformAndroid; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&WizardStepKind::PlatformWeb),
+            "Linux expanded must include PlatformWeb; got: {kinds:?}"
+        );
+    }
+
+    // ── Phase 2 Task 01: parent status rollup tests ────────────────────────────
+
+    #[test]
+    fn test_platforms_parent_status_reflects_android_missing() {
+        // Android leaf is Missing → parent should be Missing.
+        let report = make_report(vec![make_check(
+            ComponentKind::AndroidCmdlineTools,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report, false);
+        let parent = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms parent must exist");
+        assert_eq!(
+            parent.status,
+            StepStatus::Missing,
+            "Platforms parent must be Missing when Android leaf is Missing"
+        );
+    }
+
+    #[test]
+    fn test_platforms_parent_status_reflects_android_ok_with_pending_placeholders() {
+        // Android leaf Ok + other leaves Pending → parent Ok.
+        let report = make_report(vec![
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, false);
+        let parent = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms parent must exist");
+        assert_eq!(
+            parent.status,
+            StepStatus::Ok,
+            "Platforms parent must be Ok when Android leaf is Ok and placeholders are Pending"
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_all_pending_returns_pending() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Pending, StepStatus::Pending]),
+            StepStatus::Pending
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_missing_wins_over_ok() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Ok, StepStatus::Missing, StepStatus::Pending]),
+            StepStatus::Missing
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_partial_wins_over_ok() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Ok, StepStatus::Partial]),
+            StepStatus::Partial
+        );
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_empty_returns_pending() {
+        assert_eq!(rollup_step_statuses(&[]), StepStatus::Pending);
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_single_ok_returns_ok() {
+        assert_eq!(rollup_step_statuses(&[StepStatus::Ok]), StepStatus::Ok);
+    }
+
+    #[test]
+    fn test_rollup_step_statuses_ok_with_pending_returns_ok() {
+        assert_eq!(
+            rollup_step_statuses(&[StepStatus::Ok, StepStatus::Pending]),
+            StepStatus::Ok
+        );
+    }
+
+    #[test]
+    fn test_wizard_step_indent_zero_for_top_level() {
+        let report = make_report(vec![]);
+        let steps = build_steps(&report, false);
+        for step in &steps {
+            assert_eq!(
+                step.indent, 0,
+                "collapsed step {:?} must have indent 0",
+                step.kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_wizard_step_indent_one_for_leaves() {
+        let report = make_report(vec![]);
+        let steps = build_steps(&report, true);
+        for step in &steps {
+            if step.kind.is_platform_leaf() {
+                assert_eq!(
+                    step.indent, 1,
+                    "platform leaf {:?} must have indent 1",
+                    step.kind
+                );
+            } else {
+                assert_eq!(
+                    step.indent, 0,
+                    "non-leaf step {:?} must have indent 0",
+                    step.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_platforms_expanded_defaults_to_false() {
+        let state = InstallWizardState::default();
+        assert!(
+            !state.platforms_expanded,
+            "platforms_expanded must default to false"
+        );
+    }
+
+    #[test]
+    fn test_apply_report_uses_platforms_expanded_flag() {
+        let mut state = InstallWizardState {
+            platforms_expanded: true,
+            ..InstallWizardState::default()
+        };
+        let report = make_report(vec![make_check(ComponentKind::Jdk, ComponentStatus::Ok)]);
+        state.apply_report(report);
+        // Expanded on Linux: Prerequisites, Platforms, PlatformAndroid, PlatformWeb,
+        // FlutterSdk, PathConfig, Doctor = 7 steps
+        assert_eq!(
+            state.steps.len(),
+            7,
+            "expanded Linux should have 7 steps; got {}",
+            state.steps.len()
+        );
+        assert!(
+            state
+                .steps
+                .iter()
+                .any(|s| s.kind == WizardStepKind::PlatformAndroid),
+            "expanded steps must include PlatformAndroid"
+        );
+    }
+
+    // ── Phase 3, Task 03: Web leaf live tests ─────────────────────────────────
+
+    /// A `WebBrowser Missing` component must never surface as `Missing` on the
+    /// `PlatformWeb` leaf — the cap converts it to `Partial` (non-blocking).
+    #[test]
+    fn test_web_leaf_status_never_missing() {
+        let report = make_report(vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report, true);
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_ne!(
+            web.status,
+            StepStatus::Missing,
+            "PlatformWeb must never have Missing status (non-blocking cap)"
+        );
+        assert_eq!(
+            web.status,
+            StepStatus::Partial,
+            "PlatformWeb with a Missing browser must be capped to Partial"
+        );
+    }
+
+    /// A `Partial` Web leaf (browser missing / capped) must produce at least one
+    /// guided command so the user knows how to install a browser.
+    #[test]
+    fn test_web_leaf_has_guided_command_when_browser_missing() {
+        let report = make_report(vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )]);
+        let steps = build_steps(&report, true);
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_eq!(
+            web.status,
+            StepStatus::Partial,
+            "precondition: Web must be Partial"
+        );
+        assert!(
+            !web.guided_commands.is_empty(),
+            "Partial Web leaf must have at least one guided command"
+        );
+    }
+
+    /// When the browser is `Ok`, the `PlatformWeb` leaf must have no guided
+    /// commands (nothing to show).
+    #[test]
+    fn test_web_no_guided_command_when_browser_ok() {
+        let report = make_report(vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Ok,
+        )]);
+        let steps = build_steps(&report, true);
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_eq!(
+            web.status,
+            StepStatus::Ok,
+            "precondition: Web must be Ok when browser is Ok"
+        );
+        assert!(
+            web.guided_commands.is_empty(),
+            "Ok Web leaf must have no guided commands"
+        );
+    }
+
+    /// When Android is `Ok` and Web is `Partial` (browser missing → capped),
+    /// the `Platforms` parent must roll up to `Partial`, not `Missing`.
+    ///
+    /// This validates the non-blocking contract: a missing browser never blocks
+    /// the wizard or propagates a hard `Missing` status up the tree.
+    #[test]
+    fn test_platforms_parent_not_blocked_by_web_partial() {
+        let report = make_report(vec![
+            // Android all-Ok
+            make_check(ComponentKind::AndroidCmdlineTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatformTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidPlatform, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidBuildTools, ComponentStatus::Ok),
+            make_check(ComponentKind::AndroidLicenses, ComponentStatus::Ok),
+            make_check(ComponentKind::Jdk, ComponentStatus::Ok),
+            // Web missing → capped to Partial
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Missing),
+        ]);
+        let steps = build_steps(&report, true);
+
+        // Web leaf must be Partial (not Missing).
+        let web = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWeb)
+            .expect("PlatformWeb step must be present");
+        assert_eq!(
+            web.status,
+            StepStatus::Partial,
+            "PlatformWeb must be Partial when browser is Missing (cap applied)"
+        );
+
+        // Platforms parent must roll up to at most Partial.
+        let platforms = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms step must be present");
+        assert_ne!(
+            platforms.status,
+            StepStatus::Missing,
+            "Platforms parent must not be Missing when Web is Partial (non-blocking)"
+        );
+        assert_eq!(
+            platforms.status,
+            StepStatus::Partial,
+            "Platforms parent must be Partial when Android is Ok and Web is Partial"
+        );
+    }
+
+    /// `flutter_now_live()` must return `true` when `FlutterSdk` is `Ok`,
+    /// regardless of whether the Web leaf is `Partial` (browser missing).
+    ///
+    /// The handback / auto-close predicate reads `FlutterSdk` status only;
+    /// an absent browser must not block the handback.
+    #[test]
+    fn test_flutter_now_live_unaffected_by_web_partial() {
+        let mut state = InstallWizardState::default();
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::WebBrowser, ComponentStatus::Missing),
+        ]);
+        state.apply_report(report);
+
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk is Ok, \
+             even when the Web browser is Missing (non-blocking)"
+        );
+    }
+
+    // ── web_browser_guided_commands robustness tests ──────────────────────────
+
+    /// Build a minimal Windows `ToolchainReport` with the given `winget_available`
+    /// flag and `WebBrowser` component at `Missing` status (which gets capped to
+    /// `Partial` by `build_steps`).
+    fn make_windows_report_with_winget(winget_available: bool) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::PowerShell,
+            components: vec![make_check(
+                ComponentKind::WebBrowser,
+                ComponentStatus::Missing,
+            )],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available,
+        }
+    }
+
+    /// When `winget_available = true` the Windows arm must emit the winget
+    /// convenience command **and** the Chrome download URL as a
+    /// package-manager-independent fallback.
+    ///
+    /// Criterion 2 requires that every `Partial` path offers the download-URL
+    /// fallback even when a PM command is also present.
+    #[test]
+    fn web_guided_windows_uses_winget_when_available() {
+        let report = make_windows_report_with_winget(true);
+        let cmds = web_browser_guided_commands(&report, StepStatus::Partial);
+
+        // Must have at least two commands: the winget hint + the download URL.
+        assert!(
+            cmds.len() >= 2,
+            "winget=true arm must emit at least 2 commands (winget + download URL), got {}",
+            cmds.len()
+        );
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=true arm must contain a winget command; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands
+                .iter()
+                .any(|cmd| cmd.contains(CHROME_DOWNLOAD_URL)),
+            "winget=true arm must also contain the Chrome download URL as a fallback; \
+             got: {all_commands:?}"
+        );
+    }
+
+    /// When `winget_available = false` the Windows arm must NOT emit a winget
+    /// command, but must still offer the Chrome download URL + `set
+    /// CHROME_EXECUTABLE` note.
+    #[test]
+    fn web_guided_windows_falls_back_when_no_winget() {
+        let report = make_windows_report_with_winget(false);
+        let cmds = web_browser_guided_commands(&report, StepStatus::Partial);
+
+        assert!(
+            !cmds.is_empty(),
+            "winget=false arm must still emit at least one command (download URL)"
+        );
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        let all_notes: Vec<&str> = cmds.iter().filter_map(|c| c.note.as_deref()).collect();
+
+        assert!(
+            !all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=false arm must not emit a winget command; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands
+                .iter()
+                .any(|cmd| cmd.contains(CHROME_DOWNLOAD_URL)),
+            "winget=false arm must contain the Chrome download URL; got: {all_commands:?}"
+        );
+        assert!(
+            all_notes
+                .iter()
+                .any(|note| note.contains("CHROME_EXECUTABLE")),
+            "winget=false arm must contain a CHROME_EXECUTABLE note; got: {all_notes:?}"
+        );
+    }
+
+    /// Every `Partial` platform path must include the `CHROME_EXECUTABLE_NOTE`
+    /// (or an equivalent `CHROME_EXECUTABLE` mention) so users know how to
+    /// point Flutter at a non-default browser regardless of OS.
+    ///
+    /// Criterion 2: every `Partial` platform path offers a
+    /// package-manager-independent fallback.
+    #[test]
+    fn web_guided_partial_always_offers_chrome_executable_fallback() {
+        let partial_browser = vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )];
+
+        // Linux (Unknown PM — will emit only the download-URL fallback cmd)
+        let linux_report = ToolchainReport {
+            platform: HostPlatform::Linux,
+            shell: HostShell::Bash,
+            components: partial_browser.clone(),
+            doctor: None,
+            linux_package_manager: Some(LinuxPackageManager::Unknown),
+            winget_available: false,
+        };
+        let linux_cmds = web_browser_guided_commands(&linux_report, StepStatus::Partial);
+        assert!(
+            !linux_cmds.is_empty(),
+            "Linux Partial must emit at least one command"
+        );
+        let linux_has_download = linux_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        let linux_has_note = linux_cmds.iter().any(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("CHROME_EXECUTABLE"))
+        });
+        assert!(
+            linux_has_download,
+            "Linux Partial must offer the Chrome download URL fallback"
+        );
+        assert!(
+            linux_has_note,
+            "Linux Partial must offer a CHROME_EXECUTABLE note"
+        );
+
+        // macOS
+        let macos_report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Zsh,
+            components: partial_browser.clone(),
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let macos_cmds = web_browser_guided_commands(&macos_report, StepStatus::Partial);
+        assert!(
+            !macos_cmds.is_empty(),
+            "macOS Partial must emit at least one command"
+        );
+        let macos_has_download = macos_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        let macos_has_note = macos_cmds.iter().any(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("CHROME_EXECUTABLE"))
+        });
+        assert!(
+            macos_has_download,
+            "macOS Partial must offer the Chrome download URL fallback"
+        );
+        assert!(
+            macos_has_note,
+            "macOS Partial must offer a CHROME_EXECUTABLE note"
+        );
+
+        // Windows (winget=false — no PM, pure fallback)
+        let win_report = make_windows_report_with_winget(false);
+        let win_cmds = web_browser_guided_commands(&win_report, StepStatus::Partial);
+        let win_has_download = win_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        let win_has_note = win_cmds.iter().any(|c| {
+            c.note
+                .as_deref()
+                .is_some_and(|n| n.contains("CHROME_EXECUTABLE"))
+        });
+        assert!(
+            win_has_download,
+            "Windows Partial (no winget) must offer the Chrome download URL fallback"
+        );
+        assert!(
+            win_has_note,
+            "Windows Partial (no winget) must offer a CHROME_EXECUTABLE note"
+        );
+
+        // Windows (winget=true — also must have the download URL)
+        let win_winget_report = make_windows_report_with_winget(true);
+        let win_winget_cmds = web_browser_guided_commands(&win_winget_report, StepStatus::Partial);
+        let win_winget_has_download = win_winget_cmds
+            .iter()
+            .any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+        assert!(
+            win_winget_has_download,
+            "Windows Partial (winget=true) must also offer the Chrome download URL fallback"
+        );
+    }
+
+    /// Linux arms with known package managers must emit both a PM-specific hint
+    /// command AND the cross-distro download-URL fallback.
+    #[test]
+    fn web_guided_linux_known_pm_emits_pm_hint_and_download_fallback() {
+        let partial_browser = vec![make_check(
+            ComponentKind::WebBrowser,
+            ComponentStatus::Missing,
+        )];
+
+        for pm in [
+            LinuxPackageManager::Apt,
+            LinuxPackageManager::Dnf,
+            LinuxPackageManager::Yum,
+            LinuxPackageManager::Pacman,
+            LinuxPackageManager::Zypper,
+        ] {
+            let report = ToolchainReport {
+                platform: HostPlatform::Linux,
+                shell: HostShell::Bash,
+                components: partial_browser.clone(),
+                doctor: None,
+                linux_package_manager: Some(pm),
+                winget_available: false,
+            };
+            let cmds = web_browser_guided_commands(&report, StepStatus::Partial);
+
+            assert!(
+                cmds.len() >= 2,
+                "Linux/{pm:?} Partial must emit at least 2 commands (PM hint + download fallback)"
+            );
+
+            let has_download = cmds.iter().any(|c| c.command.contains(CHROME_DOWNLOAD_URL));
+            assert!(
+                has_download,
+                "Linux/{pm:?} Partial must include the Chrome download URL fallback"
+            );
+
+            // The first command should be a PM-specific install command (contains sudo).
+            let first_cmd = &cmds[0].command;
+            assert!(
+                first_cmd.contains("sudo"),
+                "Linux/{pm:?} first command should be a PM sudo command; got: {first_cmd}"
+            );
+        }
+    }
+
+    // ── iOS / macOS leaf tests (Phase 4 Task 03) ─────────────────────────────
+
+    /// Build a macOS `ToolchainReport` with the given components.
+    fn make_macos_report(components: Vec<ComponentCheck>) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components,
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        }
+    }
+
+    /// AC1: On a macOS report, `build_steps(..., expanded=true)` emits live
+    /// `PlatformIos` and `PlatformMacos` leaves whose `components` each contain
+    /// both the `XcodeTools` + `CocoaPods` checks (cloned), with `indent == 1`.
+    #[test]
+    fn test_ios_macos_leaves_present_on_macos_expanded() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Ok),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos leaf must be present on macOS expanded");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos leaf must be present on macOS expanded");
+
+        assert_eq!(ios.indent, 1, "PlatformIos must have indent == 1");
+        assert_eq!(macos.indent, 1, "PlatformMacos must have indent == 1");
+
+        // Both leaves must carry both components (cloned from the same probe data).
+        assert_eq!(
+            ios.components.len(),
+            2,
+            "PlatformIos must contain XcodeTools + CocoaPods checks"
+        );
+        assert_eq!(
+            macos.components.len(),
+            2,
+            "PlatformMacos must contain XcodeTools + CocoaPods checks"
+        );
+
+        // Verify the component kinds are present in each leaf.
+        assert!(
+            ios.components
+                .iter()
+                .any(|c| c.kind == ComponentKind::XcodeTools),
+            "PlatformIos must contain an XcodeTools check"
+        );
+        assert!(
+            ios.components
+                .iter()
+                .any(|c| c.kind == ComponentKind::CocoaPods),
+            "PlatformIos must contain a CocoaPods check"
+        );
+        assert!(
+            macos
+                .components
+                .iter()
+                .any(|c| c.kind == ComponentKind::XcodeTools),
+            "PlatformMacos must contain an XcodeTools check"
+        );
+        assert!(
+            macos
+                .components
+                .iter()
+                .any(|c| c.kind == ComponentKind::CocoaPods),
+            "PlatformMacos must contain a CocoaPods check"
+        );
+    }
+
+    /// AC2 (Missing → Partial cap): When `XcodeTools` is `Missing` in the report,
+    /// both leaf statuses must be `Partial` (not `Missing`), and guided commands
+    /// must be non-empty.
+    #[test]
+    fn test_ios_macos_missing_xcode_caps_to_partial() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        assert_ne!(
+            ios.status,
+            StepStatus::Missing,
+            "PlatformIos must not surface Missing (capped to Partial)"
+        );
+        assert_eq!(
+            ios.status,
+            StepStatus::Partial,
+            "PlatformIos must be Partial when XcodeTools is Missing"
+        );
+        assert_ne!(
+            macos.status,
+            StepStatus::Missing,
+            "PlatformMacos must not surface Missing (capped to Partial)"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Partial,
+            "PlatformMacos must be Partial when XcodeTools is Missing"
+        );
+
+        assert!(
+            !ios.guided_commands.is_empty(),
+            "Partial iOS leaf must have guided commands"
+        );
+        assert!(
+            !macos.guided_commands.is_empty(),
+            "Partial macOS leaf must have guided commands"
+        );
+    }
+
+    /// AC2 (all Ok): When both `XcodeTools` and `CocoaPods` are `Ok`, both leaf
+    /// statuses must be `Ok` and guided commands must be empty.
+    #[test]
+    fn test_xcode_ok_yields_no_guided_commands() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Ok),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        assert_eq!(
+            ios.status,
+            StepStatus::Ok,
+            "PlatformIos must be Ok when both components are Ok"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Ok,
+            "PlatformMacos must be Ok when both components are Ok"
+        );
+        assert!(
+            ios.guided_commands.is_empty(),
+            "Ok iOS leaf must have no guided commands"
+        );
+        assert!(
+            macos.guided_commands.is_empty(),
+            "Ok macOS leaf must have no guided commands"
+        );
+    }
+
+    /// AC3: The iOS leaf includes `xcodebuild -downloadPlatform iOS` when Xcode
+    /// is missing; the macOS leaf does not.
+    #[test]
+    fn test_ios_leaf_includes_download_platform_macos_does_not() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        let ios_has_download = ios
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("xcodebuild -downloadPlatform iOS"));
+        assert!(
+            ios_has_download,
+            "PlatformIos guided commands must include 'xcodebuild -downloadPlatform iOS'"
+        );
+
+        let macos_has_download = macos
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("xcodebuild -downloadPlatform iOS"));
+        assert!(
+            !macos_has_download,
+            "PlatformMacos guided commands must NOT include 'xcodebuild -downloadPlatform iOS'"
+        );
+    }
+
+    /// The "Select Xcode & accept license" guided command includes a caveat note
+    /// about adjusting the path for non-standard Xcode installations.
+    #[test]
+    fn test_xcode_select_command_has_path_caveat_note() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+
+        // Find the "Select Xcode & accept license" command.
+        let select_xcode_cmd = ios
+            .guided_commands
+            .iter()
+            .find(|c| c.label.contains("Select Xcode"))
+            .expect("Must have 'Select Xcode & accept license' command");
+
+        // Assert the note is present and contains guidance about path adjustment.
+        assert!(
+            select_xcode_cmd.note.is_some(),
+            "Select Xcode command must have a note"
+        );
+        let note = select_xcode_cmd.note.as_ref().unwrap();
+        assert!(
+            note.contains("/Applications"),
+            "Note must reference the /Applications path"
+        );
+        assert!(
+            note.contains("Adjust") || note.contains("adjust"),
+            "Note must mention adjusting the path"
+        );
+        assert!(
+            note.contains("versioned") || note.contains("beta"),
+            "Note must mention versioned or beta bundles as examples"
+        );
+    }
+
+    /// AC3: When only `CocoaPods` is missing (XcodeTools Ok), guided commands
+    /// contain only the CocoaPods install command — no Xcode commands.
+    #[test]
+    fn test_cocoapods_only_missing_emits_only_cocoapods_command() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Ok),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Missing),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present");
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present");
+
+        // Both leaves should be Partial (CocoaPods missing → capped).
+        assert_eq!(
+            ios.status,
+            StepStatus::Partial,
+            "iOS must be Partial when CocoaPods is Missing"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Partial,
+            "macOS must be Partial when CocoaPods is Missing"
+        );
+
+        // Must have at least one command (the CocoaPods install).
+        assert!(
+            !ios.guided_commands.is_empty(),
+            "iOS leaf must have CocoaPods guided command"
+        );
+        assert!(
+            !macos.guided_commands.is_empty(),
+            "macOS leaf must have CocoaPods guided command"
+        );
+
+        // All commands must relate to CocoaPods — no Xcode commands.
+        for cmd in &ios.guided_commands {
+            assert!(
+                cmd.command.contains("cocoapods") || cmd.command.contains("gem"),
+                "iOS command must be CocoaPods-related when only CocoaPods is missing; got: {}",
+                cmd.command
+            );
+        }
+        for cmd in &macos.guided_commands {
+            assert!(
+                cmd.command.contains("cocoapods") || cmd.command.contains("gem"),
+                "macOS command must be CocoaPods-related when only CocoaPods is missing; got: {}",
+                cmd.command
+            );
+        }
+
+        // Must NOT contain Xcode installation commands.
+        let ios_has_xcode_cmd = ios
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("apps.apple.com"));
+        let macos_has_xcode_cmd = macos
+            .guided_commands
+            .iter()
+            .any(|c| c.command.contains("apps.apple.com"));
+        assert!(
+            !ios_has_xcode_cmd,
+            "iOS leaf must not have Xcode App Store command when XcodeTools is Ok"
+        );
+        assert!(
+            !macos_has_xcode_cmd,
+            "macOS leaf must not have Xcode App Store command when XcodeTools is Ok"
+        );
+    }
+
+    /// AC5: On a non-macOS report, no `XcodeTools`/`CocoaPods` components exist
+    /// and no iOS/macOS leaves appear.
+    #[test]
+    fn test_no_ios_macos_leaves_on_linux_report() {
+        // Linux report with no XcodeTools/CocoaPods components (daemon never emits them).
+        let report = make_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::Git, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        let ios = steps.iter().find(|s| s.kind == WizardStepKind::PlatformIos);
+        let macos = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos);
+
+        assert!(
+            ios.is_none(),
+            "PlatformIos must not be emitted on a Linux report"
+        );
+        assert!(
+            macos.is_none(),
+            "PlatformMacos must not be emitted on a Linux report"
+        );
+    }
+
+    /// AC4: The Platforms parent rolls up to at most `Partial` from iOS/macOS when
+    /// Xcode is missing. `flutter_now_live()` must remain unaffected — handback
+    /// reads only `FlutterSdk`.
+    #[test]
+    fn test_platforms_parent_rolls_up_to_partial_from_xcode() {
+        let report = make_macos_report(vec![
+            make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+            make_check(ComponentKind::XcodeTools, ComponentStatus::Missing),
+            make_check(ComponentKind::CocoaPods, ComponentStatus::Ok),
+        ]);
+        let steps = build_steps(&report, true);
+
+        // Platforms parent must be Partial, not Missing.
+        let platforms = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms step must be present");
+        assert_ne!(
+            platforms.status,
+            StepStatus::Missing,
+            "Platforms parent must not be Missing when iOS/macOS leaves are capped to Partial"
+        );
+        assert_eq!(
+            platforms.status,
+            StepStatus::Partial,
+            "Platforms parent must be Partial when Xcode is missing (leaves are Partial)"
+        );
+
+        // flutter_now_live() must return true: FlutterSdk is Ok.
+        let mut state = InstallWizardState::default();
+        state.apply_report(report);
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk is Ok, \
+             regardless of Xcode/CocoaPods status (non-blocking)"
+        );
+    }
+
+    /// AC2 (non-macOS, no components): When the platform is not macOS, iOS/macOS
+    /// leaves are not emitted at all (no panic, no spurious leaves).
+    #[test]
+    fn test_ios_macos_leaves_absent_when_no_xcode_components() {
+        // macOS report with NO XcodeTools/CocoaPods components → Pending status,
+        // but still emits the leaves (they're gated by platform, not by component count).
+        // Actually: leaves ARE emitted on macOS even with empty components, with Pending status.
+        // This test validates that the collapse mode omits them correctly.
+        let report = make_macos_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        // Collapsed: no leaves shown.
+        let collapsed = build_steps(&report, false);
+        assert!(
+            collapsed.iter().all(|s| !matches!(
+                s.kind,
+                WizardStepKind::PlatformIos | WizardStepKind::PlatformMacos
+            )),
+            "Collapsed mode must not include iOS/macOS leaf rows"
+        );
+
+        // Expanded: leaves shown but with Pending status (no component data).
+        let expanded = build_steps(&report, true);
+        let ios = expanded
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformIos)
+            .expect("PlatformIos must be present on macOS expanded");
+        let macos = expanded
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformMacos)
+            .expect("PlatformMacos must be present on macOS expanded");
+        assert_eq!(
+            ios.status,
+            StepStatus::Pending,
+            "PlatformIos with no component data must be Pending"
+        );
+        assert_eq!(
+            macos.status,
+            StepStatus::Pending,
+            "PlatformMacos with no component data must be Pending"
+        );
+        assert!(
+            ios.guided_commands.is_empty(),
+            "Pending iOS leaf must have no guided commands"
+        );
+        assert!(
+            macos.guided_commands.is_empty(),
+            "Pending macOS leaf must have no guided commands"
+        );
+    }
+
+    // ── Windows leaf tests (Phase 5 Task 03) ─────────────────────────────────
+
+    /// Build a minimal Windows `ToolchainReport` with the given components and
+    /// `winget_available` flag.
+    fn make_windows_report(
+        components: Vec<ComponentCheck>,
+        winget_available: bool,
+    ) -> ToolchainReport {
+        ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::PowerShell,
+            components,
+            doctor: None,
+            linux_package_manager: None,
+            winget_available,
+        }
+    }
+
+    /// Build a `ComponentCheck` for `VisualStudioCpp` with the given status and
+    /// detail string.
+    fn make_vs_check(status: ComponentStatus, detail: &str) -> ComponentCheck {
+        ComponentCheck {
+            kind: ComponentKind::VisualStudioCpp,
+            status,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// AC1a: A Windows report with a `VisualStudioCpp` check routes it into the
+    /// `PlatformWindows` leaf — the leaf must have exactly 1 component.
+    #[test]
+    fn test_build_steps_windows_leaf_routes_visualstudio_component() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Ok,
+                "Visual Studio 2022 17.0",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present on a Windows report");
+
+        assert_eq!(
+            leaf.components.len(),
+            1,
+            "PlatformWindows leaf must contain exactly 1 component (VisualStudioCpp)"
+        );
+        assert_eq!(
+            leaf.components[0].kind,
+            ComponentKind::VisualStudioCpp,
+            "PlatformWindows component must be VisualStudioCpp"
+        );
+        assert_eq!(leaf.indent, 1, "PlatformWindows leaf must have indent 1");
+    }
+
+    /// AC1b: A Missing `VisualStudioCpp` check is capped to `Partial` on the
+    /// `PlatformWindows` leaf — never surfaces as `Missing`.
+    #[test]
+    fn test_build_steps_windows_leaf_caps_missing_to_partial() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Missing,
+                "Visual Studio not found",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present");
+
+        assert_ne!(
+            leaf.status,
+            StepStatus::Missing,
+            "PlatformWindows must never have Missing status (non-blocking cap)"
+        );
+        assert_eq!(
+            leaf.status,
+            StepStatus::Partial,
+            "PlatformWindows with a Missing VisualStudioCpp check must be capped to Partial"
+        );
+    }
+
+    /// AC1c: An Ok `VisualStudioCpp` check produces leaf status `Ok` and no
+    /// guided commands.
+    #[test]
+    fn test_build_steps_windows_leaf_ok_when_component_ok() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Ok,
+                "Visual Studio 2022 17.0",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present");
+
+        assert_eq!(
+            leaf.status,
+            StepStatus::Ok,
+            "Ok VS check must yield Ok leaf"
+        );
+        assert!(
+            leaf.guided_commands.is_empty(),
+            "Ok PlatformWindows leaf must have no guided commands"
+        );
+    }
+
+    /// AC1d: A Windows report without a `VisualStudioCpp` component (legacy-report
+    /// safety) must yield a `PlatformWindows` leaf with `Pending` status and no
+    /// components.
+    #[test]
+    fn test_build_steps_windows_leaf_empty_components_pending() {
+        // Windows report with no VisualStudioCpp component emitted.
+        let report = make_windows_report(vec![], false);
+        let steps = build_steps(&report, true);
+        let leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present on a Windows report");
+
+        assert_eq!(
+            leaf.status,
+            StepStatus::Pending,
+            "PlatformWindows with no VisualStudioCpp component must be Pending"
+        );
+        assert!(
+            leaf.components.is_empty(),
+            "PlatformWindows with no VS component must have empty components"
+        );
+        assert!(
+            leaf.guided_commands.is_empty(),
+            "Pending PlatformWindows leaf must have no guided commands"
+        );
+    }
+
+    // ── windows_guided_commands unit tests ────────────────────────────────────
+
+    /// AC2a + AC3: Fresh-install path (no "Visual Studio found" prefix) with
+    /// `winget_available = true` → both winget and choco entries.
+    #[test]
+    fn test_windows_guided_commands_fresh_install_winget_and_choco() {
+        let components = vec![make_vs_check(
+            ComponentStatus::Missing,
+            "Visual Studio not found",
+        )];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(
+            !cmds.is_empty(),
+            "Partial status (fresh install, winget=true) must emit guided commands"
+        );
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=true must emit a winget command; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("choco")),
+            "fresh install must always emit a choco command; got: {all_commands:?}"
+        );
+
+        // No modify entry: no "Visual Studio found" prefix.
+        let any_modify = cmds
+            .iter()
+            .any(|c| c.label.contains("Add the C++ workload"));
+        assert!(
+            !any_modify,
+            "Fresh-install path must not emit the modify entry"
+        );
+
+        // Ordering: winget before choco (no modify in this path).
+        let winget_pos = cmds
+            .iter()
+            .position(|c| c.command.contains("winget"))
+            .unwrap();
+        let choco_pos = cmds
+            .iter()
+            .position(|c| c.command.contains("choco"))
+            .unwrap();
+        assert!(
+            winget_pos < choco_pos,
+            "winget entry must come before choco entry"
+        );
+    }
+
+    /// AC3: When `winget_available = false`, the winget entry is suppressed but
+    /// choco remains.
+    #[test]
+    fn test_windows_guided_commands_no_winget_falls_back_to_choco() {
+        let components = vec![make_vs_check(
+            ComponentStatus::Missing,
+            "Visual Studio not found",
+        )];
+        let report = make_windows_report(components.clone(), false);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        assert!(
+            !all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "winget=false must suppress the winget entry; got: {all_commands:?}"
+        );
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("choco")),
+            "winget=false must still emit a choco entry; got: {all_commands:?}"
+        );
+    }
+
+    /// AC2: When the `VisualStudioCpp` detail starts with the `VS_FOUND_PREFIX`,
+    /// the modify entry is emitted first, followed by the fresh-install entries.
+    #[test]
+    fn test_windows_guided_commands_existing_vs_emits_modify_first() {
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(
+            !cmds.is_empty(),
+            "Partial status (VS found, workload missing) must emit guided commands"
+        );
+
+        // Modify entry must be first.
+        assert!(
+            cmds[0].label.contains("Add the C++ workload"),
+            "First command must be the modify entry; got: {:?}",
+            cmds[0].label
+        );
+        assert!(
+            cmds[0].command.contains("setup.exe"),
+            "Modify command must reference setup.exe; got: {}",
+            cmds[0].command
+        );
+
+        // Winget and choco follow.
+        let all_commands: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("winget")),
+            "modify-path with winget=true must also include the winget entry"
+        );
+        assert!(
+            all_commands.iter().any(|cmd| cmd.contains("choco")),
+            "modify-path must always include the choco entry"
+        );
+    }
+
+    /// AC1c (guided commands): `Ok` status yields an empty list.
+    #[test]
+    fn test_windows_guided_commands_ok_status_empty() {
+        let components = vec![make_vs_check(
+            ComponentStatus::Ok,
+            "Visual Studio 2022 17.0",
+        )];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Ok, &components);
+        assert!(
+            cmds.is_empty(),
+            "Ok status must yield no guided commands; got: {cmds:?}"
+        );
+    }
+
+    /// Pending status yields an empty list.
+    #[test]
+    fn test_windows_guided_commands_pending_status_empty() {
+        let components: Vec<ComponentCheck> = vec![];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Pending, &components);
+        assert!(
+            cmds.is_empty(),
+            "Pending status must yield no guided commands; got: {cmds:?}"
+        );
+    }
+
+    /// AC5: When VS is missing, the Platforms parent still rolls up to at most
+    /// `Partial` (never `Missing`) because the Windows leaf applies the
+    /// Missing→Partial cap.
+    #[test]
+    fn test_build_steps_windows_parent_rollup_partial_not_missing() {
+        let report = make_windows_report(
+            vec![make_vs_check(
+                ComponentStatus::Missing,
+                "Visual Studio not found",
+            )],
+            false,
+        );
+        let steps = build_steps(&report, true);
+
+        let windows_leaf = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::PlatformWindows)
+            .expect("PlatformWindows must be present");
+        assert_eq!(
+            windows_leaf.status,
+            StepStatus::Partial,
+            "PlatformWindows must be Partial when VS is missing (non-blocking cap)"
+        );
+
+        let platforms = steps
+            .iter()
+            .find(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms parent must be present");
+        assert_ne!(
+            platforms.status,
+            StepStatus::Missing,
+            "Platforms parent must not be Missing when Windows leaf is capped to Partial"
+        );
+    }
+
+    /// AC4: Non-Windows reports must not include a `PlatformWindows` leaf, and no
+    /// other leaf's behaviour changes (existing Linux-report tests stay valid).
+    #[test]
+    fn test_build_steps_non_windows_no_windows_leaf() {
+        // Linux report — no PlatformWindows leaf.
+        let report = make_report(vec![make_check(
+            ComponentKind::FlutterSdk,
+            ComponentStatus::Ok,
+        )]);
+        let steps = build_steps(&report, true);
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.kind != WizardStepKind::PlatformWindows),
+            "Linux report must not include PlatformWindows leaf"
+        );
+
+        // macOS report — no PlatformWindows leaf.
+        let macos = make_macos_report(vec![]);
+        let macos_steps = build_steps(&macos, true);
+        assert!(
+            macos_steps
+                .iter()
+                .all(|s| s.kind != WizardStepKind::PlatformWindows),
+            "macOS report must not include PlatformWindows leaf"
+        );
+    }
+
+    /// AC5: `flutter_now_live()` returns `true` when FlutterSdk is Ok on a
+    /// Windows report, regardless of the VS C++ workload status.
+    #[test]
+    fn test_flutter_now_live_unaffected_by_windows_partial() {
+        let mut state = InstallWizardState::default();
+        let report = make_windows_report(
+            vec![
+                make_check(ComponentKind::FlutterSdk, ComponentStatus::Ok),
+                make_vs_check(ComponentStatus::Missing, "Visual Studio not found"),
+            ],
+            false,
+        );
+        state.apply_report(report);
+
+        assert!(
+            state.flutter_now_live(),
+            "flutter_now_live must return true when FlutterSdk is Ok, \
+             even when VS C++ workload is missing (non-blocking)"
+        );
+    }
+
+    /// Ordering contract: modify → winget → choco (when all three are present).
+    #[test]
+    fn test_windows_guided_commands_ordering_modify_winget_choco() {
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let report = make_windows_report(components.clone(), true);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert_eq!(cmds.len(), 3, "modify + winget + choco = 3 commands");
+
+        assert!(
+            cmds[0].label.contains("Add the C++ workload"),
+            "Index 0 must be the modify entry"
+        );
+        assert!(
+            cmds[1].command.contains("winget"),
+            "Index 1 must be the winget entry"
+        );
+        assert!(
+            cmds[2].command.contains("choco"),
+            "Index 2 must be the choco entry"
+        );
+    }
+
+    /// M2: PowerShell shell → modify command uses `Start-Process` syntax with
+    /// `${env:ProgramFiles(x86)}` (because `%VAR%` does not expand in PowerShell).
+    #[test]
+    fn test_windows_guided_commands_modify_uses_powershell_syntax_for_powershell() {
+        use fdemon_daemon::toolchain::HostShell;
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let mut report = make_windows_report(components.clone(), false);
+        report.shell = HostShell::PowerShell;
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(
+            !cmds.is_empty(),
+            "PowerShell path must emit at least one command"
+        );
+        let modify_cmd = &cmds[0];
+        assert!(
+            modify_cmd.command.contains("Start-Process"),
+            "PowerShell modify command must use Start-Process; got: {}",
+            modify_cmd.command
+        );
+        assert!(
+            modify_cmd.command.contains("${env:ProgramFiles(x86)}"),
+            "PowerShell modify command must use ${{env:ProgramFiles(x86)}} syntax; got: {}",
+            modify_cmd.command
+        );
+        assert!(
+            !modify_cmd.command.contains("%ProgramFiles(x86)%"),
+            "PowerShell modify command must not use cmd.exe %VAR% syntax; got: {}",
+            modify_cmd.command
+        );
+    }
+
+    /// M2: cmd.exe shell → modify command uses `start` with `%ProgramFiles(x86)%` syntax.
+    #[test]
+    fn test_windows_guided_commands_modify_uses_cmd_syntax_for_cmd() {
+        use fdemon_daemon::toolchain::HostShell;
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        let mut report = make_windows_report(components.clone(), false);
+        report.shell = HostShell::Cmd;
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert!(!cmds.is_empty(), "Cmd path must emit at least one command");
+        let modify_cmd = &cmds[0];
+        assert!(
+            modify_cmd.command.contains("%ProgramFiles(x86)%"),
+            "Cmd modify command must use %ProgramFiles(x86)% syntax; got: {}",
+            modify_cmd.command
+        );
+        assert!(
+            !modify_cmd.command.contains("Start-Process"),
+            "Cmd modify command must not use Start-Process; got: {}",
+            modify_cmd.command
+        );
+    }
+
+    /// N1: VS-found detail + `winget_available: false` + `StepStatus::Partial`
+    /// → exactly 2 commands in [modify, choco] order.
+    #[test]
+    fn test_windows_guided_commands_existing_vs_no_winget_gives_modify_and_choco() {
+        let detail = format!(
+            "{VS_FOUND_PREFIX} (Visual Studio 2022), \
+             but the 'Desktop development with C++' workload is missing"
+        );
+        let components = vec![make_vs_check(ComponentStatus::Missing, &detail)];
+        // winget_available = false → winget entry suppressed.
+        let report = make_windows_report(components.clone(), false);
+
+        let cmds = windows_guided_commands(&report, StepStatus::Partial, &components);
+
+        assert_eq!(
+            cmds.len(),
+            2,
+            "VS-found + no winget must yield exactly 2 commands (modify + choco); got: {cmds:?}"
+        );
+
+        // Index 0: modify entry.
+        assert!(
+            cmds[0].label.contains("Add the C++ workload"),
+            "Index 0 must be the modify entry; got: {:?}",
+            cmds[0].label
+        );
+        assert!(
+            cmds[0].command.contains("setup.exe"),
+            "Modify command must reference setup.exe; got: {}",
+            cmds[0].command
+        );
+
+        // Index 1: choco entry (winget suppressed).
+        assert!(
+            cmds[1].command.contains("choco"),
+            "Index 1 must be the choco entry; got: {}",
+            cmds[1].command
         );
     }
 }

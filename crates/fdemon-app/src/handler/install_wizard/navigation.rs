@@ -4,7 +4,7 @@
 //! for the Install Wizard panel.
 
 use crate::handler::{UpdateAction, UpdateResult};
-use crate::install_wizard::{WizardOrigin, WizardPane};
+use crate::install_wizard::{build_steps, WizardOrigin, WizardPane, WizardStepKind};
 use crate::state::AppState;
 
 /// Handle `ShowInstallWizard` — opens the Install Wizard panel.
@@ -23,11 +23,13 @@ pub fn handle_show(state: &mut AppState, origin: WizardOrigin) -> UpdateResult {
     let project_path = state.project_path.clone();
     let explicit_sdk_path = state.settings.flutter.sdk_path.clone();
     let android_sdk_root = state.settings.toolchain.android_sdk_root.clone();
+    let web_browser_executable = state.settings.toolchain.web_browser_executable.clone();
 
     UpdateResult::action(UpdateAction::RunToolchainPreflight {
         project_path,
         explicit_sdk_path,
         android_sdk_root,
+        web_browser_executable,
     })
 }
 
@@ -49,12 +51,119 @@ pub fn handle_hide(state: &mut AppState) -> UpdateResult {
 /// (dispatching `InstallWizardCancelStep`); by the time this function is
 /// reached, no step is in flight.
 ///
+/// **Collapse tier (Phase 2, Task 02).** When the Platforms submenu is
+/// expanded, the first `Esc` collapses it via `set_platforms_expanded`
+/// (which re-anchors the cursor to the parent and resets
+/// `selected_command_index`). A second `Esc` falls through to the existing
+/// close path. Priority order: cancel > collapse > close.
+///
 /// **Handback (Phase 5, Task 04).** Same as `handle_hide`: when a live SDK
 /// exists and the guard is unset, dispatch device discovery and route to
 /// `UiMode::Startup`.  Delegates to `close_wizard_and_dispatch_discovery`
 /// (single source of truth) which also handles the wizard hide.
 pub fn handle_escape(state: &mut AppState) -> UpdateResult {
+    // Collapse tier: if the Platforms submenu is expanded, collapse it first.
+    if state.install_wizard_state.platforms_expanded {
+        set_platforms_expanded(&mut state.install_wizard_state, false);
+        return UpdateResult::none();
+    }
+    // Close tier: fall through to the existing handback/close path.
     maybe_dispatch_discovery_on_close(state)
+}
+
+/// Handle `InstallWizardToggleExpand` — toggle the Platforms submenu expand/collapse.
+///
+/// No-op unless the currently selected step is the `Platforms` parent row.
+/// Routes through `set_platforms_expanded` (the single source of truth for
+/// rebuild / re-anchor / clamp / reset), so it is always consistent with the
+/// directional `handle_expand` / `handle_collapse` paths.
+pub fn handle_toggle_expand(state: &mut AppState) -> UpdateResult {
+    let wiz = &mut state.install_wizard_state;
+    let is_parent = wiz
+        .selected_step()
+        .map(|s| s.kind == WizardStepKind::Platforms)
+        .unwrap_or(false);
+    if !is_parent {
+        return UpdateResult::none();
+    }
+    let new_expanded = !wiz.platforms_expanded;
+    set_platforms_expanded(wiz, new_expanded);
+    UpdateResult::none()
+}
+
+/// Handle `InstallWizardExpand` — directional expand (`l`/`Right`).
+///
+/// Expands the Platforms submenu only when the selected step is the
+/// collapsed `Platforms` parent. No-op on leaves, other steps, or if the
+/// submenu is already expanded.
+pub fn handle_expand(state: &mut AppState) -> UpdateResult {
+    let wiz = &mut state.install_wizard_state;
+    let is_collapsed_parent = wiz
+        .selected_step()
+        .map(|s| s.kind == WizardStepKind::Platforms)
+        .unwrap_or(false)
+        && !wiz.platforms_expanded;
+    if is_collapsed_parent {
+        set_platforms_expanded(wiz, true);
+    }
+    UpdateResult::none()
+}
+
+/// Handle `InstallWizardCollapse` — directional collapse (`h`/`Left`).
+///
+/// Collapses the Platforms submenu whenever it is expanded, regardless of
+/// whether the cursor is on the parent or a leaf row. The shared helper
+/// re-anchors the cursor to the `Platforms` parent when collapsing from a
+/// leaf (M2) and resets `selected_command_index` (M3). No-op when already
+/// collapsed.
+pub fn handle_collapse(state: &mut AppState) -> UpdateResult {
+    let wiz = &mut state.install_wizard_state;
+    if wiz.platforms_expanded {
+        set_platforms_expanded(wiz, false);
+    }
+    UpdateResult::none()
+}
+
+/// Apply a new `platforms_expanded` value and reconcile the step list + cursor.
+///
+/// Single source of truth for every expand/collapse transition (toggle, directional,
+/// Esc-collapse). Rebuilds the projected step list, re-anchors the cursor to the
+/// Platforms parent when collapsing away from a leaf row, clamps `selected_index`,
+/// and resets `selected_command_index`.
+fn set_platforms_expanded(wiz: &mut crate::install_wizard::InstallWizardState, expanded: bool) {
+    // Capture leaf-selection BEFORE the rebuild changes the list under us.
+    let was_leaf = wiz
+        .selected_step()
+        .map(|s| s.kind.is_platform_leaf())
+        .unwrap_or(false);
+
+    wiz.platforms_expanded = expanded;
+
+    // Borrow-split (S3): &wiz.report and &mut wiz.steps are disjoint fields, and
+    // build_steps returns an owned Vec — no ToolchainReport clone needed.
+    if let Some(report) = &wiz.report {
+        let steps = build_steps(report, expanded);
+        wiz.steps = steps;
+    }
+
+    // M2: collapsing away from a leaf returns focus to the parent it descended from.
+    if !expanded && was_leaf {
+        if let Some(idx) = wiz
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Platforms)
+        {
+            wiz.selected_index = idx;
+        }
+    }
+
+    // Defensive bounds clamp.
+    if wiz.selected_index >= wiz.steps.len() {
+        wiz.selected_index = wiz.steps.len().saturating_sub(1);
+    }
+
+    // M3: always reset the guided-command cursor on a structural change.
+    wiz.selected_command_index = 0;
 }
 
 /// Shared handback helper for `handle_hide` and `handle_escape`.
@@ -168,6 +277,7 @@ pub fn handle_next_command(state: &mut AppState) -> UpdateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::install_wizard::WizardStepKind;
     use crate::state::{AppState, UiMode};
     use fdemon_daemon::toolchain::{
         ComponentCheck, ComponentKind, ComponentStatus, HostPlatform, HostShell, ToolchainReport,
@@ -451,7 +561,7 @@ mod tests {
     #[test]
     fn test_handle_next_command_noop_for_single_command_step() {
         let mut state = state_with_wizard_open();
-        // Single-component Linux report gives AndroidTools 1 guided command (JDK missing).
+        // Single-component Linux report gives PlatformAndroid 1 guided command (JDK missing).
         let report = ToolchainReport {
             platform: HostPlatform::Linux,
             shell: HostShell::Bash,
@@ -464,8 +574,17 @@ mod tests {
             linux_package_manager: Some(fdemon_daemon::toolchain::LinuxPackageManager::Unknown),
             winget_available: false,
         };
+        // Expand so PlatformAndroid leaf appears in the step list.
+        state.install_wizard_state.platforms_expanded = true;
         state.install_wizard_state.apply_report(report);
-        state.install_wizard_state.selected_index = 1; // AndroidTools
+        // Select PlatformAndroid via kind-lookup.
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid step must exist when expanded");
+        state.install_wizard_state.selected_index = android_idx;
         state.install_wizard_state.selected_command_index = 0;
         handle_next_command(&mut state);
         assert_eq!(
@@ -656,6 +775,526 @@ mod tests {
                 .any(|a| matches!(a, crate::handler::UpdateAction::DiscoverDevices { .. })),
             "UserInvoked Esc must not dispatch DiscoverDevices; got {:?}",
             actions
+        );
+    }
+
+    // ── Phase 2, Task 02: expand/collapse toggle tests ────────────────────────
+
+    /// Helper: build an AppState with the Platforms parent selected.
+    fn state_on_platforms_parent() -> AppState {
+        let mut state = state_with_wizard_open();
+        // Find the Platforms parent by kind (not bare literal).
+        let platforms_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms step must exist after apply_report");
+        state.install_wizard_state.selected_index = platforms_idx;
+        state
+    }
+
+    #[test]
+    fn toggle_expand_on_parent_inserts_leaves() {
+        let mut state = state_on_platforms_parent();
+        let collapsed_len = state.install_wizard_state.steps.len();
+
+        handle_toggle_expand(&mut state);
+
+        assert!(
+            state.install_wizard_state.platforms_expanded,
+            "platforms_expanded must be true after first toggle"
+        );
+        let expanded_len = state.install_wizard_state.steps.len();
+        assert!(
+            expanded_len > collapsed_len,
+            "step list must grow when expanded (got {expanded_len} <= {collapsed_len})"
+        );
+        // At least PlatformAndroid and PlatformWeb leaves must be present.
+        let has_android = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .any(|s| s.kind == WizardStepKind::PlatformAndroid);
+        assert!(
+            has_android,
+            "PlatformAndroid leaf must appear when expanded"
+        );
+        let has_web = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .any(|s| s.kind == WizardStepKind::PlatformWeb);
+        assert!(has_web, "PlatformWeb leaf must appear when expanded");
+    }
+
+    #[test]
+    fn toggle_expand_collapse_removes_leaves() {
+        let mut state = state_on_platforms_parent();
+
+        // Expand first.
+        handle_toggle_expand(&mut state);
+        assert!(state.install_wizard_state.platforms_expanded);
+        let expanded_len = state.install_wizard_state.steps.len();
+
+        // Collapse by toggling again.
+        handle_toggle_expand(&mut state);
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "platforms_expanded must be false after second toggle"
+        );
+        let collapsed_len = state.install_wizard_state.steps.len();
+        assert!(
+            collapsed_len < expanded_len,
+            "step list must shrink when collapsed (got {collapsed_len} >= {expanded_len})"
+        );
+        // Leaf kinds must be absent after collapse.
+        let any_leaf = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .any(|s| s.kind.is_platform_leaf());
+        assert!(!any_leaf, "no platform leaf must remain after collapse");
+    }
+
+    #[test]
+    fn toggle_expand_cursor_stays_on_parent() {
+        let mut state = state_on_platforms_parent();
+        let platforms_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Platforms)
+            .unwrap();
+        state.install_wizard_state.selected_index = platforms_idx;
+
+        handle_toggle_expand(&mut state);
+
+        // After expand, index must still point to Platforms.
+        assert_eq!(state.install_wizard_state.selected_index, platforms_idx);
+        assert_eq!(
+            state.install_wizard_state.steps[platforms_idx].kind,
+            WizardStepKind::Platforms,
+            "cursor must remain on the Platforms parent after expand"
+        );
+    }
+
+    #[test]
+    fn toggle_expand_resets_selected_command_index() {
+        let mut state = state_on_platforms_parent();
+        state.install_wizard_state.selected_command_index = 2;
+
+        handle_toggle_expand(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "selected_command_index must be reset to 0 after toggle"
+        );
+    }
+
+    #[test]
+    fn toggle_expand_noop_when_not_on_parent() {
+        let mut state = state_with_wizard_open();
+        // Select a non-parent step (Prerequisites is always first — index 0).
+        let prereq_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Prerequisites)
+            .expect("Prerequisites must exist");
+        state.install_wizard_state.selected_index = prereq_idx;
+        let initial_expanded = state.install_wizard_state.platforms_expanded;
+        let initial_len = state.install_wizard_state.steps.len();
+
+        handle_toggle_expand(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.platforms_expanded, initial_expanded,
+            "platforms_expanded must not change when not on Platforms parent"
+        );
+        assert_eq!(
+            state.install_wizard_state.steps.len(),
+            initial_len,
+            "step list length must not change when not on Platforms parent"
+        );
+    }
+
+    #[test]
+    fn esc_collapses_expanded_submenu_then_closes() {
+        // First Esc collapses; second Esc closes (UserInvoked → Normal).
+        let mut state = state_on_platforms_parent();
+
+        // Expand the submenu.
+        handle_toggle_expand(&mut state);
+        assert!(
+            state.install_wizard_state.platforms_expanded,
+            "precondition: submenu must be expanded"
+        );
+
+        // First Esc → should collapse, not close.
+        let result = handle_escape(&mut state);
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "first Esc must collapse the submenu"
+        );
+        assert!(
+            state.install_wizard_state.visible,
+            "wizard must remain visible after collapse Esc"
+        );
+        assert!(
+            result.actions().is_empty(),
+            "collapse Esc must return no actions"
+        );
+
+        // Second Esc → should close (UserInvoked, no live SDK → Normal).
+        handle_escape(&mut state);
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "second Esc must close the wizard"
+        );
+        assert!(
+            !state.install_wizard_state.visible,
+            "wizard must be hidden after close Esc"
+        );
+    }
+
+    #[test]
+    fn esc_collapse_clamps_selected_index() {
+        // Cursor is on a leaf. After collapse the leaf disappears; selected_index
+        // must be clamped back into the (shorter) step list AND land on Platforms.
+        let mut state = state_on_platforms_parent();
+
+        // Expand and move cursor onto the first leaf (PlatformAndroid).
+        handle_toggle_expand(&mut state);
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid must exist when expanded");
+        state.install_wizard_state.selected_index = android_idx;
+        // android_idx is a valid index (from position() + expect() above).
+        assert!(!state.install_wizard_state.steps.is_empty());
+
+        // Esc collapses and must re-anchor to the Platforms parent.
+        handle_escape(&mut state);
+        let new_len = state.install_wizard_state.steps.len();
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "submenu must be collapsed after Esc"
+        );
+        assert!(
+            state.install_wizard_state.selected_index < new_len,
+            "selected_index ({}) must be within new step list length ({new_len})",
+            state.install_wizard_state.selected_index
+        );
+        // M2: cursor must land on the Platforms parent, not merely be clamped.
+        assert_eq!(
+            state.install_wizard_state.selected_step().map(|s| s.kind),
+            Some(WizardStepKind::Platforms),
+            "cursor must re-anchor to Platforms parent after collapse-from-leaf"
+        );
+    }
+
+    // ── Phase 2 followup: directional expand/collapse (handle_expand / handle_collapse) ───
+
+    #[test]
+    fn expand_on_collapsed_parent_inserts_leaves() {
+        let mut state = state_on_platforms_parent();
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "precondition: must start collapsed"
+        );
+        let collapsed_len = state.install_wizard_state.steps.len();
+
+        handle_expand(&mut state);
+
+        assert!(
+            state.install_wizard_state.platforms_expanded,
+            "platforms_expanded must be true after handle_expand on parent"
+        );
+        let expanded_len = state.install_wizard_state.steps.len();
+        assert!(
+            expanded_len > collapsed_len,
+            "step list must grow after expand (got {expanded_len} <= {collapsed_len})"
+        );
+        let has_android = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .any(|s| s.kind == WizardStepKind::PlatformAndroid);
+        assert!(has_android, "PlatformAndroid must appear after expand");
+    }
+
+    #[test]
+    fn expand_noop_when_already_expanded() {
+        let mut state = state_on_platforms_parent();
+        // Expand first.
+        handle_expand(&mut state);
+        assert!(state.install_wizard_state.platforms_expanded);
+        let len_before = state.install_wizard_state.steps.len();
+
+        // Second expand: must be no-op.
+        handle_expand(&mut state);
+        assert!(state.install_wizard_state.platforms_expanded);
+        assert_eq!(
+            state.install_wizard_state.steps.len(),
+            len_before,
+            "expand on already-expanded must be a no-op"
+        );
+    }
+
+    #[test]
+    fn expand_noop_when_not_on_parent() {
+        let mut state = state_with_wizard_open();
+        // Select a non-parent step.
+        let prereq_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Prerequisites)
+            .expect("Prerequisites must exist");
+        state.install_wizard_state.selected_index = prereq_idx;
+        let initial_expanded = state.install_wizard_state.platforms_expanded;
+        let initial_len = state.install_wizard_state.steps.len();
+
+        handle_expand(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.platforms_expanded, initial_expanded,
+            "expand on non-parent must be a no-op"
+        );
+        assert_eq!(
+            state.install_wizard_state.steps.len(),
+            initial_len,
+            "step count must not change when expanding on non-parent"
+        );
+    }
+
+    #[test]
+    fn collapse_from_leaf_reanchors_to_parent() {
+        let mut state = state_on_platforms_parent();
+
+        // Expand and descend to a leaf.
+        handle_expand(&mut state);
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid must exist when expanded");
+        state.install_wizard_state.selected_index = android_idx;
+
+        handle_collapse(&mut state);
+
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "submenu must be collapsed"
+        );
+        assert_eq!(
+            state.install_wizard_state.selected_step().map(|s| s.kind),
+            Some(WizardStepKind::Platforms),
+            "cursor must re-anchor to Platforms parent after collapse-from-leaf"
+        );
+    }
+
+    /// Collapse-from-leaf on a macOS report (has PlatformIos + PlatformMacos leaves).
+    #[test]
+    fn collapse_from_leaf_reanchors_macos() {
+        use fdemon_daemon::toolchain::HostPlatform;
+        let report = ToolchainReport {
+            platform: HostPlatform::MacOs,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.apply_report(report);
+        let platforms_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms must exist");
+        state.install_wizard_state.selected_index = platforms_idx;
+
+        // Expand so macOS leaves appear.
+        handle_expand(&mut state);
+
+        // Move cursor to a leaf that is in-range (not at the end of the list).
+        let leaf_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind.is_platform_leaf())
+            .expect("at least one leaf must exist on macOS report");
+        state.install_wizard_state.selected_index = leaf_idx;
+
+        handle_collapse(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.selected_step().map(|s| s.kind),
+            Some(WizardStepKind::Platforms),
+            "cursor must re-anchor to Platforms after collapse-from-leaf on macOS"
+        );
+    }
+
+    /// Collapse-from-leaf on a Windows report (has PlatformWindows leaf).
+    #[test]
+    fn collapse_from_leaf_reanchors_windows() {
+        use fdemon_daemon::toolchain::HostPlatform;
+        let report = ToolchainReport {
+            platform: HostPlatform::Windows,
+            shell: HostShell::Bash,
+            components: vec![ComponentCheck {
+                kind: ComponentKind::FlutterSdk,
+                status: ComponentStatus::Ok,
+                detail: String::new(),
+            }],
+            doctor: None,
+            linux_package_manager: None,
+            winget_available: false,
+        };
+        let mut state = AppState::new();
+        state.show_install_wizard(WizardOrigin::UserInvoked);
+        state.install_wizard_state.apply_report(report);
+        let platforms_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::Platforms)
+            .expect("Platforms must exist");
+        state.install_wizard_state.selected_index = platforms_idx;
+
+        // Expand so Windows leaves appear.
+        handle_expand(&mut state);
+
+        let leaf_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind.is_platform_leaf())
+            .expect("at least one leaf must exist on Windows report");
+        state.install_wizard_state.selected_index = leaf_idx;
+
+        handle_collapse(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.selected_step().map(|s| s.kind),
+            Some(WizardStepKind::Platforms),
+            "cursor must re-anchor to Platforms after collapse-from-leaf on Windows"
+        );
+    }
+
+    #[test]
+    fn collapse_noop_when_already_collapsed() {
+        let mut state = state_with_wizard_open();
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "precondition: already collapsed"
+        );
+        let initial_len = state.install_wizard_state.steps.len();
+        let initial_idx = state.install_wizard_state.selected_index;
+
+        handle_collapse(&mut state);
+
+        assert!(
+            !state.install_wizard_state.platforms_expanded,
+            "platforms_expanded must stay false"
+        );
+        assert_eq!(
+            state.install_wizard_state.steps.len(),
+            initial_len,
+            "step count must not change on no-op collapse"
+        );
+        assert_eq!(
+            state.install_wizard_state.selected_index, initial_idx,
+            "selected_index must not change on no-op collapse"
+        );
+    }
+
+    #[test]
+    fn esc_collapse_resets_selected_command_index() {
+        let mut state = state_on_platforms_parent();
+        handle_expand(&mut state);
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid must exist");
+        state.install_wizard_state.selected_index = android_idx;
+        state.install_wizard_state.selected_command_index = 3;
+
+        handle_escape(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "Esc collapse must reset selected_command_index to 0"
+        );
+    }
+
+    #[test]
+    fn collapse_resets_selected_command_index() {
+        let mut state = state_on_platforms_parent();
+        handle_expand(&mut state);
+        let android_idx = state
+            .install_wizard_state
+            .steps
+            .iter()
+            .position(|s| s.kind == WizardStepKind::PlatformAndroid)
+            .expect("PlatformAndroid must exist");
+        state.install_wizard_state.selected_index = android_idx;
+        state.install_wizard_state.selected_command_index = 3;
+
+        handle_collapse(&mut state);
+
+        assert_eq!(
+            state.install_wizard_state.selected_command_index, 0,
+            "handle_collapse must reset selected_command_index to 0"
+        );
+    }
+
+    /// Guard: toggle and Esc-collapse must leave identical state (prevents future divergence).
+    #[test]
+    fn toggle_and_esc_collapse_leave_identical_state() {
+        // Path A: expand via toggle, collapse via toggle.
+        let mut state_a = state_on_platforms_parent();
+        handle_toggle_expand(&mut state_a); // expand
+        handle_toggle_expand(&mut state_a); // collapse
+
+        // Path B: expand via toggle, collapse via Esc.
+        let mut state_b = state_on_platforms_parent();
+        handle_toggle_expand(&mut state_b); // expand
+        handle_escape(&mut state_b); // collapse (Esc collapse tier)
+
+        assert_eq!(
+            state_a.install_wizard_state.platforms_expanded,
+            state_b.install_wizard_state.platforms_expanded,
+            "platforms_expanded must match between paths"
+        );
+        assert_eq!(
+            state_a.install_wizard_state.selected_index,
+            state_b.install_wizard_state.selected_index,
+            "selected_index must match between paths"
+        );
+        assert_eq!(
+            state_a.install_wizard_state.selected_command_index,
+            state_b.install_wizard_state.selected_command_index,
+            "selected_command_index must match between paths"
+        );
+        assert_eq!(
+            state_a.install_wizard_state.steps.len(),
+            state_b.install_wizard_state.steps.len(),
+            "step list length must match between paths"
         );
     }
 }

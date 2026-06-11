@@ -446,10 +446,11 @@ auto_configure_ide = true" />
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"fdemon: command not found"</h4>
                         <p class="text-sm text-slate-400">
-                            "The fdemon binary is not on your PATH. Add \
-                             "<code class="text-xs text-blue-400">"~/.cargo/bin"</code>
-                             " to your shell\u{2019}s PATH, or install with \
-                             "<code class="text-xs text-blue-400">"cargo install fdemon"</code>"."
+                            "The fdemon binary is not on your PATH. The install script places it in \
+                             "<code class="text-xs text-blue-400">"~/.local/bin"</code>
+                             " \u{2014} add that to your shell\u{2019}s PATH (or "
+                            <code class="text-xs text-blue-400">"~/.cargo/bin"</code>
+                            " if you built from source)."
                         </p>
                     </div>
 

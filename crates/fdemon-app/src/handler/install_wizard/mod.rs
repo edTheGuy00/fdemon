@@ -5,6 +5,7 @@
 
 mod actions;
 mod navigation;
+pub mod version_picker;
 
 pub use actions::*;
 pub use navigation::*;

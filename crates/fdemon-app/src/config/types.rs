@@ -215,6 +215,30 @@ pub struct ToolchainSettings {
     /// Configurable via `[toolchain] cmdline_tools_sha256` in
     /// `.fdemon/config.toml`.
     pub cmdline_tools_sha256: Option<String>,
+
+    /// Path to a Chromium-based browser used by the **Install Wizard's web
+    /// probe** (`check_web`). Any Chromium-based browser (Chrome, Edge, Brave,
+    /// Chromium) is acceptable.
+    ///
+    /// When set, takes precedence over the `CHROME_EXECUTABLE` environment
+    /// variable and the per-OS default browser locations when fdemon probes for
+    /// a web browser. The probe order is: this field → `CHROME_EXECUTABLE` env
+    /// var → per-OS defaults.
+    ///
+    /// **Does not set `CHROME_EXECUTABLE`** in the environment and does not
+    /// affect what `flutter run -d chrome` uses — that is governed by Flutter's
+    /// own `CHROME_EXECUTABLE` lookup. To make Flutter itself use a custom
+    /// browser, export `CHROME_EXECUTABLE` in your shell profile.
+    ///
+    /// Default (`None`) → auto-detect via `CHROME_EXECUTABLE` env var and
+    /// per-OS default browser locations.
+    ///
+    /// **Note:** this lives under `[toolchain]` (distinct from
+    /// `[devtools] browser`, which controls the DevTools web UI opener).
+    ///
+    // TODO(followup): validate executable-path config fields (null bytes,
+    // absurd lengths) via a shared helper usable by jdk_path and similar fields.
+    pub web_browser_executable: Option<String>,
 }
 
 impl Default for ToolchainSettings {
@@ -228,6 +252,7 @@ impl Default for ToolchainSettings {
             cmdline_tools_build: None,
             jdk_path: None,
             cmdline_tools_sha256: None,
+            web_browser_executable: None,
         }
     }
 }
@@ -3916,6 +3941,61 @@ sdk_path = "/Users/me/flutter"
         assert_eq!(settings.android_api_level, 36);
         assert!(settings.cmdline_tools_build.is_none());
         assert!(settings.jdk_path.is_none());
+        assert!(settings.web_browser_executable.is_none());
+    }
+
+    #[test]
+    fn test_web_browser_executable_defaults_to_none() {
+        // The field defaults to None both via ToolchainSettings::default()
+        // and when a [toolchain] section is present but omits the key.
+        let settings = ToolchainSettings::default();
+        assert!(settings.web_browser_executable.is_none());
+
+        let toml = r#"
+[toolchain]
+channel = "stable"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(settings.toolchain.web_browser_executable.is_none());
+    }
+
+    #[test]
+    fn test_web_browser_executable_round_trips_from_toml() {
+        // A set value survives a serialise → deserialise round-trip.
+        let toml = r#"
+[toolchain]
+web_browser_executable = "/usr/bin/chromium"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(
+            settings.toolchain.web_browser_executable.as_deref(),
+            Some("/usr/bin/chromium")
+        );
+
+        // Re-serialise and parse again (full round-trip).
+        let re_serialized = toml::to_string(&settings).unwrap();
+        let re_parsed: Settings = toml::from_str(&re_serialized).unwrap();
+        assert_eq!(
+            re_parsed.toolchain.web_browser_executable.as_deref(),
+            Some("/usr/bin/chromium")
+        );
+    }
+
+    #[test]
+    fn test_web_browser_executable_no_collision_with_devtools_browser() {
+        // [toolchain] web_browser_executable is distinct from [devtools] browser.
+        let toml = r#"
+[toolchain]
+web_browser_executable = "/usr/bin/brave"
+[devtools]
+browser = "firefox"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(
+            settings.toolchain.web_browser_executable.as_deref(),
+            Some("/usr/bin/brave")
+        );
+        assert_eq!(settings.devtools.browser, "firefox");
     }
 
     #[test]
@@ -3996,6 +4076,7 @@ android_api_level = 35
             cmdline_tools_build: Some("10406996".to_string()),
             jdk_path: Some(PathBuf::from("/usr/lib/jvm/java-17")),
             cmdline_tools_sha256: None,
+            web_browser_executable: None,
         };
 
         let serialized = toml::to_string(&original).unwrap();

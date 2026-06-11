@@ -217,41 +217,51 @@ fn reclaim_stale_flutter_tmps(install_root: &Path) {
     }
 }
 
-// ── Channel validation ────────────────────────────────────────────────────────
+// ── Ref validation ─────────────────────────────────────────────────────────────
 
-/// Validate a Flutter channel name for use in git and archive operations.
+/// Validate a Flutter ref (channel name or pinned version tag) for use in git
+/// and archive operations.
 ///
-/// Accepted characters: `[A-Za-z0-9._-]`. A leading `-` is rejected because
-/// it would be interpreted as a command-line flag by git. Empty strings are
-/// also rejected.
+/// Accepted characters: `[A-Za-z0-9._+-]`. The first character may not be `-`,
+/// `+`, or `.`: a leading `-` would be interpreted as a command-line flag by
+/// git (argument injection); a leading `+` or `.` is rejected for tidiness.
+/// Empty strings are also rejected. The `+` is included so pinned refs like
+/// `1.12.13+hotfix.5` validate; it is inert because refs are passed to git via
+/// `run_streaming` argv (no shell).
 ///
-/// This guard prevents argument-injection attacks when the channel value comes
-/// from user-controlled config (e.g. `.fdemon/config.toml`'s `[toolchain]`
-/// block). A value like `--upload-pack=…` or `--config core.askpass=…` would
-/// otherwise be passed directly to `git clone -b <channel>` and interpreted as
-/// a git option, enabling remote code execution.
-fn validate_channel(channel: &str) -> Result<()> {
-    if channel.is_empty() {
+/// This guard prevents argument-injection attacks when the ref value comes from
+/// user-controlled config (e.g. `.fdemon/config.toml`'s `[toolchain]` block) or
+/// a version picker. A value like `--upload-pack=…` or `--config core.askpass=…`
+/// would otherwise be passed directly to `git clone -b <ref>` and interpreted
+/// as a git option, enabling remote code execution.
+fn validate_ref(reference: &str) -> Result<()> {
+    if reference.is_empty() {
         return Err(Error::process(
-            "toolchain channel must not be empty; valid values are e.g. 'stable', 'beta'",
+            "toolchain ref must not be empty; valid values are e.g. 'stable', 'beta', '3.24.0'",
         ));
     }
-    if channel.starts_with('-') {
+    let first = reference.chars().next().expect("non-empty checked above");
+    if first == '-' || first == '+' || first == '.' {
         return Err(Error::process(format!(
-            "toolchain channel '{channel}' starts with '-', which is not a valid channel name \
-             (would be interpreted as a git option)"
+            "toolchain ref '{reference}' starts with '{first}', which is not a valid leading \
+             character (a leading '-' would be interpreted as a git option)"
         )));
     }
-    if !channel
+    if !reference
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '+' || c == '-')
     {
         return Err(Error::process(format!(
-            "toolchain channel '{channel}' contains invalid characters; \
-             only [A-Za-z0-9._-] are allowed"
+            "toolchain ref '{reference}' contains invalid characters; \
+             only [A-Za-z0-9._+-] are allowed"
         )));
     }
     Ok(())
+}
+
+/// Backwards-compatible alias for [`validate_ref`] used at channel call sites.
+fn validate_channel(channel: &str) -> Result<()> {
+    validate_ref(channel)
 }
 
 // ── resolve_install_dir ───────────────────────────────────────────────────────
@@ -372,6 +382,35 @@ fn resolve_channel_release<'m>(
     manifest.releases.iter().find(|r| r.channel == channel)
 }
 
+/// Resolve a release by exact `version` string. Two-pass arch matching like
+/// [`resolve_channel_release`]: exact `dart_sdk_arch` match first, any-arch
+/// fallback.
+///
+/// Returns `None` when no release with the requested `version` exists in the
+/// manifest. Callers treat a miss as a hard error on the pinned-version path —
+/// there is intentionally no channel/stable fallback here.
+fn resolve_version_release<'m>(
+    manifest: &'m FlutterReleaseManifest,
+    version: &str,
+    arch: HostArch,
+) -> Option<&'m FlutterRelease> {
+    let arch_str = arch.as_manifest_str();
+
+    // Pass 1: prefer an exact arch match within the requested version.
+    if let Some(label) = arch_str {
+        if let Some(r) = manifest
+            .releases
+            .iter()
+            .find(|r| r.version == version && r.dart_sdk_arch.as_deref() == Some(label))
+        {
+            return Some(r);
+        }
+    }
+
+    // Pass 2: fall back to any release with the requested version.
+    manifest.releases.iter().find(|r| r.version == version)
+}
+
 // ── Wire JSON types (serde deserialization) ───────────────────────────────────
 
 /// Internal JSON shape for a single releases manifest entry.
@@ -383,6 +422,9 @@ struct RawRelease {
     sha256: String,
     #[serde(rename = "dart_sdk_arch")]
     dart_sdk_arch: Option<String>,
+    /// Raw ISO-8601 release date. Old manifest entries may omit it → `None`.
+    #[serde(default)]
+    release_date: Option<String>,
 }
 
 /// Internal JSON shape for the `current_release` object.
@@ -481,6 +523,7 @@ pub(crate) async fn fetch_release_manifest_from(url: &str) -> Result<FlutterRele
             archive: r.archive,
             sha256: r.sha256,
             dart_sdk_arch: r.dart_sdk_arch,
+            release_date: r.release_date,
         })
         .collect();
 
@@ -496,6 +539,25 @@ pub(crate) async fn fetch_release_manifest_from(url: &str) -> Result<FlutterRele
 /// Check whether `git` is resolvable on `PATH`.
 fn git_is_available() -> bool {
     which::which("git").is_ok()
+}
+
+/// Build the argv for `git clone -b <ref> --depth 1 -- <url> <dir>`.
+///
+/// Extracted as a pure helper so the exact argument shape (including the `-b`
+/// ref selection and the `--` terminator) can be asserted in unit tests without
+/// spawning git. The `--` terminator ensures the URL and directory are always
+/// positional operands, never interpreted as flags.
+fn git_clone_args<'a>(git_ref: &'a str, target_dir: &'a str) -> [&'a str; 8] {
+    [
+        "clone",
+        "-b",
+        git_ref,
+        "--depth",
+        "1",
+        "--",
+        "https://github.com/flutter/flutter.git",
+        target_dir,
+    ]
 }
 
 /// Compute the full archive download URL from manifest fields.
@@ -598,8 +660,13 @@ where
     if cancel.is_cancelled() {
         return Err(Error::cancelled("Flutter install cancelled before start"));
     }
-    // ── Channel validation (M2: prevent git argument injection) ──────────────
+    // ── Ref validation (M2: prevent git argument injection) ──────────────────
+    // Validate both the channel and the optional pinned version tag — either
+    // can reach `git clone -b <ref>`.
     validate_channel(&target.channel)?;
+    if let Some(tag) = &target.version_tag {
+        validate_ref(tag)?;
+    }
 
     let final_dir = target.install_root.join(&target.version_dir_name);
 
@@ -788,7 +855,12 @@ where
     })
 }
 
-/// Install via `git clone -b <channel> --depth 1`.
+/// Install via `git clone -b <ref> --depth 1`.
+///
+/// The `-b` ref is `target.version_tag` when set (pinned install), otherwise
+/// `target.channel`. `git clone -b` accepts tags as well as branches, so a
+/// pinned install is a shallow clone detached at the tag; `master`/`main` are
+/// real branches and work unchanged.
 ///
 /// The git invocation uses a `--` option terminator before the URL and target
 /// directory so they are always treated as positional operands and never
@@ -818,30 +890,24 @@ where
         return Err(Error::cancelled("git install cancelled before start"));
     }
 
+    // The git `-b` ref: the pinned version tag when set, otherwise the channel.
+    let git_ref = target.version_tag.as_deref().unwrap_or(&target.channel);
+
     on_event(InstallEvent::Phase("Cloning"));
     on_event(InstallEvent::Log(format!(
-        "Cloning Flutter channel '{}' into {}",
-        target.channel,
+        "Cloning Flutter ref '{}' into {}",
+        git_ref,
         tmp_dir.display()
     )));
 
-    let channel = &target.channel;
     let tmp_str = tmp_dir.to_string_lossy();
 
     // The `--` terminator ensures the URL and directory path are always
     // treated as positional arguments and never as git options, regardless
-    // of their content. `channel` has already been validated by
-    // `validate_channel` before reaching this point.
-    let args = &[
-        "clone",
-        "-b",
-        channel.as_str(),
-        "--depth",
-        "1",
-        "--",
-        "https://github.com/flutter/flutter.git",
-        tmp_str.as_ref(),
-    ];
+    // of their content. `git_ref` has already been validated by
+    // `validate_ref`/`validate_channel` before reaching this point.
+    let args = git_clone_args(git_ref, tmp_str.as_ref());
+    let args = args.as_slice();
 
     // Wrap run_streaming in a select! so the token cancels the clone
     // cooperatively.  `kill_on_drop(true)` in run_streaming ensures the git
@@ -868,10 +934,17 @@ where
 
 /// Install via archive download → SHA-256 verify → extract.
 ///
-/// The release is resolved for `target.channel` and the detected host
-/// architecture. If the manifest does not contain an archive for the requested
-/// channel, the function falls back to `stable` and emits a visible warning
-/// via [`InstallEvent::Log`].
+/// ## Release selection
+///
+/// - When `target.version_tag` is `Some(v)`, the release is resolved by **exact
+///   version** via [`resolve_version_release`]. A manifest miss is a **hard
+///   error** — the function never falls back to stable. `master`/`main` never
+///   appear in the manifest, so a pinned `master`/`main` reaching the archive
+///   path produces an explicit "only installable via git" error.
+/// - When `target.version_tag` is `None`, the release is resolved for
+///   `target.channel` and the detected host architecture. If the manifest does
+///   not contain an archive for the requested channel, the function falls back
+///   to `stable` and emits a visible warning via [`InstallEvent::Log`].
 ///
 /// ## SHA-256 note
 ///
@@ -908,11 +981,33 @@ where
 
     let manifest = fetch_release_manifest(platform.clone()).await?;
 
-    // M4: resolve the configured channel first; fall back to stable with warning.
-    let release = if let Some(r) = resolve_channel_release(&manifest, &target.channel, arch) {
+    // Release selection: pinned version (hard error on miss) vs. channel
+    // (stable fallback on miss).
+    let release = if let Some(version) = &target.version_tag {
+        // `master`/`main` are git-only refs — they never appear in the
+        // releases manifest, so a pinned `master`/`main` reaching the archive
+        // path (method == Archive, or git missing from PATH) is unreachable via
+        // an archive download. Surface that explicitly.
+        if version == "master" || version == "main" {
+            return Err(Error::process(format!(
+                "'{version}' is only installable via git; install git or choose a released version"
+            )));
+        }
+        // Pinned exact version: a manifest miss is a hard error — never the
+        // stable fallback.
+        resolve_version_release(&manifest, version, arch).ok_or_else(|| {
+            Error::process(format!(
+                "Flutter version '{version}' was not found in the releases manifest for arch \
+                 {arch:?}; install via the git method instead, or re-fetch the manifest and \
+                 choose a listed version"
+            ))
+        })?
+    } else if let Some(r) = resolve_channel_release(&manifest, &target.channel, arch) {
+        // M4: resolve the configured channel.
         r
     } else {
-        // The configured channel is not available as an archive for this arch.
+        // The configured channel is not available as an archive for this arch;
+        // fall back to stable with a warning (channel-only path).
         let warning = format!(
             "channel '{}' unavailable as archive for arch {:?}; installing stable instead",
             target.channel, arch
@@ -1237,6 +1332,7 @@ mod tests {
                     archive: "stable/linux/flutter_linux_3.24.0-stable.tar.xz".to_string(),
                     sha256: "aaaa".to_string(),
                     dart_sdk_arch: Some("x64".to_string()),
+                    release_date: None,
                 },
                 FlutterRelease {
                     version: "3.25.0-0.1.pre".to_string(),
@@ -1244,6 +1340,7 @@ mod tests {
                     archive: "beta/linux/flutter_linux_3.25.0-beta.tar.xz".to_string(),
                     sha256: "bbbb".to_string(),
                     dart_sdk_arch: Some("x64".to_string()),
+                    release_date: None,
                 },
             ],
         };
@@ -1265,6 +1362,7 @@ mod tests {
                 archive: "stable/linux/flutter_linux_3.24.0-stable.tar.xz".to_string(),
                 sha256: "aaaa".to_string(),
                 dart_sdk_arch: Some("x64".to_string()),
+                release_date: None,
             }],
         };
 
@@ -1284,6 +1382,7 @@ mod tests {
                 archive: "beta/linux/flutter_linux_3.25.0-beta.tar.xz".to_string(),
                 sha256: "cccc".to_string(),
                 dart_sdk_arch: None, // no arch field
+                release_date: None,
             }],
         };
 
@@ -1497,6 +1596,15 @@ mod tests {
                 "release_date": "2024-09-01T12:00:00.000Z",
                 "archive": "beta/linux/flutter_linux_3.25.0-0.1.pre-beta.tar.xz",
                 "sha256": "beefcafe"
+            },
+            {
+                "hash": "datelessdead",
+                "channel": "stable",
+                "version": "1.12.13+hotfix.5",
+                "dart_sdk_version": "2.7.0",
+                "dart_sdk_arch": "x64",
+                "archive": "stable/linux/flutter_linux_v1.12.13+hotfix.5-stable.tar.xz",
+                "sha256": "abad1dea"
             }
         ]
     }"#;
@@ -1511,7 +1619,7 @@ mod tests {
             raw.base_url,
             "https://storage.googleapis.com/flutter_infra_release/releases"
         );
-        assert_eq!(raw.releases.len(), 3);
+        assert_eq!(raw.releases.len(), 4);
 
         let stable_hash = raw
             .current_release
@@ -1530,6 +1638,7 @@ mod tests {
                 archive: r.archive,
                 sha256: r.sha256,
                 dart_sdk_arch: r.dart_sdk_arch,
+                release_date: r.release_date,
             })
             .collect();
 
@@ -1571,6 +1680,7 @@ mod tests {
                 archive: r.archive,
                 sha256: r.sha256,
                 dart_sdk_arch: r.dart_sdk_arch,
+                release_date: r.release_date,
             })
             .collect();
         let manifest = FlutterReleaseManifest {
@@ -1633,7 +1743,7 @@ mod tests {
             .await
             .expect("JSON parse must succeed");
 
-        assert_eq!(raw.releases.len(), 3);
+        assert_eq!(raw.releases.len(), 4);
         assert_eq!(
             raw.base_url,
             "https://storage.googleapis.com/flutter_infra_release/releases"
@@ -1665,6 +1775,7 @@ mod tests {
             channel: "stable".to_owned(),
             install_root: tmp.path().to_owned(),
             version_dir_name: "stable".to_owned(),
+            version_tag: None,
         };
 
         let mut events: Vec<InstallEvent> = Vec::new();
@@ -1691,6 +1802,7 @@ mod tests {
             channel: "--upload-pack=evil".to_owned(),
             install_root: tmp.path().to_owned(),
             version_dir_name: "bad".to_owned(),
+            version_tag: None,
         };
 
         let err = install_flutter(&target, CancellationToken::new(), |_| {})
@@ -1965,8 +2077,8 @@ mod tests {
         );
         assert_eq!(
             manifest.releases.len(),
-            3,
-            "all three fixture releases must be present"
+            4,
+            "all four fixture releases must be present"
         );
 
         // Verify one release is correctly mapped.
@@ -1996,6 +2108,7 @@ mod tests {
             channel: "stable".to_owned(),
             install_root: tmp.path().to_owned(),
             version_dir_name: "stable".to_owned(),
+            version_tag: None,
         };
 
         let token = CancellationToken::new();
@@ -2083,6 +2196,7 @@ mod tests {
             channel: "stable".to_owned(),
             install_root: tmp.path().to_owned(),
             version_dir_name: "stable".to_owned(),
+            version_tag: None,
         };
 
         let token = CancellationToken::new();
@@ -2236,6 +2350,222 @@ mod tests {
         assert!(
             !outer.exists(),
             "outer .fdemon-install-tmp-* wrapper must not exist after archive install"
+        );
+    }
+
+    // ── release_date deserialization ──────────────────────────────────────────
+
+    /// Parse the fixture into a public manifest (bypassing HTTP) for the
+    /// version-resolution and release-date tests.
+    fn fixture_manifest() -> FlutterReleaseManifest {
+        let raw: RawManifest = serde_json::from_str(MANIFEST_FIXTURE).expect("fixture must parse");
+        let current_stable_hash = raw.current_release.and_then(|cr| cr.stable);
+        let releases: Vec<FlutterRelease> = raw
+            .releases
+            .into_iter()
+            .map(|r| FlutterRelease {
+                version: r.version,
+                channel: r.channel,
+                archive: r.archive,
+                sha256: r.sha256,
+                dart_sdk_arch: r.dart_sdk_arch,
+                release_date: r.release_date,
+            })
+            .collect();
+        FlutterReleaseManifest {
+            base_url: "https://storage.googleapis.com/flutter_infra_release/releases".to_owned(),
+            current_stable_hash,
+            releases,
+        }
+    }
+
+    #[test]
+    fn test_release_date_deserialized() {
+        let manifest = fixture_manifest();
+        // The 3.24.0/x64 entry carries a release_date.
+        let r = manifest
+            .releases
+            .iter()
+            .find(|r| r.version == "3.24.0" && r.dart_sdk_arch.as_deref() == Some("x64"))
+            .expect("3.24.0/x64 must be present");
+        assert_eq!(r.release_date.as_deref(), Some("2024-08-21T17:10:03.737Z"));
+    }
+
+    #[test]
+    fn test_release_date_absent_is_none() {
+        let manifest = fixture_manifest();
+        // The 1.12.13+hotfix.5 entry omits release_date → None.
+        let r = manifest
+            .releases
+            .iter()
+            .find(|r| r.version == "1.12.13+hotfix.5")
+            .expect("date-less entry must be present");
+        assert!(
+            r.release_date.is_none(),
+            "entry without release_date key must parse as None"
+        );
+    }
+
+    // ── resolve_version_release ───────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_version_release_exact_arch() {
+        let manifest = fixture_manifest();
+        // 3.24.0 dual-arch entries → x64 resolves to the x64 sha.
+        let r = resolve_version_release(&manifest, "3.24.0", HostArch::X64)
+            .expect("3.24.0/x64 must resolve");
+        assert_eq!(r.dart_sdk_arch.as_deref(), Some("x64"));
+        assert_eq!(r.sha256, "deadbeefdeadbeef");
+    }
+
+    #[test]
+    fn test_resolve_version_release_any_arch_fallback() {
+        // A version present only with a no-arch entry must still resolve for any arch.
+        let manifest = FlutterReleaseManifest {
+            base_url: "https://example.com".to_owned(),
+            current_stable_hash: None,
+            releases: vec![FlutterRelease {
+                version: "2.10.0".to_owned(),
+                channel: "stable".to_owned(),
+                archive: "stable/linux/flutter_linux_2.10.0-stable.tar.xz".to_owned(),
+                sha256: "noarch".to_owned(),
+                dart_sdk_arch: None,
+                release_date: None,
+            }],
+        };
+        let r = resolve_version_release(&manifest, "2.10.0", HostArch::Arm64)
+            .expect("must fall back to the no-arch entry");
+        assert_eq!(r.sha256, "noarch");
+    }
+
+    #[test]
+    fn test_resolve_version_release_unknown_version_none() {
+        let manifest = fixture_manifest();
+        assert!(
+            resolve_version_release(&manifest, "9.9.9", HostArch::X64).is_none(),
+            "an unknown version must resolve to None"
+        );
+    }
+
+    #[test]
+    fn test_resolve_version_release_dual_arch_prefers_host() {
+        let manifest = fixture_manifest();
+        // 3.24.0 exists for both x64 and arm64 — resolve must pick the host arch.
+        let x64 =
+            resolve_version_release(&manifest, "3.24.0", HostArch::X64).expect("x64 must resolve");
+        assert_eq!(x64.sha256, "deadbeefdeadbeef");
+        let arm64 = resolve_version_release(&manifest, "3.24.0", HostArch::Arm64)
+            .expect("arm64 must resolve");
+        assert_eq!(arm64.sha256, "cafebabecafebabe");
+    }
+
+    // ── validate_ref (+ widening) ─────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_ref_accepts_plus_tag() {
+        assert!(validate_ref("stable").is_ok());
+        assert!(validate_ref("3.24.0").is_ok());
+        assert!(validate_ref("1.12.13+hotfix.5").is_ok());
+    }
+
+    #[test]
+    fn test_validate_ref_rejects_leading_plus() {
+        let err = validate_ref("+x").unwrap_err();
+        assert!(err.to_string().contains("starts with '+'"), "error: {err}");
+    }
+
+    #[test]
+    fn test_validate_ref_rejects_empty_and_leading_dash() {
+        assert!(validate_ref("").unwrap_err().to_string().contains("empty"));
+        let err = validate_ref("-evil").unwrap_err();
+        assert!(err.to_string().contains("starts with '-'"), "error: {err}");
+    }
+
+    // ── git_clone_args shape ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_git_clone_args_uses_version_tag_ref() {
+        // A pinned target with version_tag Some("3.24.0") must produce
+        // `git clone -b 3.24.0 --depth 1 -- <url> <dir>`.
+        let target = FlutterInstallTarget {
+            method: InstallMethod::GitClone,
+            channel: "stable".to_owned(),
+            install_root: PathBuf::from("/tmp/root"),
+            version_dir_name: "3.24.0".to_owned(),
+            version_tag: Some("3.24.0".to_owned()),
+        };
+        let git_ref = target.version_tag.as_deref().unwrap_or(&target.channel);
+        let args = git_clone_args(git_ref, "/tmp/dest");
+        assert_eq!(
+            args,
+            [
+                "clone",
+                "-b",
+                "3.24.0",
+                "--depth",
+                "1",
+                "--",
+                "https://github.com/flutter/flutter.git",
+                "/tmp/dest",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_git_clone_args_falls_back_to_channel() {
+        // When version_tag is None, the ref is the channel.
+        let target = FlutterInstallTarget {
+            method: InstallMethod::GitClone,
+            channel: "beta".to_owned(),
+            install_root: PathBuf::from("/tmp/root"),
+            version_dir_name: "beta".to_owned(),
+            version_tag: None,
+        };
+        let git_ref = target.version_tag.as_deref().unwrap_or(&target.channel);
+        assert_eq!(git_ref, "beta");
+        let args = git_clone_args(git_ref, "/tmp/dest");
+        assert_eq!(args[2], "beta");
+    }
+
+    // ── install_flutter rejects an invalid version_tag ────────────────────────
+
+    #[tokio::test]
+    async fn test_install_flutter_rejects_invalid_version_tag() {
+        let tmp = TempDir::new().unwrap();
+        let target = FlutterInstallTarget {
+            method: InstallMethod::Archive,
+            channel: "stable".to_owned(),
+            install_root: tmp.path().to_owned(),
+            version_dir_name: "bad".to_owned(),
+            version_tag: Some("--upload-pack=evil".to_owned()),
+        };
+
+        let err = install_flutter(&target, CancellationToken::new(), |_| {})
+            .await
+            .expect_err("must fail on invalid version_tag");
+        assert!(err.to_string().contains("starts with '-'"), "error: {err}");
+    }
+
+    // ── pinned archive miss is a hard error (no stable fallback) ───────────────
+
+    /// A pinned `version_tag` absent from the manifest must produce a hard
+    /// error from the resolution branch — never the stable fallback.  We
+    /// exercise the resolution step directly (rather than `archive_install`,
+    /// which is network-coupled) since that is the load-bearing branch.
+    #[test]
+    fn test_archive_pinned_version_miss_is_error_not_stable_fallback() {
+        let manifest = fixture_manifest();
+        // A real stable release exists in the fixture, so a stale fallback
+        // would silently "succeed" — assert the pinned resolver returns None.
+        assert!(
+            resolve_version_release(&manifest, "0.0.0-nonexistent", HostArch::X64).is_none(),
+            "a pinned version absent from the manifest must not resolve (no stable fallback)"
+        );
+        // Sanity: the manifest *does* contain a resolvable stable release,
+        // proving the None above is the miss path and not an empty manifest.
+        assert!(
+            manifest.resolve_stable(HostArch::X64).is_some(),
+            "fixture must contain a stable release"
         );
     }
 }

@@ -41,6 +41,12 @@ cd tests/docker/windows
 docker compose up -d
 ```
 
+> **Network exposure:** the VM ports (noVNC 8006, RDP 3389) bind to `127.0.0.1`
+> by default — important since the RDP credentials are the well-known defaults
+> (`Docker`/`admin`). To use the VM from another tailnet device, set `BIND_ADDR`
+> to this host's tailnet address before `up`: `export BIND_ADDR=<tailnet IP>` —
+> then connect to that address instead of `localhost`.
+
 - Watch the unattended install at <http://localhost:8006> (noVNC). First run is
   **~20-30 min** (ISO download + install). The `./storage` volume persists the
   installed disk, so later boots take ~30-60 s.
