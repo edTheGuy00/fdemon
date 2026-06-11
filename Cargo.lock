@@ -795,7 +795,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fdemon-app"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "base64",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-core"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-daemon"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-dap"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "fdemon-core",
  "percent-encoding",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-tui"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "crossterm",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "flutter-demon"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "clap",
