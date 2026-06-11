@@ -1,8 +1,9 @@
-//! NewSessionDialog QR pairing handlers (Pair QR tab)
+//! NewSessionDialog QR pairing modal handlers
 //!
-//! Drives the ADB wireless QR pairing flow: minting credentials and the QR
-//! payload, reacting to progress events from the background mDNS/adb task,
-//! and refreshing the connected-device list once the device is attached.
+//! Drives the ADB wireless QR pairing flow: opening the modal (`p`), minting
+//! credentials and the QR payload, reacting to progress events from the
+//! background mDNS/adb task, and refreshing the connected-device list once
+//! the device is attached.
 
 use tokio_util::sync::CancellationToken;
 
@@ -11,19 +12,22 @@ use crate::new_session_dialog::{QrPairingPhase, TargetTab};
 use crate::state::AppState;
 use fdemon_daemon::{QrPairingCredentials, QrPairingEvent};
 
-/// Start (or restart) a QR pairing session.
+/// Open the QR pairing modal (or restart it with a fresh code).
 ///
 /// Cancels any in-flight session, mints fresh credentials, stores the QR
 /// payload for rendering, and dispatches the background pairing task.
+/// Bound to `p` in the dialog and `r` inside the modal.
 ///
-/// When `adb` is unavailable no session is started — the Pair QR panel
-/// renders guidance based on `ToolAvailability` instead.
-pub fn start_qr_pairing(state: &mut AppState) -> UpdateResult {
-    let selector = &mut state.new_session_dialog_state.target_selector;
-    selector.cancel_qr_pairing();
-
+/// When `adb` is unavailable the modal opens directly in a failed state
+/// explaining the problem; no background task is started.
+pub fn handle_open_qr_pairing(state: &mut AppState) -> UpdateResult {
     if !state.tool_availability.adb {
-        tracing::warn!("start_qr_pairing: adb not available — not starting pairing task");
+        tracing::warn!("handle_open_qr_pairing: adb not available — not starting pairing task");
+        state.new_session_dialog_state.open_qr_pairing_failed(
+            "adb was not found on PATH. Install Android platform-tools \
+             (or add it to PATH) to pair devices over Wi-Fi."
+                .to_string(),
+        );
         return UpdateResult::none();
     }
 
@@ -31,7 +35,6 @@ pub fn start_qr_pairing(state: &mut AppState) -> UpdateResult {
     let cancel_token = CancellationToken::new();
     let seq = state
         .new_session_dialog_state
-        .target_selector
         .begin_qr_pairing(credentials.qr_payload(), cancel_token.clone());
 
     tracing::info!(seq, service_name = %credentials.service_name, "starting ADB QR pairing");
@@ -42,10 +45,16 @@ pub fn start_qr_pairing(state: &mut AppState) -> UpdateResult {
     })
 }
 
+/// Close the QR pairing modal, cancelling the background task.
+pub fn handle_close_qr_pairing(state: &mut AppState) -> UpdateResult {
+    state.new_session_dialog_state.cancel_qr_pairing();
+    UpdateResult::none()
+}
+
 /// Handle a progress event from the background pairing task.
 ///
 /// Stale events (seq mismatch — the session was cancelled or restarted) are
-/// silently discarded.
+/// discarded.
 pub fn handle_qr_pairing_progress(
     state: &mut AppState,
     seq: u64,
@@ -57,7 +66,6 @@ pub fn handle_qr_pairing_progress(
     };
     let applied = state
         .new_session_dialog_state
-        .target_selector
         .set_qr_pairing_phase(seq, phase);
     if !applied {
         tracing::debug!(seq, "ignoring stale QR pairing progress");
@@ -66,17 +74,18 @@ pub fn handle_qr_pairing_progress(
 }
 
 /// Handle successful completion: the device is now reachable via
-/// `adb connect`. Mirrors `handle_boot_completed` — switch to the Connected
-/// tab and run a foreground device discovery so the new device appears.
+/// `adb connect`. Closes the modal, switches to the Connected tab and runs a
+/// foreground device discovery so the new device appears (mirrors
+/// `handle_boot_completed`).
 pub fn handle_qr_pairing_completed(
     state: &mut AppState,
     seq: u64,
     ip: String,
     connect_port: u16,
 ) -> UpdateResult {
-    let selector = &mut state.new_session_dialog_state.target_selector;
-    let is_current = selector
-        .qr_pairing
+    let dialog = &mut state.new_session_dialog_state;
+    let is_current = dialog
+        .qr_pairing_modal
         .as_ref()
         .is_some_and(|pairing| pairing.seq == seq);
     if !is_current {
@@ -85,12 +94,11 @@ pub fn handle_qr_pairing_completed(
     }
 
     tracing::info!(ip = %ip, port = connect_port, "QR pairing complete — refreshing devices");
-    // Clear the session so revisiting the tab starts a fresh code. The task
-    // already finished, so firing the token is a no-op, but going through
-    // cancel_qr_pairing() keeps the invariant that every session leaves the
-    // field with its token fired.
-    selector.cancel_qr_pairing();
-    selector.set_tab(TargetTab::Connected);
+    // Close the modal. The task already finished, so firing the token is a
+    // no-op, but going through cancel_qr_pairing() keeps the invariant that
+    // every session leaves the field with its token fired.
+    dialog.cancel_qr_pairing();
+    dialog.target_selector.set_tab(TargetTab::Connected);
 
     let Some(flutter) = state.flutter_executable() else {
         tracing::warn!("handle_qr_pairing_completed: no Flutter SDK — cannot discover devices");
@@ -100,12 +108,11 @@ pub fn handle_qr_pairing_completed(
     UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
 }
 
-/// Handle pairing failure: surface the error on the Pair QR panel with a
-/// retry hint. Stale failures are discarded.
+/// Handle pairing failure: surface the error in the modal with a retry hint.
+/// Stale failures are discarded.
 pub fn handle_qr_pairing_failed(state: &mut AppState, seq: u64, error: String) -> UpdateResult {
     let applied = state
         .new_session_dialog_state
-        .target_selector
         .set_qr_pairing_phase(seq, QrPairingPhase::Failed { error });
     if !applied {
         tracing::debug!(seq, "ignoring stale QR pairing failure");
@@ -134,17 +141,17 @@ mod tests {
         state
     }
 
-    fn selector(state: &AppState) -> &crate::new_session_dialog::TargetSelectorState {
-        &state.new_session_dialog_state.target_selector
+    fn modal(state: &AppState) -> Option<&crate::new_session_dialog::QrPairingState> {
+        state.new_session_dialog_state.qr_pairing_modal.as_ref()
     }
 
     #[test]
-    fn start_qr_pairing_stores_state_and_dispatches_action() {
+    fn open_qr_pairing_stores_state_and_dispatches_action() {
         let mut state = test_app_state();
 
-        let result = start_qr_pairing(&mut state);
+        let result = handle_open_qr_pairing(&mut state);
 
-        let pairing = selector(&state).qr_pairing.as_ref().expect("qr state set");
+        let pairing = modal(&state).expect("qr modal open");
         assert_eq!(pairing.phase, QrPairingPhase::WaitingForScan);
         assert!(pairing.payload.starts_with("WIFI:T:ADB;S:fdemon-"));
         assert!(pairing.payload.ends_with(";;"));
@@ -162,38 +169,54 @@ mod tests {
     }
 
     #[test]
-    fn start_qr_pairing_without_adb_does_nothing() {
+    fn open_qr_pairing_without_adb_shows_failed_modal() {
         let mut state = test_app_state();
         state.tool_availability.adb = false;
 
-        let result = start_qr_pairing(&mut state);
+        let result = handle_open_qr_pairing(&mut state);
 
-        assert!(selector(&state).qr_pairing.is_none());
-        assert!(result.action.is_none());
-        assert!(result.message.is_none());
+        let pairing = modal(&state).expect("modal opens to show the error");
+        assert!(
+            matches!(&pairing.phase, QrPairingPhase::Failed { error } if error.contains("adb")),
+            "expected Failed phase mentioning adb, got {:?}",
+            pairing.phase
+        );
+        assert!(result.action.is_none(), "no background task without adb");
     }
 
     #[test]
-    fn start_qr_pairing_cancels_previous_session() {
+    fn open_qr_pairing_again_cancels_previous_session() {
         let mut state = test_app_state();
 
-        start_qr_pairing(&mut state);
-        let first_cancel = selector(&state).qr_pairing.as_ref().unwrap().cancel.clone();
-        let first_seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+        handle_open_qr_pairing(&mut state);
+        let first_cancel = modal(&state).unwrap().cancel.clone();
+        let first_seq = modal(&state).unwrap().seq;
 
-        start_qr_pairing(&mut state);
+        handle_open_qr_pairing(&mut state);
 
         assert!(first_cancel.is_cancelled(), "old session must be cancelled");
-        let second = selector(&state).qr_pairing.as_ref().unwrap();
+        let second = modal(&state).unwrap();
         assert!(second.seq > first_seq, "seq must advance");
         assert!(!second.cancel.is_cancelled());
     }
 
     #[test]
+    fn close_qr_pairing_cancels_and_clears() {
+        let mut state = test_app_state();
+        handle_open_qr_pairing(&mut state);
+        let token = modal(&state).unwrap().cancel.clone();
+
+        handle_close_qr_pairing(&mut state);
+
+        assert!(token.is_cancelled());
+        assert!(modal(&state).is_none());
+    }
+
+    #[test]
     fn progress_event_updates_phase() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        let seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+        handle_open_qr_pairing(&mut state);
+        let seq = modal(&state).unwrap().seq;
 
         handle_qr_pairing_progress(
             &mut state,
@@ -203,7 +226,7 @@ mod tests {
             },
         );
         assert_eq!(
-            selector(&state).qr_pairing.as_ref().unwrap().phase,
+            modal(&state).unwrap().phase,
             QrPairingPhase::Pairing {
                 ip: "192.168.1.42".to_string()
             }
@@ -217,7 +240,7 @@ mod tests {
             },
         );
         assert_eq!(
-            selector(&state).qr_pairing.as_ref().unwrap().phase,
+            modal(&state).unwrap().phase,
             QrPairingPhase::Connecting {
                 ip: "192.168.1.42".to_string()
             }
@@ -227,8 +250,8 @@ mod tests {
     #[test]
     fn stale_progress_event_is_discarded() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        let seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+        handle_open_qr_pairing(&mut state);
+        let seq = modal(&state).unwrap().seq;
 
         handle_qr_pairing_progress(
             &mut state,
@@ -239,28 +262,31 @@ mod tests {
         );
 
         assert_eq!(
-            selector(&state).qr_pairing.as_ref().unwrap().phase,
+            modal(&state).unwrap().phase,
             QrPairingPhase::WaitingForScan,
             "stale event must not change phase"
         );
     }
 
     #[test]
-    fn completed_switches_to_connected_and_refreshes() {
+    fn completed_closes_modal_switches_tab_and_refreshes() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
+        handle_open_qr_pairing(&mut state);
         state
             .new_session_dialog_state
             .target_selector
-            .set_tab(TargetTab::PairQr);
-        let seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+            .set_tab(TargetTab::Bootable);
+        let seq = modal(&state).unwrap().seq;
 
         let result =
             handle_qr_pairing_completed(&mut state, seq, "192.168.1.42".to_string(), 40123);
 
-        assert!(selector(&state).qr_pairing.is_none(), "session cleared");
-        assert_eq!(selector(&state).active_tab, TargetTab::Connected);
-        assert!(selector(&state).loading);
+        assert!(modal(&state).is_none(), "modal closed");
+        assert_eq!(
+            state.new_session_dialog_state.target_selector.active_tab,
+            TargetTab::Connected
+        );
+        assert!(state.new_session_dialog_state.target_selector.loading);
         assert!(matches!(
             result.action,
             Some(UpdateAction::DiscoverDevices { .. })
@@ -270,31 +296,26 @@ mod tests {
     #[test]
     fn stale_completed_is_discarded() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        state
-            .new_session_dialog_state
-            .target_selector
-            .set_tab(TargetTab::PairQr);
-        let seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+        handle_open_qr_pairing(&mut state);
+        let seq = modal(&state).unwrap().seq;
 
         let result =
             handle_qr_pairing_completed(&mut state, seq + 1, "192.168.1.42".to_string(), 40123);
 
-        assert!(selector(&state).qr_pairing.is_some(), "session kept");
-        assert_eq!(selector(&state).active_tab, TargetTab::PairQr);
+        assert!(modal(&state).is_some(), "modal stays open");
         assert!(result.action.is_none());
     }
 
     #[test]
     fn failed_sets_failed_phase() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        let seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+        handle_open_qr_pairing(&mut state);
+        let seq = modal(&state).unwrap().seq;
 
         handle_qr_pairing_failed(&mut state, seq, "adb pair failed".to_string());
 
         assert_eq!(
-            selector(&state).qr_pairing.as_ref().unwrap().phase,
+            modal(&state).unwrap().phase,
             QrPairingPhase::Failed {
                 error: "adb pair failed".to_string()
             }
@@ -302,10 +323,21 @@ mod tests {
     }
 
     #[test]
+    fn stale_failed_is_discarded() {
+        let mut state = test_app_state();
+        handle_open_qr_pairing(&mut state);
+        let seq = modal(&state).unwrap().seq;
+
+        handle_qr_pairing_failed(&mut state, seq + 1, "boom".to_string());
+
+        assert_eq!(modal(&state).unwrap().phase, QrPairingPhase::WaitingForScan);
+    }
+
+    #[test]
     fn hide_new_session_dialog_cancels_pairing_task() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        let token = selector(&state).qr_pairing.as_ref().unwrap().cancel.clone();
+        handle_open_qr_pairing(&mut state);
+        let token = modal(&state).unwrap().cancel.clone();
 
         state.hide_new_session_dialog();
 
@@ -313,34 +345,33 @@ mod tests {
             token.is_cancelled(),
             "closing the dialog must stop the task"
         );
-        assert!(selector(&state).qr_pairing.is_none());
+        assert!(state.new_session_dialog_state.qr_pairing_modal.is_none());
     }
 
     #[test]
     fn reopening_dialog_cancels_previous_pairing_task() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        let token = selector(&state).qr_pairing.as_ref().unwrap().cancel.clone();
+        handle_open_qr_pairing(&mut state);
+        let token = modal(&state).unwrap().cancel.clone();
 
         // Re-open replaces the dialog state wholesale; the old task's token
         // must be fired before the state (and token clone) is dropped.
         state.show_new_session_dialog(LoadedConfigs::default());
 
         assert!(token.is_cancelled(), "reopen must stop the leaked task");
-        assert!(selector(&state).qr_pairing.is_none());
+        assert!(state.new_session_dialog_state.qr_pairing_modal.is_none());
     }
 
     #[test]
-    fn stale_failed_is_discarded() {
+    fn escape_closes_qr_modal_first() {
         let mut state = test_app_state();
-        start_qr_pairing(&mut state);
-        let seq = selector(&state).qr_pairing.as_ref().unwrap().seq;
+        handle_open_qr_pairing(&mut state);
+        let token = modal(&state).unwrap().cancel.clone();
 
-        handle_qr_pairing_failed(&mut state, seq + 1, "boom".to_string());
+        let result = crate::handler::new_session::handle_new_session_dialog_escape(&mut state);
 
-        assert_eq!(
-            selector(&state).qr_pairing.as_ref().unwrap().phase,
-            QrPairingPhase::WaitingForScan
-        );
+        assert!(token.is_cancelled());
+        assert!(modal(&state).is_none());
+        assert!(result.message.is_none(), "Esc must only close the modal");
     }
 }

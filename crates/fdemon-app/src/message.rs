@@ -558,6 +558,13 @@ pub enum Message {
     /// Clear error message
     NewSessionDialogClearError,
 
+    /// Open the QR pairing modal (key `p`), or regenerate the code (`r`
+    /// inside the modal) — both mint a fresh session
+    NewSessionDialogOpenQrPairing,
+
+    /// Close the QR pairing modal and cancel the background pairing task
+    NewSessionDialogCloseQrPairing,
+
     /// QR pairing progress event from the background mDNS/adb task
     NewSessionDialogQrPairingProgress {
         seq: u64,

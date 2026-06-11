@@ -1691,9 +1691,7 @@ impl AppState {
         // Stop any QR pairing task owned by the previous dialog instance —
         // replacing the state would otherwise drop the cancellation token
         // without firing it, leaking the background mDNS/adb task.
-        self.new_session_dialog_state
-            .target_selector
-            .cancel_qr_pairing();
+        self.new_session_dialog_state.cancel_qr_pairing();
         self.new_session_dialog_state = NewSessionDialogState::new(configs);
         self.ui_mode = UiMode::NewSessionDialog;
     }

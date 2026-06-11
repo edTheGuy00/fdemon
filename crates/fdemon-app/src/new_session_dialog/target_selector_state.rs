@@ -5,9 +5,6 @@
 
 use std::cell::Cell;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use tokio_util::sync::CancellationToken;
 
 use super::device_groups::{
     flatten_groups, group_bootable_devices, group_connected_devices, next_selectable,
@@ -15,49 +12,6 @@ use super::device_groups::{
 };
 use super::TargetTab;
 use fdemon_daemon::{AndroidAvd, Device, IosSimulator};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// QR Pairing (Pair QR tab)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Phase of the ADB QR pairing flow shown on the Pair QR tab.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum QrPairingPhase {
-    /// QR code displayed, waiting for the phone to scan it.
-    WaitingForScan,
-    /// Phone scanned the code; `adb pair` is running.
-    Pairing { ip: String },
-    /// Paired; discovering the connect port and running `adb connect`.
-    Connecting { ip: String },
-    /// The flow failed; `[r]` restarts with a fresh code.
-    Failed { error: String },
-}
-
-/// Process-wide source of QR pairing sequence numbers.
-///
-/// Global (not per-state) because `NewSessionDialogState` is recreated on
-/// every dialog open: a per-state counter would restart at 0 and let a
-/// message from a leaked task of a previous dialog instance collide with a
-/// fresh session's seq.
-static QR_PAIRING_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// State of an in-progress (or failed) QR pairing session.
-///
-/// `cancel` is fired when the dialog closes or a new code is generated; the
-/// background task observes it and exits without sending further messages.
-#[derive(Debug, Clone)]
-pub struct QrPairingState {
-    /// Monotonic sequence number; messages from stale (cancelled) pairing
-    /// tasks carry an older seq and are discarded by the handlers.
-    pub seq: u64,
-    /// The exact string encoded in the QR code
-    /// (`WIFI:T:ADB;S:<name>;P:<password>;;`).
-    pub payload: String,
-    /// Current phase, drives the status line under the QR code.
-    pub phase: QrPairingPhase,
-    /// Cancellation token for the background mDNS/adb task.
-    pub cancel: CancellationToken,
-}
 
 /// State for the Target Selector pane.
 ///
@@ -122,9 +76,6 @@ pub struct TargetSelectorState {
     /// Device ids checked for multi-launch (Connected tab only). Independent
     /// of `selected_index` (the cursor). Keyed by id so it survives refreshes.
     pub checked_device_ids: BTreeSet<String>,
-
-    /// In-progress (or failed) ADB QR pairing session (Pair QR tab).
-    pub qr_pairing: Option<QrPairingState>,
 }
 
 impl Default for TargetSelectorState {
@@ -144,7 +95,6 @@ impl Default for TargetSelectorState {
             last_known_visible_height: Cell::new(0),
             cached_flat_list: None,
             checked_device_ids: BTreeSet::new(),
-            qr_pairing: None,
         }
     }
 }
@@ -247,8 +197,6 @@ impl TargetSelectorState {
                     })
                     .collect()
             }
-            // The Pair QR tab renders a QR code panel, not a device list.
-            TargetTab::PairQr => Vec::new(),
         }
     }
 
@@ -524,51 +472,6 @@ impl TargetSelectorState {
         self.connected_devices
             .iter()
             .any(|d| d.id == id && d.is_supported)
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // QR Pairing (Pair QR tab)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// Begin a new QR pairing session, cancelling any previous one.
-    ///
-    /// Returns the sequence number assigned to the session; messages from the
-    /// background task carry it so stale-task messages can be discarded.
-    pub fn begin_qr_pairing(&mut self, payload: String, cancel: CancellationToken) -> u64 {
-        self.cancel_qr_pairing();
-        let seq = QR_PAIRING_SEQ.fetch_add(1, Ordering::Relaxed);
-        self.qr_pairing = Some(QrPairingState {
-            seq,
-            payload,
-            phase: QrPairingPhase::WaitingForScan,
-            cancel,
-        });
-        seq
-    }
-
-    /// Cancel and clear any in-progress QR pairing session.
-    ///
-    /// Firing the token tells the background mDNS/adb task to exit; clearing
-    /// the state makes its in-flight messages stale (their seq no longer
-    /// matches), so they are dropped by the handlers.
-    pub fn cancel_qr_pairing(&mut self) {
-        if let Some(pairing) = self.qr_pairing.take() {
-            pairing.cancel.cancel();
-        }
-    }
-
-    /// Update the phase of the current QR pairing session, discarding stale
-    /// updates (those whose `seq` does not match the active session).
-    ///
-    /// Returns `true` if the update was applied.
-    pub fn set_qr_pairing_phase(&mut self, seq: u64, phase: QrPairingPhase) -> bool {
-        match &mut self.qr_pairing {
-            Some(pairing) if pairing.seq == seq => {
-                pairing.phase = phase;
-                true
-            }
-            _ => false,
-        }
     }
 }
 
@@ -1021,108 +924,6 @@ mod tests {
             .map(|d| d.id.as_str())
             .collect();
         assert_eq!(ids, vec!["a"]);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // QR pairing state tests
-    // ─────────────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn begin_qr_pairing_sets_state_and_increments_seq() {
-        let mut state = TargetSelectorState::default();
-
-        let seq0 = state.begin_qr_pairing("payload-0".to_string(), CancellationToken::new());
-        let pairing = state.qr_pairing.as_ref().unwrap();
-        assert_eq!(pairing.seq, seq0);
-        assert_eq!(pairing.payload, "payload-0");
-        assert_eq!(pairing.phase, QrPairingPhase::WaitingForScan);
-
-        let seq1 = state.begin_qr_pairing("payload-1".to_string(), CancellationToken::new());
-        assert!(seq1 > seq0, "seq must be strictly increasing");
-        assert_eq!(state.qr_pairing.as_ref().unwrap().payload, "payload-1");
-    }
-
-    #[test]
-    fn qr_pairing_seq_unique_across_state_instances() {
-        // The dialog state is recreated on every dialog open; sequence
-        // numbers must never repeat across instances or a leaked task from a
-        // previous instance could match a fresh session.
-        let mut a = TargetSelectorState::default();
-        let seq_a = a.begin_qr_pairing("p".to_string(), CancellationToken::new());
-
-        let mut b = TargetSelectorState::default();
-        let seq_b = b.begin_qr_pairing("p".to_string(), CancellationToken::new());
-
-        assert_ne!(seq_a, seq_b);
-    }
-
-    #[test]
-    fn begin_qr_pairing_cancels_previous_token() {
-        let mut state = TargetSelectorState::default();
-        let first_token = CancellationToken::new();
-        state.begin_qr_pairing("payload-0".to_string(), first_token.clone());
-
-        state.begin_qr_pairing("payload-1".to_string(), CancellationToken::new());
-
-        assert!(first_token.is_cancelled());
-        assert!(!state.qr_pairing.as_ref().unwrap().cancel.is_cancelled());
-    }
-
-    #[test]
-    fn cancel_qr_pairing_fires_token_and_clears_state() {
-        let mut state = TargetSelectorState::default();
-        let token = CancellationToken::new();
-        state.begin_qr_pairing("payload".to_string(), token.clone());
-
-        state.cancel_qr_pairing();
-
-        assert!(token.is_cancelled());
-        assert!(state.qr_pairing.is_none());
-
-        // No-op when nothing is in flight.
-        state.cancel_qr_pairing();
-        assert!(state.qr_pairing.is_none());
-    }
-
-    #[test]
-    fn set_qr_pairing_phase_applies_only_matching_seq() {
-        let mut state = TargetSelectorState::default();
-        let seq = state.begin_qr_pairing("payload".to_string(), CancellationToken::new());
-
-        let applied = state.set_qr_pairing_phase(
-            seq,
-            QrPairingPhase::Pairing {
-                ip: "10.0.0.2".to_string(),
-            },
-        );
-        assert!(applied);
-        assert_eq!(
-            state.qr_pairing.as_ref().unwrap().phase,
-            QrPairingPhase::Pairing {
-                ip: "10.0.0.2".to_string()
-            }
-        );
-
-        let stale = state.set_qr_pairing_phase(seq + 1, QrPairingPhase::WaitingForScan);
-        assert!(!stale);
-        assert_eq!(
-            state.qr_pairing.as_ref().unwrap().phase,
-            QrPairingPhase::Pairing {
-                ip: "10.0.0.2".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn pair_qr_tab_flat_list_is_empty() {
-        let mut state = TargetSelectorState::default();
-        state.set_connected_devices(vec![make_device("dev-a", "Device A")]);
-        state.set_tab(TargetTab::PairQr);
-        assert!(state.flat_list().is_empty());
-        // And selection helpers return nothing on this tab.
-        assert!(state.selected_connected_device().is_none());
-        assert!(state.selected_bootable_device().is_none());
-        assert!(state.selected_device_id().is_none());
     }
 
     #[test]

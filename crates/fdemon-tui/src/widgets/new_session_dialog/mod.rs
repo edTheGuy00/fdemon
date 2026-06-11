@@ -270,7 +270,9 @@ impl<'a> NewSessionDialog<'a> {
 
     /// Get footer hints based on current state
     fn footer_hints(&self) -> Vec<(&str, &str)> {
-        if self.state.is_fuzzy_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            vec![("r", "New code"), ("Esc", "Close")]
+        } else if self.state.is_fuzzy_modal_open() {
             vec![("↑↓", "Navigate"), ("Enter", "Select"), ("Esc", "Cancel")]
         } else if self.state.is_dart_defines_modal_open() {
             vec![
@@ -468,6 +470,22 @@ impl<'a> NewSessionDialog<'a> {
     }
 
     /// Render dart defines modal (full-screen overlay)
+    /// Render the QR pairing modal over the FULL terminal area.
+    ///
+    /// Unlike the other sub-modals (which overlay the dialog area), the QR
+    /// modal uses the whole terminal so the QR code has enough cells to be
+    /// scannable even in modest terminal sizes.
+    fn render_qr_pairing_modal(&self, area: Rect, buf: &mut Buffer) {
+        let modal_state = match &self.state.qr_pairing_modal {
+            Some(state) => state,
+            None => return,
+        };
+
+        let modal =
+            qr_pairing::QrPairingModal::new(modal_state).animation_frame(self.animation_frame);
+        modal.render(area, buf);
+    }
+
     fn render_dart_defines_modal(&self, dialog_area: Rect, buf: &mut Buffer) {
         let modal_state = match &self.state.dart_defines_modal {
             Some(state) => state,
@@ -552,7 +570,9 @@ impl<'a> NewSessionDialog<'a> {
         self.render_footer(chunks[4], buf);
 
         // Render modal overlay if any
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             self.render_fuzzy_modal_overlay(dialog_area, buf);
@@ -638,7 +658,9 @@ impl<'a> NewSessionDialog<'a> {
         self.render_footer_compact(chunks[6], buf);
 
         // Render modal overlay if any
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             self.render_fuzzy_modal_overlay(dialog_area, buf);
@@ -692,7 +714,9 @@ impl<'a> NewSessionDialog<'a> {
         bg_block.render(area, buf);
 
         // Shorter keybinding hints for narrow terminals
-        let hints = if self.state.is_fuzzy_modal_open() {
+        let hints = if self.state.is_qr_pairing_modal_open() {
+            vec![("r", "New code"), ("Esc", "Close")]
+        } else if self.state.is_fuzzy_modal_open() {
             vec![("↑↓", "Nav"), ("Enter", "Sel"), ("Esc", "Close")]
         } else if self.state.is_dart_defines_modal_open() {
             vec![("Tab", "Pane"), ("↑↓", "Nav"), ("Esc", "Close")]
@@ -840,7 +864,9 @@ impl NewSessionDialog<'_> {
         self.render_footer(chunks[4], buf);
 
         // Fuzzy modal overlay
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
             // Dart-defines modal: no regions in v1 (deferred to Phase 6)
         } else if self.state.is_fuzzy_modal_open() {
@@ -913,7 +939,9 @@ impl NewSessionDialog<'_> {
         Self::render_separator(chunks[5], buf);
         self.render_footer_compact(chunks[6], buf);
 
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             if let Some(modal_state) = &self.state.fuzzy_modal {
@@ -985,17 +1013,8 @@ impl NewSessionDialog<'_> {
             .animation_frame(self.animation_frame);
             tab_bar::render_with_regions(chunks[0], buf, tb, ctx.as_deref_mut());
 
-            // Device list with regions.
-            // The Pair QR panel renders regardless of connected-discovery
-            // loading/error state — pairing is independent of the Flutter SDK.
-            if state.active_tab == TargetTab::PairQr {
-                let panel = qr_pairing::QrPairingPanel::new(
-                    state.qr_pairing.as_ref(),
-                    self.tool_availability.adb,
-                )
-                .animation_frame(self.animation_frame);
-                panel.render(chunks[1], buf);
-            } else if state.loading {
+            // Device list with regions
+            if state.loading {
                 use ratatui::widgets::Paragraph;
                 let glyph = crate::widgets::spinner::spinner_char(
                     self.animation_frame / crate::widgets::spinner::SPINNER_TICKS_PER_FRAME,
@@ -1040,8 +1059,6 @@ impl NewSessionDialog<'_> {
                             chunks[1], buf, &dl, ctx,
                         );
                     }
-                    // PairQr is rendered before the loading/error branches above.
-                    TargetTab::PairQr => {}
                 }
             }
 
@@ -1051,15 +1068,14 @@ impl NewSessionDialog<'_> {
                     let checked = state.checked_count();
                     if checked > 0 {
                         format!(
-                            "Space select · a all · Enter launch · r refresh  ({} selected)",
+                            "Space select · a all · Enter launch · r refresh · p pair  ({} selected)",
                             checked
                         )
                     } else {
-                        "Space select · a all · Enter launch · r refresh".to_string()
+                        "Space select · a all · Enter launch · r refresh · p pair".to_string()
                     }
                 }
-                TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
-                TargetTab::PairQr => "Scan with your Android device  [r] New code".to_string(),
+                TargetTab::Bootable => "[Enter] Boot  [r] Refresh  [p] Pair via QR".to_string(),
             };
             use ratatui::widgets::Paragraph;
             Paragraph::new(hints.as_str())

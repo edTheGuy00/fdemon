@@ -44,19 +44,6 @@ pub fn handle_switch_tab(
             .bootable_loading = true;
         return UpdateResult::action(UpdateAction::DiscoverBootableDevices);
     }
-
-    // Entering the Pair QR tab with no session (first visit, or after a
-    // completed pairing cleared it) starts a fresh one. A failed session is
-    // kept on screen so the user can read the error; `r` retries.
-    if tab == crate::new_session_dialog::TargetTab::PairQr
-        && state
-            .new_session_dialog_state
-            .target_selector
-            .qr_pairing
-            .is_none()
-    {
-        return super::qr_pairing::start_qr_pairing(state);
-    }
     UpdateResult::none()
 }
 
@@ -328,6 +315,12 @@ pub fn handle_close_new_session_dialog(state: &mut AppState) -> UpdateResult {
 /// 3. Close dialog if sessions exist
 /// 4. Quit if no sessions (in Startup mode, nowhere else to go)
 pub fn handle_new_session_dialog_escape(state: &mut AppState) -> UpdateResult {
+    // Priority 0: Close QR pairing modal (cancels the background task)
+    if state.new_session_dialog_state.is_qr_pairing_modal_open() {
+        state.new_session_dialog_state.cancel_qr_pairing();
+        return UpdateResult::none();
+    }
+
     // Priority 1: Close fuzzy modal
     if state.new_session_dialog_state.is_fuzzy_modal_open() {
         state.new_session_dialog_state.fuzzy_modal = None;
@@ -720,80 +713,6 @@ mod tests {
             "cache miss should dispatch combined discovery, got {:?}",
             result.action
         );
-    }
-
-    #[test]
-    fn test_switch_tab_to_pair_qr_starts_pairing() {
-        let mut state = test_app_state();
-        state.tool_availability.adb = true;
-        state.show_new_session_dialog(LoadedConfigs::default());
-
-        let result = handle_switch_tab(&mut state, TargetTab::PairQr);
-
-        assert_eq!(
-            state.new_session_dialog_state.target_selector.active_tab,
-            TargetTab::PairQr
-        );
-        assert!(state
-            .new_session_dialog_state
-            .target_selector
-            .qr_pairing
-            .is_some());
-        assert!(matches!(
-            result.action,
-            Some(UpdateAction::StartQrPairing { .. })
-        ));
-    }
-
-    #[test]
-    fn test_switch_tab_to_pair_qr_existing_session_not_restarted() {
-        let mut state = test_app_state();
-        state.tool_availability.adb = true;
-        state.show_new_session_dialog(LoadedConfigs::default());
-
-        // First visit starts a session.
-        let _ = handle_switch_tab(&mut state, TargetTab::PairQr);
-        let first_seq = state
-            .new_session_dialog_state
-            .target_selector
-            .qr_pairing
-            .as_ref()
-            .unwrap()
-            .seq;
-
-        // Leave and come back — the session must be preserved (the QR code
-        // must not change while the background task is still waiting).
-        let _ = handle_switch_tab(&mut state, TargetTab::Connected);
-        let result = handle_switch_tab(&mut state, TargetTab::PairQr);
-
-        let pairing = state
-            .new_session_dialog_state
-            .target_selector
-            .qr_pairing
-            .as_ref()
-            .unwrap();
-        assert_eq!(pairing.seq, first_seq);
-        assert!(result.action.is_none());
-    }
-
-    #[test]
-    fn test_switch_tab_to_pair_qr_without_adb_no_action() {
-        let mut state = test_app_state();
-        state.tool_availability.adb = false;
-        state.show_new_session_dialog(LoadedConfigs::default());
-
-        let result = handle_switch_tab(&mut state, TargetTab::PairQr);
-
-        assert_eq!(
-            state.new_session_dialog_state.target_selector.active_tab,
-            TargetTab::PairQr
-        );
-        assert!(state
-            .new_session_dialog_state
-            .target_selector
-            .qr_pairing
-            .is_none());
-        assert!(result.action.is_none());
     }
 
     #[test]

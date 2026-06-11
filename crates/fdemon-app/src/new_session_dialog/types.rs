@@ -25,7 +25,6 @@ pub enum TargetTab {
     #[default]
     Connected, // Running/connected devices
     Bootable, // Offline simulators/AVDs
-    PairQr,   // Pair an Android device via QR code (wireless debugging)
 }
 
 impl TargetTab {
@@ -33,7 +32,6 @@ impl TargetTab {
         match self {
             TargetTab::Connected => "1 Connected",
             TargetTab::Bootable => "2 Bootable",
-            TargetTab::PairQr => "3 Pair QR",
         }
     }
 
@@ -41,16 +39,14 @@ impl TargetTab {
         match self {
             TargetTab::Connected => '1',
             TargetTab::Bootable => '2',
-            TargetTab::PairQr => '3',
         }
     }
 
-    /// Get the next tab (cycles Connected → Bootable → PairQr → Connected)
+    /// Get the other tab
     pub fn toggle(&self) -> Self {
         match self {
             TargetTab::Connected => TargetTab::Bootable,
-            TargetTab::Bootable => TargetTab::PairQr,
-            TargetTab::PairQr => TargetTab::Connected,
+            TargetTab::Bootable => TargetTab::Connected,
         }
     }
 }

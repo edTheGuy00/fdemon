@@ -96,9 +96,6 @@ pub fn handle_device_select(state: &mut AppState) -> UpdateResult {
             warn!("Cannot boot device: no device selected on Bootable tab");
             UpdateResult::none()
         }
-        // No selectable items on the Pair QR tab; the flow is driven by the
-        // phone scanning the displayed code.
-        TargetTab::PairQr => UpdateResult::none(),
     }
 }
 
@@ -121,9 +118,6 @@ pub fn handle_refresh_devices(state: &mut AppState) -> UpdateResult {
                 .bootable_loading = true;
             UpdateResult::action(UpdateAction::DiscoverBootableDevices)
         }
-        // `r` on the Pair QR tab regenerates the code (cancels the current
-        // session and starts a new one).
-        TargetTab::PairQr => super::qr_pairing::start_qr_pairing(state),
     }
 }
 

@@ -12,5 +12,5 @@ mod types;
 // Re-export all types
 pub use device_groups::{DeviceListItem, GroupedBootableDevice};
 pub use state::*;
-pub use target_selector_state::{QrPairingPhase, QrPairingState, TargetSelectorState};
+pub use target_selector_state::TargetSelectorState;
 pub use types::*;
