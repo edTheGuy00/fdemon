@@ -18,7 +18,8 @@ use tui_qrcode::{QrCodeWidget, QuietZone};
 use crate::theme::palette;
 use fdemon_app::new_session_dialog::{QrPairingPhase, QrPairingState};
 
-/// Quiet-zone border added by [`QuietZone::Enabled`]: 4 modules on each side.
+/// Total quiet-zone width added by [`QuietZone::Enabled`]:
+/// 4 modules per side × 2 sides = 8.
 const QUIET_ZONE_MODULES: u16 = 8;
 
 /// The Pair QR panel (content area of the Pair QR tab).
@@ -83,18 +84,10 @@ impl Widget for QrPairingPanel<'_> {
         };
 
         // One terminal cell per module horizontally, half-block packing
-        // vertically (2 modules per row).
+        // vertically (2 modules per row; QR codes are square, so cols also
+        // gives the module row count).
         let qr_cols = qr.width() as u16 + QUIET_ZONE_MODULES;
         let qr_rows = qr_cols.div_ceil(2);
-
-        // Layout: instruction line, QR code, status line.
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(qr_rows),
-            Constraint::Length(1),
-        ])
-        .flex(ratatui::layout::Flex::Center)
-        .split(area);
 
         if area.width < qr_cols || area.height < qr_rows + 2 {
             render_centered_message(
@@ -112,6 +105,15 @@ impl Widget for QrPairingPanel<'_> {
             );
             return;
         }
+
+        // Layout: instruction line, QR code, status line.
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(qr_rows),
+            Constraint::Length(1),
+        ])
+        .flex(ratatui::layout::Flex::Center)
+        .split(area);
 
         let instruction = Paragraph::new(
             "Scan on your phone: Developer options › Wireless debugging › Pair device with QR code",

@@ -29,15 +29,20 @@ use tokio_util::sync::CancellationToken;
 use fdemon_core::{Error, Result};
 
 /// mDNS service type the phone advertises while the QR pairing screen is open.
-pub const PAIRING_SERVICE_TYPE: &str = "_adb-tls-pairing._tcp.local.";
+const PAIRING_SERVICE_TYPE: &str = "_adb-tls-pairing._tcp.local.";
 
 /// mDNS service type adbd advertises for TLS connections (wireless debugging).
-pub const CONNECT_SERVICE_TYPE: &str = "_adb-tls-connect._tcp.local.";
+const CONNECT_SERVICE_TYPE: &str = "_adb-tls-connect._tcp.local.";
 
 /// Prefix for the generated mDNS service-instance name. The suffix makes each
 /// QR code unique so the host can correlate the phone's advertisement with the
 /// code it displayed.
 const SERVICE_NAME_PREFIX: &str = "fdemon";
+
+/// How long the displayed QR code stays valid waiting for the phone to scan
+/// it. Bounds the background task (and its mDNS daemon thread) when the user
+/// leaves the tab open without scanning; `r` mints a fresh code.
+const PAIRING_SCAN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How long to wait for the phone's `_adb-tls-connect` advertisement after a
 /// successful `adb pair`. The service is normally already being advertised, so
@@ -145,11 +150,22 @@ async fn pair_with_qr_inner(
         .browse(PAIRING_SERVICE_TYPE)
         .map_err(|e| Error::process(format!("mDNS browse failed: {e}")))?;
 
+    let scan_deadline = tokio::time::sleep(PAIRING_SCAN_TIMEOUT);
+    tokio::pin!(scan_deadline);
+
     let (ip, pairing_port) = loop {
         let event = tokio::select! {
             _ = cancel.cancelled() => {
                 let _ = mdns.stop_browse(PAIRING_SERVICE_TYPE);
                 return Err(Error::cancelled("QR pairing cancelled"));
+            }
+            _ = &mut scan_deadline => {
+                let _ = mdns.stop_browse(PAIRING_SERVICE_TYPE);
+                return Err(Error::process(format!(
+                    "QR code expired after {} minutes without being scanned — \
+                     press r to generate a new one",
+                    PAIRING_SCAN_TIMEOUT.as_secs() / 60
+                )));
             }
             event = receiver.recv_async() => event
                 .map_err(|e| Error::process(format!("mDNS channel closed: {e}")))?,
@@ -284,8 +300,13 @@ async fn run_adb(args: &[&str], cancel: &CancellationToken) -> Result<std::proce
 
 /// Match a resolved mDNS fullname (e.g. `fdemon-123456._adb-tls-pairing._tcp.local.`)
 /// against the service-instance name we put in the QR code.
+///
+/// Anchored on the `.` label boundary so a name that merely shares a prefix
+/// (e.g. `fdemon-1234567` vs `fdemon-123456`) cannot match.
 fn fullname_matches(fullname: &str, service_name: &str) -> bool {
-    fullname.starts_with(service_name)
+    fullname
+        .strip_prefix(service_name)
+        .is_some_and(|rest| rest.starts_with('.'))
 }
 
 /// Pick a usable IPv4 address from a resolved service, preferring private
@@ -330,9 +351,10 @@ fn parse_connect_output(
     ip: &str,
     port: u16,
 ) -> Result<()> {
+    // "connected to <ep>" and "already connected to <ep>" both anchored to the
+    // exact endpoint so output mentioning another device cannot false-positive.
     let success = status_ok
-        && (stdout.contains(&format!("connected to {ip}:{port}"))
-            || stdout.contains("already connected"))
+        && stdout.contains(&format!("connected to {ip}:{port}"))
         && !stdout.contains("failed to connect");
     if success {
         return Ok(());
@@ -412,6 +434,12 @@ mod tests {
             "fdemon-999999._adb-tls-pairing._tcp.local.",
             "fdemon-123456"
         ));
+        // A longer name sharing our name as prefix must not match (label
+        // boundary anchor).
+        assert!(!fullname_matches(
+            "fdemon-1234567._adb-tls-pairing._tcp.local.",
+            "fdemon-123456"
+        ));
     }
 
     #[test]
@@ -487,6 +515,19 @@ mod tests {
             40123
         )
         .is_ok());
+    }
+
+    #[test]
+    fn parse_connect_output_rejects_other_endpoint() {
+        // "already connected" to a DIFFERENT device must not count as success.
+        let result = parse_connect_output(
+            true,
+            "already connected to 10.0.0.99:1234\n",
+            "",
+            "192.168.1.100",
+            40123,
+        );
+        assert!(result.is_err());
     }
 
     #[test]

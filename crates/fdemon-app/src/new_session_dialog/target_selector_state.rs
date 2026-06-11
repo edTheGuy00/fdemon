@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio_util::sync::CancellationToken;
 
@@ -31,6 +32,14 @@ pub enum QrPairingPhase {
     /// The flow failed; `[r]` restarts with a fresh code.
     Failed { error: String },
 }
+
+/// Process-wide source of QR pairing sequence numbers.
+///
+/// Global (not per-state) because `NewSessionDialogState` is recreated on
+/// every dialog open: a per-state counter would restart at 0 and let a
+/// message from a leaked task of a previous dialog instance collide with a
+/// fresh session's seq.
+static QR_PAIRING_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// State of an in-progress (or failed) QR pairing session.
 ///
@@ -116,9 +125,6 @@ pub struct TargetSelectorState {
 
     /// In-progress (or failed) ADB QR pairing session (Pair QR tab).
     pub qr_pairing: Option<QrPairingState>,
-
-    /// Next sequence number to assign to a QR pairing session.
-    pub qr_pairing_next_seq: u64,
 }
 
 impl Default for TargetSelectorState {
@@ -139,7 +145,6 @@ impl Default for TargetSelectorState {
             cached_flat_list: None,
             checked_device_ids: BTreeSet::new(),
             qr_pairing: None,
-            qr_pairing_next_seq: 0,
         }
     }
 }
@@ -531,8 +536,7 @@ impl TargetSelectorState {
     /// background task carry it so stale-task messages can be discarded.
     pub fn begin_qr_pairing(&mut self, payload: String, cancel: CancellationToken) -> u64 {
         self.cancel_qr_pairing();
-        let seq = self.qr_pairing_next_seq;
-        self.qr_pairing_next_seq += 1;
+        let seq = QR_PAIRING_SEQ.fetch_add(1, Ordering::Relaxed);
         self.qr_pairing = Some(QrPairingState {
             seq,
             payload,
@@ -1028,14 +1032,28 @@ mod tests {
         let mut state = TargetSelectorState::default();
 
         let seq0 = state.begin_qr_pairing("payload-0".to_string(), CancellationToken::new());
-        assert_eq!(seq0, 0);
         let pairing = state.qr_pairing.as_ref().unwrap();
+        assert_eq!(pairing.seq, seq0);
         assert_eq!(pairing.payload, "payload-0");
         assert_eq!(pairing.phase, QrPairingPhase::WaitingForScan);
 
         let seq1 = state.begin_qr_pairing("payload-1".to_string(), CancellationToken::new());
-        assert_eq!(seq1, 1);
+        assert!(seq1 > seq0, "seq must be strictly increasing");
         assert_eq!(state.qr_pairing.as_ref().unwrap().payload, "payload-1");
+    }
+
+    #[test]
+    fn qr_pairing_seq_unique_across_state_instances() {
+        // The dialog state is recreated on every dialog open; sequence
+        // numbers must never repeat across instances or a leaked task from a
+        // previous instance could match a fresh session.
+        let mut a = TargetSelectorState::default();
+        let seq_a = a.begin_qr_pairing("p".to_string(), CancellationToken::new());
+
+        let mut b = TargetSelectorState::default();
+        let seq_b = b.begin_qr_pairing("p".to_string(), CancellationToken::new());
+
+        assert_ne!(seq_a, seq_b);
     }
 
     #[test]

@@ -55,10 +55,13 @@ pub fn handle_qr_pairing_progress(
         QrPairingEvent::PhoneFound { ip } => QrPairingPhase::Pairing { ip },
         QrPairingEvent::Paired { ip } => QrPairingPhase::Connecting { ip },
     };
-    state
+    let applied = state
         .new_session_dialog_state
         .target_selector
         .set_qr_pairing_phase(seq, phase);
+    if !applied {
+        tracing::debug!(seq, "ignoring stale QR pairing progress");
+    }
     UpdateResult::none()
 }
 
@@ -82,8 +85,11 @@ pub fn handle_qr_pairing_completed(
     }
 
     tracing::info!(ip = %ip, port = connect_port, "QR pairing complete — refreshing devices");
-    // The session is over; clear it so revisiting the tab starts a fresh code.
-    selector.qr_pairing = None;
+    // Clear the session so revisiting the tab starts a fresh code. The task
+    // already finished, so firing the token is a no-op, but going through
+    // cancel_qr_pairing() keeps the invariant that every session leaves the
+    // field with its token fired.
+    selector.cancel_qr_pairing();
     selector.set_tab(TargetTab::Connected);
 
     let Some(flutter) = state.flutter_executable() else {
@@ -293,6 +299,35 @@ mod tests {
                 error: "adb pair failed".to_string()
             }
         );
+    }
+
+    #[test]
+    fn hide_new_session_dialog_cancels_pairing_task() {
+        let mut state = test_app_state();
+        start_qr_pairing(&mut state);
+        let token = selector(&state).qr_pairing.as_ref().unwrap().cancel.clone();
+
+        state.hide_new_session_dialog();
+
+        assert!(
+            token.is_cancelled(),
+            "closing the dialog must stop the task"
+        );
+        assert!(selector(&state).qr_pairing.is_none());
+    }
+
+    #[test]
+    fn reopening_dialog_cancels_previous_pairing_task() {
+        let mut state = test_app_state();
+        start_qr_pairing(&mut state);
+        let token = selector(&state).qr_pairing.as_ref().unwrap().cancel.clone();
+
+        // Re-open replaces the dialog state wholesale; the old task's token
+        // must be fired before the state (and token clone) is dropped.
+        state.show_new_session_dialog(LoadedConfigs::default());
+
+        assert!(token.is_cancelled(), "reopen must stop the leaked task");
+        assert!(selector(&state).qr_pairing.is_none());
     }
 
     #[test]

@@ -1688,12 +1688,21 @@ impl AppState {
 
     /// Show the new session dialog
     pub fn show_new_session_dialog(&mut self, configs: LoadedConfigs) {
+        // Stop any QR pairing task owned by the previous dialog instance —
+        // replacing the state would otherwise drop the cancellation token
+        // without firing it, leaking the background mDNS/adb task.
+        self.new_session_dialog_state
+            .target_selector
+            .cancel_qr_pairing();
         self.new_session_dialog_state = NewSessionDialogState::new(configs);
         self.ui_mode = UiMode::NewSessionDialog;
     }
 
     /// Hide the new session dialog
     pub fn hide_new_session_dialog(&mut self) {
+        // Run the dialog's own teardown (closes modals, cancels any
+        // in-flight QR pairing task).
+        self.new_session_dialog_state.hide();
         self.ui_mode = UiMode::Normal;
         // Clear the startup notice so it doesn't re-appear if the dialog is
         // re-opened later in the same process (e.g. via n key in Normal mode).
