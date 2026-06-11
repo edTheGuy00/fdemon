@@ -130,8 +130,21 @@ pub async fn run_preflight(
     // concurrent probe tasks are spawned (tokio::join! below). The refresh is
     // a no-op on Linux/macOS. See path_config::refresh_process_path_from_registry
     // for the full rationale and safety discussion.
+    //
+    // The refresh shells out to PowerShell via a *blocking* `std::process`
+    // call. Running it directly on the async runtime thread would freeze that
+    // thread (and every `tokio::time::timeout` scheduled on it) for the
+    // duration of the PowerShell spawn — and indefinitely if PowerShell's pipe
+    // is held open by an inherited handle from a concurrent spawn. Offload it
+    // to a blocking thread and cap the wait so preflight can never wedge on it.
     #[cfg(target_os = "windows")]
-    path_config::refresh_process_path_from_registry();
+    {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            tokio::task::spawn_blocking(path_config::refresh_process_path_from_registry),
+        )
+        .await;
+    }
 
     let platform = HostPlatform::detect();
     let shell = HostShell::detect();

@@ -233,6 +233,14 @@ async fn probe_version(browser_path: &Path) -> Option<String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .stdin(Stdio::null())
+            // Kill the child if this future is dropped (e.g. the timeout above
+            // fires). Without this, a timed-out browser probe lingers holding
+            // its inherited stdout pipe write-handle; on Windows that handle
+            // can be inherited by a concurrently-spawned process whose own
+            // blocking `output()` then waits on the pipe forever — deadlocking
+            // `run_preflight`'s test runner. Mirrors `run_vswhere` in
+            // checks/windows.rs.
+            .kill_on_drop(true)
             .output()
             .await
     })

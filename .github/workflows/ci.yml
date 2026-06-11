@@ -19,6 +19,8 @@ jobs:
   check:
     name: Check / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Fail fast on a hung test/build instead of burning the 6h GitHub default.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
