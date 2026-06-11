@@ -349,14 +349,14 @@ impl TargetSelector<'_> {
                 let checked = self.state.checked_count();
                 if checked > 0 {
                     format!(
-                        "Space select · a all · Enter launch · r refresh · p pair  ({} selected)",
+                        "Space select · a all · Enter launch · r refresh  ({} selected)",
                         checked
                     )
                 } else {
-                    "Space select · a all · Enter launch · r refresh · p pair".to_string()
+                    "Space select · a all · Enter launch · r refresh".to_string()
                 }
             }
-            TargetTab::Bootable => "[Enter] Boot  [r] Refresh  [p] Pair via QR".to_string(),
+            TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
         };
 
         let text = Paragraph::new(hints.as_str())

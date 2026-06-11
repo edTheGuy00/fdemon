@@ -292,7 +292,7 @@ impl<'a> NewSessionDialog<'a> {
         }
     }
 
-    /// Render header area with title, subtitle, and close hint
+    /// Render header area with title, subtitle, close hint, and QR pairing hint
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         // Row 1: "New Session" (left) + "[Esc] Close" (right)
         let title_line = Line::from(vec![
@@ -329,6 +329,19 @@ impl<'a> NewSessionDialog<'a> {
         ]);
         let subtitle_area = Rect::new(area.x, area.y + 1, area.width, 1);
         Paragraph::new(subtitle).render(subtitle_area, buf);
+
+        // Row 3: QR pairing hint (full-width, never truncated by pane splits)
+        let pair_hint = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[p]", Style::default().fg(palette::TEXT_PRIMARY)),
+            Span::raw(" "),
+            Span::styled(
+                "Pair Android device via QR code",
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
+        ]);
+        let pair_hint_area = Rect::new(area.x, area.y + 2, area.width, 1);
+        Paragraph::new(pair_hint).render(pair_hint_area, buf);
     }
 
     /// Render a horizontal separator line
@@ -1068,14 +1081,14 @@ impl NewSessionDialog<'_> {
                     let checked = state.checked_count();
                     if checked > 0 {
                         format!(
-                            "Space select · a all · Enter launch · r refresh · p pair  ({} selected)",
+                            "Space select · a all · Enter launch · r refresh  ({} selected)",
                             checked
                         )
                     } else {
-                        "Space select · a all · Enter launch · r refresh · p pair".to_string()
+                        "Space select · a all · Enter launch · r refresh".to_string()
                     }
                 }
-                TargetTab::Bootable => "[Enter] Boot  [r] Refresh  [p] Pair via QR".to_string(),
+                TargetTab::Bootable => "[Enter] Boot  [r] Refresh".to_string(),
             };
             use ratatui::widgets::Paragraph;
             Paragraph::new(hints.as_str())
@@ -1217,6 +1230,34 @@ mod tests {
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
         assert!(content.contains("New Session"));
+    }
+
+    #[test]
+    fn test_header_shows_qr_pairing_hint() {
+        // The pairing hint lives in the full-width header (below the
+        // subtitle), where it cannot be truncated by the pane split.
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 100, 40);
+        assert!(content.contains("Configure deployment target and runtime flags."));
+        assert!(content.contains("[p] Pair Android device via QR code"));
+    }
+
+    #[test]
+    fn test_qr_pairing_modal_renders_over_dialog() {
+        use tokio_util::sync::CancellationToken;
+
+        let mut state = test_dialog_state();
+        state.begin_qr_pairing(
+            "WIFI:T:ADB;S:fdemon-123456;P:87654321;;".to_string(),
+            CancellationToken::new(),
+        );
+
+        let content = render_dialog(&state, 100, 40);
+        assert!(content.contains("Pair Android Device"));
+        assert!(
+            content.contains('█') || content.contains('▀') || content.contains('▄'),
+            "expected QR half-block glyphs when the modal is open"
+        );
     }
 
     #[test]
