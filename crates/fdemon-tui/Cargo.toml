@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Terminal UI for Flutter Demon"
 
+[features]
+# Rebrand title surfaces as "Fdemon PRO" (gold). Enabled only by the pro repo.
+pro = []
+
 [dependencies]
 fdemon-core.workspace = true
 fdemon-app.workspace = true

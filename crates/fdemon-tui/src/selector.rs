@@ -16,7 +16,7 @@ use ratatui::{
 
 use fdemon_core::prelude::*;
 
-use crate::theme::palette;
+use crate::theme::{branding, palette};
 
 /// Maximum number of projects to display (limited by single-digit selection)
 const MAX_DISPLAY_PROJECTS: usize = 9;
@@ -169,8 +169,8 @@ fn render_selector(
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" Flutter Demon ")
-        .title_style(Style::default().fg(palette::ACCENT).bold());
+        .title(format!(" {} ", branding::APP_TITLE))
+        .title_style(Style::default().fg(branding::TITLE_COLOR).bold());
 
     let inner_area = outer_block.inner(modal_area);
     frame.render_widget(outer_block, modal_area);

@@ -13,7 +13,7 @@ use ratatui::{
 use fdemon_app::session_manager::SessionManager;
 use fdemon_app::{Message, MouseAction, MouseRect};
 
-use crate::theme::{icons::IconSet, palette, styles};
+use crate::theme::{branding, icons::IconSet, palette, styles};
 use crate::widgets::MouseCtx;
 
 use super::tabs::render_session_tabs;
@@ -286,9 +286,9 @@ impl MainHeader<'_> {
             Span::styled(status_icon, status_style),
             Span::raw(" "),
             Span::styled(
-                "Flutter Demon",
+                branding::APP_TITLE,
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(branding::TITLE_COLOR)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -444,7 +444,7 @@ mod tests {
 
         // Should contain app name
         assert!(
-            term.buffer_contains("Flutter Demon"),
+            term.buffer_contains(crate::theme::branding::APP_TITLE),
             "Header should contain app title"
         );
     }
@@ -530,7 +530,7 @@ mod tests {
         // The header renders the full name but it gets truncated by the terminal width
         // Verify basic rendering worked without panic
         assert!(
-            term.buffer_contains("Flutter Demon"),
+            term.buffer_contains(crate::theme::branding::APP_TITLE),
             "Should still show app title"
         );
     }
@@ -547,7 +547,7 @@ mod tests {
         let content = term.content();
         assert!(!content.is_empty(), "Should render in compact mode");
         assert!(
-            term.buffer_contains("Flutter Demon"),
+            term.buffer_contains(crate::theme::branding::APP_TITLE),
             "Should contain title in compact mode"
         );
     }
@@ -679,7 +679,10 @@ mod tests {
         let header = MainHeader::new(Some("app"), icons);
         term.render_widget(header, term.area());
 
-        assert!(term.buffer_contains("Flutter Demon"), "Title should show");
+        assert!(
+            term.buffer_contains(crate::theme::branding::APP_TITLE),
+            "Title should show"
+        );
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         assert!(term.buffer_contains(&version), "Version should show");
     }
