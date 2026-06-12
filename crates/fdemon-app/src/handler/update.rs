@@ -7,6 +7,7 @@
 //! - `log_view`: Log filtering/search handlers (Phase 6.1, Task 04)
 //! - `settings_handlers`: Settings page handlers (Phase 6.1, Task 04)
 
+use crate::engine_event::EngineEvent;
 use crate::message::{AutoLaunchSuccess, Message};
 use crate::state::{
     AppState, DevToolsError, DevToolsPanel, StartupNotice, UiMode, MAX_PENDING_WATCHER_ERRORS,
@@ -166,6 +167,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                             LogSource::App,
                             "Restarting...".to_string(),
                         ));
+                        state
+                            .pending_engine_events
+                            .push(EngineEvent::RestartStarted { session_id });
                         return UpdateResult::action(UpdateAction::SpawnTask(Task::Restart {
                             session_id,
                             app_id,
@@ -223,17 +227,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             time_ms,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Emit only for a reload that legitimately started — a stale
+                // completion (session no longer Reloading) is a no-op in
+                // complete_reload() and must not produce a ReloadCompleted event.
+                let was_reloading = handle.session.phase == AppPhase::Reloading;
                 handle.session.complete_reload();
                 handle.session.add_log(fdemon_core::LogEntry::info(
                     LogSource::App,
                     format!("Reloaded in {}ms", time_ms),
                 ));
+                if was_reloading {
+                    state
+                        .pending_engine_events
+                        .push(EngineEvent::ReloadCompleted {
+                            session_id,
+                            time_ms,
+                        });
+                }
             }
             UpdateResult::none()
         }
 
         Message::SessionReloadFailed { session_id, reason } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                let was_reloading = handle.session.phase == AppPhase::Reloading;
                 // Only restore Running from Reloading — do not resurrect a
                 // Launching/Stopped session whose reload never legitimately started.
                 handle.session.fail_reload();
@@ -241,6 +258,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     LogSource::App,
                     format!("Reload failed: {}", reason),
                 ));
+                if was_reloading {
+                    state
+                        .pending_engine_events
+                        .push(EngineEvent::ReloadFailed { session_id, reason });
+                }
             }
             UpdateResult::none()
         }
@@ -248,7 +270,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::SessionRestartCompleted { session_id } => {
             let mut should_reenable_rebuild_stats = false;
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Same staleness guard as SessionReloadCompleted above.
+                let was_reloading = handle.session.phase == AppPhase::Reloading;
                 handle.session.complete_reload();
+                if was_reloading {
+                    state
+                        .pending_engine_events
+                        .push(EngineEvent::RestartCompleted { session_id });
+                }
                 handle.session.add_log(fdemon_core::LogEntry::info(
                     LogSource::App,
                     "Restarted".to_string(),
@@ -307,6 +336,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // File Watcher Messages
         // ─────────────────────────────────────────────────────────
         Message::AutoReloadTriggered => {
+            // The debounced watcher collapses the change batch on the
+            // auto-reload path, so the per-file count is unknown here (0).
+            state.pending_engine_events.push(EngineEvent::FilesChanged {
+                count: 0,
+                auto_reload_triggered: true,
+            });
+
             // Skip if any session is busy (to keep all devices in sync)
             if state.session_manager.any_session_busy() {
                 tracing::debug!("Auto-reload skipped: some session(s) already reloading");
@@ -344,6 +380,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::FilesChanged { count } => {
             tracing::debug!("{} file(s) changed", count);
+
+            // The watcher only sends FilesChanged when auto-reload is disabled,
+            // so no reload is triggered on this path.
+            state.pending_engine_events.push(EngineEvent::FilesChanged {
+                count,
+                auto_reload_triggered: false,
+            });
 
             // Phase 4, Task 03: gate auto-reload while the debugger is paused.
             // When `suppress_reload_on_pause` is enabled and the watcher is
@@ -436,6 +479,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::DevicesDiscovered { devices } => {
             let device_count = devices.len();
+
+            state
+                .pending_engine_events
+                .push(EngineEvent::DevicesDiscovered {
+                    devices: devices.clone(),
+                });
 
             // Update global cache FIRST (Task 08e)
             state.set_device_cache(devices.clone());
@@ -1122,6 +1171,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
                     match session_result {
                         Ok(session_id) => {
+                            state
+                                .pending_engine_events
+                                .push(EngineEvent::SessionCreated {
+                                    session_id,
+                                    device: device.clone(),
+                                });
+
                             // Save selection for next time
                             let _ = crate::config::save_last_selection(
                                 &state.project_path,

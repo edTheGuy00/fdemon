@@ -40,7 +40,9 @@ struct StateSnapshot {
     phase: AppPhase,
     selected_session_id: Option<SessionId>,
     log_count: usize,
-    _session_count: usize,
+    /// Per-session `(id, phase)` pairs for all sessions (max 9), used to
+    /// detect session removal and per-session transitions into `Stopped`.
+    session_phases: Vec<(SessionId, AppPhase)>,
     _reload_count: u32,
 }
 
@@ -62,9 +64,21 @@ impl StateSnapshot {
             phase,
             selected_session_id: state.session_manager.selected().map(|s| s.session.id),
             log_count,
-            _session_count: state.session_manager.len(),
+            session_phases: state
+                .session_manager
+                .iter()
+                .map(|h| (h.session.id, h.session.phase))
+                .collect(),
             _reload_count: reload_count,
         }
+    }
+
+    /// Phase of `session_id` at snapshot time, if the session existed.
+    fn phase_of(&self, session_id: SessionId) -> Option<AppPhase> {
+        self.session_phases
+            .iter()
+            .find(|(id, _)| *id == session_id)
+            .map(|(_, phase)| *phase)
     }
 }
 
@@ -353,8 +367,13 @@ impl Engine {
         // Keep the VM handle slot in sync with the selected session.
         self.sync_vm_handle_for_dap();
 
+        // Drain events queued by handlers during update() (events whose
+        // payloads only exist at the handler layer), then emit them together
+        // with snapshot-diff events.
+        let queued = std::mem::take(&mut self.state.pending_engine_events);
+
         // Emit events for any state changes
-        self.emit_events(&pre, &post);
+        self.emit_events(&pre, &post, queued);
 
         // Notify plugins after processing and event emission (only if registered)
         if let Some(ref m) = msg_for_plugins {
@@ -678,8 +697,52 @@ impl Engine {
     /// Emit EngineEvents based on state changes after processing.
     ///
     /// Called after process_message() and flush_pending_logs().
-    /// Compares pre/post snapshots to detect what changed.
-    fn emit_events(&self, pre: &StateSnapshot, post: &StateSnapshot) {
+    /// Emits handler-queued events first (session lifecycle, reload/restart
+    /// outcomes, device discovery, file changes — see
+    /// `AppState::pending_engine_events`), then events derived by comparing
+    /// the pre/post snapshots.
+    fn emit_events(&self, pre: &StateSnapshot, post: &StateSnapshot, queued: Vec<EngineEvent>) {
+        // A restart drives the same Reloading phase transition as a reload;
+        // when this cycle queued RestartStarted for a session, suppress the
+        // snapshot-derived ReloadStarted so subscribers see only the truthful
+        // restart event.
+        let restart_started: Vec<SessionId> = queued
+            .iter()
+            .filter_map(|event| match event {
+                EngineEvent::RestartStarted { session_id } => Some(*session_id),
+                _ => None,
+            })
+            .collect();
+
+        for event in queued {
+            self.emit(event);
+        }
+
+        // Sessions that transitioned into Stopped (any session, not only the
+        // selected one — the stop may come from a background process exit).
+        for (session_id, post_phase) in &post.session_phases {
+            if *post_phase != AppPhase::Stopped {
+                continue;
+            }
+            if matches!(pre.phase_of(*session_id), Some(pre_phase) if pre_phase != AppPhase::Stopped)
+            {
+                self.emit(EngineEvent::SessionStopped {
+                    session_id: *session_id,
+                    // The snapshot diff carries no exit reason.
+                    reason: None,
+                });
+            }
+        }
+
+        // Sessions removed from the session manager.
+        for (session_id, _) in &pre.session_phases {
+            if post.phase_of(*session_id).is_none() {
+                self.emit(EngineEvent::SessionRemoved {
+                    session_id: *session_id,
+                });
+            }
+        }
+
         // Phase changes
         if pre.phase != post.phase {
             if let Some(session_id) = post.selected_session_id {
@@ -691,24 +754,20 @@ impl Engine {
             }
         }
 
-        // Reload detection - transition from non-Reloading to Reloading
+        // Reload detection - transition from non-Reloading to Reloading.
+        // Restart triggers are excluded (they queued RestartStarted above).
         if pre.phase != AppPhase::Reloading && post.phase == AppPhase::Reloading {
             if let Some(session_id) = post.selected_session_id {
-                self.emit(EngineEvent::ReloadStarted { session_id });
+                if !restart_started.contains(&session_id) {
+                    self.emit(EngineEvent::ReloadStarted { session_id });
+                }
             }
         }
 
-        // Reload completion - transition from Reloading to Running
-        if pre.phase == AppPhase::Reloading && post.phase == AppPhase::Running {
-            if let Some(session_id) = post.selected_session_id {
-                // Calculate reload time if we have reload start/end times
-                // For now, emit with 0ms - actual timing is tracked elsewhere
-                self.emit(EngineEvent::ReloadCompleted {
-                    session_id,
-                    time_ms: 0,
-                });
-            }
-        }
+        // Reload completion (ReloadCompleted with the daemon-measured time_ms),
+        // reload failure, and restart completion are handler-queued events —
+        // the snapshot diff cannot distinguish them (all three are a
+        // Reloading -> Running transition) nor measure the reload time.
 
         // New logs detected
         if post.log_count > pre.log_count {
@@ -765,11 +824,6 @@ impl Engine {
                 }
             }
         }
-
-        // Note: Hot restart events (RestartStarted, RestartCompleted) would be
-        // emitted here based on message type or phase changes, but the current
-        // AppPhase enum doesn't have a Restarting variant. These events may be
-        // added in a future update when restart tracking is implemented.
     }
 
     /// Emit a single EngineEvent to all subscribers.
@@ -998,7 +1052,7 @@ mod tests {
 
         assert_eq!(snapshot.phase, AppPhase::Initializing);
         assert_eq!(snapshot.log_count, 0);
-        assert_eq!(snapshot._session_count, 0);
+        assert!(snapshot.session_phases.is_empty());
     }
 
     #[tokio::test]
@@ -1056,6 +1110,410 @@ mod tests {
     async fn test_event_type_label() {
         let event = EngineEvent::Shutdown;
         assert_eq!(event.event_type(), "shutdown");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Event Emission Tests (engine-events)
+    // ─────────────────────────────────────────────────────────
+
+    fn test_device(id: &str, name: &str) -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: true,
+            capabilities: None,
+        }
+    }
+
+    /// Collect all events already broadcast (emission is synchronous within
+    /// `process_message`, so no waiting is needed).
+    fn drain_events(rx: &mut broadcast::Receiver<EngineEvent>) -> Vec<EngineEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn test_session_created_event_emitted_on_auto_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        // Prevent a real `flutter run` spawn on machines with a global SDK —
+        // session creation (and the event) happens before the spawn dispatch.
+        engine.state.resolved_sdk = None;
+
+        let mut rx = engine.subscribe();
+        let device = test_device("emulator-5554", "Pixel 6");
+        engine.process_message(Message::AutoLaunchResult {
+            result: Ok(crate::message::AutoLaunchSuccess {
+                device,
+                config: None,
+            }),
+        });
+
+        let events = drain_events(&mut rx);
+        let created = events
+            .iter()
+            .find(|e| matches!(e, EngineEvent::SessionCreated { .. }))
+            .expect("SessionCreated should be emitted when auto-launch creates a session");
+        match created {
+            EngineEvent::SessionCreated { session_id, device } => {
+                assert_eq!(
+                    Some(*session_id),
+                    engine.state.session_manager.selected_id()
+                );
+                assert_eq!(device.id, "emulator-5554");
+                assert_eq!(device.name, "Pixel 6");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_started_event_emitted_with_session_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::SessionStarted {
+            session_id,
+            device_id: "dev-1".to_string(),
+            device_name: "Pixel 6".to_string(),
+            platform: "android".to_string(),
+            pid: Some(4242),
+        });
+
+        let events = drain_events(&mut rx);
+        let started = events
+            .iter()
+            .find(|e| matches!(e, EngineEvent::SessionStarted { .. }))
+            .expect("SessionStarted should be emitted when the Flutter process starts");
+        match started {
+            EngineEvent::SessionStarted {
+                session_id: sid,
+                device_id,
+                device_name,
+                platform,
+                pid,
+            } => {
+                assert_eq!(*sid, session_id);
+                assert_eq!(device_id, "dev-1");
+                assert_eq!(device_name, "Pixel 6");
+                assert_eq!(platform, "android");
+                assert_eq!(*pid, Some(4242));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_stopped_event_emitted_on_process_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::SessionDaemon {
+            session_id,
+            event: fdemon_core::DaemonEvent::Exited { code: Some(0) },
+        });
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::SessionStopped { session_id: sid, reason: None } if *sid == session_id
+            )),
+            "SessionStopped should be emitted on process exit, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_session_removed_event_emitted_on_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let first = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        let _second = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-2", "iPhone 15"))
+            .unwrap();
+        assert_eq!(engine.state.session_manager.selected_id(), Some(first));
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::CloseCurrentSession);
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::SessionRemoved { session_id } if *session_id == first
+            )),
+            "SessionRemoved should be emitted when a session is closed, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reload_completed_event_carries_daemon_measured_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        {
+            let handle = engine.state.session_manager.get_mut(session_id).unwrap();
+            handle.session.mark_started("app-1".to_string());
+            handle.session.mark_running();
+            handle.session.start_reload();
+        }
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::SessionReloadCompleted {
+            session_id,
+            time_ms: 123,
+        });
+
+        let events = drain_events(&mut rx);
+        let completed = events
+            .iter()
+            .find(|e| matches!(e, EngineEvent::ReloadCompleted { .. }))
+            .expect("ReloadCompleted should be emitted when a reload finishes");
+        match completed {
+            EngineEvent::ReloadCompleted {
+                session_id: sid,
+                time_ms,
+            } => {
+                assert_eq!(*sid, session_id);
+                assert_eq!(*time_ms, 123, "time_ms must be the daemon-measured value");
+                assert!(*time_ms > 0, "time_ms must no longer be the hardcoded 0");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stale_reload_completed_does_not_emit_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        // Session is not Reloading — the completion is stale.
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::SessionReloadCompleted {
+            session_id,
+            time_ms: 50,
+        });
+
+        let events = drain_events(&mut rx);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::ReloadCompleted { .. })),
+            "a stale completion must not emit ReloadCompleted, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reload_failed_event_emitted_with_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        {
+            let handle = engine.state.session_manager.get_mut(session_id).unwrap();
+            handle.session.mark_started("app-1".to_string());
+            handle.session.mark_running();
+            handle.session.start_reload();
+        }
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::SessionReloadFailed {
+            session_id,
+            reason: "compile error".to_string(),
+        });
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::ReloadFailed { session_id: sid, reason }
+                    if *sid == session_id && reason == "compile error"
+            )),
+            "ReloadFailed should be emitted with the failure reason, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restart_started_event_emitted_instead_of_reload_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        {
+            let handle = engine.state.session_manager.get_mut(session_id).unwrap();
+            handle.session.mark_started("app-1".to_string());
+            handle.session.mark_running();
+            handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
+        }
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::HotRestart);
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::RestartStarted { session_id: sid } if *sid == session_id
+            )),
+            "RestartStarted should be emitted when a hot restart begins, got {:?}",
+            events
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::ReloadStarted { .. })),
+            "a restart must not emit ReloadStarted, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restart_completed_event_emitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        {
+            let handle = engine.state.session_manager.get_mut(session_id).unwrap();
+            handle.session.mark_started("app-1".to_string());
+            handle.session.mark_running();
+            handle.session.start_reload();
+        }
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::SessionRestartCompleted { session_id });
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::RestartCompleted { session_id: sid } if *sid == session_id
+            )),
+            "RestartCompleted should be emitted when a restart finishes, got {:?}",
+            events
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::ReloadCompleted { .. })),
+            "a restart completion must not emit ReloadCompleted, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_devices_discovered_event_emitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::DevicesDiscovered {
+            devices: vec![test_device("dev-1", "Pixel 6")],
+        });
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::DevicesDiscovered { devices }
+                    if devices.len() == 1 && devices[0].id == "dev-1"
+            )),
+            "DevicesDiscovered should be emitted with the device list, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_files_changed_event_emitted_without_auto_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::FilesChanged { count: 3 });
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::FilesChanged {
+                    count: 3,
+                    auto_reload_triggered: false
+                }
+            )),
+            "FilesChanged should be emitted with the watcher's count, got {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_files_changed_event_emitted_on_auto_reload_trigger() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+
+        let mut rx = engine.subscribe();
+        engine.process_message(Message::AutoReloadTriggered);
+
+        let events = drain_events(&mut rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                EngineEvent::FilesChanged {
+                    auto_reload_triggered: true,
+                    ..
+                }
+            )),
+            "FilesChanged should be emitted when the watcher triggers auto-reload, got {:?}",
+            events
+        );
     }
 
     // ─────────────────────────────────────────────────────────

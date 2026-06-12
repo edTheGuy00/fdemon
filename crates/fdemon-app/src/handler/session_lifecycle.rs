@@ -37,6 +37,16 @@ pub fn handle_session_started(
         for err in state.pending_watcher_errors.drain(..) {
             handle.session.log_error(LogSource::Watcher, err);
         }
+
+        state
+            .pending_engine_events
+            .push(crate::engine_event::EngineEvent::SessionStarted {
+                session_id,
+                device_id: handle.session.device_id.clone(),
+                device_name,
+                platform: handle.session.platform.clone(),
+                pid,
+            });
     }
 
     UpdateResult::none()
