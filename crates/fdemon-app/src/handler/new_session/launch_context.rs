@@ -706,6 +706,13 @@ fn spawn_one(
         }
     };
 
+    state
+        .pending_engine_events
+        .push(crate::engine_event::EngineEvent::SessionCreated {
+            session_id,
+            device: device.clone(),
+        });
+
     tracing::info!(
         "Session created for {} (id: {}, device: {})",
         device.name,

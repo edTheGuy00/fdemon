@@ -1526,6 +1526,20 @@ pub struct AppState {
     /// are ever pushed here; all other action variants flow through the normal
     /// `handle_action` path.
     pub pending_runner_actions: Vec<crate::handler::UpdateAction>,
+
+    /// EngineEvents queued by TEA handlers during `update()`.
+    ///
+    /// Some domain events carry payloads that only exist at the handler layer
+    /// (the created session's `Device`, daemon-reported reload timing, restart
+    /// triggers, discovered device lists) and cannot be derived from the
+    /// Engine's before/after state snapshots. Handlers push those events here;
+    /// `Engine::process_message` drains the queue after each TEA cycle and
+    /// broadcasts every entry through `Engine::emit`, so subscriber and plugin
+    /// delivery is identical to snapshot-diff events.
+    ///
+    /// **Access contract:** only the Engine drains this queue. Do not drain or
+    /// iterate it from outside the crate.
+    pub pending_engine_events: Vec<crate::engine_event::EngineEvent>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1602,6 +1616,7 @@ impl AppState {
             mouse_capture_active,
             animation_frame: 0,
             pending_runner_actions: Vec::new(),
+            pending_engine_events: Vec::new(),
         }
     }
 
