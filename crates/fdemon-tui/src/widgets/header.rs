@@ -679,7 +679,10 @@ mod tests {
         let header = MainHeader::new(Some("app"), icons);
         term.render_widget(header, term.area());
 
-        assert!(term.buffer_contains(crate::theme::branding::APP_TITLE), "Title should show");
+        assert!(
+            term.buffer_contains(crate::theme::branding::APP_TITLE),
+            "Title should show"
+        );
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         assert!(term.buffer_contains(&version), "Version should show");
     }
