@@ -143,7 +143,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_nonzero_exit_reported_as_unsuccessful_not_error() {
-        let service = service_with("/bin/false");
+        // `false` lives in /usr/bin on macOS but /bin on Linux.
+        #[cfg(target_os = "macos")]
+        let false_bin = "/usr/bin/false";
+        #[cfg(not(target_os = "macos"))]
+        let false_bin = "/bin/false";
+        let service = service_with(false_bin);
 
         let output = ProjectService::clean(&service).await.unwrap();
         assert!(!output.success);
