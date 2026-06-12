@@ -28,6 +28,7 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Launch Context (Right Pane)](#launch-context-right-pane)
   - [Fuzzy Search Modal](#fuzzy-search-modal)
   - [Dart Defines Modal](#dart-defines-modal)
+  - [QR Pairing Modal](#qr-pairing-modal)
 - [Search Input Mode](#search-input-mode)
 - [Link Highlight Mode](#link-highlight-mode)
 - [Settings Panel Mode](#settings-panel-mode)
@@ -230,6 +231,7 @@ The dialog has a two-pane layout:
 | `Tab` | Switch Pane | Switch focus between Target Selector and Launch Context |
 | `1` | Connected Tab | Switch to Connected devices tab |
 | `2` | Bootable Tab | Switch to Bootable devices tab |
+| `p` | Pair Android Device | Open the QR pairing modal to pair a physical Android device over Wi-Fi (requires `adb` on PATH) |
 | `Esc` | Close | Close modal (if open), or close dialog (if sessions exist) |
 | `Ctrl+C` | Force Quit | Emergency exit |
 
@@ -319,6 +321,16 @@ The editability of fields depends on the configuration source:
 | **None** | Editable (transient) | Editable (transient) | Editable (transient) |
 
 When a VSCode config is selected, fields show "(from config)" and cannot be modified. When an FDemon config is selected, changes are automatically saved to `.fdemon/launch.toml`.
+
+### QR Pairing Modal
+
+The QR pairing modal (opened with `p`) implements Android Studio's "Pair device with QR code" flow. Scan the displayed QR code from your phone's **Developer options → Wireless debugging → Pair device with QR code** screen; fdemon discovers the phone via mDNS, then runs `adb pair` and `adb connect` automatically. Once connected, the device list refreshes and the new device appears in the Connected tab.
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `r` / `p` | Regenerate | Cancel the current attempt and mint a fresh pairing code |
+| `Esc` | Close | Cancel pairing and close the modal |
+| `Ctrl+C` | Force Quit | Emergency exit |
 
 ---
 
