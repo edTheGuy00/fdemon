@@ -8,6 +8,7 @@
 //! ## Entry Points
 //!
 //! - [`run_with_project()`] - Main entry point: creates Engine, initializes terminal, runs event loop
+//! - [`run_with_engine()`] - Embedder entry point: runs the event loop on a caller-constructed Engine
 //! - [`select_project()`] - Interactive project selector (when multiple Flutter projects found)
 //!
 //! ## Widgets
@@ -33,5 +34,5 @@ pub mod widgets;
 pub mod test_utils;
 
 // Re-export main entry points
-pub use runner::{run_with_project, run_with_project_and_dap};
+pub use runner::{run_with_engine, run_with_project, run_with_project_and_dap, DapOptions};
 pub use selector::{select_project, SelectionResult};

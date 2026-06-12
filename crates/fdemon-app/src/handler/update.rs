@@ -680,6 +680,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
+        // Service-Layer Session Control (SessionService)
+        // ─────────────────────────────────────────────────────────
+        Message::StartSessionOnDevice { device_id } => {
+            session_lifecycle::handle_start_session_on_device(state, &device_id)
+        }
+
+        Message::StopSessionById { session_id } => {
+            state.last_log_click = None;
+            session_lifecycle::handle_stop_session_by_id(state, session_id)
+        }
+
+        // ─────────────────────────────────────────────────────────
         // Log Control (Task 10)
         // ─────────────────────────────────────────────────────────
         Message::ClearLogs => {

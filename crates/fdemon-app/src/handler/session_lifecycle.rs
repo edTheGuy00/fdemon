@@ -347,3 +347,71 @@ pub fn handle_close_session_at(state: &mut AppState, index: usize) -> UpdateResu
 
     close_session_internal(state, session_id)
 }
+
+/// Start a new session on the device with `device_id`.
+///
+/// Service-layer entry point (`services::SessionService`): resolves the
+/// device from the device cache, creates a session, and dispatches
+/// `SpawnSession` — the same machinery the dialog and headless auto-start
+/// use. No-op with a warning when the device id is unknown, no Flutter SDK
+/// is resolved, or the session limit is reached.
+pub fn handle_start_session_on_device(state: &mut AppState, device_id: &str) -> UpdateResult {
+    let Some(device) = state
+        .get_cached_devices()
+        .and_then(|devices| devices.iter().find(|d| d.id == device_id))
+        .cloned()
+    else {
+        tracing::warn!(
+            "StartSessionOnDevice: device '{}' not in device cache — run device discovery first",
+            device_id
+        );
+        return UpdateResult::none();
+    };
+
+    let Some(flutter) = state.flutter_executable() else {
+        tracing::warn!("StartSessionOnDevice: no Flutter SDK resolved — cannot spawn session");
+        return UpdateResult::none();
+    };
+
+    match state.session_manager.create_session(&device) {
+        Ok(session_id) => {
+            state
+                .pending_engine_events
+                .push(crate::engine_event::EngineEvent::SessionCreated {
+                    session_id,
+                    device: device.clone(),
+                });
+            tracing::info!(
+                "StartSessionOnDevice: created session {} on {} ({})",
+                session_id,
+                device.name,
+                device.id
+            );
+            UpdateResult::action(UpdateAction::SpawnSession {
+                session_id,
+                device,
+                config: None,
+                flutter,
+            })
+        }
+        Err(e) => {
+            tracing::warn!("StartSessionOnDevice: failed to create session: {}", e);
+            UpdateResult::none()
+        }
+    }
+}
+
+/// Stop the app and remove the session with `session_id`.
+///
+/// Service-layer entry point (`services::SessionService`). Reuses the same
+/// close path as the keyboard shortcuts, but intentionally without the
+/// "last session = quit" conversion: a remote consumer stopping the only
+/// session must not terminate fdemon.
+pub fn handle_stop_session_by_id(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    if state.session_manager.get(session_id).is_none() {
+        tracing::warn!("StopSessionById: unknown session id {}", session_id);
+        return UpdateResult::none();
+    }
+
+    close_session_internal(state, session_id)
+}

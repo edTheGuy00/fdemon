@@ -242,6 +242,24 @@ pub enum Message {
     CloseSessionAt(usize),
 
     // ─────────────────────────────────────────────────────────
+    // Service-Layer Session Control (SessionService)
+    // ─────────────────────────────────────────────────────────
+    /// Start a new session on the device with the given id.
+    ///
+    /// Dispatched by `services::SessionService` consumers (MCP server).
+    /// The device must be present in the device cache; unknown ids are
+    /// ignored with a warning.
+    StartSessionOnDevice { device_id: String },
+
+    /// Stop the app and remove the session with the given id.
+    ///
+    /// Dispatched by `services::SessionService` consumers (MCP server).
+    /// Unlike [`Message::CloseCurrentSession`], stopping the last remaining
+    /// session does not convert into a quit request. Unknown ids are ignored
+    /// with a warning.
+    StopSessionById { session_id: SessionId },
+
+    // ─────────────────────────────────────────────────────────
     // Log Control (Task 10)
     // ─────────────────────────────────────────────────────────
     /// Clear logs for current session

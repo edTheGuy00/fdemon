@@ -154,6 +154,10 @@ impl LocalFlutterController for DaemonFlutterController {
 ///
 /// This implementation sends commands directly to the daemon with request ID
 /// tracking and response matching.
+///
+/// Implements the `Send` variant ([`FlutterController`]) so remote consumers
+/// (MCP server) can drive reload/restart from spawned tokio tasks. The
+/// `trait_variant` blanket impl provides [`LocalFlutterController`] for free.
 pub struct CommandSenderController {
     /// Command sender for daemon communication
     sender: CommandSender,
@@ -167,7 +171,7 @@ impl CommandSenderController {
     }
 }
 
-impl LocalFlutterController for CommandSenderController {
+impl FlutterController for CommandSenderController {
     async fn reload(&self) -> Result<ReloadResult> {
         let app_id = self
             .state
@@ -368,6 +372,57 @@ mod tests {
             controller.get_app_id().await,
             Some("test-app-123".to_string())
         );
+    }
+
+    /// Compile-time proof that `CommandSenderController` satisfies the `Send`
+    /// trait variant (required for use from spawned tokio tasks).
+    fn assert_send_controller<T: FlutterController>(_: &T) {}
+
+    #[tokio::test]
+    async fn test_command_sender_controller_usable_from_spawned_task() {
+        let sender = fdemon_daemon::CommandSender::new_for_test();
+        let state = Arc::new(SharedState::new(100));
+        state.app_state.write().await.app_id = Some("app-42".to_string());
+
+        let controller = CommandSenderController::new(sender, state);
+        assert_send_controller(&controller);
+
+        // Both traits are implemented (Local via the trait_variant blanket
+        // impl), so disambiguate via the Send-variant path explicitly.
+        let handle = tokio::spawn(async move {
+            let app_id = FlutterController::get_app_id(&controller).await;
+            let running = FlutterController::is_running(&controller).await;
+            (app_id, running)
+        });
+
+        let (app_id, running) = handle.await.unwrap();
+        assert_eq!(app_id, Some("app-42".to_string()));
+        assert!(!running, "Initializing phase is not running");
+    }
+
+    #[tokio::test]
+    async fn test_command_sender_controller_reload_requires_app_id() {
+        let sender = fdemon_daemon::CommandSender::new_for_test();
+        let state = Arc::new(SharedState::new(100));
+        let controller = CommandSenderController::new(sender, state);
+
+        // No app_id set -- reload must fail instead of hanging on the daemon.
+        let result = FlutterController::reload(&controller).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_command_sender_controller_local_variant_via_blanket_impl() {
+        let sender = fdemon_daemon::CommandSender::new_for_test();
+        let state = Arc::new(SharedState::new(100));
+        state.app_state.write().await.app_id = Some("app-7".to_string());
+
+        let controller = CommandSenderController::new(sender, state);
+
+        // The blanket impl must keep the Local variant usable (Engine's
+        // `flutter_controller()` returns `impl LocalFlutterController`).
+        let app_id = LocalFlutterController::get_app_id(&controller).await;
+        assert_eq!(app_id, Some("app-7".to_string()));
     }
 
     #[tokio::test]

@@ -30,10 +30,14 @@
 //! - [`FlutterController`]: Hot reload/restart operations
 //! - [`LogService`]: Log buffer access and filtering
 //! - [`StateService`]: App state and device queries
+//! - [`SessionService`]: Session listing, start/stop by id, DevTools URLs
+//! - [`ProjectService`]: Project-level operations (`pub get`, `clean`)
 
 pub mod clipboard;
 mod flutter_controller;
 mod log_service;
+mod project_service;
+mod session_service;
 mod state_service;
 
 #[cfg(test)]
@@ -46,6 +50,14 @@ pub use flutter_controller::{
 };
 
 pub use log_service::{LocalLogService, LogFilter, LogService, SharedLogService};
+
+pub use project_service::{
+    CommandOutput, FlutterProjectService, LocalProjectService, ProjectService,
+};
+
+pub use session_service::{
+    LocalSessionService, SessionService, SessionSnapshot, SharedSessionService,
+};
 
 pub use state_service::{
     AppRunState, LocalStateService, ProjectInfo, SharedState, SharedStateService, StateService,

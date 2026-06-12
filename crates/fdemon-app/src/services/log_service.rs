@@ -5,16 +5,23 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Local};
 use tokio::sync::RwLock;
 
 use fdemon_core::{LogEntry, LogLevel};
 
 /// Filter for querying logs
+///
+/// All criteria are conjunctive: an entry must match every populated field.
+/// `source` is compared case-insensitively against [`fdemon_core::LogSource::prefix`]
+/// (e.g. `"app"`, `"daemon"`, `"flutter"`, or a native tag name).
 #[derive(Debug, Clone, Default)]
 pub struct LogFilter {
     pub level: Option<LogLevel>,
     pub source: Option<String>,
     pub pattern: Option<String>,
+    /// Only include entries with `timestamp >= since`.
+    pub since: Option<DateTime<Local>>,
     pub limit: Option<usize>,
 }
 
@@ -47,9 +54,48 @@ impl LogFilter {
         self
     }
 
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    pub fn with_since(mut self, since: DateTime<Local>) -> Self {
+        self.since = Some(since);
+        self
+    }
+
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
+    }
+
+    /// Check whether `log` matches every populated criterion.
+    pub fn matches(&self, log: &LogEntry) -> bool {
+        if let Some(level) = &self.level {
+            if &log.level != level {
+                return false;
+            }
+        }
+
+        if let Some(source) = &self.source {
+            if !log.source.prefix().eq_ignore_ascii_case(source) {
+                return false;
+            }
+        }
+
+        if let Some(pattern) = &self.pattern {
+            if !log.message.contains(pattern.as_str()) {
+                return false;
+            }
+        }
+
+        if let Some(since) = &self.since {
+            if log.timestamp < *since {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -92,23 +138,7 @@ impl LocalLogService for SharedLogService {
 
         let mut result: Vec<LogEntry> = logs
             .iter()
-            .filter(|log| {
-                // Filter by level
-                if let Some(level) = &filter.level {
-                    if &log.level != level {
-                        return false;
-                    }
-                }
-
-                // Filter by pattern
-                if let Some(pattern) = &filter.pattern {
-                    if !log.message.contains(pattern) {
-                        return false;
-                    }
-                }
-
-                true
-            })
+            .filter(|log| filter.matches(log))
             .cloned()
             .collect();
 
@@ -288,6 +318,157 @@ mod tests {
         service.add_log(LogEntry::info(LogSource::App, "2")).await;
 
         assert_eq!(service.log_count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_source_filter_matches_prefix_case_insensitive() {
+        let service = create_test_service(100);
+
+        service
+            .add_log(LogEntry::info(LogSource::App, "from app"))
+            .await;
+        service
+            .add_log(LogEntry::info(LogSource::Daemon, "from daemon"))
+            .await;
+        service
+            .add_log(LogEntry::info(LogSource::Flutter, "from flutter"))
+            .await;
+
+        let filtered = service
+            .get_logs(Some(LogFilter::new().with_source("DAEMON")))
+            .await;
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].message, "from daemon");
+    }
+
+    #[tokio::test]
+    async fn test_source_filter_matches_native_tag() {
+        let service = create_test_service(100);
+
+        service
+            .add_log(LogEntry::info(
+                LogSource::Native {
+                    tag: "ActivityManager".to_string(),
+                },
+                "native line",
+            ))
+            .await;
+        service
+            .add_log(LogEntry::info(LogSource::App, "app line"))
+            .await;
+
+        let filtered = service
+            .get_logs(Some(LogFilter::new().with_source("ActivityManager")))
+            .await;
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].message, "native line");
+    }
+
+    #[tokio::test]
+    async fn test_since_filter_excludes_older_entries() {
+        let service = create_test_service(100);
+
+        let mut old = LogEntry::info(LogSource::App, "old");
+        old.timestamp = chrono::Local::now() - chrono::Duration::seconds(60);
+        service.add_log(old).await;
+        service.add_log(LogEntry::info(LogSource::App, "new")).await;
+
+        let cutoff = chrono::Local::now() - chrono::Duration::seconds(30);
+        let filtered = service
+            .get_logs(Some(LogFilter::new().with_since(cutoff)))
+            .await;
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].message, "new");
+    }
+
+    #[tokio::test]
+    async fn test_since_filter_is_inclusive_of_boundary() {
+        let service = create_test_service(100);
+
+        let entry = LogEntry::info(LogSource::App, "boundary");
+        let exact = entry.timestamp;
+        service.add_log(entry).await;
+
+        let filtered = service
+            .get_logs(Some(LogFilter::new().with_since(exact)))
+            .await;
+        assert_eq!(filtered.len(), 1, "timestamp == since must match");
+    }
+
+    #[tokio::test]
+    async fn test_combined_level_pattern_since_filter() {
+        let service = create_test_service(100);
+
+        let mut old_error = LogEntry::error(LogSource::App, "apple crash");
+        old_error.timestamp = chrono::Local::now() - chrono::Duration::seconds(120);
+        service.add_log(old_error).await;
+        service
+            .add_log(LogEntry::error(LogSource::App, "apple crash again"))
+            .await;
+        service
+            .add_log(LogEntry::error(LogSource::App, "banana crash"))
+            .await;
+        service
+            .add_log(LogEntry::info(LogSource::App, "apple info"))
+            .await;
+
+        let cutoff = chrono::Local::now() - chrono::Duration::seconds(30);
+        let filtered = service
+            .get_logs(Some(
+                LogFilter::new()
+                    .with_level(LogLevel::Error)
+                    .with_pattern("apple")
+                    .with_since(cutoff),
+            ))
+            .await;
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].message, "apple crash again");
+    }
+
+    #[tokio::test]
+    async fn test_combined_level_and_source_filter() {
+        let service = create_test_service(100);
+
+        service
+            .add_log(LogEntry::error(LogSource::App, "app error"))
+            .await;
+        service
+            .add_log(LogEntry::error(LogSource::Daemon, "daemon error"))
+            .await;
+        service
+            .add_log(LogEntry::info(LogSource::Daemon, "daemon info"))
+            .await;
+
+        let filtered = service
+            .get_logs(Some(
+                LogFilter::new()
+                    .with_level(LogLevel::Error)
+                    .with_source("daemon"),
+            ))
+            .await;
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].message, "daemon error");
+    }
+
+    #[tokio::test]
+    async fn test_limit_applies_after_other_filters() {
+        let service = create_test_service(100);
+
+        for i in 0..5 {
+            service
+                .add_log(LogEntry::error(LogSource::App, format!("error {}", i)))
+                .await;
+            service
+                .add_log(LogEntry::info(LogSource::App, format!("info {}", i)))
+                .await;
+        }
+
+        let filtered = service
+            .get_logs(Some(LogFilter::errors().with_limit(2)))
+            .await;
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].message, "error 3");
+        assert_eq!(filtered[1].message, "error 4");
     }
 
     #[tokio::test]
