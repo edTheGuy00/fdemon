@@ -1362,6 +1362,44 @@ pub enum Message {
     },
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Service-layer DevTools monitoring (headless embedders)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Start DevTools telemetry collection for a session without requiring the
+    /// TUI user to enter DevTools mode.
+    ///
+    /// Dispatched by [`crate::services::DevToolsService::start_monitoring`].
+    /// Sets `SessionHandle::devtools_service_monitoring`, spawns the
+    /// performance/network polling tasks if they are not running (the same
+    /// `StartPerformanceMonitoring` / `StartNetworkMonitoring` actions the TUI
+    /// uses), and unpauses already-running tasks. While the flag is set, the
+    /// TUI's pause-on-DevTools-exit paths leave the perf/network polling loops
+    /// running so headless consumers keep receiving samples.
+    ///
+    /// If the VM Service is not yet connected, only the flag is set; the
+    /// `VmServiceConnected` handler then starts monitoring automatically.
+    StartDevToolsMonitoring { session_id: SessionId },
+
+    /// Stop service-level DevTools telemetry collection for a session.
+    ///
+    /// Clears `SessionHandle::devtools_service_monitoring` and pauses the
+    /// perf/network polling loops — unless the TUI user is currently viewing
+    /// that session in DevTools mode, in which case the pause state is left
+    /// for the TUI handlers to manage.
+    StopDevToolsMonitoring { session_id: SessionId },
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Embedder status badge
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Set or clear the generic embedder status badge in the main header.
+    ///
+    /// `Some(badge)` shows the badge near the right edge of the header;
+    /// `None` clears it. Intended for external embedders (e.g. an MCP server
+    /// showing `"MCP 2 clients"`); fdemon itself never sets a badge.
+    SetStatusBadge {
+        badge: Option<crate::state::StatusBadge>,
+    },
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)
     // ─────────────────────────────────────────────────────────────────────────
     /// Open the dart defines editor modal for the launch config at `config_idx`.

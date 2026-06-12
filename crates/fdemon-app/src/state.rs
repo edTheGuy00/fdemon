@@ -1302,6 +1302,50 @@ impl Toast {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Embedder status badge
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Visual category of an embedder [`StatusBadge`].
+///
+/// Controls the accent colour the TUI uses when rendering the badge in the
+/// main header; it carries no semantics beyond presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusBadgeKind {
+    /// Neutral informational badge (muted accent).
+    Info,
+    /// Something is actively running/connected (green accent).
+    Active,
+    /// Something needs attention (yellow accent).
+    Warn,
+}
+
+/// A small, generic status indicator supplied by an external embedder.
+///
+/// Embedders (e.g. an MCP server wrapping the Engine) set this via
+/// [`crate::message::Message::SetStatusBadge`] to surface their own state in
+/// the TUI — for example `"MCP 2 clients"`. fdemon itself never sets a badge;
+/// the slot is intentionally embedder-agnostic. The TUI renders the badge near
+/// the right edge of the main header and renders nothing when the slot is
+/// `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusBadge {
+    /// Short human-readable label (keep it brief — it shares the header row).
+    pub text: String,
+    /// Visual category (controls accent colour).
+    pub kind: StatusBadgeKind,
+}
+
+impl StatusBadge {
+    /// Construct a new badge.
+    pub fn new(text: impl Into<String>, kind: StatusBadgeKind) -> Self {
+        Self {
+            text: text.into(),
+            kind,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -1454,6 +1498,13 @@ pub struct AppState {
     /// `handler/devtools/mod.rs`) via [`AppState::push_toast`].
     /// Expired automatically on each `Tick` via [`AppState::expire_toasts`].
     pub toasts: Vec<Toast>,
+
+    /// Generic embedder status badge shown near the right edge of the main
+    /// header (e.g. `"MCP 2 clients"` from an MCP server embedding the Engine).
+    ///
+    /// Set/cleared by [`crate::message::Message::SetStatusBadge`]; `None`
+    /// (the default) renders nothing and leaves the header layout untouched.
+    pub status_badge: Option<StatusBadge>,
 
     /// Per-frame mouse click-region registry.
     ///
@@ -1610,6 +1661,7 @@ impl AppState {
             install_wizard_state: InstallWizardState::default(),
             startup_notice: None,
             toasts: Vec::new(),
+            status_badge: None,
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
             last_log_click: None,
             last_settings_click: None,

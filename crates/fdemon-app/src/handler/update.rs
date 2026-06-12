@@ -1733,7 +1733,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // process.rs hydrates `StartPerformanceMonitoring.handle` and
             // `ToggleProfileWidgetBuilds.vm_handle` with the VmRequestHandle
             // from the session before dispatch.
-            let perf_action = if state.ui_mode == UiMode::DevTools {
+            //
+            // Service-layer monitoring: when a headless consumer requested
+            // telemetry via `StartDevToolsMonitoring` before the VM connected,
+            // start the polling tasks now even though the TUI is not in
+            // DevTools mode (the `VmServicePerformanceMonitoringStarted`
+            // handler unpauses based on the same flag).
+            let service_monitoring = state
+                .session_manager
+                .get(session_id)
+                .map(|h| h.devtools_service_monitoring)
+                .unwrap_or(false);
+            let perf_action = if state.ui_mode == UiMode::DevTools || service_monitoring {
                 Some(UpdateAction::StartPerformanceMonitoring {
                     session_id,
                     handle: None, // hydrated by process.rs
@@ -1769,6 +1780,27 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let mut extra_actions = Vec::new();
             if let Some(action) = auto_enable_action {
                 extra_actions.push(action);
+            }
+
+            // Service-layer monitoring also needs the network polling task
+            // (the TUI only starts it on Network-panel entry). The network
+            // task was torn down at the top of this arm, so it is never
+            // already running here. Skip when the `ext.dart.io.*` extensions
+            // are known to be unavailable (release mode).
+            if service_monitoring {
+                let network_extensions_unavailable = state
+                    .session_manager
+                    .get(session_id)
+                    .map(|h| h.session.network.extensions_available == Some(false))
+                    .unwrap_or(true);
+                if !network_extensions_unavailable {
+                    extra_actions.push(UpdateAction::StartNetworkMonitoring {
+                        session_id,
+                        handle: None, // hydrated by process.rs
+                        poll_interval_ms: state.settings.devtools.network_poll_interval_ms,
+                        mode,
+                    });
+                }
             }
 
             UpdateResult {
@@ -1851,18 +1883,44 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
 
             // Re-subscribe to VM streams and restart performance monitoring only
-            // when DevTools is already active. If the user is viewing logs, the
-            // monitoring task will be started lazily when they open DevTools.
+            // when DevTools is already active or a service-layer consumer has
+            // requested telemetry (`StartDevToolsMonitoring`). If the user is
+            // viewing logs, the monitoring task will be started lazily when
+            // they open DevTools.
             // `process.rs` will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
-            if state.ui_mode == UiMode::DevTools {
-                UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
+            let service_monitoring = state
+                .session_manager
+                .get(session_id)
+                .map(|h| h.devtools_service_monitoring)
+                .unwrap_or(false);
+            if state.ui_mode == UiMode::DevTools || service_monitoring {
+                let mut actions = vec![UpdateAction::StartPerformanceMonitoring {
                     session_id,
                     handle: None, // hydrated by process.rs
                     performance_refresh_ms,
                     allocation_profile_interval_ms,
                     mode,
-                })
+                }];
+                // The old network polling task was aborted above; restart it
+                // for service-layer consumers (the TUI restarts it on its own
+                // via Network-panel entry).
+                if service_monitoring {
+                    let network_extensions_unavailable = state
+                        .session_manager
+                        .get(session_id)
+                        .map(|h| h.session.network.extensions_available == Some(false))
+                        .unwrap_or(true);
+                    if !network_extensions_unavailable {
+                        actions.push(UpdateAction::StartNetworkMonitoring {
+                            session_id,
+                            handle: None, // hydrated by process.rs
+                            poll_interval_ms: state.settings.devtools.network_poll_interval_ms,
+                            mode,
+                        });
+                    }
+                }
+                UpdateResult::actions_vec(actions)
             } else {
                 UpdateResult::none()
             }
@@ -2130,7 +2188,35 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         }
                     }
                 }
+
+                // Service-layer monitoring (headless embedders): the memory
+                // tick must run regardless of the TUI's UI mode while a
+                // consumer has requested telemetry via StartDevToolsMonitoring.
+                if handle.devtools_service_monitoring {
+                    if let Some(ref tx) = handle.perf_pause_tx {
+                        let _ = tx.send(false);
+                    }
+                }
             }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Service-layer DevTools monitoring (headless embedders)
+        // ─────────────────────────────────────────────────────────
+        Message::StartDevToolsMonitoring { session_id } => {
+            devtools::monitoring::handle_start_devtools_monitoring(state, session_id)
+        }
+
+        Message::StopDevToolsMonitoring { session_id } => {
+            devtools::monitoring::handle_stop_devtools_monitoring(state, session_id)
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Embedder status badge
+        // ─────────────────────────────────────────────────────────
+        Message::SetStatusBadge { badge } => {
+            state.status_badge = badge;
             UpdateResult::none()
         }
 
