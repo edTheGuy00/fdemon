@@ -6,12 +6,14 @@
 //!
 //! Sub-modules:
 //! - `inspector`: Widget tree fetch handlers, inspector navigation, and layout data handlers
+//! - `monitoring`: Service-level start/stop monitoring handlers (headless embedders)
 //! - `performance`: Frame selection, memory sample, and allocation profile handlers
 //! - `scroll_helpers`: Shared chart-scroll helpers used by `performance` and `memory`
 
 pub(crate) mod debug;
 pub mod inspector;
 pub(crate) mod memory;
+pub(crate) mod monitoring;
 pub(crate) mod network;
 pub(crate) mod performance;
 pub(crate) mod scroll_helpers;
@@ -364,9 +366,13 @@ pub fn handle_devtools_escape(state: &mut AppState) -> UpdateResult {
 pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
     // Pause the entire performance polling loop (memory + alloc).
     // This eliminates all getMemoryUsage/getIsolate RPCs while viewing logs.
+    // Skipped while a service-layer consumer (`StartDevToolsMonitoring`) needs
+    // the memory samples to keep flowing.
     if let Some(handle) = state.session_manager.selected() {
-        if let Some(ref tx) = handle.perf_pause_tx {
-            let _ = tx.send(true); // pause
+        if !handle.devtools_service_monitoring {
+            if let Some(ref tx) = handle.perf_pause_tx {
+                let _ = tx.send(true); // pause
+            }
         }
     }
 
@@ -380,9 +386,12 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
 
     // Pause network monitoring (if running): the user is leaving DevTools, so
     // no getHttpProfile RPCs should fire while they are viewing logs.
+    // Skipped while a service-layer consumer needs HTTP profile entries.
     if let Some(handle) = state.session_manager.selected() {
-        if let Some(ref tx) = handle.network_pause_tx {
-            let _ = tx.send(true); // pause
+        if !handle.devtools_service_monitoring {
+            if let Some(ref tx) = handle.network_pause_tx {
+                let _ = tx.send(true); // pause
+            }
         }
     }
 
@@ -486,10 +495,13 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
 
     // Before switching, check if we are leaving the Network panel — if so,
     // pause network polling so no getHttpProfile RPCs fire while on other panels.
+    // Skipped while a service-layer consumer needs HTTP profile entries.
     if old_panel == DevToolsPanel::Network && panel != DevToolsPanel::Network {
         if let Some(handle) = state.session_manager.selected() {
-            if let Some(ref tx) = handle.network_pause_tx {
-                let _ = tx.send(true); // pause network polling
+            if !handle.devtools_service_monitoring {
+                if let Some(ref tx) = handle.network_pause_tx {
+                    let _ = tx.send(true); // pause network polling
+                }
             }
         }
     }
@@ -1472,6 +1484,66 @@ mod tests {
         assert!(
             *perf_rx.borrow(),
             "exiting DevTools should pause performance monitoring (send true on perf_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_keeps_perf_running_when_service_monitoring() {
+        // While a service-layer consumer holds devtools_service_monitoring,
+        // exiting DevTools must NOT pause the performance polling loop.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            handle.devtools_service_monitoring = true;
+            handle.perf_pause_tx.as_ref().unwrap().send(false).unwrap();
+        }
+        assert!(!*perf_rx.borrow(), "precondition: perf should be unpaused");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            !*perf_rx.borrow(),
+            "exit must not pause perf polling while service monitoring is active"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_keeps_network_running_when_service_monitoring() {
+        // Same guard for the network polling loop.
+        let mut state = make_state_with_session();
+        let (net_tx, net_rx) = tokio::sync::watch::channel(false);
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            handle.devtools_service_monitoring = true;
+            handle.network_pause_tx = Some(std::sync::Arc::new(net_tx));
+        }
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            !*net_rx.borrow(),
+            "exit must not pause network polling while service monitoring is active"
+        );
+    }
+
+    #[test]
+    fn test_leave_network_panel_keeps_polling_when_service_monitoring() {
+        // Switching away from the Network panel must not pause network polling
+        // while a service-layer consumer needs HTTP profile entries.
+        let mut state = make_state_with_session();
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        let (net_tx, net_rx) = tokio::sync::watch::channel(false);
+        {
+            let handle = state.session_manager.selected_mut().unwrap();
+            handle.devtools_service_monitoring = true;
+            handle.network_pause_tx = Some(std::sync::Arc::new(net_tx));
+        }
+
+        handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        assert!(
+            !*net_rx.borrow(),
+            "leaving the Network panel must not pause polling while service monitoring is active"
         );
     }
 

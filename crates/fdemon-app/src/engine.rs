@@ -20,8 +20,11 @@ use crate::handler::UpdateAction;
 use crate::message::Message;
 use crate::process;
 use crate::services::{
-    CommandSenderController, FlutterProjectService, LocalFlutterController, ProjectInfo,
-    SessionSnapshot, SharedLogService, SharedSessionService, SharedState, SharedStateService,
+    CommandSenderController, DevToolsSessionSnapshot, FlutterProjectService,
+    LocalFlutterController, ProjectInfo, SessionSnapshot, SharedDevToolsService, SharedLogService,
+    SharedSessionService, SharedState, SharedStateService, WidgetTreeSnapshot,
+    DEVTOOLS_SNAPSHOT_MAX_FRAMES, DEVTOOLS_SNAPSHOT_MAX_MEMORY_SAMPLES,
+    DEVTOOLS_SNAPSHOT_MAX_NETWORK_ENTRIES,
 };
 use crate::session::SessionId;
 use crate::signals;
@@ -477,6 +480,89 @@ impl Engine {
                 .collect();
         }
 
+        // Sync per-session DevTools telemetry snapshots for the
+        // DevToolsService consumers. Telemetry vectors are tail-capped by the
+        // DEVTOOLS_SNAPSHOT_MAX_* constants to bound the per-cycle clone cost.
+        if let Ok(mut devtools) = self.shared_state.devtools.try_write() {
+            *devtools = self
+                .state
+                .session_manager
+                .iter()
+                .map(|handle| {
+                    let session = &handle.session;
+                    let frames = &session.performance.frame_history;
+                    let samples = &session.memory.memory_samples;
+                    let requests = &session.network.entries;
+                    DevToolsSessionSnapshot {
+                        session_id: session.id,
+                        vm_connected: session.vm_connected,
+                        perf_monitoring_active: session.performance.monitoring_active,
+                        network_monitoring_active: handle.network_shutdown_tx.is_some(),
+                        network_extensions_available: session.network.extensions_available,
+                        stats: session.performance.stats.clone(),
+                        recent_frames: frames
+                            .iter()
+                            .skip(frames.len().saturating_sub(DEVTOOLS_SNAPSHOT_MAX_FRAMES))
+                            .cloned()
+                            .collect(),
+                        memory_samples: samples
+                            .iter()
+                            .skip(
+                                samples
+                                    .len()
+                                    .saturating_sub(DEVTOOLS_SNAPSHOT_MAX_MEMORY_SAMPLES),
+                            )
+                            .cloned()
+                            .collect(),
+                        network_requests: requests
+                            .iter()
+                            .skip(
+                                requests
+                                    .len()
+                                    .saturating_sub(DEVTOOLS_SNAPSHOT_MAX_NETWORK_ENTRIES),
+                            )
+                            .cloned()
+                            .collect(),
+                    }
+                })
+                .collect();
+        }
+
+        // Sync the cached widget tree for the selected session. The tree can
+        // be large, so it is deep-cloned into an Arc only when the inspector
+        // fetch state changed (fetch started/completed or session switched);
+        // in the steady state this is a cheap field comparison.
+        if let Ok(mut slot) = self.shared_state.widget_tree.try_write() {
+            match self.state.session_manager.selected() {
+                Some(handle) => {
+                    let inspector = &self.state.devtools_view_state.inspector;
+                    let session_id = handle.session.id;
+                    let changed = match slot.as_ref() {
+                        Some(s) => {
+                            s.session_id != session_id
+                                || s.fetched_at != inspector.last_fetch_time
+                                || s.loading != inspector.loading
+                        }
+                        None => true,
+                    };
+                    if changed {
+                        *slot = Some(WidgetTreeSnapshot {
+                            session_id,
+                            fetched_at: inspector.last_fetch_time,
+                            loading: inspector.loading,
+                            error: inspector.error.as_ref().map(|e| e.message.clone()),
+                            root: inspector.root.as_ref().map(|r| Arc::new(r.clone())),
+                        });
+                    }
+                }
+                None => {
+                    if slot.is_some() {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+
         // Sync the device cache so StateService::get_devices works for
         // service consumers.
         if let Some(devices) = self.state.get_cached_devices() {
@@ -632,6 +718,15 @@ impl Engine {
     /// operations are dispatched through the Engine's message channel.
     pub fn session_service(&self) -> SharedSessionService {
         SharedSessionService::new(self.shared_state.clone(), self.msg_tx.clone())
+    }
+
+    /// Get a DevTools telemetry service (frames, memory, network, widget tree,
+    /// headless monitoring control).
+    ///
+    /// `Send + 'static`: reads come from SharedState snapshots, control
+    /// operations are dispatched through the Engine's message channel.
+    pub fn devtools_service(&self) -> SharedDevToolsService {
+        SharedDevToolsService::new(self.shared_state.clone(), self.msg_tx.clone())
     }
 
     /// Get a project operations service (`flutter pub get` / `flutter clean`).
@@ -1823,5 +1918,121 @@ mod tests {
         assert_eq!(config.paths, vec![PathBuf::from("lib")]);
         assert_eq!(config.extensions, vec!["dart".to_string()]);
         assert!(config.auto_reload);
+    }
+
+    // ── DevTools telemetry sync (DevToolsService) ─────────────────────────────
+
+    fn devtools_test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "emulator-5554".to_string(),
+            name: "Pixel 6".to_string(),
+            platform: "android".to_string(),
+            emulator: true,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+            is_supported: true,
+            capabilities: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_populates_devtools_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&devtools_test_device())
+            .unwrap();
+        {
+            let handle = engine.state.session_manager.get_mut(session_id).unwrap();
+            handle.session.vm_connected = true;
+            handle.session.performance.monitoring_active = true;
+            for i in 1..=5u64 {
+                handle.session.performance.frame_history.push(
+                    fdemon_core::performance::FrameTiming {
+                        number: i,
+                        build_micros: 5_000,
+                        raster_micros: 5_000,
+                        elapsed_micros: 10_000,
+                        timestamp: chrono::Local::now(),
+                        phases: None,
+                        shader_compilation: false,
+                    },
+                );
+            }
+        }
+
+        // flush_pending_logs runs the non-blocking SharedState sync.
+        engine.flush_pending_logs();
+
+        let snapshots = engine.shared_state().devtools.read().await.clone();
+        assert_eq!(snapshots.len(), 1);
+        let snap = &snapshots[0];
+        assert_eq!(snap.session_id, session_id);
+        assert!(snap.vm_connected);
+        assert!(snap.perf_monitoring_active);
+        assert!(!snap.network_monitoring_active);
+        assert_eq!(snap.recent_frames.len(), 5);
+        assert_eq!(snap.recent_frames[0].number, 1);
+        assert!(snap.memory_samples.is_empty());
+        assert!(snap.network_requests.is_empty());
+
+        // The service accessor reads the same data.
+        use crate::services::DevToolsService;
+        let service = engine.devtools_service();
+        let perf = service.performance_frames(session_id).await.unwrap();
+        assert_eq!(perf.frames.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_sync_widget_tree_only_clones_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&devtools_test_device())
+            .unwrap();
+
+        // Simulate a completed inspector fetch for the selected session.
+        engine.state.devtools_view_state.inspector.root = Some(fdemon_core::DiagnosticsNode {
+            description: "RootWidget".to_string(),
+            ..Default::default()
+        });
+        engine.state.devtools_view_state.inspector.loading = false;
+        engine.state.devtools_view_state.inspector.last_fetch_time =
+            Some(std::time::Instant::now());
+
+        engine.flush_pending_logs();
+
+        let slot = engine.shared_state().widget_tree.read().await.clone();
+        let snap = slot.expect("widget tree must be synced for the selected session");
+        assert_eq!(snap.session_id, session_id);
+        let first_root = snap.root.clone().expect("root must be present");
+        assert_eq!(first_root.description, "RootWidget");
+
+        // A second sync with unchanged fetch state must reuse the same Arc
+        // (no deep clone in the steady state).
+        engine.flush_pending_logs();
+        let slot2 = engine.shared_state().widget_tree.read().await.clone();
+        let second_root = slot2.unwrap().root.unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first_root, &second_root),
+            "unchanged inspector state must not re-clone the tree"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sync_widget_tree_cleared_without_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+
+        engine.flush_pending_logs();
+        assert!(engine.shared_state().widget_tree.read().await.is_none());
     }
 }

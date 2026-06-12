@@ -215,6 +215,21 @@ pub struct SessionHandle {
     /// for the session's lifetime.
     pub rebuilt_widgets_gate_tx: Option<Arc<tokio::sync::watch::Sender<bool>>>,
 
+    /// Whether a service-layer consumer (e.g. an MCP server embedding the
+    /// Engine) has requested continuous DevTools telemetry for this session.
+    ///
+    /// Set by `Message::StartDevToolsMonitoring`, cleared by
+    /// `Message::StopDevToolsMonitoring`. While `true`:
+    /// - The TUI's pause-on-DevTools-exit paths skip pausing the performance
+    ///   and network polling loops, so headless consumers keep receiving
+    ///   memory samples and HTTP profile entries.
+    /// - `VmServiceConnected` starts performance/network monitoring even when
+    ///   the TUI is not in DevTools mode.
+    ///
+    /// Survives VM reconnects (it lives on the handle, not the session
+    /// telemetry state, which is reset on reconnect).
+    pub devtools_service_monitoring: bool,
+
     /// Per-session native log tag discovery and visibility state.
     ///
     /// Tracks every distinct tag seen in this session's native log stream
@@ -265,6 +280,10 @@ impl std::fmt::Debug for SessionHandle {
                 "has_rebuilt_widgets_gate",
                 &self.rebuilt_widgets_gate_tx.is_some(),
             )
+            .field(
+                "devtools_service_monitoring",
+                &self.devtools_service_monitoring,
+            )
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
@@ -296,6 +315,7 @@ impl SessionHandle {
             timeline_pause_tx: None,
             timeline_task_handle: None,
             rebuilt_widgets_gate_tx: None,
+            devtools_service_monitoring: false,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
         }

@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use fdemon_app::session_manager::SessionManager;
-use fdemon_app::{Message, MouseAction, MouseRect};
+use fdemon_app::{Message, MouseAction, MouseRect, StatusBadge, StatusBadgeKind};
 
 use crate::theme::{branding, icons::IconSet, palette, styles};
 use crate::widgets::MouseCtx;
@@ -41,6 +41,10 @@ pub struct MainHeader<'a> {
     /// `0.0` = no tint (steady state); `1.0` = peak blend at completion.
     /// Set via `.reload_flash(..)` builder.
     reload_flash: f32,
+    /// Optional embedder status badge rendered at the right edge of the title
+    /// row (e.g. `"MCP 2 clients"`). Set via `.status_badge(..)` builder;
+    /// `None` (the default) renders nothing and changes no layout.
+    status_badge: Option<&'a StatusBadge>,
 }
 
 impl<'a> MainHeader<'a> {
@@ -50,12 +54,20 @@ impl<'a> MainHeader<'a> {
             session_manager: None,
             icons,
             reload_flash: 0.0,
+            status_badge: None,
         }
     }
 
     /// Add session manager to render tabs inside the header
     pub fn with_sessions(mut self, session_manager: &'a SessionManager) -> Self {
         self.session_manager = Some(session_manager);
+        self
+    }
+
+    /// Show a generic embedder status badge near the right edge of the title
+    /// row. `None` leaves the header exactly as it renders without a badge.
+    pub fn status_badge(mut self, badge: Option<&'a StatusBadge>) -> Self {
+        self.status_badge = badge;
         self
     }
 
@@ -351,9 +363,33 @@ impl MainHeader<'_> {
             .map(|l| l.width() as u16)
             .unwrap_or(0);
 
+        // Build embedder status badge (rightmost section), if set.
+        let badge_content = self.status_badge.map(|badge| {
+            let color = match badge.kind {
+                StatusBadgeKind::Info => palette::ACCENT,
+                StatusBadgeKind::Active => palette::STATUS_GREEN,
+                StatusBadgeKind::Warn => palette::STATUS_YELLOW,
+            };
+            Line::from(vec![
+                Span::styled(self.icons.circle(), Style::default().fg(color)),
+                Span::raw(" "),
+                Span::styled(badge.text.clone(), Style::default().fg(color)),
+                Span::raw(" "),
+            ])
+        });
+        let badge_width = badge_content
+            .as_ref()
+            .map(|l| l.width() as u16)
+            .unwrap_or(0);
+        // The badge claims the rightmost cells of the row; sections that were
+        // previously right-aligned (the device pill) anchor against `badge_x`
+        // instead of the area edge. With no badge, `badge_x` equals the right
+        // edge, so the layout is byte-for-byte identical to before.
+        let badge_x = (area.x + area.width).saturating_sub(badge_width);
+
         // Calculate available space and positioning
         let total_content_width =
-            left_width + shortcuts_width + device_width + HEADER_SECTION_PADDING;
+            left_width + shortcuts_width + device_width + badge_width + HEADER_SECTION_PADDING;
 
         if total_content_width <= area.width {
             // Everything fits: left | center | right layout
@@ -371,19 +407,19 @@ impl MainHeader<'_> {
                 }
             }
 
-            // Right-align device pill
+            // Right-align device pill (left of the badge when one is set)
             if let Some(device_line) = device_content {
-                let device_x = area.x + area.width - device_width;
+                let device_x = badge_x.saturating_sub(device_width);
                 if device_x >= area.x + left_width + shortcuts_width + HEADER_SECTION_PADDING {
                     buf.set_line(device_x, area.y, &device_line, device_width);
                 }
             }
-        } else if left_width + device_width + 2 <= area.width {
+        } else if left_width + device_width + badge_width + 2 <= area.width {
             // Shortcuts don't fit, but left + device does — no region registration.
             buf.set_line(area.x, area.y, &left_line, area.width);
 
             if let Some(device_line) = device_content {
-                let device_x = area.x + area.width - device_width;
+                let device_x = badge_x.saturating_sub(device_width);
                 if device_x >= area.x + left_width + 2 {
                     buf.set_line(device_x, area.y, &device_line, device_width);
                 }
@@ -391,6 +427,14 @@ impl MainHeader<'_> {
         } else {
             // Only left section fits — no region registration.
             buf.set_line(area.x, area.y, &left_line, area.width);
+        }
+
+        // Paint the badge last so it can never be overdrawn by the sections
+        // above; skipped when it would collide with the left section.
+        if let Some(badge_line) = badge_content {
+            if badge_x > area.x + left_width {
+                buf.set_line(badge_x, area.y, &badge_line, badge_width);
+            }
         }
     }
 }
@@ -872,6 +916,147 @@ mod tests {
         } else {
             panic!("expected Rgb color, got {bg:?}");
         }
+    }
+
+    // ── Embedder status badge tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_header_renders_status_badge_text() {
+        let mut term = TestTerminal::with_size(120, 5);
+        let icons = IconSet::new(IconMode::Unicode);
+        let badge = StatusBadge::new("MCP 2 clients", StatusBadgeKind::Active);
+        let header = MainHeader::new(Some("test_app"), icons).status_badge(Some(&badge));
+
+        term.render_widget(header, term.area());
+
+        assert!(
+            term.buffer_contains("MCP 2 clients"),
+            "Header should render the embedder status badge text"
+        );
+        // Existing sections must still render alongside the badge.
+        assert!(term.buffer_contains("test_app"), "project name still shown");
+        assert!(term.buffer_contains("[r] Run"), "shortcuts still shown");
+    }
+
+    #[test]
+    fn test_header_without_badge_renders_nothing_extra() {
+        let mut term = TestTerminal::with_size(120, 5);
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("test_app"), icons).status_badge(None);
+
+        term.render_widget(header, term.area());
+
+        assert!(
+            !term.buffer_contains("MCP"),
+            "No badge text should appear when the badge slot is None"
+        );
+        assert!(term.buffer_contains("test_app"));
+        assert!(term.buffer_contains("[r] Run"));
+    }
+
+    #[test]
+    fn test_header_badge_layout_identical_when_unset() {
+        // Rendering with `.status_badge(None)` must produce exactly the same
+        // buffer as not calling the builder at all.
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 120, 5);
+        let icons = IconSet::new(IconMode::Unicode);
+
+        let mut buf_plain = Buffer::empty(area);
+        let header_plain = MainHeader::new(Some("app"), icons);
+        render_main_header(area, &mut buf_plain, &header_plain, None);
+
+        let mut buf_none = Buffer::empty(area);
+        let header_none = MainHeader::new(Some("app"), icons).status_badge(None);
+        render_main_header(area, &mut buf_none, &header_none, None);
+
+        assert_eq!(
+            buf_plain, buf_none,
+            "status_badge(None) must not disturb the existing layout"
+        );
+    }
+
+    #[test]
+    fn test_header_badge_renders_in_multi_session_mode() {
+        let mut term = TestTerminal::with_size(120, 5);
+        let mut session_manager = SessionManager::new();
+        session_manager
+            .create_session(&test_device_with_platform("d1", "iPhone 15", "ios"))
+            .unwrap();
+        session_manager
+            .create_session(&test_device_with_platform("d2", "Pixel 7", "android"))
+            .unwrap();
+
+        let icons = IconSet::new(IconMode::Unicode);
+        let badge = StatusBadge::new("MCP 2 clients", StatusBadgeKind::Info);
+        let header = MainHeader::new(Some("test_app"), icons)
+            .with_sessions(&session_manager)
+            .status_badge(Some(&badge));
+
+        term.render_widget(header, term.area());
+
+        assert!(
+            term.buffer_contains("MCP 2 clients"),
+            "badge should render on the title row in multi-session mode"
+        );
+        assert!(term.buffer_contains("iPhone 15"), "tabs still render");
+    }
+
+    #[test]
+    fn test_header_badge_kind_controls_color() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        // Render a badge and find the foreground color of its first text cell.
+        fn badge_text_fg(kind: StatusBadgeKind) -> ratatui::style::Color {
+            let area = Rect::new(0, 0, 120, 5);
+            let mut buf = Buffer::empty(area);
+            let icons = IconSet::new(IconMode::Unicode);
+            let badge = StatusBadge::new("BADGE", kind);
+            let header = MainHeader::new(Some("app"), icons).status_badge(Some(&badge));
+            render_main_header(area, &mut buf, &header, None);
+
+            // Title row is y=1 (inside the border). Find the 'B' of "BADGE"
+            // near the right edge.
+            let row = 1u16;
+            for x in (0..area.width).rev() {
+                if buf[(x, row)].symbol() == "B" {
+                    return buf[(x, row)]
+                        .style()
+                        .fg
+                        .unwrap_or(ratatui::style::Color::Reset);
+                }
+            }
+            panic!("badge text not found in buffer");
+        }
+
+        assert_eq!(badge_text_fg(StatusBadgeKind::Info), palette::ACCENT);
+        assert_eq!(
+            badge_text_fg(StatusBadgeKind::Active),
+            palette::STATUS_GREEN
+        );
+        assert_eq!(badge_text_fg(StatusBadgeKind::Warn), palette::STATUS_YELLOW);
+    }
+
+    #[test]
+    fn test_header_badge_skipped_when_no_room() {
+        // At a very narrow width, the badge would collide with the left
+        // section and must be skipped without panicking.
+        let mut term = TestTerminal::with_size(30, 5);
+        let icons = IconSet::new(IconMode::Unicode);
+        let badge = StatusBadge::new("MCP 2 clients", StatusBadgeKind::Warn);
+        let header = MainHeader::new(Some("a_long_project_name"), icons).status_badge(Some(&badge));
+
+        term.render_widget(header, term.area());
+
+        // Should render without panic; the title is still present.
+        assert!(
+            term.buffer_contains(crate::theme::branding::APP_TITLE)
+                || term.buffer_contains("Flutter"),
+            "left section should still render at narrow widths"
+        );
     }
 
     // ── Multi-session separator tests (Phase 7, Task 01) ─────────────────────

@@ -13710,3 +13710,63 @@ mod fetch_trigger_tests {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Embedder status badge (SetStatusBadge)
+// ─────────────────────────────────────────────────────────────────────────────
+
+mod status_badge_tests {
+    use super::*;
+    use crate::state::{StatusBadge, StatusBadgeKind};
+
+    #[test]
+    fn test_status_badge_defaults_to_none() {
+        let state = AppState::new();
+        assert!(state.status_badge.is_none(), "no badge by default");
+    }
+
+    #[test]
+    fn test_set_status_badge_stores_badge() {
+        let mut state = AppState::new();
+
+        let result = update(
+            &mut state,
+            Message::SetStatusBadge {
+                badge: Some(StatusBadge::new("MCP 2 clients", StatusBadgeKind::Active)),
+            },
+        );
+
+        assert!(result.action.is_none(), "SetStatusBadge has no side effect");
+        assert!(result.message.is_none());
+        let badge = state.status_badge.as_ref().expect("badge must be stored");
+        assert_eq!(badge.text, "MCP 2 clients");
+        assert_eq!(badge.kind, StatusBadgeKind::Active);
+    }
+
+    #[test]
+    fn test_set_status_badge_replaces_existing_badge() {
+        let mut state = AppState::new();
+        state.status_badge = Some(StatusBadge::new("MCP 1 client", StatusBadgeKind::Info));
+
+        update(
+            &mut state,
+            Message::SetStatusBadge {
+                badge: Some(StatusBadge::new("MCP 3 clients", StatusBadgeKind::Warn)),
+            },
+        );
+
+        let badge = state.status_badge.as_ref().unwrap();
+        assert_eq!(badge.text, "MCP 3 clients");
+        assert_eq!(badge.kind, StatusBadgeKind::Warn);
+    }
+
+    #[test]
+    fn test_set_status_badge_none_clears_badge() {
+        let mut state = AppState::new();
+        state.status_badge = Some(StatusBadge::new("MCP 2 clients", StatusBadgeKind::Active));
+
+        update(&mut state, Message::SetStatusBadge { badge: None });
+
+        assert!(state.status_badge.is_none(), "badge must be cleared");
+    }
+}

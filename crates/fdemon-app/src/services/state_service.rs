@@ -8,6 +8,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Local};
 use tokio::sync::{broadcast, RwLock};
 
+use super::devtools_service::{DevToolsSessionSnapshot, WidgetTreeSnapshot};
 use super::session_service::SessionSnapshot;
 use fdemon_core::{AppPhase, DaemonMessage, DeviceInfo, LogEntry};
 
@@ -82,6 +83,14 @@ pub struct SharedState {
     /// Snapshots of all active sessions (synced from the SessionManager)
     pub sessions: Arc<RwLock<Vec<SessionSnapshot>>>,
 
+    /// Per-session DevTools telemetry snapshots (frames, memory, network),
+    /// synced from the per-session ring buffers each TEA cycle.
+    pub devtools: Arc<RwLock<Vec<DevToolsSessionSnapshot>>>,
+
+    /// Cached widget tree for the currently selected session, synced from the
+    /// inspector view-state. `None` when no session is selected.
+    pub widget_tree: Arc<RwLock<Option<WidgetTreeSnapshot>>>,
+
     /// Event broadcaster for multiple subscribers
     pub event_tx: broadcast::Sender<DaemonMessage>,
 
@@ -98,6 +107,8 @@ impl SharedState {
             logs: Arc::new(RwLock::new(Vec::new())),
             devices: Arc::new(RwLock::new(Vec::new())),
             sessions: Arc::new(RwLock::new(Vec::new())),
+            devtools: Arc::new(RwLock::new(Vec::new())),
+            widget_tree: Arc::new(RwLock::new(None)),
             event_tx,
             max_logs,
         }

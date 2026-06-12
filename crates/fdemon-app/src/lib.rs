@@ -46,6 +46,8 @@
 //! - [`services::LogService`] - Log buffer access
 //! - [`services::StateService`] - App state access
 //! - [`services::SessionService`] - Session listing, start/stop by id, DevTools URLs
+//! - [`services::DevToolsService`] - Per-session DevTools telemetry (frames,
+//!   memory, network, widget tree) and headless monitoring control
 //! - [`services::ProjectService`] - Project operations (`pub get`, `clean`)
 //!
 //! ### Configuration
@@ -97,8 +99,8 @@ pub use plugin::EnginePlugin;
 pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
 pub use state::{
-    AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, TagFilterUiState,
-    ToastLevel,
+    AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, StatusBadge,
+    StatusBadgeKind, TagFilterUiState, ToastLevel,
 };
 
 // Re-export action types used by TUI for startup

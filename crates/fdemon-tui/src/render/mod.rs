@@ -242,7 +242,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         .unwrap_or(0.0);
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
         .with_sessions(&state.session_manager)
-        .reload_flash(reload_flash);
+        .reload_flash(reload_flash)
+        .status_badge(state.status_badge.as_ref());
     let header_ctx: Option<&mut MouseCtx<'_>> = if in_modal { None } else { Some(&mut mouse_ctx) };
     widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, header_ctx);
 

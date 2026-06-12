@@ -31,9 +31,12 @@
 //! - [`LogService`]: Log buffer access and filtering
 //! - [`StateService`]: App state and device queries
 //! - [`SessionService`]: Session listing, start/stop by id, DevTools URLs
+//! - [`DevToolsService`]: Per-session DevTools telemetry (frames, memory,
+//!   network, widget tree) and headless monitoring control
 //! - [`ProjectService`]: Project-level operations (`pub get`, `clean`)
 
 pub mod clipboard;
+mod devtools_service;
 mod flutter_controller;
 mod log_service;
 mod project_service;
@@ -43,6 +46,12 @@ mod state_service;
 #[cfg(test)]
 pub use clipboard::MemoryClipboard;
 pub use clipboard::{create_clipboard, Clipboard, ClipboardInit, NullClipboard, SystemClipboard};
+
+pub use devtools_service::{
+    DevToolsService, DevToolsSessionSnapshot, LocalDevToolsService, PerformanceFramesSnapshot,
+    SharedDevToolsService, WidgetTreeSnapshot, DEVTOOLS_SNAPSHOT_MAX_FRAMES,
+    DEVTOOLS_SNAPSHOT_MAX_MEMORY_SAMPLES, DEVTOOLS_SNAPSHOT_MAX_NETWORK_ENTRIES,
+};
 
 pub use flutter_controller::{
     CommandSenderController, DaemonFlutterController, FlutterCommand, FlutterController,
