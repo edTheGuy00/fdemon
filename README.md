@@ -32,10 +32,12 @@
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash
+curl -fsSL https://fdemon.dev/install.sh | bash
 ```
 
 This downloads the latest release binary for your platform and installs it to `$HOME/.local/bin`.
+
+> The script is also available at `https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh` if you prefer fetching it straight from the repository.
 
 See the [installation guide](https://fdemon.dev/docs/installation) for version-specific installs, custom directories, Windows, and building from source.
 

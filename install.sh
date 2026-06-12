@@ -2,8 +2,8 @@
 # install.sh — Install or update the fdemon binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash -s -- --version 0.2.0
+#   curl -fsSL https://fdemon.dev/install.sh | bash
+#   curl -fsSL https://fdemon.dev/install.sh | bash -s -- --version 0.2.0
 #   FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL ... | bash
 #
 # Options:
@@ -20,7 +20,9 @@ REPO="edTheGuy00/fdemon"
 BINARY_NAME="fdemon"
 DEFAULT_INSTALL_DIR="${FDEMON_INSTALL_DIR:-$HOME/.local/bin}"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
+GITHUB_LATEST="https://github.com/${REPO}/releases/latest"
 GITHUB_RELEASES="https://github.com/${REPO}/releases/download"
+USER_AGENT="fdemon-install (+https://github.com/${REPO})"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,13 +44,13 @@ ENVIRONMENT:
 
 EXAMPLES:
     # Install the latest release
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
+    curl -fsSL https://fdemon.dev/install.sh | bash
 
     # Install a specific version
-    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --version 0.2.0
+    curl -fsSL https://fdemon.dev/install.sh | bash -s -- --version 0.2.0
 
     # Install to a custom directory
-    FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
+    FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL https://fdemon.dev/install.sh | bash
 EOF
 }
 
@@ -126,13 +128,46 @@ require_cmd() {
 }
 
 # ---------------------------------------------------------------------------
-# GitHub API — resolve latest version
+# Resolve latest version
 # ---------------------------------------------------------------------------
 
-get_latest_version() {
-    curl -fsSL "$GITHUB_API" \
+# Primary: follow the github.com releases/latest redirect.
+#
+# https://github.com/<repo>/releases/latest answers with a 302 whose final
+# location is .../releases/tag/vX.Y.Z. Unlike api.github.com (60 requests/hour
+# per IP for unauthenticated callers), this endpoint is NOT subject to the
+# REST API rate limit — shared-NAT/VPN/mobile users were hitting 403s there
+# (see https://github.com/edTheGuy00/fdemon/issues/41).
+get_latest_version_redirect() {
+    local final_url
+    final_url="$(curl -fsSLI -A "$USER_AGENT" --retry 2 --retry-delay 1 \
+        -o /dev/null -w '%{url_effective}' "$GITHUB_LATEST" 2>/dev/null)" || return 1
+    case "$final_url" in
+        */releases/tag/v*)
+            printf '%s' "${final_url##*/releases/tag/v}"
+            ;;
+        *)
+            # No redirect happened (e.g. no releases yet) — treat as failure.
+            return 1
+            ;;
+    esac
+}
+
+# Fallback: GitHub REST API (rate-limited; kept for resilience if the
+# redirect behavior ever changes).
+get_latest_version_api() {
+    curl -fsSL -A "$USER_AGENT" --retry 2 --retry-delay 1 "$GITHUB_API" 2>/dev/null \
         | grep '"tag_name"' \
         | sed -E 's/.*"v([^"]+)".*/\1/'
+}
+
+get_latest_version() {
+    local version
+    version="$(get_latest_version_redirect)" || version=""
+    if [ -z "$version" ]; then
+        version="$(get_latest_version_api)" || version=""
+    fi
+    printf '%s' "$version"
 }
 
 # ---------------------------------------------------------------------------
@@ -203,7 +238,10 @@ main() {
         info "Resolving latest version from GitHub..."
         version="$(get_latest_version)"
         if [ -z "$version" ]; then
-            error "Failed to resolve latest version from GitHub API. Use --version to specify a version explicitly."
+            warn "Could not resolve the latest version. Both lookups failed:"
+            warn "  1. ${GITHUB_LATEST} (redirect)"
+            warn "  2. ${GITHUB_API} (REST API — rate-limited to 60 req/hr per IP)"
+            error "Failed to resolve latest version. Pass one explicitly, e.g. --version 0.5.0 — available versions: https://github.com/${REPO}/releases"
         fi
         info "Latest version: ${version}"
     fi
@@ -234,7 +272,7 @@ main() {
     local archive_path="${TMPDIR_WORK}/${archive_name}"
 
     # Download archive
-    if ! curl -fsSL --output "$archive_path" "$url"; then
+    if ! curl -fsSL -A "$USER_AGENT" --retry 2 --retry-delay 1 --output "$archive_path" "$url"; then
         error "Download failed. Check that version ${version} exists for target ${target}: https://github.com/${REPO}/releases"
     fi
 

@@ -24,7 +24,7 @@ pub fn Installation() -> impl IntoView {
                     <p>"This downloads the latest release binary for your platform and installs it to "
                     <code class="text-green-300">"$HOME/.local/bin"</code>"."</p>
                 </div>
-                <CodeBlock code="curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash" />
+                <CodeBlock code="curl -fsSL https://fdemon.dev/install.sh | bash" />
             </Section>
 
             // ── Specifying a Version ──────────────────────────────────
@@ -35,7 +35,7 @@ pub fn Installation() -> impl IntoView {
                 </p>
                 {
                     let install_cmd = format!(
-                        "curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash -s -- --version {}",
+                        "curl -fsSL https://fdemon.dev/install.sh | bash -s -- --version {}",
                         FDEMON_VERSION
                     );
                     view! { <CodeBlock code=install_cmd /> }
@@ -48,7 +48,7 @@ pub fn Installation() -> impl IntoView {
                     "Set the "<code class="text-blue-400">"FDEMON_INSTALL_DIR"</code>
                     " environment variable to install to a different directory:"
                 </p>
-                <CodeBlock code="FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash" />
+                <CodeBlock code="FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL https://fdemon.dev/install.sh | bash" />
             </Section>
 
             // ── Supported Platforms ───────────────────────────────────

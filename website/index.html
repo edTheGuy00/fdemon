@@ -1,69 +1,162 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Flutter Demon — Terminal UI for Flutter</title>
 
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Flutter Demon — Terminal UI for Flutter</title>
+        <!-- Primary meta -->
+        <meta
+            name="description"
+            content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust."
+        />
 
-    <!-- Primary meta -->
-    <meta name="description" content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust." />
+        <!-- Canonical (root; per-route canonicals injected by leptos_meta after WASM boots) -->
+        <link rel="canonical" href="https://fdemon.dev/" />
 
-    <!-- Canonical (root; per-route canonicals injected by leptos_meta after WASM boots) -->
-    <link rel="canonical" href="https://fdemon.dev/" />
+        <!-- Open Graph -->
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Flutter Demon" />
+        <meta
+            property="og:title"
+            content="Flutter Demon — Terminal UI for Flutter"
+        />
+        <meta
+            property="og:description"
+            content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust."
+        />
+        <meta property="og:url" content="https://fdemon.dev/" />
+        <meta property="og:image" content="https://fdemon.dev/og-image.png" />
 
-    <!-- Open Graph -->
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Flutter Demon" />
-    <meta property="og:title" content="Flutter Demon — Terminal UI for Flutter" />
-    <meta property="og:description" content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust." />
-    <meta property="og:url" content="https://fdemon.dev/" />
-    <meta property="og:image" content="https://fdemon.dev/og-image.png" />
+        <!-- Twitter / X Card -->
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta
+            name="twitter:title"
+            content="Flutter Demon — Terminal UI for Flutter"
+        />
+        <meta
+            name="twitter:description"
+            content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust."
+        />
+        <meta name="twitter:image" content="https://fdemon.dev/og-image.png" />
 
-    <!-- Twitter / X Card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Flutter Demon — Terminal UI for Flutter" />
-    <meta name="twitter:description" content="fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust." />
-    <meta name="twitter:image" content="https://fdemon.dev/og-image.png" />
+        <!-- JSON-LD: SoftwareApplication -->
+        <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "SoftwareApplication",
+                "name": "Flutter Demon",
+                "alternateName": "fdemon",
+                "applicationCategory": "DeveloperApplication",
+                "operatingSystem": ["macOS", "Linux", "Windows"],
+                "description": "fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust.",
+                "url": "https://fdemon.dev/",
+                "installUrl": "https://fdemon.dev/docs/installation",
+                "codeRepository": "https://github.com/edTheGuy00/fdemon",
+                "programmingLanguage": "Rust",
+                "license": "https://github.com/edTheGuy00/fdemon/blob/main/LICENSE",
+                "featureList": [
+                    "Real-time Flutter log viewer",
+                    "Hot reload on file changes",
+                    "Multi-device session launch",
+                    "DevTools integration (performance, inspector, network)",
+                    "Native log capture (Android logcat, macOS log stream, iOS simulator)",
+                    "Keyboard-driven TUI"
+                ]
+            }
+        </script>
 
-    <!-- JSON-LD: SoftwareApplication -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "Flutter Demon",
-      "alternateName": "fdemon",
-      "applicationCategory": "DeveloperApplication",
-      "operatingSystem": ["macOS", "Linux", "Windows"],
-      "description": "fdemon is a blazingly fast terminal UI (TUI) for Flutter development — live logs, hot reload, multi-device sessions, DevTools, written in Rust.",
-      "url": "https://fdemon.dev/",
-      "installUrl": "https://fdemon.dev/docs/installation",
-      "codeRepository": "https://github.com/edTheGuy00/fdemon",
-      "programmingLanguage": "Rust",
-      "license": "https://github.com/edTheGuy00/fdemon/blob/main/LICENSE",
-      "featureList": [
-        "Real-time Flutter log viewer",
-        "Hot reload on file changes",
-        "Multi-device session launch",
-        "DevTools integration (performance, inspector, network)",
-        "Native log capture (Android logcat, macOS log stream, iOS simulator)",
-        "Keyboard-driven TUI"
-      ]
-    }
-    </script>
+        <!-- Trunk directives -->
+        <link data-trunk rel="tailwind-css" href="tailwind.css" />
+        <link data-trunk rel="rust" data-wasm-opt="z" />
+        <link data-trunk rel="copy-dir" href="public" />
 
-    <!-- Trunk directives -->
-    <link data-trunk rel="tailwind-css" href="tailwind.css" />
-    <link data-trunk rel="rust" data-wasm-opt="z" />
-    <link data-trunk rel="copy-dir" href="public" />
+        <!-- Favicons -->
+        <link rel="icon" type="image/x-icon" href="/public/favicon.ico" />
+        <link
+            rel="icon"
+            type="image/png"
+            sizes="32x32"
+            href="/public/favicon-32x32.png"
+        />
+        <link
+            rel="icon"
+            type="image/png"
+            sizes="16x16"
+            href="/public/favicon-16x16.png"
+        />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="/public/apple-touch-icon.png"
+        />
 
-    <!-- Favicons -->
-    <link rel="icon" type="image/x-icon" href="/public/favicon.ico" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/public/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/public/favicon-16x16.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/public/apple-touch-icon.png" />
-</head>
+        <!-- Splash screen (static, pre-WASM).
+         The page is CSR: <body> stays empty until the WASM bundle (~358 KB)
+         downloads and boots, which previously showed a white blank page.
+         This inline-styled splash paints immediately and is removed by
+         src/main.rs right after Leptos mounts the app. -->
+        <style>
+            html,
+            body {
+                /* match the app shell (Tailwind slate-950) to avoid any white flash */
+                background-color: #020617;
+            }
 
-<body></body>
+            #splash {
+                position: fixed;
+                inset: 0;
+                z-index: 9999;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 1.75rem;
+                background-color: #020617;
+            }
 
+            #splash img {
+                width: 96px;
+                height: 96px;
+                border-radius: 1rem;
+                box-shadow: 0 10px 40px rgba(59, 130, 246, 0.2);
+                animation: splash-pulse 1.6s ease-in-out infinite;
+            }
+
+            #splash .splash-ring {
+                width: 28px;
+                height: 28px;
+                border: 3px solid rgba(59, 130, 246, 0.25);
+                border-top-color: #3b82f6;
+                border-radius: 50%;
+                animation: splash-spin 0.8s linear infinite;
+            }
+
+            @keyframes splash-pulse {
+                0%,
+                100% {
+                    opacity: 1;
+                    transform: scale(1);
+                }
+
+                50% {
+                    opacity: 0.75;
+                    transform: scale(0.96);
+                }
+            }
+
+            @keyframes splash-spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+        </style>
+    </head>
+
+    <body>
+        <div id="splash" aria-hidden="true">
+            <img src="/public/logo-192.png" alt="" />
+            <div class="splash-ring"></div>
+        </div>
+    </body>
 </html>

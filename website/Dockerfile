@@ -4,13 +4,19 @@
 FROM rust:slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev \
+    pkg-config libssl-dev wget ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rustup toolchain install nightly \
     && rustup default nightly \
     && rustup target add wasm32-unknown-unknown
-RUN cargo install trunk
+
+# Prebuilt trunk binary: `cargo install trunk` compiles trunk with the floating
+# nightly toolchain above, which breaks whenever nightly regresses one of
+# trunk's pinned deps (e.g. E0119 in `time` with trunk 0.21.14).
+ARG TRUNK_VERSION=v0.21.14
+RUN wget -qO- "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar xz -C /usr/local/bin trunk
 
 WORKDIR /app
 COPY . .

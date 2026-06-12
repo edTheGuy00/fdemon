@@ -21,7 +21,7 @@ pub fn Home() -> impl IntoView {
 
                 <div class="relative z-10 flex flex-col items-center">
                     <img
-                        src="/public/logo.png"
+                        src="/public/logo-192.png"
                         alt="Flutter Demon logo — a Rust-powered terminal UI for Flutter development"
                         class="w-24 h-24 rounded-2xl mb-8 shadow-lg shadow-blue-500/20"
                     />
