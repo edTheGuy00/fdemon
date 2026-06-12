@@ -727,8 +727,14 @@ mod tests {
 
         let mut event_rx = handle.event_rx;
         let mut events = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
+        // The first event needs a generous timeout: cold Windows CI runners can
+        // take seconds to spawn the child process. Subsequent lines arrive from
+        // the same already-running process, so a short timeout drains the rest.
+        if let Ok(Some(event)) = timeout(Duration::from_secs(10), event_rx.recv()).await {
             events.push(event);
+            while let Ok(Some(event)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
+                events.push(event);
+            }
         }
 
         // Both lines should appear as log events (pattern matching doesn't consume lines).
