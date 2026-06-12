@@ -2572,7 +2572,7 @@ let running = state_service.is_running().await;
 | **Lifecycle hooks** | ❌ No | ✅ Yes | ❌ No |
 | **Best for** | Remote forwarding | Metrics, logging | Control operations |
 
-For detailed examples and usage patterns, see [Extension API Documentation](./EXTENSION_API.md).
+Detailed examples and usage patterns are documented alongside the downstream integrations that consume these extension points.
 
 ---
 

@@ -64,7 +64,7 @@ impl<'a> MouseCtx<'a> {
     }
 }
 
-use crate::theme::{icons::IconSet, palette};
+use crate::theme::{branding, icons::IconSet, palette};
 
 // ─── Startup-notice banner ──────────────────────────────────────────────────
 
@@ -645,13 +645,13 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
     let app_name = if let Some(ref name) = state.project_name {
         name.clone()
     } else {
-        "Flutter Demon".to_string()
+        branding::APP_TITLE.to_string()
     };
 
     lines.push(Line::from(vec![Span::styled(
         app_name,
         Style::default()
-            .fg(palette::ACCENT)
+            .fg(branding::TITLE_COLOR)
             .add_modifier(Modifier::BOLD),
     )]));
 
