@@ -26,7 +26,7 @@
 **Flutter Demon** (`fdemon`) is a high-performance terminal UI for Flutter development. Run apps, view logs in real-time, hot reload on file changes, and manage multiple device sessions — all from your terminal.
 
 <p align="center">
-    <img src="docs/images/log-view.png" width="600" alt="Log view with real-time logs, hot reload, and file watcher">
+    <img src="docs/images/video_sample.gif" width="700" alt="Flutter Demon in action: session launch, real-time logs, hot reload, and DevTools panels">
 </p>
 
 ## Installation
@@ -42,10 +42,13 @@ See the [installation guide](https://fdemon.dev/docs/installation) for version-s
 ## Features
 
 - **Real-time log viewing** with level/source filtering, regex search, and error navigation
+- **Native platform logs** — Android logcat, iOS, and macOS capture with per-tag filtering (`T`)
 - **Auto hot reload** on file save with smart debouncing
 - **Multi-device sessions** — run on up to 9 devices simultaneously
-- **Built-in DevTools** — widget inspector, performance monitor, network monitor
-- **New Session Dialog** — device selection, launch configs, dart defines
+- **Built-in DevTools** — widget inspector, performance monitor, memory panel, network monitor
+- **New Session Dialog** — device selection, launch configs, dart defines, and Android QR pairing
+- **DAP server** — connect your IDE's debugger to fdemon with one keypress
+- **Flutter SDK management** — version manager and toolchain install wizard built in
 - **Link Highlight Mode** — open files from log traces directly in your editor
 - **Smart project discovery** — auto-detects Flutter apps, plugins, and workspaces
 
@@ -56,27 +59,18 @@ cd /path/to/my_flutter_app
 fdemon
 ```
 
-Select a device, configure launch settings, and press `Enter` to launch.
-
-<p align="center">
-    <img src="docs/images/new-session.png" width="500" alt="New Session dialog with device selection and launch configuration">
-</p>
+Select a device, configure launch settings, and press `Enter` to launch. From the New Session dialog you can also pair a physical Android device over Wi-Fi via QR code (`p`).
 
 ## DevTools
 
-Press `d` to enter DevTools mode. Three panels are available:
+Press `d` to enter DevTools mode. Four panels are available:
 
 | Key | Panel | Description |
 |-----|-------|-------------|
 | `i` | **Widget Inspector** | Browse the widget tree, view layout details and source locations |
-| `p` | **Performance** | Real-time FPS, memory usage, jank detection, allocation table |
+| `p` | **Performance** | Real-time FPS, frame analysis, jank detection, rebuild stats, timeline events |
+| `m` | **Memory** | Memory usage chart and allocation table with sorting |
 | `n` | **Network** | HTTP request capture, detail tabs, filtering, recording controls |
-
-<p align="center">
-    <img src="docs/images/widget-inspector.png" width="420" alt="Widget Inspector with tree view and Layout Explorer">
-    &nbsp;&nbsp;
-    <img src="docs/images/performance-monitor.png" width="420" alt="Performance Monitor with FPS, memory, and allocations">
-</p>
 
 Debug overlays (`Ctrl+r` repaint rainbow, `Ctrl+p` performance, `Ctrl+d` debug paint) and browser DevTools (`b`) are also available.
 
@@ -85,13 +79,18 @@ Debug overlays (`Ctrl+r` repaint rainbow, `Ctrl+p` performance, `Ctrl+d` debug p
 | Key | Action |
 |-----|--------|
 | `r` / `R` | Hot reload / Hot restart |
+| `s` | Stop app |
 | `d` | Enter DevTools |
+| `D` | Toggle DAP server |
 | `+` | New session |
 | `1-9` / `Tab` | Switch session |
 | `f` / `F` | Cycle level/source filter |
+| `T` | Native tag filter overlay |
 | `/` | Search logs |
 | `e` / `E` | Next/previous error |
 | `L` | Link highlight mode |
+| `,` | Settings panel |
+| `V` / `I` | Flutter version manager / Install wizard |
 | `q` `q` | Quit |
 
 Full reference: [fdemon.dev/docs/keybindings](https://fdemon.dev/docs/keybindings)
