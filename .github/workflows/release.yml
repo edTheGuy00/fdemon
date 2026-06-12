@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version override (e.g. 0.3.0). Leave empty for auto-bump from conventional commits.'
+        description: "Version override (e.g. 0.3.0). Leave empty for auto-bump from conventional commits."
         required: false
         type: string
 
@@ -327,6 +327,11 @@ jobs:
 
       - name: Generate changelog JSON for website
         run: git cliff --context -o website/changelog.json
+
+      - name: Copy install.sh into website public dir
+        # The Docker build context is ./website, so the repo-root installer
+        # must be copied in. Served at https://fdemon.dev/install.sh (nginx.conf).
+        run: cp install.sh website/public/install.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0

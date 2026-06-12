@@ -24,9 +24,9 @@ on:
   workflow_dispatch:
     inputs:
       skip_prerender:
-        description: 'Skip headless-Chrome prerender step (use CSR fallback)'
+        description: "Skip headless-Chrome prerender step (use CSR fallback)"
         required: false
-        default: 'false'
+        default: "false"
         type: boolean
 
 env:
@@ -45,6 +45,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Copy install.sh into website public dir
+        # The Docker build context is ./website, so the repo-root installer
+        # must be copied in. Served at https://fdemon.dev/install.sh (nginx.conf).
+        run: cp install.sh website/public/install.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0

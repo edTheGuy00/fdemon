@@ -1,3 +1,6 @@
 /target
 /dist
 changelog.json
+# Copied from the repo root by CI before the Docker build (single source of
+# truth is /install.sh at the repository root) — never commit the copy.
+public/install.sh
