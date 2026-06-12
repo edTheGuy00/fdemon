@@ -83,25 +83,21 @@ pub fn render_with_regions(
     let tabs =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
 
+    const TAB_ORDER: [TargetTab; 2] = [TargetTab::Connected, TargetTab::Bootable];
+
     // Record click regions for each tab half (z=1, main dialog layer)
     if let Some(c) = ctx {
-        c.click_at_z(
-            MouseRect::new(tabs[0].x, tabs[0].y, tabs[0].width, tabs[0].height),
-            MouseAction::emit(Message::NewSessionDialogSwitchTab(TargetTab::Connected)),
-            1,
-        );
-        c.click_at_z(
-            MouseRect::new(tabs[1].x, tabs[1].y, tabs[1].width, tabs[1].height),
-            MouseAction::emit(Message::NewSessionDialogSwitchTab(TargetTab::Bootable)),
-            1,
-        );
+        for (rect, tab) in tabs.iter().zip(TAB_ORDER) {
+            c.click_at_z(
+                MouseRect::new(rect.x, rect.y, rect.width, rect.height),
+                MouseAction::emit(Message::NewSessionDialogSwitchTab(tab)),
+                1,
+            );
+        }
     }
 
     // Render each tab label
-    for (i, tab) in [TargetTab::Connected, TargetTab::Bootable]
-        .iter()
-        .enumerate()
-    {
+    for (i, tab) in TAB_ORDER.iter().enumerate() {
         let is_active = *tab == tab_bar.active_tab;
         let refreshing = match tab {
             TargetTab::Connected => tab_bar.connected_refreshing,
@@ -309,33 +305,34 @@ mod tests {
     fn render_with_regions_records_two_tab_regions_at_z1() {
         let tab_bar = TabBar::new(TargetTab::Connected, true, false, false);
 
-        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 3));
         let mut regions = MouseRegions::default();
         {
             let builder = regions.builder();
             let mut ctx = MouseCtx::new(builder);
-            render_with_regions(Rect::new(0, 0, 40, 3), &mut buf, tab_bar, Some(&mut ctx));
+            render_with_regions(Rect::new(0, 0, 60, 3), &mut buf, tab_bar, Some(&mut ctx));
         }
 
         assert_eq!(regions.len(), 2, "expected exactly 2 tab regions");
 
-        let connected_present = regions.iter().any(|e| {
-            e.on_left
-                .as_ref()
-                .and_then(|a| a.as_emit())
-                .map(|m| matches!(m, Message::NewSessionDialogSwitchTab(TargetTab::Connected)))
-                .unwrap_or(false)
-        });
-        let bootable_present = regions.iter().any(|e| {
-            e.on_left
-                .as_ref()
-                .and_then(|a| a.as_emit())
-                .map(|m| matches!(m, Message::NewSessionDialogSwitchTab(TargetTab::Bootable)))
-                .unwrap_or(false)
-        });
+        let has_region_for = |tab: TargetTab| {
+            regions.iter().any(|e| {
+                e.on_left
+                    .as_ref()
+                    .and_then(|a| a.as_emit())
+                    .map(|m| matches!(m, Message::NewSessionDialogSwitchTab(t) if *t == tab))
+                    .unwrap_or(false)
+            })
+        };
 
-        assert!(connected_present, "expected Connected tab region");
-        assert!(bootable_present, "expected Bootable tab region");
+        assert!(
+            has_region_for(TargetTab::Connected),
+            "expected Connected tab region"
+        );
+        assert!(
+            has_region_for(TargetTab::Bootable),
+            "expected Bootable tab region"
+        );
 
         for entry in regions.iter() {
             assert_eq!(entry.z_index, 1, "all tab regions must be at z=1");

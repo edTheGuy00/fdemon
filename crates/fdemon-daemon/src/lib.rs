@@ -52,6 +52,7 @@
 //! - [`IosLogConfig`] - Configuration for iOS native log capture (macOS only)
 //! - [`create_native_log_capture()`](native_logs::create_native_log_capture) - Platform dispatch
 
+pub mod adb_pairing;
 pub mod avds;
 pub mod commands;
 pub mod devices;
@@ -68,6 +69,7 @@ pub mod toolchain;
 pub mod vm_service;
 
 // Public API re-exports
+pub use adb_pairing::{pair_with_qr, QrPairedDevice, QrPairingCredentials, QrPairingEvent};
 pub use avds::{
     boot_avd, is_any_emulator_running, kill_all_emulators, list_android_avds, AndroidAvd,
 };

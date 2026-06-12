@@ -159,6 +159,14 @@ pub fn handle_action(
             spawn::spawn_device_boot(msg_tx, device_id, platform, tool_availability);
         }
 
+        UpdateAction::StartQrPairing {
+            seq,
+            credentials,
+            cancel_token,
+        } => {
+            spawn::spawn_qr_pairing(msg_tx, seq, credentials, cancel_token);
+        }
+
         UpdateAction::AutoSaveConfig { configs } => {
             // Clone data for async task
             let project_path = project_path.to_path_buf();

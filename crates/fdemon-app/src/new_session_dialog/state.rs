@@ -6,6 +6,52 @@ use super::types::{
 use crate::config::{ConfigSource, FlutterMode, LoadedConfigs};
 use fdemon_daemon::Device;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio_util::sync::CancellationToken;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QrPairingModalState
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Phase of the ADB QR pairing flow shown in the QR pairing modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QrPairingPhase {
+    /// QR code displayed, waiting for the phone to scan it.
+    WaitingForScan,
+    /// Phone scanned the code; `adb pair` is running.
+    Pairing { ip: String },
+    /// Paired; discovering the connect port and running `adb connect`.
+    Connecting { ip: String },
+    /// The flow failed; `r` restarts with a fresh code.
+    Failed { error: String },
+}
+
+/// Process-wide source of QR pairing sequence numbers.
+///
+/// Global (not per-state) because `NewSessionDialogState` is recreated on
+/// every dialog open: a per-state counter would restart at 0 and let a
+/// message from a leaked task of a previous dialog instance collide with a
+/// fresh session's seq.
+static QR_PAIRING_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// State of the QR pairing modal (`p` from the New Session dialog).
+///
+/// Present == modal is open. `cancel` is fired when the modal closes or a
+/// new code is generated; the background task observes it and exits without
+/// sending further messages.
+#[derive(Debug, Clone)]
+pub struct QrPairingState {
+    /// Monotonic sequence number; messages from stale (cancelled) pairing
+    /// tasks carry an older seq and are discarded by the handlers.
+    pub seq: u64,
+    /// The exact string encoded in the QR code
+    /// (`WIFI:T:ADB;S:<name>;P:<password>;;`).
+    pub payload: String,
+    /// Current phase, drives the status line under the QR code.
+    pub phase: QrPairingPhase,
+    /// Cancellation token for the background mDNS/adb task.
+    pub cancel: CancellationToken,
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FuzzyModalState
@@ -723,6 +769,9 @@ pub struct NewSessionDialogState {
     /// Active dart defines modal (if any)
     pub dart_defines_modal: Option<DartDefinesModalState>,
 
+    /// Active ADB QR pairing modal (if any)
+    pub qr_pairing_modal: Option<QrPairingState>,
+
     /// Whether the dialog is visible
     pub visible: bool,
 }
@@ -736,6 +785,7 @@ impl NewSessionDialogState {
             focused_pane: DialogPane::TargetSelector,
             fuzzy_modal: None,
             dart_defines_modal: None,
+            qr_pairing_modal: None,
             visible: true,
         }
     }
@@ -783,7 +833,9 @@ impl NewSessionDialogState {
 
     /// Check if any modal is open
     pub fn has_modal_open(&self) -> bool {
-        self.fuzzy_modal.is_some() || self.dart_defines_modal.is_some()
+        self.fuzzy_modal.is_some()
+            || self.dart_defines_modal.is_some()
+            || self.qr_pairing_modal.is_some()
     }
 
     /// Check if fuzzy modal is open
@@ -794,6 +846,70 @@ impl NewSessionDialogState {
     /// Check if dart defines modal is open
     pub fn is_dart_defines_modal_open(&self) -> bool {
         self.dart_defines_modal.is_some()
+    }
+
+    /// Check if the QR pairing modal is open
+    pub fn is_qr_pairing_modal_open(&self) -> bool {
+        self.qr_pairing_modal.is_some()
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // QR Pairing Modal
+    // ─────────────────────────────────────────────────────────
+
+    /// Open the QR pairing modal with a fresh session, cancelling any
+    /// previous one.
+    ///
+    /// Returns the sequence number assigned to the session; messages from the
+    /// background task carry it so stale-task messages can be discarded.
+    pub fn begin_qr_pairing(&mut self, payload: String, cancel: CancellationToken) -> u64 {
+        self.cancel_qr_pairing();
+        let seq = QR_PAIRING_SEQ.fetch_add(1, Ordering::Relaxed);
+        self.qr_pairing_modal = Some(QrPairingState {
+            seq,
+            payload,
+            phase: QrPairingPhase::WaitingForScan,
+            cancel,
+        });
+        seq
+    }
+
+    /// Open the QR pairing modal directly in a failed state (no background
+    /// task). Used when `adb` is unavailable so the modal can explain why.
+    pub fn open_qr_pairing_failed(&mut self, error: String) {
+        self.cancel_qr_pairing();
+        let seq = QR_PAIRING_SEQ.fetch_add(1, Ordering::Relaxed);
+        self.qr_pairing_modal = Some(QrPairingState {
+            seq,
+            payload: String::new(),
+            phase: QrPairingPhase::Failed { error },
+            cancel: CancellationToken::new(),
+        });
+    }
+
+    /// Close the QR pairing modal, cancelling any in-flight session.
+    ///
+    /// Firing the token tells the background mDNS/adb task to exit; clearing
+    /// the state makes its in-flight messages stale (their seq no longer
+    /// matches), so they are dropped by the handlers.
+    pub fn cancel_qr_pairing(&mut self) {
+        if let Some(pairing) = self.qr_pairing_modal.take() {
+            pairing.cancel.cancel();
+        }
+    }
+
+    /// Update the phase of the current QR pairing session, discarding stale
+    /// updates (those whose `seq` does not match the active session).
+    ///
+    /// Returns `true` if the update was applied.
+    pub fn set_qr_pairing_phase(&mut self, seq: u64, phase: QrPairingPhase) -> bool {
+        match &mut self.qr_pairing_modal {
+            Some(pairing) if pairing.seq == seq => {
+                pairing.phase = phase;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Open fuzzy modal for config selection
@@ -839,6 +955,9 @@ impl NewSessionDialogState {
     pub fn close_modal(&mut self) {
         self.fuzzy_modal = None;
         self.dart_defines_modal = None;
+        // QR pairing owns a background task — close via cancel so the token
+        // fires and the mDNS/adb task exits.
+        self.cancel_qr_pairing();
     }
 
     /// Close fuzzy modal and apply selection
@@ -960,6 +1079,9 @@ impl NewSessionDialogState {
     /// Hide the dialog
     pub fn hide(&mut self) {
         self.visible = false;
+        // close_modal() also cancels any in-flight QR pairing task — a QR
+        // code that is no longer on screen can't be scanned, and its
+        // credentials shouldn't stay armed.
         self.close_modal();
     }
 
@@ -976,6 +1098,91 @@ mod tests {
     use super::*;
     use crate::config::priority::SourcedConfig;
     use crate::config::types::{ConfigSource, FlutterMode, LaunchConfig};
+
+    #[test]
+    fn test_hide_cancels_qr_pairing() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        let token = CancellationToken::new();
+        state.begin_qr_pairing("payload".to_string(), token.clone());
+
+        state.hide();
+
+        assert!(token.is_cancelled());
+        assert!(state.qr_pairing_modal.is_none());
+    }
+
+    #[test]
+    fn test_reset_cancels_qr_pairing() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        let token = CancellationToken::new();
+        state.begin_qr_pairing("payload".to_string(), token.clone());
+
+        state.reset();
+
+        assert!(token.is_cancelled());
+        assert!(state.qr_pairing_modal.is_none());
+    }
+
+    #[test]
+    fn test_qr_pairing_modal_counts_as_open_modal() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        assert!(!state.has_modal_open());
+
+        state.begin_qr_pairing("payload".to_string(), CancellationToken::new());
+
+        assert!(state.has_modal_open());
+        assert!(state.is_qr_pairing_modal_open());
+    }
+
+    #[test]
+    fn test_begin_qr_pairing_replaces_and_cancels_previous() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        let first = CancellationToken::new();
+        let seq_a = state.begin_qr_pairing("a".to_string(), first.clone());
+
+        let seq_b = state.begin_qr_pairing("b".to_string(), CancellationToken::new());
+
+        assert!(first.is_cancelled());
+        assert!(seq_b > seq_a, "seq must be strictly increasing");
+        assert_eq!(state.qr_pairing_modal.as_ref().unwrap().payload, "b");
+    }
+
+    #[test]
+    fn test_set_qr_pairing_phase_discards_stale_seq() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        let seq = state.begin_qr_pairing("payload".to_string(), CancellationToken::new());
+
+        let applied = state.set_qr_pairing_phase(
+            seq,
+            QrPairingPhase::Pairing {
+                ip: "10.0.0.2".to_string(),
+            },
+        );
+        assert!(applied);
+
+        let stale = state.set_qr_pairing_phase(seq + 1, QrPairingPhase::WaitingForScan);
+        assert!(!stale);
+        assert_eq!(
+            state.qr_pairing_modal.as_ref().unwrap().phase,
+            QrPairingPhase::Pairing {
+                ip: "10.0.0.2".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_open_qr_pairing_failed_sets_failed_phase() {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+
+        state.open_qr_pairing_failed("adb not found".to_string());
+
+        assert_eq!(
+            state.qr_pairing_modal.as_ref().unwrap().phase,
+            QrPairingPhase::Failed {
+                error: "adb not found".to_string()
+            }
+        );
+    }
 
     #[test]
     fn test_create_and_select_default_config_empty_list() {

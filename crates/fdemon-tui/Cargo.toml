@@ -15,9 +15,12 @@ tracing.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 unicode-width = "0.2"
+qrcode.workspace = true
+tui-qrcode.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio-util.workspace = true
 insta.workspace = true
 serial_test.workspace = true
 fdemon-daemon = { workspace = true, features = ["test-helpers"] }

@@ -315,6 +315,12 @@ pub fn handle_close_new_session_dialog(state: &mut AppState) -> UpdateResult {
 /// 3. Close dialog if sessions exist
 /// 4. Quit if no sessions (in Startup mode, nowhere else to go)
 pub fn handle_new_session_dialog_escape(state: &mut AppState) -> UpdateResult {
+    // Priority 0: Close QR pairing modal (cancels the background task)
+    if state.new_session_dialog_state.is_qr_pairing_modal_open() {
+        state.new_session_dialog_state.cancel_qr_pairing();
+        return UpdateResult::none();
+    }
+
     // Priority 1: Close fuzzy modal
     if state.new_session_dialog_state.is_fuzzy_modal_open() {
         state.new_session_dialog_state.fuzzy_modal = None;

@@ -82,6 +82,13 @@ lzma-rs = { version = "0.3", features = ["stream"] }
 # sha2: pure-Rust SHA-256 for archive checksum verification.
 sha2 = "0.10"
 
+# mDNS service discovery for ADB wireless QR pairing (pure Rust, no system daemon)
+mdns-sd = "0.20"
+# QR code generation + ratatui widget for the ADB pairing QR display.
+# default-features = false on qrcode drops the image/SVG renderers.
+qrcode = { version = "0.14", default-features = false }
+tui-qrcode = { version = "0.2.4", default-features = false }
+
 # Misc
 rand = "0.8"
 # base64: OSC 52 clipboard payload encoding (RFC 4648 standard alphabet)

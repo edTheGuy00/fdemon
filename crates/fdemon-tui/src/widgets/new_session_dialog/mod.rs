@@ -13,6 +13,7 @@ mod device_groups;
 mod device_list;
 pub mod fuzzy_modal; // Public for App layer to access fuzzy_filter function
 mod launch_context;
+mod qr_pairing;
 mod state;
 mod tab_bar;
 pub mod target_selector; // Public for App layer to re-export TargetSelectorState
@@ -22,6 +23,7 @@ pub use device_groups::*;
 pub use device_list::*;
 pub use fuzzy_modal::*;
 pub use launch_context::*;
+pub use qr_pairing::*;
 pub use state::*; // Re-exports from App layer
 pub use tab_bar::*;
 pub use target_selector::*;
@@ -268,7 +270,9 @@ impl<'a> NewSessionDialog<'a> {
 
     /// Get footer hints based on current state
     fn footer_hints(&self) -> Vec<(&str, &str)> {
-        if self.state.is_fuzzy_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            vec![("r", "New code"), ("Esc", "Close")]
+        } else if self.state.is_fuzzy_modal_open() {
             vec![("↑↓", "Navigate"), ("Enter", "Select"), ("Esc", "Cancel")]
         } else if self.state.is_dart_defines_modal_open() {
             vec![
@@ -288,7 +292,7 @@ impl<'a> NewSessionDialog<'a> {
         }
     }
 
-    /// Render header area with title, subtitle, and close hint
+    /// Render header area with title, subtitle, close hint, and QR pairing hint
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         // Row 1: "New Session" (left) + "[Esc] Close" (right)
         let title_line = Line::from(vec![
@@ -325,6 +329,19 @@ impl<'a> NewSessionDialog<'a> {
         ]);
         let subtitle_area = Rect::new(area.x, area.y + 1, area.width, 1);
         Paragraph::new(subtitle).render(subtitle_area, buf);
+
+        // Row 3: QR pairing hint (full-width, never truncated by pane splits)
+        let pair_hint = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[p]", Style::default().fg(palette::TEXT_PRIMARY)),
+            Span::raw(" "),
+            Span::styled(
+                "Pair Android device via QR code",
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
+        ]);
+        let pair_hint_area = Rect::new(area.x, area.y + 2, area.width, 1);
+        Paragraph::new(pair_hint).render(pair_hint_area, buf);
     }
 
     /// Render a horizontal separator line
@@ -466,6 +483,22 @@ impl<'a> NewSessionDialog<'a> {
     }
 
     /// Render dart defines modal (full-screen overlay)
+    /// Render the QR pairing modal over the FULL terminal area.
+    ///
+    /// Unlike the other sub-modals (which overlay the dialog area), the QR
+    /// modal uses the whole terminal so the QR code has enough cells to be
+    /// scannable even in modest terminal sizes.
+    fn render_qr_pairing_modal(&self, area: Rect, buf: &mut Buffer) {
+        let modal_state = match &self.state.qr_pairing_modal {
+            Some(state) => state,
+            None => return,
+        };
+
+        let modal =
+            qr_pairing::QrPairingModal::new(modal_state).animation_frame(self.animation_frame);
+        modal.render(area, buf);
+    }
+
     fn render_dart_defines_modal(&self, dialog_area: Rect, buf: &mut Buffer) {
         let modal_state = match &self.state.dart_defines_modal {
             Some(state) => state,
@@ -550,7 +583,9 @@ impl<'a> NewSessionDialog<'a> {
         self.render_footer(chunks[4], buf);
 
         // Render modal overlay if any
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             self.render_fuzzy_modal_overlay(dialog_area, buf);
@@ -636,7 +671,9 @@ impl<'a> NewSessionDialog<'a> {
         self.render_footer_compact(chunks[6], buf);
 
         // Render modal overlay if any
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             self.render_fuzzy_modal_overlay(dialog_area, buf);
@@ -690,7 +727,9 @@ impl<'a> NewSessionDialog<'a> {
         bg_block.render(area, buf);
 
         // Shorter keybinding hints for narrow terminals
-        let hints = if self.state.is_fuzzy_modal_open() {
+        let hints = if self.state.is_qr_pairing_modal_open() {
+            vec![("r", "New code"), ("Esc", "Close")]
+        } else if self.state.is_fuzzy_modal_open() {
             vec![("↑↓", "Nav"), ("Enter", "Sel"), ("Esc", "Close")]
         } else if self.state.is_dart_defines_modal_open() {
             vec![("Tab", "Pane"), ("↑↓", "Nav"), ("Esc", "Close")]
@@ -838,7 +877,9 @@ impl NewSessionDialog<'_> {
         self.render_footer(chunks[4], buf);
 
         // Fuzzy modal overlay
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
             // Dart-defines modal: no regions in v1 (deferred to Phase 6)
         } else if self.state.is_fuzzy_modal_open() {
@@ -911,7 +952,9 @@ impl NewSessionDialog<'_> {
         Self::render_separator(chunks[5], buf);
         self.render_footer_compact(chunks[6], buf);
 
-        if self.state.is_dart_defines_modal_open() {
+        if self.state.is_qr_pairing_modal_open() {
+            self.render_qr_pairing_modal(area, buf);
+        } else if self.state.is_dart_defines_modal_open() {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             if let Some(modal_state) = &self.state.fuzzy_modal {
@@ -1187,6 +1230,34 @@ mod tests {
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
         assert!(content.contains("New Session"));
+    }
+
+    #[test]
+    fn test_header_shows_qr_pairing_hint() {
+        // The pairing hint lives in the full-width header (below the
+        // subtitle), where it cannot be truncated by the pane split.
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 100, 40);
+        assert!(content.contains("Configure deployment target and runtime flags."));
+        assert!(content.contains("[p] Pair Android device via QR code"));
+    }
+
+    #[test]
+    fn test_qr_pairing_modal_renders_over_dialog() {
+        use tokio_util::sync::CancellationToken;
+
+        let mut state = test_dialog_state();
+        state.begin_qr_pairing(
+            "WIFI:T:ADB;S:fdemon-123456;P:87654321;;".to_string(),
+            CancellationToken::new(),
+        );
+
+        let content = render_dialog(&state, 100, 40);
+        assert!(content.contains("Pair Android Device"));
+        assert!(
+            content.contains('█') || content.contains('▀') || content.contains('▄'),
+            "expected QR half-block glyphs when the modal is open"
+        );
     }
 
     #[test]

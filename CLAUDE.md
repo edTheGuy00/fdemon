@@ -101,3 +101,4 @@ Total: ~3,209 unit tests across 4 crates
 - **Per-session DevTools state**: `session/performance.rs` and `session/network.rs` hold ring-buffered telemetry per Flutter session
 - **Native log capture**: `fdemon-daemon/native_logs/` provides platform-specific capture backends (`android.rs`, `macos.rs`, `ios.rs`) implementing the `NativeLogCapture` trait
 - **Per-session tag filtering**: `session/native_tags.rs` tracks discovered native log tags and per-session visibility state; `widgets/tag_filter.rs` provides the `T`-key overlay UI
+- **ADB QR pairing**: `fdemon-daemon/adb_pairing.rs` implements Android Studio's "Pair device with QR code" flow (mDNS browse via `mdns-sd` + `adb pair`/`adb connect`); surfaced as a full-screen modal (`p` key) over the New Session dialog (`widgets/new_session_dialog/qr_pairing.rs`, rendered with `tui-qrcode`)

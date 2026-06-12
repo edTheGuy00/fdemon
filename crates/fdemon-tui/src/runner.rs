@@ -445,6 +445,7 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
             | UpdateAction::CheckToolAvailability
             | UpdateAction::DiscoverBootableDevices
             | UpdateAction::BootDevice { .. }
+            | UpdateAction::StartQrPairing { .. }
             | UpdateAction::AutoSaveConfig { .. }
             | UpdateAction::PersistSettings { .. }
             | UpdateAction::LaunchFlutterSession { .. }

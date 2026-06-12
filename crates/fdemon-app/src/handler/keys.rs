@@ -1420,6 +1420,9 @@ fn handle_key_new_session_dialog(key: InputKey, state: &AppState) -> Option<Mess
     let dialog = &state.new_session_dialog_state;
 
     // Check highest priority keys and modals first
+    if dialog.is_qr_pairing_modal_open() {
+        return handle_qr_pairing_modal_key(key);
+    }
     if dialog.is_fuzzy_modal_open() {
         return handle_fuzzy_modal_key(key);
     }
@@ -1439,12 +1442,26 @@ fn handle_key_new_session_dialog(key: InputKey, state: &AppState) -> Option<Mess
         InputKey::Tab => Some(Message::NewSessionDialogSwitchPane),
         InputKey::Char('1') => Some(Message::NewSessionDialogSwitchTab(TargetTab::Connected)),
         InputKey::Char('2') => Some(Message::NewSessionDialogSwitchTab(TargetTab::Bootable)),
+        InputKey::Char('p') => Some(Message::NewSessionDialogOpenQrPairing),
 
         // Route based on focused pane
         _ => match dialog.focused_pane {
             DialogPane::TargetSelector => handle_target_selector_key(key),
             DialogPane::LaunchContext => handle_launch_context_key(key, dialog),
         },
+    }
+}
+
+/// Handle key events when the QR pairing modal is open.
+///
+/// `r`/`p` regenerate the code (restart the session), Esc closes the modal
+/// and cancels the background pairing task.
+fn handle_qr_pairing_modal_key(key: InputKey) -> Option<Message> {
+    match key {
+        InputKey::CharCtrl('c') => Some(Message::Quit),
+        InputKey::Esc => Some(Message::NewSessionDialogCloseQrPairing),
+        InputKey::Char('r') | InputKey::Char('p') => Some(Message::NewSessionDialogOpenQrPairing),
+        _ => None,
     }
 }
 
