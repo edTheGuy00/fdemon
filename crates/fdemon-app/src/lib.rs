@@ -48,6 +48,8 @@
 //! - [`services::SessionService`] - Session listing, start/stop by id, DevTools URLs
 //! - [`services::DevToolsService`] - Per-session DevTools telemetry (frames,
 //!   memory, network, widget tree) and headless monitoring control
+//! - [`services::VmExtensionService`] - Generic pass-through to registered
+//!   Dart VM service extensions (call + discovery), per session
 //! - [`services::ProjectService`] - Project operations (`pub get`, `clean`)
 //!
 //! ### Configuration

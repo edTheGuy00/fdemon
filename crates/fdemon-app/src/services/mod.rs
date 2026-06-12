@@ -33,6 +33,8 @@
 //! - [`SessionService`]: Session listing, start/stop by id, DevTools URLs
 //! - [`DevToolsService`]: Per-session DevTools telemetry (frames, memory,
 //!   network, widget tree) and headless monitoring control
+//! - [`VmExtensionService`]: Generic pass-through to registered Dart VM
+//!   service extensions (call + discovery), per session
 //! - [`ProjectService`]: Project-level operations (`pub get`, `clean`)
 
 pub mod clipboard;
@@ -42,6 +44,7 @@ mod log_service;
 mod project_service;
 mod session_service;
 mod state_service;
+mod vm_extension_service;
 
 #[cfg(test)]
 pub use clipboard::MemoryClipboard;
@@ -70,4 +73,8 @@ pub use session_service::{
 
 pub use state_service::{
     AppRunState, LocalStateService, ProjectInfo, SharedState, SharedStateService, StateService,
+};
+
+pub use vm_extension_service::{
+    LocalVmExtensionService, SharedVmExtensionService, VmExtensionService,
 };
