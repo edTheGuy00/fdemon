@@ -20,8 +20,8 @@ use crate::handler::UpdateAction;
 use crate::message::Message;
 use crate::process;
 use crate::services::{
-    CommandSenderController, LocalFlutterController, ProjectInfo, SharedLogService, SharedState,
-    SharedStateService,
+    CommandSenderController, FlutterProjectService, LocalFlutterController, ProjectInfo,
+    SessionSnapshot, SharedLogService, SharedSessionService, SharedState, SharedStateService,
 };
 use crate::session::SessionId;
 use crate::signals;
@@ -448,6 +448,53 @@ impl Engine {
                 *logs = session.logs.iter().cloned().collect();
             }
         }
+
+        // Sync snapshots of ALL sessions (not just the selected one) for the
+        // SessionService consumers. Runs even with zero sessions so removals
+        // are reflected.
+        if let Ok(mut sessions) = self.shared_state.sessions.try_write() {
+            *sessions = self
+                .state
+                .session_manager
+                .iter()
+                .map(|handle| {
+                    let session = &handle.session;
+                    SessionSnapshot {
+                        session_id: session.id,
+                        name: session.name.clone(),
+                        device_id: session.device_id.clone(),
+                        device_name: session.device_name.clone(),
+                        platform: session.platform.clone(),
+                        phase: session.phase,
+                        app_id: session.app_id.clone(),
+                        devtools_url: session
+                            .devtools_endpoint
+                            .as_ref()
+                            .zip(session.ws_uri.as_ref())
+                            .map(|(endpoint, ws_uri)| endpoint.url(ws_uri)),
+                    }
+                })
+                .collect();
+        }
+
+        // Sync the device cache so StateService::get_devices works for
+        // service consumers.
+        if let Some(devices) = self.state.get_cached_devices() {
+            if let Ok(mut shared_devices) = self.shared_state.devices.try_write() {
+                *shared_devices = devices
+                    .iter()
+                    .map(|d| fdemon_core::DeviceInfo {
+                        id: d.id.clone(),
+                        name: d.name.clone(),
+                        platform: d.platform.clone(),
+                        emulator: d.emulator,
+                        category: d.category.clone(),
+                        platform_type: d.platform_type.clone(),
+                        ephemeral: d.ephemeral,
+                    })
+                    .collect();
+            }
+        }
     }
 
     /// Get a clone of the message sender for spawning input sources.
@@ -558,6 +605,42 @@ impl Engine {
             cmd_sender.clone(),
             self.shared_state.clone(),
         ))
+    }
+
+    /// Get an owned, `Send + 'static` FlutterController for the currently
+    /// selected session.
+    ///
+    /// Unlike [`Engine::flutter_controller`], the returned controller does not
+    /// borrow the Engine and implements the `Send` trait variant
+    /// ([`crate::services::FlutterController`]), so remote consumers (MCP
+    /// server) can move it into spawned tokio tasks and call
+    /// `reload()`/`restart()` from there.
+    ///
+    /// Returns None if no session is selected or no command sender is available.
+    pub fn flutter_controller_owned(&self) -> Option<CommandSenderController> {
+        let session = self.state.session_manager.selected()?;
+        let cmd_sender = session.cmd_sender.as_ref()?;
+        Some(CommandSenderController::new(
+            cmd_sender.clone(),
+            self.shared_state.clone(),
+        ))
+    }
+
+    /// Get a session control service (list/start/stop sessions, DevTools URLs).
+    ///
+    /// `Send + 'static`: reads come from SharedState snapshots, control
+    /// operations are dispatched through the Engine's message channel.
+    pub fn session_service(&self) -> SharedSessionService {
+        SharedSessionService::new(self.shared_state.clone(), self.msg_tx.clone())
+    }
+
+    /// Get a project operations service (`flutter pub get` / `flutter clean`).
+    ///
+    /// Returns None when no Flutter SDK has been resolved.
+    pub fn project_service(&self) -> Option<FlutterProjectService> {
+        self.state.resolved_sdk.as_ref().map(|sdk| {
+            FlutterProjectService::new(sdk.executable.clone(), self.project_path.clone())
+        })
     }
 
     /// Get access to the shared log service.
@@ -989,6 +1072,151 @@ mod tests {
 
         // No session selected, should return None
         assert!(engine.flutter_controller().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_flutter_controller_owned_none_without_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(dir.path().to_path_buf());
+
+        assert!(engine.flutter_controller_owned().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_flutter_controller_owned_is_send_and_static() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        engine
+            .state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
+
+        let controller = engine
+            .flutter_controller_owned()
+            .expect("session with cmd_sender should yield a controller");
+
+        // Moving the controller into a spawned task requires Send + 'static.
+        let handle = tokio::spawn(async move {
+            crate::services::FlutterController::is_running(&controller).await
+        });
+        assert!(!handle.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_session_service_accessor() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(dir.path().to_path_buf());
+
+        let _session_service = engine.session_service();
+        // Should not panic
+    }
+
+    #[tokio::test]
+    async fn test_project_service_none_without_sdk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        engine.state.resolved_sdk = None;
+
+        assert!(engine.project_service().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_project_service_some_with_resolved_sdk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        engine.state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+
+        assert!(engine.project_service().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_session_snapshots_synced_to_shared_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        {
+            let handle = engine.state.session_manager.get_mut(session_id).unwrap();
+            handle.session.app_id = Some("app-1".to_string());
+            handle.session.ws_uri = Some("ws://127.0.0.1:1234/abc=/ws".to_string());
+            handle.session.devtools_endpoint = Some(crate::session::DevToolsEndpoint {
+                base_url: "http://127.0.0.1:9100".to_string(),
+            });
+        }
+
+        engine.flush_pending_logs();
+
+        let sessions = engine.shared_state().sessions.read().await;
+        assert_eq!(sessions.len(), 1);
+        let snapshot = &sessions[0];
+        assert_eq!(snapshot.session_id, session_id);
+        assert_eq!(snapshot.device_id, "dev-1");
+        assert_eq!(snapshot.device_name, "Pixel 6");
+        assert_eq!(snapshot.app_id, Some("app-1".to_string()));
+        let devtools_url = snapshot.devtools_url.as_deref().unwrap();
+        assert!(devtools_url.starts_with("http://127.0.0.1:9100?uri="));
+    }
+
+    #[tokio::test]
+    async fn test_session_snapshot_devtools_url_none_without_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+
+        engine.flush_pending_logs();
+
+        let sessions = engine.shared_state().sessions.read().await;
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].devtools_url.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_snapshots_cleared_after_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+        engine.flush_pending_logs();
+        assert_eq!(engine.shared_state().sessions.read().await.len(), 1);
+
+        engine.state.session_manager.remove_session(session_id);
+        engine.flush_pending_logs();
+
+        assert!(engine.shared_state().sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_device_cache_synced_to_shared_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        engine
+            .state
+            .set_device_cache(vec![test_device("dev-1", "Pixel 6")]);
+
+        engine.flush_pending_logs();
+
+        let devices = engine.shared_state().devices.read().await;
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id, "dev-1");
+        assert_eq!(devices[0].name, "Pixel 6");
+        assert_eq!(devices[0].platform, "android");
     }
 
     #[tokio::test]

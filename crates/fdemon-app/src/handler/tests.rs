@@ -659,6 +659,145 @@ fn test_close_session_at_zero_when_selected_is_zero_picks_next() {
 }
 
 // ─────────────────────────────────────────────────────────
+// Service-layer session control tests (SessionService)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_start_session_on_device_spawns_session_from_cache() {
+    let mut state = AppState::new();
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+    state.set_device_cache(vec![
+        test_device("emulator-5554", "Pixel 6"),
+        test_device("d2", "iPhone"),
+    ]);
+
+    let result = update(
+        &mut state,
+        Message::StartSessionOnDevice {
+            device_id: "emulator-5554".to_string(),
+        },
+    );
+
+    assert_eq!(state.session_manager.len(), 1);
+    match result.action {
+        Some(UpdateAction::SpawnSession { device, config, .. }) => {
+            assert_eq!(device.id, "emulator-5554");
+            assert!(
+                config.is_none(),
+                "service-layer start uses no launch config"
+            );
+        }
+        other => panic!("expected SpawnSession action, got {:?}", other),
+    }
+    // SessionCreated is queued for the Engine's event broadcast.
+    assert!(state.pending_engine_events.iter().any(|e| matches!(
+        e,
+        crate::engine_event::EngineEvent::SessionCreated { device, .. }
+            if device.id == "emulator-5554"
+    )));
+}
+
+#[test]
+fn test_start_session_on_device_unknown_device_is_noop() {
+    let mut state = AppState::new();
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+    state.set_device_cache(vec![test_device("d1", "Pixel")]);
+
+    let result = update(
+        &mut state,
+        Message::StartSessionOnDevice {
+            device_id: "no-such-device".to_string(),
+        },
+    );
+
+    assert_eq!(state.session_manager.len(), 0);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_start_session_on_device_without_sdk_is_noop() {
+    let mut state = AppState::new();
+    state.resolved_sdk = None;
+    state.set_device_cache(vec![test_device("d1", "Pixel")]);
+
+    let result = update(
+        &mut state,
+        Message::StartSessionOnDevice {
+            device_id: "d1".to_string(),
+        },
+    );
+
+    assert_eq!(state.session_manager.len(), 0);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_start_session_on_device_empty_cache_is_noop() {
+    let mut state = AppState::new();
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+
+    let result = update(
+        &mut state,
+        Message::StartSessionOnDevice {
+            device_id: "d1".to_string(),
+        },
+    );
+
+    assert_eq!(state.session_manager.len(), 0);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_stop_session_by_id_removes_only_that_session() {
+    let mut state = AppState::new();
+    let id1 = state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let id2 = state
+        .session_manager
+        .create_session(&test_device("d2", "Pixel"))
+        .unwrap();
+
+    update(&mut state, Message::StopSessionById { session_id: id1 });
+
+    assert_eq!(state.session_manager.len(), 1);
+    assert!(state.session_manager.get(id1).is_none());
+    assert!(state.session_manager.get(id2).is_some());
+}
+
+#[test]
+fn test_stop_session_by_id_unknown_id_is_noop() {
+    let mut state = AppState::new();
+    state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+
+    update(&mut state, Message::StopSessionById { session_id: 9999 });
+
+    assert_eq!(state.session_manager.len(), 1);
+}
+
+#[test]
+fn test_stop_session_by_id_last_session_does_not_quit() {
+    let mut state = AppState::new();
+    let id = state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    state.settings.behavior.confirm_quit = false;
+
+    update(&mut state, Message::StopSessionById { session_id: id });
+
+    assert_eq!(state.session_manager.len(), 0);
+    assert!(
+        !state.should_quit(),
+        "remote stop of the last session must not quit fdemon"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
 // Clear logs tests
 // ─────────────────────────────────────────────────────────
 

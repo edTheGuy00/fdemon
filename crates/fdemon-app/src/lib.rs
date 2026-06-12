@@ -45,6 +45,8 @@
 //! - [`services::FlutterController`] - Reload/restart/stop
 //! - [`services::LogService`] - Log buffer access
 //! - [`services::StateService`] - App state access
+//! - [`services::SessionService`] - Session listing, start/stop by id, DevTools URLs
+//! - [`services::ProjectService`] - Project operations (`pub get`, `clean`)
 //!
 //! ### Configuration
 //! - [`config::Settings`] - Global settings from `.fdemon/config.toml`

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Local};
 use tokio::sync::{broadcast, RwLock};
 
+use super::session_service::SessionSnapshot;
 use fdemon_core::{AppPhase, DaemonMessage, DeviceInfo, LogEntry};
 
 /// Application run state with metadata
@@ -78,6 +79,9 @@ pub struct SharedState {
     /// Known devices
     pub devices: Arc<RwLock<Vec<DeviceInfo>>>,
 
+    /// Snapshots of all active sessions (synced from the SessionManager)
+    pub sessions: Arc<RwLock<Vec<SessionSnapshot>>>,
+
     /// Event broadcaster for multiple subscribers
     pub event_tx: broadcast::Sender<DaemonMessage>,
 
@@ -93,6 +97,7 @@ impl SharedState {
             app_state: Arc::new(RwLock::new(AppRunState::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
             devices: Arc::new(RwLock::new(Vec::new())),
+            sessions: Arc::new(RwLock::new(Vec::new())),
             event_tx,
             max_logs,
         }
