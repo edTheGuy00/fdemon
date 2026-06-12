@@ -22,8 +22,8 @@ use crate::process;
 use crate::services::{
     CommandSenderController, DevToolsSessionSnapshot, FlutterProjectService,
     LocalFlutterController, ProjectInfo, SessionSnapshot, SharedDevToolsService, SharedLogService,
-    SharedSessionService, SharedState, SharedStateService, WidgetTreeSnapshot,
-    DEVTOOLS_SNAPSHOT_MAX_FRAMES, DEVTOOLS_SNAPSHOT_MAX_MEMORY_SAMPLES,
+    SharedSessionService, SharedState, SharedStateService, SharedVmExtensionService,
+    WidgetTreeSnapshot, DEVTOOLS_SNAPSHOT_MAX_FRAMES, DEVTOOLS_SNAPSHOT_MAX_MEMORY_SAMPLES,
     DEVTOOLS_SNAPSHOT_MAX_NETWORK_ENTRIES,
 };
 use crate::session::SessionId;
@@ -563,6 +563,23 @@ impl Engine {
             }
         }
 
+        // Sync per-session VM request handles for VmExtensionService
+        // consumers (same precedent as `sync_vm_handle_for_dap`, but for all
+        // sessions). Handles are cheap to clone (channel sender + Arcs).
+        if let Ok(mut vm_handles) = self.shared_state.vm_handles.try_write() {
+            *vm_handles = self
+                .state
+                .session_manager
+                .iter()
+                .filter_map(|handle| {
+                    handle
+                        .vm_request_handle
+                        .clone()
+                        .map(|vm| (handle.session.id, vm))
+                })
+                .collect();
+        }
+
         // Sync the device cache so StateService::get_devices works for
         // service consumers.
         if let Some(devices) = self.state.get_cached_devices() {
@@ -727,6 +744,17 @@ impl Engine {
     /// operations are dispatched through the Engine's message channel.
     pub fn devtools_service(&self) -> SharedDevToolsService {
         SharedDevToolsService::new(self.shared_state.clone(), self.msg_tx.clone())
+    }
+
+    /// Get a generic VM service-extension pass-through service (invoke and
+    /// discover registered `ext.*` methods per session).
+    ///
+    /// `Send + 'static`: calls go directly over the per-session VM handles
+    /// the Engine syncs into [`SharedState`] after each TEA cycle. No
+    /// allowlist is enforced — callers are responsible for what they invoke
+    /// (debug-mode VM seam; the TUI never calls this service).
+    pub fn vm_extension_service(&self) -> SharedVmExtensionService {
+        SharedVmExtensionService::new(self.shared_state.clone())
     }
 
     /// Get a project operations service (`flutter pub get` / `flutter clean`).
@@ -1260,6 +1288,57 @@ mod tests {
         assert_eq!(snapshot.app_id, Some("app-1".to_string()));
         let devtools_url = snapshot.devtools_url.as_deref().unwrap();
         assert!(devtools_url.starts_with("http://127.0.0.1:9100?uri="));
+    }
+
+    #[tokio::test]
+    async fn test_vm_extension_service_accessor() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(dir.path().to_path_buf());
+
+        let _vm_extension_service = engine.vm_extension_service();
+        // Should not panic
+    }
+
+    #[tokio::test]
+    async fn test_vm_handles_synced_to_shared_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(dir.path().to_path_buf());
+        let session_id = engine
+            .state
+            .session_manager
+            .create_session(&test_device("dev-1", "Pixel 6"))
+            .unwrap();
+
+        // No VM handle yet — sync leaves the map empty.
+        engine.flush_pending_logs();
+        assert!(engine.shared_state().vm_handles.read().await.is_empty());
+
+        // Attach a VM handle — sync publishes it under the session id.
+        engine
+            .state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .vm_request_handle = Some(fdemon_daemon::vm_service::VmRequestHandle::new_for_test(
+            None,
+        ));
+        engine.flush_pending_logs();
+        assert!(engine
+            .shared_state()
+            .vm_handles
+            .read()
+            .await
+            .contains_key(&session_id));
+
+        // Handle cleared (VM disconnected) — sync removes the entry.
+        engine
+            .state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .vm_request_handle = None;
+        engine.flush_pending_logs();
+        assert!(engine.shared_state().vm_handles.read().await.is_empty());
     }
 
     #[tokio::test]

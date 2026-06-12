@@ -3,6 +3,7 @@
 //! This module provides thread-safe state that can be accessed by both
 //! the TUI and future MCP server handlers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Local};
@@ -10,7 +11,9 @@ use tokio::sync::{broadcast, RwLock};
 
 use super::devtools_service::{DevToolsSessionSnapshot, WidgetTreeSnapshot};
 use super::session_service::SessionSnapshot;
+use crate::session::SessionId;
 use fdemon_core::{AppPhase, DaemonMessage, DeviceInfo, LogEntry};
+use fdemon_daemon::vm_service::VmRequestHandle;
 
 /// Application run state with metadata
 #[derive(Debug, Clone, Default)]
@@ -91,6 +94,13 @@ pub struct SharedState {
     /// inspector view-state. `None` when no session is selected.
     pub widget_tree: Arc<RwLock<Option<WidgetTreeSnapshot>>>,
 
+    /// Per-session VM Service request handles, synced from the
+    /// `SessionManager` each TEA cycle (following the `vm_handle_for_dap`
+    /// precedent). A session is present while it has a VM handle; consumers
+    /// (e.g. [`super::SharedVmExtensionService`]) clone the handle and issue
+    /// RPCs directly over the session's VM Service WebSocket.
+    pub vm_handles: Arc<RwLock<HashMap<SessionId, VmRequestHandle>>>,
+
     /// Event broadcaster for multiple subscribers
     pub event_tx: broadcast::Sender<DaemonMessage>,
 
@@ -109,6 +119,7 @@ impl SharedState {
             sessions: Arc::new(RwLock::new(Vec::new())),
             devtools: Arc::new(RwLock::new(Vec::new())),
             widget_tree: Arc::new(RwLock::new(None)),
+            vm_handles: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
             max_logs,
         }
