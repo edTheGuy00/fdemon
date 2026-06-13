@@ -1862,7 +1862,15 @@ impl AppState {
     /// Returns `true` if a registered panel with that id exists and was made
     /// active. Returns `false` (leaving state unchanged) when no such panel is
     /// registered.
-    pub fn select_devtools_extension_panel(&mut self, id: &str) -> bool {
+    ///
+    /// # Note
+    ///
+    /// This method mutates panel state **without** the pause/unpause and
+    /// auto-fetch side effects that [`crate::handler::devtools::handle_switch_extension_panel`]
+    /// enforces. Callers outside this crate should dispatch
+    /// `Message::SwitchDevToolsExtensionPanel` to go through the full handler path.
+    #[allow(dead_code)] // retained as a building-block; the full handler path is preferred
+    pub(crate) fn select_devtools_extension_panel(&mut self, id: &str) -> bool {
         if self.extra_devtools_panels.iter().any(|p| p.id() == id) {
             self.devtools_view_state.active_extension_panel = Some(id.to_string());
             true
@@ -1887,6 +1895,7 @@ impl AppState {
 
     /// Build the combined, ordered list of panel ids: the four built-ins
     /// followed by registered panels in registration order.
+    #[allow(dead_code)]
     fn devtools_panel_id_order(&self) -> Vec<String> {
         let mut ids: Vec<String> = BUILTIN_DEVTOOLS_PANEL_IDS
             .iter()
@@ -1901,9 +1910,16 @@ impl AppState {
     ///
     /// `forward = true` advances (`Tab`); `forward = false` goes back
     /// (`Shift+Tab`). With no registered panels this still cycles the four
-    /// built-ins. Used by the host key router only when an extension panel is
-    /// focused (so built-in `Tab` semantics are untouched in stock fdemon).
-    pub fn cycle_devtools_panel(&mut self, forward: bool) {
+    /// built-ins.
+    ///
+    /// # Note
+    ///
+    /// This method mutates panel state **without** the pause/unpause and
+    /// auto-fetch side effects that [`crate::handler::devtools::handle_cycle_panel`]
+    /// enforces. Callers outside this crate should dispatch
+    /// `Message::CycleDevToolsPanel` to go through the full handler path.
+    #[allow(dead_code)] // retained as a building-block; the full handler path is preferred
+    pub(crate) fn cycle_devtools_panel(&mut self, forward: bool) {
         let order = self.devtools_panel_id_order();
         if order.is_empty() {
             return;

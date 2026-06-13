@@ -246,7 +246,7 @@ const MAX_PRETTY_PRINT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Format a body string for display.
 ///
-/// - If `body` is empty, returns `None`.
+/// - If `body` is empty, returns an empty string.
 /// - If `body.len()` exceeds [`MAX_PRETTY_PRINT_BYTES`], returns a placeholder
 ///   string indicating the body is too large to display.
 /// - If `body` parses as valid JSON, returns the pretty-printed JSON string.
@@ -267,9 +267,8 @@ pub fn format_body_text(body: &str) -> String {
         );
     }
 
-    // Attempt JSON pretty-print. `serde_json::from_str` is allocation-free for
-    // the parse step (it borrows from `body`); only `to_string_pretty` allocates
-    // and it is bounded by the guard above.
+    // Attempt JSON pretty-print. Parse cost is bounded by `MAX_PRETTY_PRINT_BYTES`;
+    // only `to_string_pretty` allocates and it is bounded by the guard above.
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
         // `to_string_pretty` should not fail for a valid Value, but handle the
         // error gracefully rather than unwrapping.

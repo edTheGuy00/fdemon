@@ -18,7 +18,7 @@
 //! Invalid JSON or binary data falls back to raw text or a size placeholder.
 
 use fdemon_app::message::Message;
-use fdemon_app::session::NetworkDetailTab;
+use fdemon_app::session::{BodyWrapCacheKey, NetworkDetailTab, NetworkState};
 use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::network::{
     format_body_text, format_bytes, format_duration_ms, HttpProfileEntry, HttpProfileEntryDetail,
@@ -52,6 +52,13 @@ pub struct RequestDetails<'a> {
     loading: bool,
     /// Current scroll offset for the body viewport (lines from top).
     scroll_offset: usize,
+    /// Optional reference to the owning `NetworkState` for body-wrap caching.
+    ///
+    /// When `Some`, `render_body` uses the cached pre-wrapped lines stored on
+    /// the state (via interior `RefCell`) to avoid re-wrapping large JSON bodies
+    /// on every ~50 ms tick. When `None` (tests and legacy call sites), the
+    /// widget computes the wrapped lines inline with no caching.
+    network_state: Option<&'a NetworkState>,
 }
 
 impl<'a> RequestDetails<'a> {
@@ -69,7 +76,18 @@ impl<'a> RequestDetails<'a> {
             active_tab,
             loading,
             scroll_offset,
+            network_state: None,
         }
+    }
+
+    /// Attach the owning `NetworkState` to enable body-wrap caching.
+    ///
+    /// Builder-style; the `&NetworkState` provides access to the `RefCell`-backed
+    /// `body_wrap_cache` so repeated renders of the same body content do not
+    /// re-wrap on every tick.
+    pub fn with_network_state(mut self, state: &'a NetworkState) -> Self {
+        self.network_state = Some(state);
+        self
     }
 }
 
@@ -214,7 +232,7 @@ impl RequestDetails<'_> {
         // Wrap URI across multiple rows so it doesn't overflow to the right.
         let uri_width = area.width.saturating_sub(3) as usize;
         if uri_width > 0 {
-            for chunk in wrap_text(&self.entry.uri, uri_width) {
+            for chunk in split_at_width(&self.entry.uri, uri_width) {
                 if y >= area.bottom() {
                     break;
                 }
@@ -254,13 +272,15 @@ impl RequestDetails<'_> {
                 return;
             }
             let ct_width = area.width.saturating_sub(3) as usize;
-            let display = if ct.len() > ct_width && ct_width > 0 {
-                &ct[..ct_width]
-            } else {
-                ct.as_str()
-            };
-            buf.set_string(area.x + 3, y, display, value_style);
-            y += 1;
+            // Use the char-boundary-aware helper to avoid a panic if ct_width
+            // falls inside a multibyte code point.
+            for chunk in split_at_width(ct.as_str(), ct_width) {
+                if y >= area.bottom() {
+                    break;
+                }
+                buf.set_string(area.x + 3, y, chunk, value_style);
+                y += 1;
+            }
         }
 
         // ── Duration ──────────────────────────────────────────────────────────
@@ -316,7 +336,7 @@ impl RequestDetails<'_> {
             buf.set_string(area.x + 1, y, "Error:", Style::default().fg(Color::Red));
             y += 1;
             let err_width = area.width.saturating_sub(3) as usize;
-            for chunk in wrap_text(err, err_width) {
+            for chunk in split_at_width(err, err_width) {
                 if y >= area.bottom() {
                     break;
                 }
@@ -388,7 +408,7 @@ impl RequestDetails<'_> {
             buf.set_string(area.x + 1, y, &key_line, key_style);
             y += 1;
             // Wrap value.
-            for chunk in wrap_text(&val_str, content_width) {
+            for chunk in split_at_width(&val_str, content_width) {
                 if y >= area.bottom() {
                     break;
                 }
@@ -420,7 +440,7 @@ impl RequestDetails<'_> {
                 let key_line = format!("  {}:", key);
                 buf.set_string(area.x + 1, y, &key_line, key_style);
                 y += 1;
-                for chunk in wrap_text(&val_str, content_width) {
+                for chunk in split_at_width(&val_str, content_width) {
                     if y >= area.bottom() {
                         break;
                     }
@@ -505,7 +525,7 @@ impl RequestDetails<'_> {
             Some(raw_text) => {
                 // Pretty-print if JSON, fall back to raw.
                 let formatted = format_body_text(raw_text);
-                // Guard against oversized placeholder strings.
+                // Guard against empty body (empty input from format_body_text).
                 if formatted.is_empty() {
                     return;
                 }
@@ -518,7 +538,19 @@ impl RequestDetails<'_> {
 
                 // Pre-wrap using textwrap so we can compute exact line count
                 // without relying on ratatui's unstable line_count API.
-                let wrapped_lines = wrap_text_owned(&formatted, content_width);
+                // Use the NetworkState wrap cache when available to avoid
+                // re-wrapping large JSON bodies on every ~50 ms render tick.
+                let wrapped_lines = if let Some(ns) = self.network_state {
+                    let cache_key = BodyWrapCacheKey {
+                        selected_index: ns.selected_index,
+                        detail_tab: self.active_tab,
+                        content_width,
+                        body_len: formatted.len(),
+                    };
+                    ns.get_or_compute_wrapped_lines(cache_key, &formatted, content_width)
+                } else {
+                    wrap_text_owned(&formatted, content_width)
+                };
                 let total_lines = wrapped_lines.len();
                 let viewport_height = area.height as usize;
 
@@ -667,7 +699,7 @@ impl RequestDetails<'_> {
 /// Wrap `text` to `max_width` columns, returning a `Vec` of owned line strings.
 ///
 /// Uses the `textwrap` crate so that line count is exact and matches what
-/// we render. Empty `max_width` returns a single empty line vector.
+/// we render. Empty `max_width` or empty `text` returns an empty vector.
 fn wrap_text_owned(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 || text.is_empty() {
         return Vec::new();
@@ -678,18 +710,11 @@ fn wrap_text_owned(text: &str, max_width: usize) -> Vec<String> {
         .collect()
 }
 
-/// Wrap `text` to `max_width` columns using char-boundary splitting.
+/// Split `text` into `max_width`-char-boundary chunks.
 ///
-/// Used for short label/value strings in the General and Headers tabs.
+/// Used for short label/value strings in the General and Headers tabs where
+/// content is typically short ASCII text (URIs, header values, Content-Type).
 /// For the body tab (which needs exact line counts), use [`wrap_text_owned`].
-fn wrap_text(text: &str, max_width: usize) -> Vec<&str> {
-    split_at_width(text, max_width)
-}
-
-/// Split `text` into `max_width`-char-boundary chunks (simple ASCII split).
-///
-/// Used for label/value pairs in the General and Headers tabs where content
-/// is typically short ASCII text.
 fn split_at_width(text: &str, max_width: usize) -> Vec<&str> {
     if max_width == 0 || text.is_empty() {
         return Vec::new();
@@ -1758,5 +1783,95 @@ mod tests {
     fn test_wrap_text_owned_zero_width() {
         let lines = wrap_text_owned("hello", 0);
         assert!(lines.is_empty(), "Zero width should produce no lines");
+    }
+
+    // ── Round 1 review fix tests ──────────────────────────────────────────────
+
+    /// Item 3 (Q6): Render the General tab with a multibyte (non-ASCII) Content-Type.
+    ///
+    /// Previously `&ct[..ct_width]` could panic when `ct_width` lands inside a
+    /// multibyte UTF-8 code point. After the fix, `split_at_width` always splits
+    /// at a valid char boundary, so this must never panic.
+    #[test]
+    fn test_general_tab_multibyte_content_type_no_panic() {
+        // "応用/json" — Japanese characters are 3 bytes each in UTF-8.
+        // With a narrow terminal (width=10) ct_width could fall inside a char.
+        let mut entry = make_entry();
+        entry.content_type = Some("応用/json; charset=UTF-8".to_string());
+
+        for width in [5u16, 6, 7, 8, 10, 15, 20, 80] {
+            let widget =
+                RequestDetails::new(&entry, None, NetworkDetailTab::General, false, 0);
+            // Must not panic at any terminal width.
+            let buf = render_to_buf(widget, width, 20);
+            // At wide enough widths, some content must be visible.
+            if width >= 10 {
+                let text = collect_buf_text(&buf, width, 20);
+                assert!(
+                    !text.trim().is_empty(),
+                    "General tab must render content at width={width}, got: {text:?}"
+                );
+            }
+        }
+    }
+
+    /// Item 5 (Q2): The wrap cache is reused for identical inputs and rebuilt
+    /// when the selection or content width changes.
+    #[test]
+    fn test_wrap_cache_reuse_and_invalidation() {
+        use fdemon_app::session::{BodyWrapCacheKey, NetworkDetailTab, NetworkState};
+
+        let mut state = NetworkState::default();
+        // Populate with a body entry so we can call get_or_compute_wrapped_lines.
+        let body = "word ".repeat(100); // 500-char string
+        let key1 = BodyWrapCacheKey {
+            selected_index: Some(0),
+            detail_tab: NetworkDetailTab::ResponseBody,
+            content_width: 40,
+            body_len: body.len(),
+        };
+
+        // First call — cache miss, computes lines.
+        let lines1 = state.get_or_compute_wrapped_lines(key1.clone(), &body, 40);
+        assert!(!lines1.is_empty(), "Should produce wrapped lines");
+
+        // Second call with identical key — cache hit, returns same lines.
+        let lines2 = state.get_or_compute_wrapped_lines(key1.clone(), &body, 40);
+        assert_eq!(lines1, lines2, "Cache hit must return identical lines");
+
+        // Verify the cache is populated.
+        assert!(
+            state.body_wrap_cache.borrow().key.is_some(),
+            "Cache key must be set after population"
+        );
+
+        // Change content width — cache miss, lines differ.
+        let key2 = BodyWrapCacheKey {
+            content_width: 20, // narrower
+            ..key1.clone()
+        };
+        let lines3 = state.get_or_compute_wrapped_lines(key2.clone(), &body, 20);
+        assert!(
+            lines3.len() > lines1.len(),
+            "Narrower width must produce more lines (got: {} vs {})",
+            lines3.len(),
+            lines1.len()
+        );
+        assert_eq!(
+            state.body_wrap_cache.borrow().key.as_ref(),
+            Some(&key2),
+            "Cache key must be updated to the new key"
+        );
+
+        // Explicit invalidation (e.g., on selection change).
+        state.invalidate_wrap_cache();
+        assert!(
+            state.body_wrap_cache.borrow().key.is_none(),
+            "Cache key must be None after invalidate_wrap_cache()"
+        );
+        assert!(
+            state.body_wrap_cache.borrow().lines.is_empty(),
+            "Cache lines must be empty after invalidate_wrap_cache()"
+        );
     }
 }

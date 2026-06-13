@@ -195,21 +195,23 @@ impl DevToolsView<'_> {
         if self.state.active_extension_panel.is_some() {
             // Read disjoint immutable data into locals before the mutable
             // borrow of `self.panels` below.
-            let vm_connected = self
-                .session
-                .map(|s| s.session.vm_connected)
-                .unwrap_or(false);
             let animation_frame = self.animation_frame;
             let ext_id = self
                 .state
                 .active_extension_panel
                 .clone()
                 .unwrap_or_default();
+            // Populate connection_status from the displayed session.
+            let conn_status = self
+                .session
+                .map(|h| h.vm_connection_status.clone())
+                .unwrap_or(VmConnectionStatus::Disconnected);
 
             let mut footer_hint: Option<String> = None;
             if let Some(panels) = self.panels.as_deref_mut() {
                 if let Some(panel) = panels.iter_mut().find(|p| p.id() == ext_id) {
-                    let ctx = DevToolsPanelCtx::new(vm_connected, animation_frame);
+                    let ctx =
+                        DevToolsPanelCtx::with_status(conn_status, animation_frame);
                     panel.render(chunks[1], buf, ctx);
                     footer_hint = Some(panel.key_hint().to_string());
                 }
@@ -277,14 +279,17 @@ impl DevToolsView<'_> {
             }
             DevToolsPanel::Network => {
                 // Safety fallback: DevTools mode is only reachable when a session
-                // exists, but guard defensively.
-                static DEFAULT_NETWORK: std::sync::LazyLock<fdemon_app::session::NetworkState> =
-                    std::sync::LazyLock::new(fdemon_app::session::NetworkState::default);
-
-                let (network_state, vm_connected) = self
-                    .session
-                    .map(|s| (&s.session.network, s.session.vm_connected))
-                    .unwrap_or_else(|| (&*DEFAULT_NETWORK, false));
+                // exists, but guard defensively. NetworkState contains RefCell
+                // (!Sync), so a stack-local default is used instead of a
+                // LazyLock static (which requires Sync).
+                let default_network;
+                let (network_state, vm_connected) = match self.session {
+                    Some(s) => (&s.session.network, s.session.vm_connected),
+                    None => {
+                        default_network = fdemon_app::session::NetworkState::default();
+                        (&default_network, false)
+                    }
+                };
 
                 let widget =
                     NetworkMonitor::new(network_state, vm_connected, session_conn_status);

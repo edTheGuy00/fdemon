@@ -209,7 +209,8 @@ impl NetworkMonitor<'_> {
                 self.network_state.detail_tab,
                 self.network_state.loading_detail,
                 self.network_state.details_scroll_offset,
-            );
+            )
+            .with_network_state(self.network_state);
             detail_widget.render_with_regions(detail_inner, buf, ctx);
         }
     }
@@ -239,7 +240,8 @@ impl NetworkMonitor<'_> {
                 self.network_state.detail_tab,
                 self.network_state.loading_detail,
                 self.network_state.details_scroll_offset,
-            );
+            )
+            .with_network_state(self.network_state);
             detail_widget.render_with_regions(chunks[1], buf, ctx);
         }
     }

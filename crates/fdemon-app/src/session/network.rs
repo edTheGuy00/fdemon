@@ -4,9 +4,57 @@
 //! Stores the rolling request history, selected request detail,
 //! and UI interaction state (filter, sort, recording toggle).
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail, SocketEntry};
+
+// ── BodyWrapCache ─────────────────────────────────────────────────────────────
+
+/// Cache key for the pre-wrapped body lines.
+///
+/// Invalidated when any of selection, detail tab, content width, or body
+/// byte-length changes. Using byte-length (not a hash) is fast and sufficient:
+/// two different bodies of equal length and equal key fields would share the
+/// same cache entry — in practice this cannot happen since `selected_index` is
+/// also in the key.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BodyWrapCacheKey {
+    /// Raw index of the selected entry, or `None` if nothing is selected.
+    pub selected_index: Option<usize>,
+    /// Active detail sub-tab (determines which body field is rendered).
+    pub detail_tab: NetworkDetailTab,
+    /// Render content width used when the lines were wrapped.
+    pub content_width: usize,
+    /// Byte-length of the formatted body string at wrap time.
+    pub body_len: usize,
+}
+
+/// Memoized pre-wrapped body lines for the details pane.
+///
+/// Re-wrapping a 100–500 KB JSON body on every ~50 ms tick is visible as
+/// stutter. This cache avoids re-wrapping when the inputs have not changed.
+/// It lives on `NetworkState` (behind `RefCell` for interior mutability so
+/// the immutable `&NetworkState` render path can update the cache) and is
+/// naturally cleared by `reset()` and `clear()` (those methods replace the
+/// entire struct). Explicit invalidation via `invalidate_wrap_cache()` handles
+/// input changes (selection, tab, filter).
+///
+/// # Interior mutability
+///
+/// `RefCell` is used here for the same reason `Cell<usize>` is used for
+/// render-hint fields in `PerformanceState`: the TUI render path receives
+/// `&NetworkState` (not `&mut`), so `RefCell` provides the safe interior
+/// mutability required to populate the cache during `render`. `NetworkState`
+/// is owned by a single engine task (never shared across threads), so
+/// `RefCell` (not `Mutex`) is correct.
+#[derive(Debug, Default)]
+pub struct BodyWrapCache {
+    /// Cache discriminant. `None` means the cache is empty / invalid.
+    pub key: Option<BodyWrapCacheKey>,
+    /// The wrapped lines, valid when `key` matches the current render inputs.
+    pub lines: Vec<String>,
+}
 
 // ── NetworkDetailTab ──────────────────────────────────────────────────────────
 
@@ -65,6 +113,14 @@ pub struct NetworkState {
     pub filter_input_active: bool,
     /// Buffer for the filter text being typed (committed on Enter).
     pub filter_input_buffer: String,
+    /// Memoized pre-wrapped body lines for the details pane.
+    ///
+    /// Keyed by (selected_index, detail_tab, content_width, body_len) to avoid
+    /// re-wrapping large formatted JSON bodies on every ~50 ms render tick.
+    /// Invalidated automatically by selection/tab/width changes and by
+    /// `reset()`/`clear()`. Behind `RefCell` so the immutable render path
+    /// can populate the cache.
+    pub body_wrap_cache: RefCell<BodyWrapCache>,
 }
 
 impl Default for NetworkState {
@@ -86,6 +142,7 @@ impl Default for NetworkState {
             last_error: None,
             filter_input_active: false,
             filter_input_buffer: String::new(),
+            body_wrap_cache: RefCell::new(BodyWrapCache::default()),
         }
     }
 }
@@ -190,6 +247,17 @@ impl NetworkState {
             .count()
     }
 
+    /// Invalidate the body wrap cache.
+    ///
+    /// Called whenever the cache key inputs change: selection, detail tab switch,
+    /// or filter change. `reset()` and `clear()` invalidate implicitly by
+    /// replacing the entire struct (and thus the `RefCell`) with defaults.
+    pub fn invalidate_wrap_cache(&mut self) {
+        let mut cache = self.body_wrap_cache.borrow_mut();
+        cache.key = None;
+        cache.lines.clear();
+    }
+
     /// Update the filter text and clear any active selection.
     ///
     /// Clearing the selection on filter change avoids the index domain mismatch
@@ -204,6 +272,7 @@ impl NetworkState {
         self.selected_detail = None;
         self.scroll_offset = 0;
         self.details_scroll_offset = 0;
+        self.invalidate_wrap_cache();
     }
 
     /// Clear all entries and reset poll timestamp.
@@ -214,6 +283,7 @@ impl NetworkState {
         self.last_poll_timestamp = None;
         self.scroll_offset = 0;
         self.details_scroll_offset = 0;
+        self.invalidate_wrap_cache();
     }
 
     /// Navigate selection up.
@@ -228,6 +298,7 @@ impl NetworkState {
         });
         self.selected_detail = None; // invalidate cached detail
         self.details_scroll_offset = 0; // reset detail viewport on selection change
+        self.invalidate_wrap_cache();
     }
 
     /// Navigate selection down.
@@ -243,12 +314,48 @@ impl NetworkState {
         });
         self.selected_detail = None; // invalidate cached detail
         self.details_scroll_offset = 0; // reset detail viewport on selection change
+        self.invalidate_wrap_cache();
     }
 
     /// Get the selected entry (if any).
     pub fn selected_entry(&self) -> Option<&HttpProfileEntry> {
         let filtered = self.filtered_entries();
         self.selected_index.and_then(|i| filtered.get(i).copied())
+    }
+
+    /// Return the cached pre-wrapped body lines if the cache is valid for
+    /// the given key; otherwise compute them from `formatted_body`, store them,
+    /// and return a reference-counted clone of the stored lines.
+    ///
+    /// The returned `Vec<String>` is a clone of the stored cache; this avoids
+    /// holding the `RefCell` borrow across the caller's render loop.
+    pub fn get_or_compute_wrapped_lines(
+        &self,
+        key: BodyWrapCacheKey,
+        formatted_body: &str,
+        max_width: usize,
+    ) -> Vec<String> {
+        {
+            let cache = self.body_wrap_cache.borrow();
+            if cache.key.as_ref() == Some(&key) {
+                return cache.lines.clone();
+            }
+        }
+        // Cache miss — compute and store.
+        let lines = if max_width == 0 || formatted_body.is_empty() {
+            Vec::new()
+        } else {
+            textwrap::wrap(formatted_body, max_width)
+                .into_iter()
+                .map(|cow| cow.into_owned())
+                .collect()
+        };
+        {
+            let mut cache = self.body_wrap_cache.borrow_mut();
+            cache.key = Some(key);
+            cache.lines = lines.clone();
+        }
+        lines
     }
 
     /// Scroll the details pane up by one line, clamped to 0.

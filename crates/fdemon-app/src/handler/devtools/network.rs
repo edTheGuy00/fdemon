@@ -184,12 +184,16 @@ pub(crate) fn handle_network_select_request(
 ///
 /// Changes the active detail tab (General, Headers, RequestBody,
 /// ResponseBody, or Timing) for the currently active session.
+/// Resets the detail scroll offset so the new tab always starts at the top,
+/// and invalidates the body wrap cache (the active tab is part of the cache key).
 pub(crate) fn handle_network_switch_detail_tab(
     state: &mut AppState,
     tab: NetworkDetailTab,
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
         handle.session.network.detail_tab = tab;
+        handle.session.network.details_scroll_offset = 0;
+        handle.session.network.invalidate_wrap_cache();
     }
     UpdateResult::none()
 }
@@ -299,12 +303,12 @@ pub(crate) fn handle_network_details_scroll_up(state: &mut AppState) -> UpdateRe
 
 /// Scroll the details pane down by one line.
 ///
+/// Delegates to [`NetworkState::scroll_details_down`], mirroring the up handler.
 /// The TUI clamps `details_scroll_offset` to `(total_lines - viewport_height)`
 /// during rendering, so it is safe to increment unconditionally here.
 pub(crate) fn handle_network_details_scroll_down(state: &mut AppState) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
-        handle.session.network.details_scroll_offset =
-            handle.session.network.details_scroll_offset.saturating_add(1);
+        handle.session.network.scroll_details_down();
     }
     UpdateResult::none()
 }

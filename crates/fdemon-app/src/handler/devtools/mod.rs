@@ -679,6 +679,11 @@ pub fn handle_switch_extension_panel(state: &mut AppState, id: String) -> Update
 /// the active *built-in* (`devtools_view_state.active_panel`), as if the user
 /// were navigating away from it. Used when switching to a host-registered
 /// extension panel so no built-in RPC traffic continues behind it.
+///
+/// When leaving the Performance panel this also clears the timeline event
+/// buffer, matching the clean-state semantics of [`handle_switch_panel`]'s
+/// leave-Performance path so that a Performance→extension→Performance
+/// round-trip is indistinguishable from a normal panel-leave/re-enter cycle.
 fn pause_builtin_polling_on_leave(state: &mut AppState) {
     let old_panel = state.devtools_view_state.active_panel;
 
@@ -697,6 +702,19 @@ fn pause_builtin_polling_on_leave(state: &mut AppState) {
             if let Some(ref tx) = handle.timeline_pause_tx {
                 let _ = tx.send(true);
             }
+        }
+        // Clear timeline buffers so re-entering Performance shows fresh data,
+        // mirroring the leave-Performance path in handle_switch_panel.
+        if let Some(handle) = state.session_manager.selected_mut() {
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.clear();
+            perf.timeline_thread_name_map.clear();
+            perf.timeline_thread_scroll_offset = 0;
+            perf.committed_frame_anchor = None;
+            perf.frame_anchor_map.clear();
+            perf.timeline_search_query = None;
+            perf.timeline_search_input_active = false;
+            perf.timeline_search_match_cursor = 0;
         }
     }
 
@@ -2503,6 +2521,50 @@ mod tests {
             !*net_rx.borrow(),
             "exit must NOT pause network polling while service monitoring is active \
              (MCP/headless consumers need HTTP profile entries)"
+        );
+    }
+
+    /// `update(CycleDevToolsPanel { forward: true })` fires the full
+    /// `handle_switch_panel` / `handle_switch_extension_panel` side-effect
+    /// chain — not just the key router emitting the message.
+    ///
+    /// Scenario: start on Performance (alloc + timeline active), cycle forward
+    /// to the *next* built-in (Memory). We expect:
+    /// - alloc poller stays active  (Performance → Memory is alloc→alloc, no pause)
+    /// - timeline poller is paused  (leaving Performance)
+    /// - active panel changes to Memory
+    ///
+    /// This is an update()-level test; `handle_cycle_panel` alone could pass
+    /// while a wiring bug in `update.rs` silently drops the message.
+    #[test]
+    fn cycle_devtools_panel_via_update_fires_pause_side_effects() {
+        use crate::handler::update::update;
+        use crate::message::Message;
+
+        let (mut state, _perf_rx, alloc_rx, _net_rx, timeline_rx) =
+            make_state_with_all_pollers_active();
+
+        // Pre-condition: start on Performance.
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        // Cycle forward: Inspector(0) → Performance(1) → Memory(2) — but we
+        // start at Performance(1) so forward lands on Memory(2).
+        update(&mut state, Message::CycleDevToolsPanel { forward: true });
+
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Memory,
+            "cycling forward from Performance must select Memory"
+        );
+        // alloc polling: Performance→Memory is alloc→alloc, no pause expected.
+        assert!(
+            !*alloc_rx.borrow(),
+            "alloc poller must remain active when cycling between alloc panels"
+        );
+        // timeline polling: leaving Performance must pause timeline.
+        assert!(
+            *timeline_rx.borrow(),
+            "timeline poller must be paused when cycling away from Performance"
         );
     }
 }

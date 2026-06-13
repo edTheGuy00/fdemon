@@ -23,7 +23,7 @@ pub use handle::{CustomSourceHandle, SessionHandle, SharedSourceHandle};
 pub use log_batcher::LogBatcher;
 pub use memory::{AllocationSortColumn, MemorySection, MemoryState};
 pub use native_tags::NativeTagState;
-pub use network::{NetworkDetailTab, NetworkState};
+pub use network::{BodyWrapCacheKey, NetworkDetailTab, NetworkState};
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
 pub use performance::{
     PerfSection, PerformanceState, SelectionDirection, TimelineEventCursor, TimelineFilter,
