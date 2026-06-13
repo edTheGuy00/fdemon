@@ -8,6 +8,7 @@
 pub mod launch;
 pub mod priority;
 pub mod settings;
+pub mod toml_merge;
 pub mod types;
 pub mod vscode;
 pub mod writer;

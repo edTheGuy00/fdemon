@@ -821,6 +821,7 @@ dependencies = [
  "tokio-test",
  "tokio-util",
  "toml",
+ "toml_edit",
  "tracing",
  "trait-variant",
  "wiremock",

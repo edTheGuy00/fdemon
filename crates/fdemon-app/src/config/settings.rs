@@ -542,12 +542,33 @@ pub fn save_settings(project_path: &Path, settings: &Settings) -> Result<()> {
 
     let config_path = fdemon_dir.join(CONFIG_FILENAME);
 
-    // Generate TOML content with header
-    let header = generate_config_header();
-    let content = toml::to_string_pretty(settings)
+    // Format-preserving write: only the keys the user actually changed are
+    // updated; comments, key order, and any hand-written sections the struct
+    // does not model are left untouched. The baseline is the editor's starting
+    // point (`load_settings`, same path the panel loaded from), so the diff
+    // against `settings` is exactly the in-panel edits.
+    let baseline = load_settings(project_path);
+    let baseline_val = toml::Value::try_from(&baseline)
+        .map_err(|e| Error::config(format!("Failed to encode baseline settings: {}", e)))?;
+    let current_val = toml::Value::try_from(settings)
         .map_err(|e| Error::config(format!("Failed to serialize settings: {}", e)))?;
 
-    let full_content = format!("{}{}", header, content);
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let is_new = existing.trim().is_empty();
+    let merged = super::toml_merge::merge_into_existing(&existing, &baseline_val, &current_val)
+        .map_err(|e| {
+            Error::config(format!(
+                "Refusing to overwrite malformed {}: {}",
+                config_path.display(),
+                e
+            ))
+        })?;
+    // Brand-new files get the explanatory header; existing files keep their own.
+    let full_content = if is_new {
+        format!("{}{}", generate_config_header(), merged)
+    } else {
+        merged
+    };
 
     // Atomic write: create a uniquely-named temp file in the same directory,
     // write the content, then persist (rename) it into the final path.
@@ -805,14 +826,32 @@ pub fn save_user_preferences(
     let prefs_path = fdemon_dir.join(LOCAL_SETTINGS_FILENAME);
     let temp_path = fdemon_dir.join(".settings.local.toml.tmp");
 
-    // Serialize to TOML with header comment
-    let header = "# User-specific preferences (not tracked in git)\n\
-                  # These override values from config.toml\n\n";
-
-    let content = toml::to_string_pretty(prefs)
+    // Format-preserving write (see `save_settings`): only changed keys are
+    // updated, preserving any comments or hand-written keys. Baseline is the
+    // on-disk prefs the editor loaded; defaults when the file is absent.
+    let baseline = load_user_preferences(project_path).unwrap_or_default();
+    let baseline_val = toml::Value::try_from(&baseline)
+        .map_err(|e| Error::config(format!("Failed to encode baseline preferences: {}", e)))?;
+    let current_val = toml::Value::try_from(prefs)
         .map_err(|e| Error::config(format!("Failed to serialize preferences: {}", e)))?;
 
-    let full_content = format!("{}{}", header, content);
+    let existing = std::fs::read_to_string(&prefs_path).unwrap_or_default();
+    let is_new = existing.trim().is_empty();
+    let merged = super::toml_merge::merge_into_existing(&existing, &baseline_val, &current_val)
+        .map_err(|e| {
+            Error::config(format!(
+                "Refusing to overwrite malformed {}: {}",
+                prefs_path.display(),
+                e
+            ))
+        })?;
+    let header = "# User-specific preferences (not tracked in git)\n\
+                  # These override values from config.toml\n\n";
+    let full_content = if is_new {
+        format!("{}{}", header, merged)
+    } else {
+        merged
+    };
 
     // Atomic write: write to temp, then rename
     std::fs::write(&temp_path, full_content)
@@ -989,6 +1028,51 @@ auto_reload = false
         // Should return defaults
         let settings = load_settings(temp.path());
         assert!(settings.behavior.confirm_quit);
+    }
+
+    #[test]
+    fn save_settings_preserves_comments_and_only_writes_changed_key() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // A hand-crafted config with comments and a section the panel won't touch.
+        let original = "\
+# My project config — keep these notes!
+[behavior]
+confirm_quit = true  # ask before quitting
+
+[ui]
+theme = \"dark\"  # my favourite
+";
+        std::fs::write(fdemon_dir.join("config.toml"), original).unwrap();
+
+        // Load (the editor's starting point), change a single field, save.
+        let mut settings = load_settings(temp.path());
+        settings.behavior.confirm_quit = false;
+        save_settings(temp.path(), &settings).unwrap();
+
+        let after = std::fs::read_to_string(fdemon_dir.join("config.toml")).unwrap();
+        assert!(
+            after.contains("confirm_quit = false"),
+            "change applied: {after}"
+        );
+        assert!(after.contains("# My project config"), "header comment kept");
+        assert!(
+            after.contains("# ask before quitting"),
+            "inline comment kept"
+        );
+        assert!(
+            after.contains("# my favourite"),
+            "untouched section comment kept"
+        );
+        assert!(after.contains("theme = \"dark\""), "untouched value kept");
+        // The panel never touched the UI tab, so no UI keys should be rewritten
+        // beyond what was already there (no wholesale re-serialisation).
+        assert!(
+            !after.contains("log_buffer_size"),
+            "defaults for untouched keys must not be materialised: {after}"
+        );
     }
 
     #[test]
