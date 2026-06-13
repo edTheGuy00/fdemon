@@ -2157,9 +2157,11 @@ fn nonzero_offset_renderer_recorder_parity() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let mut regions = MouseRegions::default();
 
-    let mut state = SettingsViewState::default();
-    state.active_tab = SettingsTab::Project;
-    state.selected_index = last;
+    let mut state = SettingsViewState {
+        active_tab: SettingsTab::Project,
+        selected_index: last,
+        ..Default::default()
+    };
 
     {
         let panel = SettingsPanel::new(&settings, project_path, &[]);
@@ -2266,8 +2268,10 @@ fn extra_tab_renders_provider_items_and_registers_regions() {
         vec![Box::new(DemoProvider)];
     let panel = SettingsPanel::new(&settings, project_path, &extra);
 
-    let mut state = SettingsViewState::default();
-    state.active_tab = SettingsTab::Extra(0);
+    let mut state = SettingsViewState {
+        active_tab: SettingsTab::Extra(0),
+        ..Default::default()
+    };
 
     let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
     let mut regions = MouseRegions::default();
@@ -2321,7 +2325,7 @@ impl fdemon_app::settings_tab_provider::SettingsTabProvider for ScrollProvider {
     fn items(&self) -> Vec<SettingItem> {
         (0..20)
             .map(|i| {
-                SettingItem::new(&format!("scroll.item{}", i), &format!("Item {}", i))
+                SettingItem::new(format!("scroll.item{}", i), format!("Item {}", i))
                     .value(SettingValue::Bool(false))
                     .section("Items".to_string())
             })
@@ -2362,9 +2366,11 @@ fn nonzero_offset_renderer_recorder_parity_extra_tab() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let mut regions = MouseRegions::default();
 
-    let mut state = SettingsViewState::default();
-    state.active_tab = SettingsTab::Extra(0);
-    state.selected_index = last;
+    let mut state = SettingsViewState {
+        active_tab: SettingsTab::Extra(0),
+        selected_index: last,
+        ..Default::default()
+    };
 
     let panel = SettingsPanel::new(&settings, project_path, &extra);
     {
