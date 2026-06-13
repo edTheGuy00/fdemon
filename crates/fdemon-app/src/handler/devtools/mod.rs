@@ -2251,4 +2251,129 @@ mod tests {
             "handle_exit_devtools_mode should reset timeline_thread_scroll_offset to 0"
         );
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Polling-stop guarantee tests (T2: polling-stop-guarantee, W5)
+    //
+    // These regression tests prove that closing the DevTools page pauses ALL
+    // four VM polling channels (performance, allocation, network, timeline) so
+    // no further VM Service RPCs fire. The VM WebSocket itself is NOT torn down
+    // (socket teardown is on session close, not DevTools close).
+    //
+    // The pause channels are watch::channel<bool> senders stored on SessionHandle.
+    // When paused (`true`), each poll loop body checks the channel and executes
+    // `continue` — a true no-op that issues no RPC.  We prove this by asserting
+    // the channel values after handle_exit_devtools_mode returns.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Build a state with all four polling pause channels wired up and active
+    /// (channel value = false = polling active). Returns the AppState and four
+    /// receivers so tests can assert the channel values after the handler runs.
+    #[allow(clippy::type_complexity)]
+    fn make_state_with_all_pollers_active() -> (
+        AppState,
+        tokio::sync::watch::Receiver<bool>, // perf_pause_rx
+        tokio::sync::watch::Receiver<bool>, // alloc_pause_rx
+        tokio::sync::watch::Receiver<bool>, // network_pause_rx
+        tokio::sync::watch::Receiver<bool>, // timeline_pause_rx
+    ) {
+        let mut state = make_state_with_session();
+
+        let (perf_tx, perf_rx) = tokio::sync::watch::channel(false); // active
+        let (alloc_tx, alloc_rx) = tokio::sync::watch::channel(false); // active
+        let (net_tx, net_rx) = tokio::sync::watch::channel(false); // active
+        let (timeline_tx, timeline_rx) = tokio::sync::watch::channel(false); // active
+
+        // Also wire shutdown senders so the handlers that check `is_none()` see
+        // running tasks (some guards check shutdown_tx.is_some() before pausing).
+        let (perf_shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let (net_shutdown_tx, _) = tokio::sync::watch::channel(false);
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(perf_shutdown_tx));
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_tx));
+        handle.alloc_pause_tx = Some(std::sync::Arc::new(alloc_tx));
+        handle.network_shutdown_tx = Some(std::sync::Arc::new(net_shutdown_tx));
+        handle.network_pause_tx = Some(std::sync::Arc::new(net_tx));
+        handle.timeline_pause_tx = Some(std::sync::Arc::new(timeline_tx));
+
+        (state, perf_rx, alloc_rx, net_rx, timeline_rx)
+    }
+
+    /// Regression test: after `handle_exit_devtools_mode`, ALL four polling
+    /// channels (perf, alloc, network, timeline) must be set to `true` (paused).
+    ///
+    /// This proves the invariant: "closing the DevTools page produces zero VM
+    /// RPC traffic from all devtools pollers" because each poll loop body
+    /// checks its pause channel and executes `continue` when `true`, issuing
+    /// no RPC. Socket teardown is NOT triggered — only the pause flags change.
+    #[test]
+    fn devtools_close_pauses_all_four_pollers() {
+        let (mut state, perf_rx, alloc_rx, net_rx, timeline_rx) =
+            make_state_with_all_pollers_active();
+
+        // Precondition: all four pollers are active (false = not paused).
+        assert!(!*perf_rx.borrow(), "precondition: perf should be active");
+        assert!(!*alloc_rx.borrow(), "precondition: alloc should be active");
+        assert!(!*net_rx.borrow(), "precondition: network should be active");
+        assert!(
+            !*timeline_rx.borrow(),
+            "precondition: timeline should be active"
+        );
+
+        handle_exit_devtools_mode(&mut state);
+
+        // All four pause channels must now be `true` (paused = no RPC traffic).
+        assert!(
+            *perf_rx.borrow(),
+            "DevTools close must pause perf polling (no getMemoryUsage/getIsolate RPCs)"
+        );
+        assert!(
+            *alloc_rx.borrow(),
+            "DevTools close must pause alloc polling (no getAllocationProfile RPCs)"
+        );
+        assert!(
+            *net_rx.borrow(),
+            "DevTools close must pause network polling (no getHttpProfile RPCs)"
+        );
+        assert!(
+            *timeline_rx.borrow(),
+            "DevTools close must pause timeline polling (no getVMTimeline RPCs)"
+        );
+    }
+
+    /// Regression test: when `devtools_service_monitoring` is enabled, closing
+    /// the DevTools page must NOT pause the perf or network pollers (external
+    /// MCP/headless consumers need the telemetry to keep flowing). The alloc
+    /// and timeline pollers are always paused on DevTools close because the
+    /// service monitoring path only manages perf and network.
+    ///
+    /// This mirrors the behaviour in `monitoring.rs`'s
+    /// `handle_start_devtools_monitoring` which only unpauses perf+network.
+    #[test]
+    fn devtools_close_with_service_monitoring_keeps_perf_and_network_active() {
+        let (mut state, perf_rx, _alloc_rx, net_rx, _timeline_rx) =
+            make_state_with_all_pollers_active();
+
+        // Enable service-layer monitoring for this session.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .devtools_service_monitoring = true;
+
+        handle_exit_devtools_mode(&mut state);
+
+        // Perf and network must remain active (false) while service monitoring is on.
+        assert!(
+            !*perf_rx.borrow(),
+            "exit must NOT pause perf polling while service monitoring is active \
+             (MCP/headless consumers need memory samples)"
+        );
+        assert!(
+            !*net_rx.borrow(),
+            "exit must NOT pause network polling while service monitoring is active \
+             (MCP/headless consumers need HTTP profile entries)"
+        );
+    }
 }
