@@ -66,6 +66,7 @@
 pub(crate) mod actions;
 pub mod config;
 pub mod confirm_dialog;
+pub mod devtools_panel_provider;
 pub mod editor;
 pub mod engine;
 pub mod engine_event;
@@ -101,6 +102,7 @@ pub use message::{DebugOverlayKind, Message};
 pub use plugin::EnginePlugin;
 pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
+pub use devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
 pub use settings_tab_provider::SettingsTabProvider;
 pub use state::{
     AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, StatusBadge,

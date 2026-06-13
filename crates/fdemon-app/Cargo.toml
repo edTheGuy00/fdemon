@@ -9,6 +9,11 @@ description = "Application state and orchestration for Flutter Demon"
 fdemon-core.workspace = true
 fdemon-daemon.workspace = true
 fdemon-dap.workspace = true
+# ratatui types appear in the out-of-tree DevTools panel seam
+# (`devtools_panel_provider`): a registered panel renders into a ratatui
+# `Buffer`/`Rect`. fdemon-app stays otherwise terminal-library-independent; the
+# headless/MCP paths simply register no panels, so this dep is inert there.
+ratatui.workspace = true
 tokio.workspace = true
 chrono.workspace = true
 serde.workspace = true

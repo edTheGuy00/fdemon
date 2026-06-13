@@ -620,6 +620,49 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// - `r` — in Inspector: refresh widget tree
 /// - `q` — request quit
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
+    // ── Out-of-tree extension panel routing (DevToolsPanelProvider seam) ──────
+    //
+    // When a host-registered panel is the active DevTools panel, keys are routed
+    // to it BEFORE any built-in handler. The host reserves a few keys for itself:
+    //   - Tab / Shift+Tab cycle the combined panel set (built-ins + registered),
+    //   - Esc exits DevTools (same tiered behaviour as built-ins via DevToolsEscape),
+    //   - i/p/m/n switch directly to the matching built-in panel (escape hatch),
+    // everything else is delivered to the panel's `handle_key` via a message.
+    //
+    // This entire block is unreachable in stock fdemon (no registered panels →
+    // `active_extension_panel` is always `None`), so built-in behaviour is
+    // byte-identical.
+    if state.devtools_view_state.active_extension_panel.is_some() {
+        // Confirm the id is still registered; a stale id falls through to the
+        // built-in handlers (the view shows the built-in fallback too).
+        let id_live = state
+            .devtools_view_state
+            .active_extension_panel
+            .as_deref()
+            .map(|id| state.extra_devtools_panels.iter().any(|p| p.id() == id))
+            .unwrap_or(false);
+        if id_live {
+            return match key {
+                InputKey::Tab => Some(Message::CycleDevToolsPanel { forward: true }),
+                InputKey::BackTab => Some(Message::CycleDevToolsPanel { forward: false }),
+                InputKey::Esc => Some(Message::DevToolsEscape),
+                InputKey::Char('i') => {
+                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector))
+                }
+                InputKey::Char('p') => {
+                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance))
+                }
+                InputKey::Char('m') => {
+                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory))
+                }
+                InputKey::Char('n') => {
+                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+                }
+                other => Some(Message::DevToolsExtensionPanelKey(other)),
+            };
+        }
+    }
+
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
     let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
     let in_memory = state.devtools_view_state.active_panel == DevToolsPanel::Memory;

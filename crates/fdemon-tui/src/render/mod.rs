@@ -511,12 +511,23 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         UiMode::DevTools => {
             // DevTools mode renders into the log area (below the header/tabs)
             // so the project name and session tabs remain visible.
+            //
+            // The host-registered extension panels (`extra_devtools_panels`) are
+            // threaded in as a mutable borrow so the active extension panel can
+            // render through `&mut self`. The three borrows of `state` here are
+            // disjoint fields (`devtools_view_state`, `session_manager`,
+            // `extra_devtools_panels`, plus `animation_frame`), so the borrow
+            // checker accepts them simultaneously. With no registered panels this
+            // is byte-identical to the stock path.
+            let session_count = state.session_manager.len();
+            let animation_frame = state.animation_frame;
             let devtools = widgets::devtools::DevToolsView::new(
                 &state.devtools_view_state,
                 state.session_manager.selected(),
                 icons,
-                state.session_manager.len(),
-            );
+                session_count,
+            )
+            .with_panels(&mut state.extra_devtools_panels, animation_frame);
             widgets::devtools::render_with_regions(
                 areas.logs,
                 frame.buffer_mut(),

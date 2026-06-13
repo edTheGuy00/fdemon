@@ -14,6 +14,7 @@ pub use memory::MemoryPanel;
 pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
+use fdemon_app::devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider};
 use fdemon_app::message::Message;
 use fdemon_app::session::{MemoryState, PerfSection, PerformanceState, SessionHandle};
 use fdemon_app::state::{DevToolsPanel, DevToolsViewState, PerfDetailsTab, VmConnectionStatus};
@@ -57,10 +58,23 @@ pub struct DevToolsView<'a> {
     /// When >1, the displayed session's device name is shown next to the
     /// "DevTools" title in the tab bar so the user can identify the session.
     session_count: usize,
+    /// Host-registered extension panels (out-of-tree DevTools panel seam).
+    ///
+    /// `None` in tests and in the legacy `new` constructor (stock behaviour:
+    /// no extension panels). When `Some`, the tab bar enumerates these after
+    /// the built-ins and the active extension panel is rendered with `&mut self`.
+    /// Held as `&mut` so stateful panels can mutate during draw.
+    panels: Option<&'a mut Vec<Box<dyn DevToolsPanelProvider>>>,
+    /// Animation frame counter, forwarded to extension panels via their ctx.
+    animation_frame: u64,
 }
 
 impl<'a> DevToolsView<'a> {
-    /// Create a new `DevToolsView` widget.
+    /// Create a new `DevToolsView` widget with no extension panels.
+    ///
+    /// This is the stock constructor: behaviour is byte-identical to before the
+    /// extension-panel seam existed. Hosts that register panels use
+    /// [`DevToolsView::with_panels`].
     pub fn new(
         state: &'a DevToolsViewState,
         session: Option<&'a SessionHandle>,
@@ -72,7 +86,42 @@ impl<'a> DevToolsView<'a> {
             session,
             icons,
             session_count,
+            panels: None,
+            animation_frame: 0,
         }
+    }
+
+    /// Attach the host-registered extension panels and the animation frame.
+    ///
+    /// Builder-style; the mutable borrow lets the active extension panel render
+    /// through `&mut self`. Passing an empty `Vec` is equivalent to [`new`]
+    /// (no extension tabs, no behaviour change).
+    ///
+    /// [`new`]: DevToolsView::new
+    pub fn with_panels(
+        mut self,
+        panels: &'a mut Vec<Box<dyn DevToolsPanelProvider>>,
+        animation_frame: u64,
+    ) -> Self {
+        self.panels = Some(panels);
+        self.animation_frame = animation_frame;
+        self
+    }
+
+    /// The id of the panel that is currently visible, accounting for a live
+    /// extension-panel selection vs. the built-in fallback.
+    fn active_panel_id(&self) -> &str {
+        if let Some(id) = self.state.active_extension_panel.as_deref() {
+            let live = self
+                .panels
+                .as_ref()
+                .map(|ps| ps.iter().any(|p| p.id() == id))
+                .unwrap_or(false);
+            if live {
+                return id;
+            }
+        }
+        self.state.active_panel.id()
     }
 }
 
@@ -92,7 +141,7 @@ impl DevToolsView<'_> {
     /// `Widget::render` implementation. When `ctx` is `Some`, click regions
     /// are recorded for the sub-tab bar and forwarded to the active panel's
     /// click-aware render path.
-    fn render_impl(self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
+    fn render_impl(mut self, area: Rect, buf: &mut Buffer, mut ctx: Option<&mut MouseCtx<'_>>) {
         // Clear background — set every cell to ' ' with the background style
         // so the log view underneath is fully occluded.
         let bg_style = Style::default().bg(palette::DEEPEST_BG);
@@ -136,6 +185,41 @@ impl DevToolsView<'_> {
             .session
             .map(|h| &h.vm_connection_status)
             .unwrap_or(&DISCONNECTED);
+
+        // ── Extension-panel dispatch (out-of-tree DevToolsPanelProvider seam) ──
+        //
+        // When a host-registered panel is active AND still registered, render it
+        // via `&mut self` instead of any built-in. Stock fdemon never reaches
+        // this (panels is None / active_extension_panel is None), so the built-in
+        // dispatch below is byte-identical to before.
+        if self.state.active_extension_panel.is_some() {
+            // Read disjoint immutable data into locals before the mutable
+            // borrow of `self.panels` below.
+            let vm_connected = self
+                .session
+                .map(|s| s.session.vm_connected)
+                .unwrap_or(false);
+            let animation_frame = self.animation_frame;
+            let ext_id = self
+                .state
+                .active_extension_panel
+                .clone()
+                .unwrap_or_default();
+
+            let mut footer_hint: Option<String> = None;
+            if let Some(panels) = self.panels.as_deref_mut() {
+                if let Some(panel) = panels.iter_mut().find(|p| p.id() == ext_id) {
+                    let ctx = DevToolsPanelCtx::new(vm_connected, animation_frame);
+                    panel.render(chunks[1], buf, ctx);
+                    footer_hint = Some(panel.key_hint().to_string());
+                }
+            }
+            if let Some(hint) = footer_hint {
+                render_footer_hint(chunks[1], buf, &hint);
+                return;
+            }
+            // Stale id (provider removed): fall through to built-in dispatch.
+        }
 
         // Panel dispatch — panel sister functions share render_impl with
         // Widget::render so region recording flows through cleanly.
@@ -267,9 +351,14 @@ impl DevToolsView<'_> {
             (DevToolsPanel::Network, "[n] Network"),
         ];
 
+        // Highlight uses the *visible* panel id so an active extension panel
+        // de-highlights the built-ins. With no extension panel this equals
+        // `active_panel.id()`, so built-in highlighting is unchanged.
+        let active_id = self.active_panel_id();
+
         let mut x = inner.x + 1;
         for (panel, label) in &tabs {
-            let is_active = self.state.active_panel == *panel;
+            let is_active = active_id == panel.id();
             let padded = format!(" {label} ");
             let needed_width = padded.len() as u16;
 
@@ -300,6 +389,48 @@ impl DevToolsView<'_> {
             }
 
             x += needed_width + 1;
+        }
+
+        // ── Host-registered extension panel tabs ─────────────────────────────
+        //
+        // Rendered after the four built-ins, in registration order. Stock fdemon
+        // has no registered panels (`self.panels` is None or empty), so this
+        // loop is a no-op and the tab bar is byte-identical to before.
+        if let Some(panels) = self.panels.as_deref() {
+            for panel in panels.iter() {
+                let is_active = active_id == panel.id();
+                let padded = format!(" {} ", panel.title());
+                let needed_width = padded.len() as u16;
+
+                if x + needed_width > inner.right() {
+                    break;
+                }
+
+                let style = if is_active {
+                    Style::default()
+                        .bg(Color::Cyan)
+                        .fg(Color::Black)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(palette::TEXT_MUTED)
+                };
+
+                buf.set_string(x, inner.y, &padded, style);
+
+                if let Some(ref mut c) = ctx {
+                    let rect = MouseRect::new(x, inner.y, needed_width, 1);
+                    if rect.width > 0 && rect.height > 0 {
+                        c.click(
+                            rect,
+                            MouseAction::emit(Message::SwitchDevToolsExtensionPanel(
+                                panel.id().to_string(),
+                            )),
+                        );
+                    }
+                }
+
+                x += needed_width + 1;
+            }
         }
 
         // Right-aligned overlay status indicators
@@ -414,8 +545,6 @@ impl DevToolsView<'_> {
             return;
         }
 
-        let y = area.y + area.height - 1;
-
         let hints: std::borrow::Cow<'static, str> = match self.state.active_panel {
             DevToolsPanel::Inspector => {
                 if self.state.inspector.details_open {
@@ -476,17 +605,31 @@ impl DevToolsView<'_> {
             }
         };
 
-        // Truncate hints to fit available width
-        let max_width = area.width.saturating_sub(2) as usize;
-        let display_hints: String = hints.chars().take(max_width).collect();
-
-        buf.set_string(
-            area.x + 1,
-            y,
-            &display_hints,
-            Style::default().fg(palette::TEXT_MUTED),
-        );
+        render_footer_hint(area, buf, &hints);
     }
+}
+
+/// Draw a single line of footer hint text at the bottom of `area`.
+///
+/// Shared by the built-in [`DevToolsView::render_footer`] and the extension-panel
+/// dispatch path (which uses each panel's `key_hint`). Hints are truncated to the
+/// available width and styled with the muted footer colour, matching the
+/// built-in panels exactly. No-op when `area.height < 2`.
+fn render_footer_hint(area: Rect, buf: &mut Buffer, hints: &str) {
+    if area.height < 2 {
+        return;
+    }
+    let y = area.y + area.height - 1;
+    // Truncate hints to fit available width
+    let max_width = area.width.saturating_sub(2) as usize;
+    let display_hints: String = hints.chars().take(max_width).collect();
+
+    buf.set_string(
+        area.x + 1,
+        y,
+        &display_hints,
+        Style::default().fg(palette::TEXT_MUTED),
+    );
 }
 
 // ── render_with_regions (click-aware entry point) ────────────────────────────
@@ -1597,6 +1740,130 @@ mod tests {
         assert!(
             !text.contains('\u{2026}'),
             "Name at exactly DEVICE_NAME_MAX_CHARS must NOT get an ellipsis, got: {text:?}"
+        );
+    }
+
+    // ── Out-of-tree DevTools panel seam (T5) ──────────────────────────────────
+
+    use fdemon_app::devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
+    use fdemon_app::InputKey;
+
+    /// Render-counting dummy panel that draws a recognizable marker string.
+    #[derive(Debug, Default)]
+    struct MarkerPanel {
+        renders: usize,
+    }
+
+    impl DevToolsPanelProvider for MarkerPanel {
+        fn id(&self) -> &str {
+            "preview"
+        }
+        fn title(&self) -> &str {
+            "Preview"
+        }
+        fn key_hint(&self) -> &str {
+            "[Esc] Logs  PREVIEW-HINT"
+        }
+        fn render(&mut self, area: Rect, buf: &mut Buffer, _ctx: DevToolsPanelCtx) {
+            self.renders += 1;
+            if area.height > 0 && area.width >= 8 {
+                buf.set_string(area.x, area.y, "MARKER42", Style::default());
+            }
+        }
+        fn handle_key(&mut self, _key: InputKey) -> Handled {
+            Handled::Consumed
+        }
+    }
+
+    /// A registered panel's title appears in the tab bar after the four built-ins.
+    #[test]
+    fn ext_tab_bar_shows_registered_title() {
+        let state = DevToolsViewState::default();
+        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> = vec![Box::new(MarkerPanel::default())];
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1)
+            .with_panels(&mut panels, 0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 100, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 100, 3);
+        assert!(text.contains("Inspector"), "built-ins still shown: {text:?}");
+        assert!(
+            text.contains("Preview"),
+            "registered panel title must appear in tab bar, got: {text:?}"
+        );
+    }
+
+    /// When the extension panel is active, the panel content (via `&mut self`)
+    /// replaces the built-in panel content, and its key_hint is shown.
+    #[test]
+    fn ext_active_panel_renders_via_mut_self() {
+        let state = DevToolsViewState {
+            active_extension_panel: Some("preview".to_string()),
+            ..Default::default()
+        };
+        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> = vec![Box::new(MarkerPanel::default())];
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1)
+            .with_panels(&mut panels, 0);
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 24);
+        assert!(
+            text.contains("MARKER42"),
+            "active extension panel must render its content, got marker missing"
+        );
+        assert!(
+            text.contains("PREVIEW-HINT"),
+            "active extension panel footer must show its key_hint"
+        );
+        // Render mutated the panel (renders counter advanced).
+        assert_eq!(panels[0_usize].id(), "preview");
+    }
+
+    /// A stale active extension id (no matching registered panel) falls back to
+    /// the built-in panel — the built-in content renders, not a blank panel.
+    #[test]
+    fn ext_stale_id_falls_back_to_builtin_render() {
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Network,
+            active_extension_panel: Some("gone".to_string()),
+            ..Default::default()
+        };
+        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> = vec![Box::new(MarkerPanel::default())];
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1)
+            .with_panels(&mut panels, 0);
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 24);
+        assert!(
+            !text.contains("MARKER42"),
+            "stale id must NOT render the (non-active) preview panel"
+        );
+    }
+
+    /// STOCK: a DevToolsView built with `new` (no panels) and with no extension
+    /// panel active renders byte-identically to one built with an EMPTY panels
+    /// vec. This pins that the seam is a true no-op for stock builds.
+    #[test]
+    fn ext_stock_render_is_identical_with_empty_panels() {
+        let state = DevToolsViewState::default();
+        let area = Rect::new(0, 0, 80, 24);
+
+        let mut buf_plain = Buffer::empty(area);
+        DevToolsView::new(&state, None, IconSet::default(), 1).render(area, &mut buf_plain);
+
+        let mut empty: Vec<Box<dyn DevToolsPanelProvider>> = Vec::new();
+        let mut buf_with = Buffer::empty(area);
+        DevToolsView::new(&state, None, IconSet::default(), 1)
+            .with_panels(&mut empty, 0)
+            .render(area, &mut buf_with);
+
+        assert_eq!(
+            buf_plain, buf_with,
+            "with no registered panels the seam must produce byte-identical output"
         );
     }
 }

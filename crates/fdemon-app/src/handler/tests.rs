@@ -14032,3 +14032,263 @@ mod status_badge_tests {
         assert!(state.status_badge.is_none(), "badge must be cleared");
     }
 }
+
+// ── Out-of-tree DevTools panel registry (T5) ─────────────────────────────────
+
+mod devtools_panel_registry_tests {
+    use super::*;
+    use crate::devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
+    use crate::state::DevToolsPanel;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    /// Build a state in DevTools mode with the given active built-in panel.
+    fn make_devtools_state(panel: DevToolsPanel) -> AppState {
+        let mut state = AppState::new();
+        let device = test_device("d1", "iPhone");
+        state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = panel;
+        state
+    }
+
+    /// Stateful dummy panel: counts renders and keys via shared atomics so a
+    /// test can observe mutation through the `Box<dyn _>` trait object.
+    #[derive(Debug)]
+    struct DummyPanel {
+        id: String,
+        renders: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        keys: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        last_key: std::sync::Arc<std::sync::Mutex<Option<InputKey>>>,
+    }
+
+    impl DummyPanel {
+        fn new(id: &str) -> Self {
+            Self {
+                id: id.to_string(),
+                renders: Default::default(),
+                keys: Default::default(),
+                last_key: Default::default(),
+            }
+        }
+    }
+
+    impl DevToolsPanelProvider for DummyPanel {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn title(&self) -> &str {
+            "Dummy"
+        }
+        fn render(&mut self, _area: Rect, _buf: &mut Buffer, _ctx: DevToolsPanelCtx) {
+            self.renders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn handle_key(&mut self, key: InputKey) -> Handled {
+            self.keys.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.last_key.lock().unwrap() = Some(key);
+            Handled::Consumed
+        }
+    }
+
+    /// A registered panel can be selected by id and becomes the active panel.
+    #[test]
+    fn extension_panel_registers_and_is_selectable() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+
+        assert_eq!(state.extra_devtools_panels.len(), 1);
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+
+        update(
+            &mut state,
+            Message::SwitchDevToolsExtensionPanel("preview".to_string()),
+        );
+        assert_eq!(
+            state.active_devtools_panel_id(),
+            "preview",
+            "selecting a registered panel makes it the visible panel"
+        );
+    }
+
+    /// Switching to a non-existent extension id is a no-op.
+    #[test]
+    fn extension_panel_switch_unknown_id_is_noop() {
+        let mut state = make_devtools_state(DevToolsPanel::Network);
+        update(
+            &mut state,
+            Message::SwitchDevToolsExtensionPanel("ghost".to_string()),
+        );
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+        assert_eq!(state.active_devtools_panel_id(), "network");
+    }
+
+    /// The registered panel appears AFTER the four built-ins in the Tab cycle:
+    /// inspector → performance → memory → network → preview → inspector.
+    #[test]
+    fn extension_panel_appears_after_builtins_in_cycle() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+
+        let expected = [
+            "performance",
+            "memory",
+            "network",
+            "preview",
+            "inspector",
+        ];
+        for want in expected {
+            state.cycle_devtools_panel(true);
+            assert_eq!(
+                state.active_devtools_panel_id(),
+                want,
+                "Tab cycle order: built-ins then registered, wrapping"
+            );
+        }
+    }
+
+    /// Shift+Tab from the first built-in wraps backward to the registered panel.
+    #[test]
+    fn extension_panel_reverse_cycle_wraps_to_registered() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+
+        state.cycle_devtools_panel(false);
+        assert_eq!(
+            state.active_devtools_panel_id(),
+            "preview",
+            "Shift+Tab from inspector wraps to the last (registered) panel"
+        );
+    }
+
+    /// When a registered panel is focused, a non-reserved key is routed to it
+    /// (its `handle_key` is called and it can mutate its own state).
+    #[test]
+    fn extension_panel_receives_focused_keys() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        let panel = DummyPanel::new("preview");
+        let key_count = panel.keys.clone();
+        let last_key = panel.last_key.clone();
+        state.register_devtools_panel(Box::new(panel));
+        state.select_devtools_extension_panel("preview");
+
+        // Key router: a plain char becomes DevToolsExtensionPanelKey.
+        let msg = handle_key(&state, InputKey::Char('z'));
+        assert!(
+            matches!(msg, Some(Message::DevToolsExtensionPanelKey(InputKey::Char('z')))),
+            "focused extension panel keys route to DevToolsExtensionPanelKey, got: {msg:?}"
+        );
+
+        // Dispatching it reaches the provider's handle_key (observed via atomics).
+        update(&mut state, msg.unwrap());
+        assert_eq!(
+            key_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "provider.handle_key must be called exactly once"
+        );
+        assert_eq!(
+            *last_key.lock().unwrap(),
+            Some(InputKey::Char('z')),
+            "the routed key must reach the provider"
+        );
+    }
+
+    /// Reserved keys are NOT delivered to the panel: Tab cycles, Esc exits,
+    /// i/p/m/n switch to built-ins.
+    #[test]
+    fn extension_panel_reserved_keys_not_delivered() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+        state.select_devtools_extension_panel("preview");
+
+        assert!(matches!(
+            handle_key(&state, InputKey::Tab),
+            Some(Message::CycleDevToolsPanel { forward: true })
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::BackTab),
+            Some(Message::CycleDevToolsPanel { forward: false })
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Esc),
+            Some(Message::DevToolsEscape)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('i')),
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector))
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('n')),
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+        ));
+    }
+
+    /// Selecting a built-in clears the active extension panel.
+    #[test]
+    fn switching_to_builtin_clears_extension_panel() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+        state.select_devtools_extension_panel("preview");
+        assert_eq!(state.active_devtools_panel_id(), "preview");
+
+        update(
+            &mut state,
+            Message::SwitchDevToolsPanel(DevToolsPanel::Memory),
+        );
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+        assert_eq!(state.active_devtools_panel_id(), "memory");
+    }
+
+    /// STOCK BEHAVIOUR: with no registered panels, the key router never produces
+    /// any extension message, and the cycle helper still cycles the four
+    /// built-ins in order (no behaviour change).
+    #[test]
+    fn stock_no_registered_panels_behaviour_unchanged() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        assert!(state.extra_devtools_panels.is_empty());
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+
+        // The extension routing block is never entered: Tab keeps its built-in
+        // meaning (Inspector tree mode → not a cycle message).
+        let tab_msg = handle_key(&state, InputKey::Tab);
+        assert!(
+            !matches!(tab_msg, Some(Message::CycleDevToolsPanel { .. })),
+            "Tab must keep built-in semantics when no panels are registered, got: {tab_msg:?}"
+        );
+        assert!(
+            !matches!(tab_msg, Some(Message::DevToolsExtensionPanelKey(_))),
+            "no key is ever routed to an extension panel in stock builds"
+        );
+
+        // The combined cycle degrades to the four built-ins.
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "performance");
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "memory");
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "network");
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "inspector");
+    }
+
+    /// A stale active extension id (provider removed) falls back to the built-in
+    /// for both the active-id query and the key router.
+    #[test]
+    fn stale_extension_id_falls_back_to_builtin() {
+        let mut state = make_devtools_state(DevToolsPanel::Performance);
+        // Set an active extension id with NO matching registered panel.
+        state.devtools_view_state.active_extension_panel = Some("gone".to_string());
+
+        assert_eq!(
+            state.active_devtools_panel_id(),
+            "performance",
+            "stale id falls back to active built-in"
+        );
+        // Key router does not treat it as a live extension panel.
+        let msg = handle_key(&state, InputKey::Char('q'));
+        assert!(
+            !matches!(msg, Some(Message::DevToolsExtensionPanelKey(_))),
+            "stale extension id must not route keys to a (missing) panel"
+        );
+    }
+}

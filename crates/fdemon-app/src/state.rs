@@ -159,6 +159,38 @@ pub enum DevToolsPanel {
     Network,
 }
 
+/// Stable ids of the four built-in DevTools panels, in tab-bar order.
+///
+/// Host-registered panels (`AppState::extra_devtools_panels`) must not reuse
+/// these ids. The combined cycle order is these ids followed by the registered
+/// panels in registration order.
+pub const BUILTIN_DEVTOOLS_PANEL_IDS: [&str; 4] =
+    ["inspector", "performance", "memory", "network"];
+
+impl DevToolsPanel {
+    /// Stable string id for this built-in panel.
+    pub fn id(self) -> &'static str {
+        match self {
+            DevToolsPanel::Inspector => "inspector",
+            DevToolsPanel::Performance => "performance",
+            DevToolsPanel::Memory => "memory",
+            DevToolsPanel::Network => "network",
+        }
+    }
+
+    /// Parse a built-in panel from its stable id, or `None` for unknown ids
+    /// (e.g. a host-registered panel id).
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "inspector" => Some(DevToolsPanel::Inspector),
+            "performance" => Some(DevToolsPanel::Performance),
+            "memory" => Some(DevToolsPanel::Memory),
+            "network" => Some(DevToolsPanel::Network),
+            _ => None,
+        }
+    }
+}
+
 /// A user-friendly error with an actionable hint for DevTools panels.
 ///
 /// Created by [`crate::handler::devtools::map_rpc_error`] which maps raw RPC
@@ -744,8 +776,24 @@ impl InspectorState {
 /// Complete state for the DevTools mode UI.
 #[derive(Debug, Clone, Default)]
 pub struct DevToolsViewState {
-    /// Currently active sub-panel.
+    /// Currently active **built-in** sub-panel.
+    ///
+    /// When [`active_extension_panel`](Self::active_extension_panel) is `Some`,
+    /// a host-registered panel is shown instead of this built-in; `active_panel`
+    /// then records which built-in is restored when the user cycles/switches
+    /// back. Stock fdemon never sets `active_extension_panel`, so this field is
+    /// the sole panel selector and behaviour is byte-identical to before.
     pub active_panel: DevToolsPanel,
+
+    /// Id of the currently active host-registered DevTools panel, if any.
+    ///
+    /// `None` (the default, and the only value reachable in stock fdemon) means
+    /// a built-in panel selected by [`active_panel`](Self::active_panel) is
+    /// shown. `Some(id)` selects the registered
+    /// [`crate::devtools_panel_provider::DevToolsPanelProvider`] with that `id`
+    /// from [`AppState::extra_devtools_panels`]. If the id is stale (provider
+    /// removed), the view falls back to `active_panel`.
+    pub active_extension_panel: Option<String>,
 
     /// Widget inspector tree state (also contains layout explorer data).
     pub inspector: InspectorState,
@@ -1605,6 +1653,19 @@ pub struct AppState {
     /// startup and this field is never cleared during the `AppState` lifetime.
     pub extra_settings_tabs: Vec<Box<dyn crate::settings_tab_provider::SettingsTabProvider>>,
 
+    /// Host-injected extra DevTools panels, rendered after the four built-in
+    /// panels (Inspector, Performance, Memory, Network).
+    ///
+    /// Each provider supplies its own id, title, render surface, and key
+    /// handling via the [`crate::devtools_panel_provider::DevToolsPanelProvider`]
+    /// seam. The public binary leaves this empty (so DevTools behaviour is
+    /// byte-identical to stock); embedders push providers once at startup and
+    /// this field is never cleared during the `AppState` lifetime.
+    ///
+    /// **Stability: UNSTABLE embedder API** — see the module docs.
+    pub extra_devtools_panels:
+        Vec<Box<dyn crate::devtools_panel_provider::DevToolsPanelProvider>>,
+
     /// The UI mode a confirmation dialog was raised over, if it should render
     /// that mode as a backdrop. `Some(UiMode::Settings)` makes the unsaved-
     /// changes prompt appear as an overlay on the still-visible settings panel
@@ -1690,6 +1751,7 @@ impl AppState {
             pending_runner_actions: Vec::new(),
             pending_engine_events: Vec::new(),
             extra_settings_tabs: Vec::new(),
+            extra_devtools_panels: Vec::new(),
             confirm_dialog_backdrop: None,
         }
     }
@@ -1771,8 +1833,96 @@ impl AppState {
     }
 
     /// Switch the active DevTools sub-panel.
+    ///
+    /// Selecting a built-in panel clears any active extension panel so the
+    /// built-in becomes the visible panel again.
     pub fn switch_devtools_panel(&mut self, panel: DevToolsPanel) {
         self.devtools_view_state.active_panel = panel;
+        self.devtools_view_state.active_extension_panel = None;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // DevTools extension-panel registry (out-of-tree seam)
+    // ─────────────────────────────────────────────────────────
+
+    /// Register a host-supplied DevTools panel.
+    ///
+    /// Embedders call this once at startup (before the engine loop) for each
+    /// out-of-tree panel. Panels appear in the sub-tab bar after the four
+    /// built-ins, in registration order. **Stability: UNSTABLE embedder API.**
+    pub fn register_devtools_panel(
+        &mut self,
+        panel: Box<dyn crate::devtools_panel_provider::DevToolsPanelProvider>,
+    ) {
+        self.extra_devtools_panels.push(panel);
+    }
+
+    /// Select a host-registered DevTools panel by its stable id.
+    ///
+    /// Returns `true` if a registered panel with that id exists and was made
+    /// active. Returns `false` (leaving state unchanged) when no such panel is
+    /// registered.
+    pub fn select_devtools_extension_panel(&mut self, id: &str) -> bool {
+        if self.extra_devtools_panels.iter().any(|p| p.id() == id) {
+            self.devtools_view_state.active_extension_panel = Some(id.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The stable id of the panel that is currently visible in DevTools mode.
+    ///
+    /// Returns the active extension panel's id when one is active **and still
+    /// registered**; otherwise the active built-in panel's id. A stale
+    /// extension id (provider removed) falls back to the built-in.
+    pub fn active_devtools_panel_id(&self) -> &str {
+        if let Some(id) = self.devtools_view_state.active_extension_panel.as_deref() {
+            if self.extra_devtools_panels.iter().any(|p| p.id() == id) {
+                return id;
+            }
+        }
+        self.devtools_view_state.active_panel.id()
+    }
+
+    /// Build the combined, ordered list of panel ids: the four built-ins
+    /// followed by registered panels in registration order.
+    fn devtools_panel_id_order(&self) -> Vec<String> {
+        let mut ids: Vec<String> = BUILTIN_DEVTOOLS_PANEL_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        ids.extend(self.extra_devtools_panels.iter().map(|p| p.id().to_string()));
+        ids
+    }
+
+    /// Cycle the active DevTools panel through the combined ordered set
+    /// (built-ins + registered), wrapping at the ends.
+    ///
+    /// `forward = true` advances (`Tab`); `forward = false` goes back
+    /// (`Shift+Tab`). With no registered panels this still cycles the four
+    /// built-ins. Used by the host key router only when an extension panel is
+    /// focused (so built-in `Tab` semantics are untouched in stock fdemon).
+    pub fn cycle_devtools_panel(&mut self, forward: bool) {
+        let order = self.devtools_panel_id_order();
+        if order.is_empty() {
+            return;
+        }
+        let current = self.active_devtools_panel_id().to_string();
+        let cur_idx = order.iter().position(|id| *id == current).unwrap_or(0);
+        let next_idx = if forward {
+            (cur_idx + 1) % order.len()
+        } else {
+            (cur_idx + order.len() - 1) % order.len()
+        };
+        let next_id = &order[next_idx];
+        match DevToolsPanel::from_id(next_id) {
+            Some(builtin) => self.switch_devtools_panel(builtin),
+            None => {
+                // Registered panel — guaranteed to exist since it came from order.
+                self.devtools_view_state.active_extension_panel = Some(next_id.clone());
+            }
+        }
     }
 
     /// Show the new session dialog

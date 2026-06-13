@@ -639,6 +639,135 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
     UpdateResult::none()
 }
 
+/// Handle switching to a host-registered DevTools panel by id.
+///
+/// Part of the out-of-tree DevTools panel seam. No-op when no registered panel
+/// has the given id. When a built-in panel was active before, its background
+/// polling is paused exactly as the built-in switch path would do (by routing
+/// through [`handle_switch_panel`] first), then the extension panel is made
+/// active. This keeps the built-in pause/unpause invariants intact while an
+/// extension panel is shown.
+pub fn handle_switch_extension_panel(state: &mut AppState, id: String) -> UpdateResult {
+    // Only act if the id resolves to a registered panel.
+    if !state.extra_devtools_panels.iter().any(|p| p.id() == id) {
+        return UpdateResult::none();
+    }
+
+    // Pause any built-in panel's polling by performing a "switch away" to the
+    // current built-in's own id (a no-op selection that still runs the
+    // leaving-panel pause logic). We pause by treating the move as leaving the
+    // alloc/timeline/network panels: route through handle_switch_panel using a
+    // panel that is NOT the current one so the leave-side pauses fire, then
+    // restore. Simpler and correct: directly run the leave-side pauses via a
+    // dedicated helper.
+    pause_builtin_polling_on_leave(state);
+
+    state.devtools_view_state.active_extension_panel = Some(id);
+
+    // Extension panels never participate in the RebuiltWidgets gate (that is
+    // Performance-only); switching to one closes the gate for all sessions.
+    for handle in state.session_manager.iter_mut() {
+        if let Some(ref tx) = handle.rebuilt_widgets_gate_tx {
+            let _ = tx.send(false);
+        }
+    }
+
+    UpdateResult::none()
+}
+
+/// Pause the background polling owned by whichever built-in panel is currently
+/// the active *built-in* (`devtools_view_state.active_panel`), as if the user
+/// were navigating away from it. Used when switching to a host-registered
+/// extension panel so no built-in RPC traffic continues behind it.
+fn pause_builtin_polling_on_leave(state: &mut AppState) {
+    let old_panel = state.devtools_view_state.active_panel;
+
+    // Alloc polling (Performance + Memory).
+    if matches!(old_panel, DevToolsPanel::Performance | DevToolsPanel::Memory) {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.alloc_pause_tx {
+                let _ = tx.send(true);
+            }
+        }
+    }
+
+    // Timeline polling (Performance).
+    if old_panel == DevToolsPanel::Performance {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.timeline_pause_tx {
+                let _ = tx.send(true);
+            }
+        }
+    }
+
+    // Network polling (Network), unless a service consumer needs it.
+    if old_panel == DevToolsPanel::Network {
+        if let Some(handle) = state.session_manager.selected() {
+            if !handle.devtools_service_monitoring {
+                if let Some(ref tx) = handle.network_pause_tx {
+                    let _ = tx.send(true);
+                }
+            }
+        }
+    }
+}
+
+/// Cycle the active DevTools panel through the combined set (built-ins +
+/// registered), wrapping. When the cycle lands on a built-in, the built-in
+/// switch path runs (with its pause/unpause + auto-fetch side effects); when it
+/// lands on a registered panel, built-in polling is paused.
+///
+/// Part of the out-of-tree DevTools panel seam — only reachable while an
+/// extension panel is focused, so stock fdemon never cycles this way.
+pub fn handle_cycle_panel(state: &mut AppState, forward: bool) -> UpdateResult {
+    let order = {
+        let mut ids: Vec<String> = crate::state::BUILTIN_DEVTOOLS_PANEL_IDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        ids.extend(state.extra_devtools_panels.iter().map(|p| p.id().to_string()));
+        ids
+    };
+    if order.is_empty() {
+        return UpdateResult::none();
+    }
+    let current = state.active_devtools_panel_id().to_string();
+    let cur_idx = order.iter().position(|id| *id == current).unwrap_or(0);
+    let next_idx = if forward {
+        (cur_idx + 1) % order.len()
+    } else {
+        (cur_idx + order.len() - 1) % order.len()
+    };
+    let next_id = order[next_idx].clone();
+
+    match DevToolsPanel::from_id(&next_id) {
+        // Route built-in selection through the full switch path so its
+        // pause/unpause and auto-fetch side effects run exactly as normal.
+        Some(builtin) => handle_switch_panel(state, builtin),
+        // Registered panel — reuse the extension-switch path.
+        None => handle_switch_extension_panel(state, next_id),
+    }
+}
+
+/// Route a panel-scoped key to the active host-registered DevTools panel.
+///
+/// Only reached while an extension panel is active (the key router gates this).
+/// Calls the focused provider's `handle_key`. The TUI redraws on the next ~50 ms
+/// tick regardless of the return value, so no redraw signalling is needed.
+///
+/// Part of the out-of-tree DevTools panel seam — never reached in stock fdemon.
+pub fn handle_extension_panel_key(
+    state: &mut AppState,
+    key: crate::input_key::InputKey,
+) -> UpdateResult {
+    if let Some(id) = state.devtools_view_state.active_extension_panel.clone() {
+        if let Some(panel) = state.extra_devtools_panels.iter_mut().find(|p| p.id() == id) {
+            let _ = panel.handle_key(key);
+        }
+    }
+    UpdateResult::none()
+}
+
 /// Handle opening Flutter DevTools in the system browser.
 ///
 /// Prefers the served DevTools endpoint (`session.devtools_endpoint`) when

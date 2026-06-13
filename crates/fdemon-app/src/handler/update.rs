@@ -2231,6 +2231,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::SwitchDevToolsPanel(panel) => devtools::handle_switch_panel(state, panel),
 
+        Message::SwitchDevToolsExtensionPanel(id) => {
+            devtools::handle_switch_extension_panel(state, id)
+        }
+
+        Message::CycleDevToolsPanel { forward } => {
+            devtools::handle_cycle_panel(state, forward)
+        }
+
+        Message::DevToolsExtensionPanelKey(key) => {
+            devtools::handle_extension_panel_key(state, key)
+        }
+
         Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
 
         Message::DevToolsServed {
