@@ -85,17 +85,45 @@ pub fn save_launch_configs(project_path: &Path, configs: &[LaunchConfig]) -> Res
     let launch_path = fdemon_dir.join(LAUNCH_FILENAME);
     let temp_path = fdemon_dir.join(".launch.toml.tmp");
 
-    // Wrap configs in LaunchFile structure
-    let launch_file = LaunchFile {
+    // Format-preserving write: each `[[configurations]]` block is matched by
+    // `name` against the editor's load-time baseline, so editing one config's
+    // fields rewrites only those fields and leaves every other block — and the
+    // file's comments and ordering — intact. Baseline is `load_launch_configs`,
+    // the same path the panel loaded from.
+    let baseline_configs: Vec<LaunchConfig> = load_launch_configs(project_path)
+        .into_iter()
+        .map(|r| r.config)
+        .collect();
+    let baseline_val = toml::Value::try_from(LaunchFile {
+        configurations: baseline_configs,
+    })
+    .map_err(|e| Error::config(format!("Failed to encode baseline launch configs: {}", e)))?;
+    let current_val = toml::Value::try_from(LaunchFile {
         configurations: configs.to_vec(),
+    })
+    .map_err(|e| Error::config(format!("Failed to serialize launch configs: {}", e)))?;
+
+    let existing = std::fs::read_to_string(&launch_path).unwrap_or_default();
+    let is_new = existing.trim().is_empty();
+    let merged = super::toml_merge::merge_array_of_tables_by_key(
+        &existing,
+        "configurations",
+        "name",
+        &baseline_val,
+        &current_val,
+    )
+    .map_err(|e| {
+        Error::config(format!(
+            "Refusing to overwrite malformed {}: {}",
+            launch_path.display(),
+            e
+        ))
+    })?;
+    let full_content = if is_new {
+        format!("{}{}", generate_launch_header(), merged)
+    } else {
+        merged
     };
-
-    // Generate TOML content with header
-    let header = generate_launch_header();
-    let content = toml::to_string_pretty(&launch_file)
-        .map_err(|e| Error::config(format!("Failed to serialize launch configs: {}", e)))?;
-
-    let full_content = format!("{}{}", header, content);
 
     // Atomic write: write to temp, then rename
     std::fs::write(&temp_path, &full_content)
@@ -385,6 +413,53 @@ mod tests {
         let temp = tempdir().unwrap();
         let configs = load_launch_configs(temp.path());
         assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn save_launch_configs_preserves_comments_and_other_blocks() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        let original = "\
+# my launch configs — keep these notes
+[[configurations]]
+name = \"Dev\"  # everyday driver
+device = \"auto\"
+mode = \"debug\"
+
+[[configurations]]
+name = \"Prod\"
+device = \"pixel\"  # the test phone
+mode = \"release\"
+";
+        std::fs::write(fdemon_dir.join("launch.toml"), original).unwrap();
+
+        // Load (editor's starting point), change ONE field of ONE config, save.
+        let mut configs: Vec<LaunchConfig> = load_launch_configs(temp.path())
+            .into_iter()
+            .map(|r| r.config)
+            .collect();
+        configs[0].device = "emulator-5554".to_string();
+        save_launch_configs(temp.path(), &configs).unwrap();
+
+        let after = std::fs::read_to_string(fdemon_dir.join("launch.toml")).unwrap();
+        assert!(
+            after.contains("device = \"emulator-5554\""),
+            "edit applied: {after}"
+        );
+        assert!(after.contains("# my launch configs"), "header comment kept");
+        assert!(
+            after.contains("# everyday driver"),
+            "edited block's comment kept"
+        );
+        assert!(
+            after.contains("# the test phone"),
+            "other block's comment kept"
+        );
+        assert!(after.contains("name = \"Prod\""), "other block preserved");
+        // The Prod block was untouched, so its release mode must be unchanged.
+        assert!(after.contains("mode = \"release\""));
     }
 
     #[test]

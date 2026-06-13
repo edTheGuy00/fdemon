@@ -12,8 +12,13 @@
 //! `toml_edit`, writing ONLY the leaf keys whose value differs between baseline
 //! and current. Everything else — comments, blank lines, key ordering, and keys
 //! the struct does not model — is preserved byte-for-byte.
+//!
+//! [`merge_array_of_tables_by_key`] is the array-of-tables counterpart for
+//! configs like launch.toml's `[[configurations]]`: it matches elements by a key
+//! field (e.g. `name`) so editing one entry's fields, adding, or deleting an
+//! entry preserves every other block's formatting.
 
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 
 /// Produce the new file contents for a struct-backed TOML config.
 ///
@@ -46,6 +51,117 @@ pub fn merge_into_existing(
     }
 
     Ok(doc.to_string())
+}
+
+/// Format-preserving write for an array-of-tables config (e.g. launch.toml's
+/// `[[configurations]]`), serialised as `{ <array_key>: [ <table>, ... ] }`.
+///
+/// Elements are matched between `baseline` and `current` by the string value of
+/// `match_key` (e.g. `"name"`) rather than by position, so the right block is
+/// updated/removed even when entries are deleted or reordered:
+/// - a matched element is field-merged in place (only changed fields rewritten,
+///   its comments and untouched fields preserved);
+/// - an element whose `match_key` is gone from `current` is removed;
+/// - a `current` element with no baseline match is appended.
+///
+/// A rename therefore reads as delete-old + append-new (the renamed block moves
+/// to the end); editing any non-name field preserves the block in place. All
+/// other file content — top-level comments and keys, blank lines — is kept.
+///
+/// # Errors
+///
+/// Returns `Err` if `existing` is non-empty but not valid TOML.
+pub fn merge_array_of_tables_by_key(
+    existing: &str,
+    array_key: &str,
+    match_key: &str,
+    baseline: &toml::Value,
+    current: &toml::Value,
+) -> Result<String, toml_edit::TomlError> {
+    let mut doc = if existing.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        existing.parse::<DocumentMut>()?
+    };
+
+    let empty: Vec<toml::Value> = Vec::new();
+    let base_items = baseline
+        .get(array_key)
+        .and_then(toml::Value::as_array)
+        .unwrap_or(&empty);
+    let cur_items = current
+        .get(array_key)
+        .and_then(toml::Value::as_array)
+        .unwrap_or(&empty);
+
+    let aot = array_of_tables_mut(&mut doc, array_key);
+
+    // The doc's array elements line up 1:1 with `base_items` (both come from the
+    // same on-disk file). Match-key value of each baseline element, by index.
+    let base_names: Vec<Option<&str>> = base_items
+        .iter()
+        .map(|v| {
+            v.as_table()
+                .and_then(|t| t.get(match_key))
+                .and_then(toml::Value::as_str)
+        })
+        .collect();
+
+    let usable = aot.len().min(base_names.len());
+    let mut consumed = vec![false; usable];
+    let mut keep = vec![false; aot.len()];
+    let mut appends: Vec<&toml::Table> = Vec::new();
+
+    for cur in cur_items {
+        let Some(cur_tbl) = cur.as_table() else {
+            continue;
+        };
+        let cur_name = cur_tbl.get(match_key).and_then(toml::Value::as_str);
+
+        // First not-yet-consumed baseline element sharing this match-key value.
+        let matched = cur_name
+            .and_then(|name| (0..usable).find(|&i| !consumed[i] && base_names[i] == Some(name)));
+
+        match matched {
+            Some(i) => {
+                consumed[i] = true;
+                keep[i] = true;
+                let base_tbl = base_items[i].as_table();
+                if let Some(elem) = aot.get_mut(i) {
+                    merge_table(elem, base_tbl, cur_tbl);
+                }
+            }
+            None => appends.push(cur_tbl),
+        }
+    }
+
+    // Drop elements whose entry disappeared from `current` (reverse order so the
+    // surviving indices stay valid).
+    for i in (0..aot.len()).rev() {
+        if !keep[i] {
+            aot.remove(i);
+        }
+    }
+
+    // Append brand-new entries, writing every field (no baseline to diff against).
+    for cur_tbl in appends {
+        let mut elem = Table::new();
+        merge_table(&mut elem, None, cur_tbl);
+        aot.push(elem);
+    }
+
+    Ok(doc.to_string())
+}
+
+/// Borrow `doc[key]` as an array-of-tables, creating an empty one if the key is
+/// absent or not already an array-of-tables.
+fn array_of_tables_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut ArrayOfTables {
+    if !doc.get(key).map(Item::is_array_of_tables).unwrap_or(false) {
+        doc.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
+    }
+    doc[key]
+        .as_array_of_tables_mut()
+        .expect("just ensured key is an array-of-tables")
 }
 
 /// Recursively write changed leaves from `current` into `doc`, using `baseline`
@@ -260,5 +376,93 @@ browser = \"firefox\"  # keep too
         let baseline = val("port = 1\n");
         let current = val("port = 2\n");
         assert!(merge_into_existing(existing, &baseline, &current).is_err());
+    }
+
+    // ── array-of-tables (launch.toml) ─────────────────────────────────────────
+
+    const LAUNCH: &str = "\
+# my launch configs — keep notes
+[[configurations]]
+name = \"Dev\"  # everyday
+device = \"auto\"
+
+[[configurations]]
+name = \"Prod\"
+device = \"pixel\"  # the test phone
+";
+
+    fn aot_merge(existing: &str, baseline: &str, current: &str) -> String {
+        merge_array_of_tables_by_key(
+            existing,
+            "configurations",
+            "name",
+            &val(baseline),
+            &val(current),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn aot_field_edit_preserves_all_comments() {
+        let baseline = "[[configurations]]\nname = \"Dev\"\ndevice = \"auto\"\n\
+                        [[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n";
+        // Change only Dev.device.
+        let current = "[[configurations]]\nname = \"Dev\"\ndevice = \"emulator-5554\"\n\
+                       [[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n";
+        let out = aot_merge(LAUNCH, baseline, current);
+        assert!(
+            out.contains("device = \"emulator-5554\""),
+            "edit applied: {out}"
+        );
+        assert!(out.contains("# my launch configs"), "header kept");
+        assert!(
+            out.contains("# everyday"),
+            "edited block's name comment kept"
+        );
+        assert!(
+            out.contains("# the test phone"),
+            "other block's comment kept"
+        );
+        assert!(out.contains("name = \"Prod\""), "other block kept");
+    }
+
+    #[test]
+    fn aot_no_op_is_byte_identical() {
+        let baseline = "[[configurations]]\nname = \"Dev\"\ndevice = \"auto\"\n\
+                        [[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n";
+        let out = aot_merge(LAUNCH, baseline, baseline);
+        assert_eq!(out, LAUNCH, "no change must not alter the file");
+    }
+
+    #[test]
+    fn aot_delete_removes_the_right_block_by_name() {
+        let baseline = "[[configurations]]\nname = \"Dev\"\ndevice = \"auto\"\n\
+                        [[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n";
+        // Dev deleted; only Prod remains.
+        let current = "[[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n";
+        let out = aot_merge(LAUNCH, baseline, current);
+        assert!(!out.contains("name = \"Dev\""), "Dev block removed: {out}");
+        assert!(out.contains("name = \"Prod\""), "Prod block kept");
+        assert!(
+            out.contains("# the test phone"),
+            "Prod's comment kept (not misattributed)"
+        );
+        assert!(
+            !out.contains("# everyday"),
+            "Dev's comment removed with its block"
+        );
+    }
+
+    #[test]
+    fn aot_add_appends_without_touching_existing() {
+        let baseline = "[[configurations]]\nname = \"Dev\"\ndevice = \"auto\"\n\
+                        [[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n";
+        let current = "[[configurations]]\nname = \"Dev\"\ndevice = \"auto\"\n\
+                       [[configurations]]\nname = \"Prod\"\ndevice = \"pixel\"\n\
+                       [[configurations]]\nname = \"Staging\"\ndevice = \"web\"\n";
+        let out = aot_merge(LAUNCH, baseline, current);
+        assert!(out.contains("name = \"Staging\""), "new config appended");
+        assert!(out.contains("# everyday"), "existing comments untouched");
+        assert!(out.contains("# the test phone"));
     }
 }
