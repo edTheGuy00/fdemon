@@ -5378,6 +5378,168 @@ fn test_app_stop_cleans_up_network_monitoring() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Network state reset on app stop / restart (T1 regression guards)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// AppStop must clear all network entries — including any that are still
+/// pending (no end_time_us) — so they don't persist as "stuck loading" rows
+/// when the app is restarted.
+#[test]
+fn test_app_stop_resets_network_state_including_pending_entry() {
+    use fdemon_core::{AppStart, AppStop, DaemonMessage};
+
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark session as started.
+    let start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "dev-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &start_msg);
+
+    // Seed network state with a completed entry AND a pending entry
+    // (end_time_us = None → is_pending() == true).
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        // Completed request.
+        handle.session.network.entries.push_back(make_test_http_entry("req-done"));
+        // Pending request: same shape but no end time.
+        handle.session.network.entries.push_back(fdemon_core::network::HttpProfileEntry {
+            id: "req-pending".to_string(),
+            method: "POST".to_string(),
+            uri: "https://example.com/upload".to_string(),
+            status_code: None,
+            content_type: None,
+            start_time_us: 2_000_000,
+            end_time_us: None, // still in-flight
+            request_content_length: None,
+            response_content_length: None,
+            error: None,
+        });
+    }
+
+    // Precondition: two entries present, one of which is pending.
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.session.network.entries.len(), 2);
+        assert!(
+            handle.session.network.entries.iter().any(|e| e.is_pending()),
+            "Precondition: a pending entry must be present"
+        );
+    }
+
+    // Action: send AppStop.
+    let stop_msg = DaemonMessage::AppStop(AppStop {
+        app_id: "test-app".to_string(),
+        error: None,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &stop_msg);
+
+    // Assert: network entries are cleared.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.session.network.entries.is_empty(),
+        "Network entries must be empty after AppStop (no stale pending rows)"
+    );
+    // Config-derived fields must survive the reset.
+    // (recording defaults to true; max_entries is set from config — both are
+    // preserved by NetworkState::reset().)
+    assert!(
+        handle.session.network.recording,
+        "recording flag must survive AppStop reset"
+    );
+}
+
+/// After a VmServiceConnected (i.e. fresh connect or hot-restart), network
+/// entries accumulated during the *previous* connection must not be visible.
+#[test]
+fn test_vm_service_connected_resets_network_state() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Seed network entries from a hypothetical prior run.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.network.entries.push_back(make_test_http_entry("old-req-1"));
+        handle.session.network.entries.push_back(make_test_http_entry("old-req-2"));
+        // Simulate a stale poll cursor left over from the old VM.
+        handle.session.network.last_poll_timestamp = Some(999_999);
+    }
+
+    // Assert precondition.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .network
+            .entries
+            .len(),
+        2,
+        "Precondition: two stale entries present"
+    );
+
+    // Action: fresh VmServiceConnected (e.g. after hot-restart).
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    // Assert: network entries are gone and cursor is reset.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.session.network.entries.is_empty(),
+        "Network entries must be empty after VmServiceConnected (no pre-restart rows)"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp,
+        None,
+        "Poll cursor must be reset to None after VmServiceConnected"
+    );
+}
+
+/// Regression guard: VmServiceReconnected (transient WebSocket reconnect)
+/// must NOT wipe accumulated network history.  Only a full app stop/restart
+/// should clear the network state.
+#[test]
+fn test_vm_service_reconnected_preserves_network_history() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Populate network entries to simulate live history accumulated before a
+    // transient WebSocket blip.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.network.entries.push_back(make_test_http_entry("live-req-1"));
+        handle.session.network.entries.push_back(make_test_http_entry("live-req-2"));
+        handle.session.network.last_poll_timestamp = Some(12_345);
+    }
+
+    // Action: transient reconnect.
+    update(&mut state, Message::VmServiceReconnected { session_id });
+
+    // Assert: history is intact.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.network.entries.len(),
+        2,
+        "Network history must be preserved across VmServiceReconnected"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp,
+        Some(12_345),
+        "Poll cursor must be preserved across VmServiceReconnected"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DevTools: RequestWidgetTree / RequestLayoutData VM guard regression tests
 // ─────────────────────────────────────────────────────────────────────────────
 

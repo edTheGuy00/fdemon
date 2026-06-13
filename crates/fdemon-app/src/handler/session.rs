@@ -261,6 +261,13 @@ pub fn handle_session_message_state(
                 // not persist when the app is restarted within the same session.
                 handle.native_tag_state = crate::session::NativeTagState::default();
 
+                // Reset network state so pending/stale HTTP entries from the stopped
+                // app do not persist in the Network tab. The new app process starts
+                // with a fresh HTTP profile; any pending entries from the old process
+                // will never complete and would be stuck loading forever without this.
+                // NetworkState::reset() preserves `max_entries` and `recording`.
+                handle.session.network.reset();
+
                 // Clear DevTools endpoint — hot restart cycles the Flutter
                 // app and likely cycles its DevTools server. The stored URL
                 // may now point at a dead port; the next `app.devTools`

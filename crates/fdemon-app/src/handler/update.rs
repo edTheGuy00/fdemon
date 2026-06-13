@@ -1656,12 +1656,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     LogSource::App,
                     "VM Service connected — enhanced logging active",
                 ));
-                // Reset performance and memory state on (re)connection so stale
-                // data from a previous session or hot-restart is not shown.
+                // Reset performance, memory, and network state on (re)connection
+                // so stale data from a previous session or hot-restart is not shown.
                 // Use configurable memory history size from settings for MemoryState.
+                // NetworkState::reset() preserves `max_entries` and `recording` so
+                // user config survives the restart; it clears all entries and the
+                // poll cursor so the new VM's HTTP profile starts fresh.
                 handle.session.performance = crate::session::PerformanceState::default();
                 handle.session.memory =
                     crate::session::MemoryState::with_history_size(memory_history_size);
+                handle.session.network.reset();
             }
             // Clear any previous connection error and update status to Connected,
             // but only when this session is currently active in the UI.
