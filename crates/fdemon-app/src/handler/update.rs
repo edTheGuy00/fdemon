@@ -2608,6 +2608,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::NetworkFilterBackspace => devtools::network::handle_filter_backspace(state),
 
+        Message::NetworkDetailsScrollUp => {
+            devtools::network::handle_network_details_scroll_up(state)
+        }
+
+        Message::NetworkDetailsScrollDown => {
+            devtools::network::handle_network_details_scroll_down(state)
+        }
+
         // ── Memory Panel UI Messages ──────────────────────────────────────────
         Message::MemToggleSort => devtools::memory::handle_toggle_allocation_sort(state),
         Message::MemFocusSection(section) => {

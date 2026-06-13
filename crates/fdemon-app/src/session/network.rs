@@ -53,6 +53,8 @@ pub struct NetworkState {
     pub last_poll_timestamp: Option<i64>,
     /// Scroll offset for the request table.
     pub scroll_offset: usize,
+    /// Scroll offset for the request details pane (body text viewport).
+    pub details_scroll_offset: usize,
     /// Socket entries (optional, refreshed periodically).
     pub socket_entries: Vec<SocketEntry>,
     /// Whether the `ext.dart.io.*` extensions are available (false in release mode).
@@ -78,6 +80,7 @@ impl Default for NetworkState {
             loading_detail: false,
             last_poll_timestamp: None,
             scroll_offset: 0,
+            details_scroll_offset: 0,
             socket_entries: Vec::new(),
             extensions_available: None,
             last_error: None,
@@ -200,6 +203,7 @@ impl NetworkState {
         self.selected_index = None;
         self.selected_detail = None;
         self.scroll_offset = 0;
+        self.details_scroll_offset = 0;
     }
 
     /// Clear all entries and reset poll timestamp.
@@ -209,6 +213,7 @@ impl NetworkState {
         self.selected_detail = None;
         self.last_poll_timestamp = None;
         self.scroll_offset = 0;
+        self.details_scroll_offset = 0;
     }
 
     /// Navigate selection up.
@@ -222,6 +227,7 @@ impl NetworkState {
             Some(i) => i - 1,
         });
         self.selected_detail = None; // invalidate cached detail
+        self.details_scroll_offset = 0; // reset detail viewport on selection change
     }
 
     /// Navigate selection down.
@@ -236,12 +242,27 @@ impl NetworkState {
             Some(i) => (i + 1).min(max),
         });
         self.selected_detail = None; // invalidate cached detail
+        self.details_scroll_offset = 0; // reset detail viewport on selection change
     }
 
     /// Get the selected entry (if any).
     pub fn selected_entry(&self) -> Option<&HttpProfileEntry> {
         let filtered = self.filtered_entries();
         self.selected_index.and_then(|i| filtered.get(i).copied())
+    }
+
+    /// Scroll the details pane up by one line, clamped to 0.
+    pub fn scroll_details_up(&mut self) {
+        self.details_scroll_offset = self.details_scroll_offset.saturating_sub(1);
+    }
+
+    /// Scroll the details pane down by one line.
+    ///
+    /// The TUI renderer clamps `details_scroll_offset` to the valid range
+    /// (`total_lines - viewport_height`) during rendering, so callers can
+    /// increment without computing the line count at the handler site.
+    pub fn scroll_details_down(&mut self) {
+        self.details_scroll_offset = self.details_scroll_offset.saturating_add(1);
     }
 }
 
@@ -588,6 +609,110 @@ mod tests {
             state.filtered_count(),
             state.filtered_entries().len(),
             "filtered_count() must equal filtered_entries().len() for empty state"
+        );
+    }
+
+    // ── details_scroll_offset tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_details_scroll_offset_default_zero() {
+        let state = NetworkState::default();
+        assert_eq!(state.details_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_details_up_clamps_at_zero() {
+        let mut state = NetworkState::default();
+        // Already at 0 — should stay at 0 (no underflow).
+        state.scroll_details_up();
+        assert_eq!(state.details_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_details_down_increments() {
+        let mut state = NetworkState::default();
+        state.scroll_details_down();
+        assert_eq!(state.details_scroll_offset, 1);
+        state.scroll_details_down();
+        assert_eq!(state.details_scroll_offset, 2);
+    }
+
+    #[test]
+    fn test_scroll_details_up_decrements() {
+        let mut state = NetworkState {
+            details_scroll_offset: 5,
+            ..Default::default()
+        };
+        state.scroll_details_up();
+        assert_eq!(state.details_scroll_offset, 4);
+    }
+
+    #[test]
+    fn test_reset_clears_details_scroll_offset() {
+        let mut state = NetworkState {
+            details_scroll_offset: 10,
+            ..Default::default()
+        };
+        state.reset();
+        assert_eq!(state.details_scroll_offset, 0, "reset() must clear details_scroll_offset");
+    }
+
+    #[test]
+    fn test_clear_clears_details_scroll_offset() {
+        let mut state = NetworkState {
+            details_scroll_offset: 7,
+            ..Default::default()
+        };
+        state.clear();
+        assert_eq!(state.details_scroll_offset, 0, "clear() must clear details_scroll_offset");
+    }
+
+    #[test]
+    fn test_set_filter_clears_details_scroll_offset() {
+        let mut state = NetworkState {
+            details_scroll_offset: 3,
+            ..Default::default()
+        };
+        state.set_filter("api".to_string());
+        assert_eq!(
+            state.details_scroll_offset, 0,
+            "set_filter() must clear details_scroll_offset"
+        );
+    }
+
+    #[test]
+    fn test_select_prev_clears_details_scroll_offset() {
+        let mut state = NetworkState {
+            details_scroll_offset: 5,
+            ..Default::default()
+        };
+        state.merge_entries(vec![
+            make_entry("a", "GET", Some(200)),
+            make_entry("b", "GET", Some(200)),
+        ]);
+        state.selected_index = Some(1);
+        state.select_prev();
+        assert_eq!(
+            state.details_scroll_offset, 0,
+            "select_prev() must reset details_scroll_offset"
+        );
+    }
+
+    #[test]
+    fn test_select_next_clears_details_scroll_offset() {
+        let mut state = NetworkState {
+            details_scroll_offset: 8,
+            ..Default::default()
+        };
+        state.merge_entries(vec![
+            make_entry("a", "GET", Some(200)),
+            make_entry("b", "GET", Some(200)),
+        ]);
+        state.selected_index = Some(0);
+        state.select_next();
+        assert_eq!(
+            state.details_scroll_offset, 0,
+            "select_next() must reset details_scroll_offset"
         );
     }
 

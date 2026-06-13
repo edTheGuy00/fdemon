@@ -1194,6 +1194,12 @@ pub enum Message {
     /// Delete last character from filter input buffer.
     NetworkFilterBackspace,
 
+    /// Scroll the network request details pane up by one line.
+    NetworkDetailsScrollUp,
+
+    /// Scroll the network request details pane down by one line.
+    NetworkDetailsScrollDown,
+
     // ── Memory Panel UI Messages ──────────────────────────────────────────────
     /// Cycle focus within the Memory panel sections (Chart ↔ AllocationList).
     MemFocusSection(MemorySection),

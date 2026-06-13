@@ -19,6 +19,7 @@ tracing.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 unicode-width = "0.2"
+textwrap = { version = "0.16", default-features = false }
 qrcode.workspace = true
 tui-qrcode.workspace = true
 

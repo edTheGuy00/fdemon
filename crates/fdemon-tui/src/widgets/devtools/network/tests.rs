@@ -806,6 +806,7 @@ mod region_tests {
             None::<&HttpProfileEntryDetail>,
             NetworkDetailTab::General,
             false,
+            0,
         );
 
         let mut regions = MouseRegions::default();
@@ -896,6 +897,7 @@ mod region_tests {
             None::<&HttpProfileEntryDetail>,
             NetworkDetailTab::General,
             false,
+            0,
         );
 
         let mut regions = MouseRegions::default();

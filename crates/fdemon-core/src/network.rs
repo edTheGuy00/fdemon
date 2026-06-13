@@ -236,6 +236,52 @@ pub struct SocketEntry {
     pub write_bytes: u64,
 }
 
+// ── Body formatting ───────────────────────────────────────────────────────────
+
+/// Maximum body size to attempt pretty-printing (4 MiB).
+///
+/// Bodies larger than this are returned as a trimmed placeholder to avoid
+/// attempting to allocate a potentially very large pretty-printed string.
+const MAX_PRETTY_PRINT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Format a body string for display.
+///
+/// - If `body` is empty, returns `None`.
+/// - If `body.len()` exceeds [`MAX_PRETTY_PRINT_BYTES`], returns a placeholder
+///   string indicating the body is too large to display.
+/// - If `body` parses as valid JSON, returns the pretty-printed JSON string.
+/// - Otherwise returns the raw text unchanged.
+///
+/// This function never panics and never allocates more than `O(body.len())`
+/// memory (the pretty-printed JSON may be slightly larger in the worst case but
+/// is bounded by the `MAX_PRETTY_PRINT_BYTES` guard).
+pub fn format_body_text(body: &str) -> String {
+    if body.is_empty() {
+        return String::new();
+    }
+
+    if body.len() > MAX_PRETTY_PRINT_BYTES {
+        return format!(
+            "(body too large to display: {})",
+            format_bytes(body.len() as u64)
+        );
+    }
+
+    // Attempt JSON pretty-print. `serde_json::from_str` is allocation-free for
+    // the parse step (it borrows from `body`); only `to_string_pretty` allocates
+    // and it is bounded by the guard above.
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+        // `to_string_pretty` should not fail for a valid Value, but handle the
+        // error gracefully rather than unwrapping.
+        if let Ok(pretty) = serde_json::to_string_pretty(&value) {
+            return pretty;
+        }
+    }
+
+    // Not valid JSON or pretty-print failed — return the raw text.
+    body.to_string()
+}
+
 // ── Helper functions ──────────────────────────────────────────────────────────
 
 /// Format a byte count as a human-readable string (B, KB, MB).
@@ -405,6 +451,73 @@ mod tests {
         assert!(timing.connection_ms.is_none());
         assert!(timing.waiting_ms.is_none());
         assert!(timing.receiving_ms.is_none());
+    }
+
+    // ── format_body_text tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_body_text_empty_returns_empty() {
+        assert_eq!(format_body_text(""), "");
+    }
+
+    #[test]
+    fn test_format_body_text_valid_json_pretty_prints() {
+        let input = r#"{"name":"Alice","age":30}"#;
+        let result = format_body_text(input);
+        // Pretty-printed JSON should contain newlines and indentation.
+        assert!(
+            result.contains('\n'),
+            "Pretty-printed JSON should contain newlines"
+        );
+        assert!(
+            result.contains("name"),
+            "Pretty-printed JSON should contain the key 'name'"
+        );
+        assert!(
+            result.contains("Alice"),
+            "Pretty-printed JSON should contain the value 'Alice'"
+        );
+    }
+
+    #[test]
+    fn test_format_body_text_invalid_json_returns_raw() {
+        let raw = "{invalid json}";
+        let result = format_body_text(raw);
+        assert_eq!(
+            result, raw,
+            "Invalid JSON should be returned as-is (no panic, no modification)"
+        );
+    }
+
+    #[test]
+    fn test_format_body_text_non_json_returns_raw() {
+        let raw = "plain text, not JSON";
+        let result = format_body_text(raw);
+        assert_eq!(result, raw, "Non-JSON text should be returned unchanged");
+    }
+
+    #[test]
+    fn test_format_body_text_oversized_body_returns_placeholder() {
+        // Build a string larger than MAX_PRETTY_PRINT_BYTES (4 MiB).
+        let oversized = "x".repeat(5 * 1024 * 1024);
+        let result = format_body_text(&oversized);
+        assert!(
+            result.contains("too large"),
+            "Oversized body should produce a placeholder message"
+        );
+        assert!(
+            !result.contains('x'),
+            "Oversized body placeholder should not contain raw content"
+        );
+    }
+
+    #[test]
+    fn test_format_body_text_json_array() {
+        let input = r#"[1,2,3]"#;
+        let result = format_body_text(input);
+        // JSON arrays should also be pretty-printed.
+        assert!(result.contains('\n'), "JSON array should be pretty-printed");
+        assert!(result.contains('1'), "Pretty result should contain element 1");
     }
 
     #[test]

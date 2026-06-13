@@ -906,6 +906,7 @@ dependencies = [
  "ratatui",
  "serial_test",
  "tempfile",
+ "textwrap",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3262,6 +3263,12 @@ dependencies = [
  "wezterm-input-types",
  "winapi",
 ]
+
+[[package]]
+name = "textwrap"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
 
 [[package]]
 name = "thiserror"

@@ -289,6 +289,26 @@ pub(crate) fn handle_filter_backspace(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
+/// Scroll the details pane up by one line.
+pub(crate) fn handle_network_details_scroll_up(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.network.scroll_details_up();
+    }
+    UpdateResult::none()
+}
+
+/// Scroll the details pane down by one line.
+///
+/// The TUI clamps `details_scroll_offset` to `(total_lines - viewport_height)`
+/// during rendering, so it is safe to increment unconditionally here.
+pub(crate) fn handle_network_details_scroll_down(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.network.details_scroll_offset =
+            handle.session.network.details_scroll_offset.saturating_add(1);
+    }
+    UpdateResult::none()
+}
+
 /// Build a `FetchHttpRequestDetail` action for the currently selected entry.
 ///
 /// Returns `UpdateResult::none()` when there is no active session, no
@@ -766,6 +786,54 @@ mod tests {
         let handle = state.session_manager.selected().unwrap();
         assert_eq!(handle.session.network.filter, "GET");
         assert!(!handle.session.network.filter_input_active);
+    }
+
+    // ── details scroll handler tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_handle_details_scroll_up_clamps_at_zero() {
+        let mut state = make_devtools_state();
+        // Already at 0 — should not underflow.
+        let result = handle_network_details_scroll_up(&mut state);
+        assert!(result.action.is_none());
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.details_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_handle_details_scroll_down_increments() {
+        let mut state = make_devtools_state();
+        handle_network_details_scroll_down(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.details_scroll_offset, 1);
+        drop(handle);
+        handle_network_details_scroll_down(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.details_scroll_offset, 2);
+    }
+
+    #[test]
+    fn test_handle_details_scroll_up_decrements() {
+        let mut state = make_devtools_state();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .details_scroll_offset = 5;
+        handle_network_details_scroll_up(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.details_scroll_offset, 4);
+    }
+
+    #[test]
+    fn test_handle_details_scroll_no_session_is_noop() {
+        let mut state = AppState::new(); // no sessions
+        let result_up = handle_network_details_scroll_up(&mut state);
+        let result_down = handle_network_details_scroll_down(&mut state);
+        assert!(result_up.action.is_none());
+        assert!(result_down.action.is_none());
     }
 
     #[test]

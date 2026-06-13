@@ -1115,6 +1115,12 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             .selected_id()
             .map(|session_id| Message::ClearNetworkProfile { session_id }),
 
+        // ── Network panel — details pane scroll ──────────────────────────────
+        // Alt+k/Alt+j scroll the body viewport in the details pane (distinct
+        // from bare k/j which navigate the request list).
+        InputKey::CharAlt('k') if in_network => Some(Message::NetworkDetailsScrollUp),
+        InputKey::CharAlt('j') if in_network => Some(Message::NetworkDetailsScrollDown),
+
         // ── Network panel — enter filter input mode ───────────────────────────
         InputKey::Char('/') if in_network => Some(Message::NetworkEnterFilterMode),
 
