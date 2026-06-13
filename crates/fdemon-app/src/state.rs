@@ -1895,8 +1895,11 @@ impl AppState {
 
     /// Build the combined, ordered list of panel ids: the four built-ins
     /// followed by registered panels in registration order.
-    #[allow(dead_code)]
-    fn devtools_panel_id_order(&self) -> Vec<String> {
+    ///
+    /// This is the single source of truth for the cycle order used by
+    /// [`crate::handler::devtools::handle_cycle_panel`] and
+    /// [`Self::cycle_devtools_panel`].
+    pub(crate) fn devtools_panel_id_order(&self) -> Vec<String> {
         let mut ids: Vec<String> = BUILTIN_DEVTOOLS_PANEL_IDS
             .iter()
             .map(|s| s.to_string())

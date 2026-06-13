@@ -52,6 +52,12 @@ pub(crate) fn handle_http_profile_received(
 /// Handle full request detail received.
 ///
 /// Stores the fetched detail and clears the loading flag for the session.
+/// Invalidates the body wrap cache because the displayed body content has
+/// changed — the new detail may contain a different body even if the
+/// `selected_index` is unchanged (e.g. an in-place entry update of equal
+/// formatted length). This is the single authoritative point where the
+/// displayed body changes, so invalidating here closes the stale-render bug
+/// regardless of how the new body arrived.
 pub(crate) fn handle_http_request_detail_received(
     state: &mut AppState,
     session_id: SessionId,
@@ -60,6 +66,8 @@ pub(crate) fn handle_http_request_detail_received(
     if let Some(handle) = state.session_manager.get_mut(session_id) {
         handle.session.network.loading_detail = false;
         handle.session.network.selected_detail = Some(detail);
+        // Invalidate the wrap cache: the body content has changed.
+        handle.session.network.invalidate_wrap_cache();
     }
     UpdateResult::none()
 }
@@ -163,6 +171,9 @@ pub(crate) fn handle_network_navigate(state: &mut AppState, nav: NetworkNav) -> 
 ///
 /// Clears the cached detail so a fresh fetch is triggered for the new
 /// selection. If `index` is `None` the selection is cleared entirely.
+/// Also invalidates the body wrap cache (belt-and-suspenders alongside the
+/// invalidation in `handle_http_request_detail_received`): on re-select the
+/// old cached lines should not survive until the new detail arrives.
 pub(crate) fn handle_network_select_request(
     state: &mut AppState,
     index: Option<usize>,
@@ -172,6 +183,7 @@ pub(crate) fn handle_network_select_request(
     };
     handle.session.network.selected_index = index;
     handle.session.network.selected_detail = None;
+    handle.session.network.invalidate_wrap_cache();
 
     if index.is_some() {
         fetch_selected_detail_action(state)
@@ -441,6 +453,92 @@ mod tests {
         let handle = state.session_manager.get(session_id).unwrap();
         assert!(!handle.session.network.loading_detail);
         assert!(handle.session.network.selected_detail.is_some());
+    }
+
+    /// C1 regression: `handle_http_request_detail_received` must invalidate
+    /// the body wrap cache so a subsequent render sees the new body content,
+    /// not stale wrapped lines from a previous detail of equal formatted length.
+    #[test]
+    fn test_handle_http_request_detail_received_invalidates_wrap_cache() {
+        use crate::session::{hash_body, BodyWrapCacheKey, NetworkDetailTab};
+
+        let mut state = make_devtools_state();
+        let session_id = active_session_id(&state);
+
+        // Prime the wrap cache with a body so it has a valid key.
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            let body = "cached response body";
+            let key = BodyWrapCacheKey {
+                selected_index: Some(0),
+                detail_tab: NetworkDetailTab::ResponseBody,
+                content_width: 80,
+                body_len: body.len(),
+                body_hash: hash_body(body),
+            };
+            let _ = handle.session.network.get_or_compute_wrapped_lines(key, body, 80);
+            // Verify the cache is populated.
+            assert!(
+                handle.session.network.body_wrap_cache.borrow().key.is_some(),
+                "Cache must be populated before the detail handler runs"
+            );
+        }
+
+        // Deliver a new detail — the handler must invalidate the cache.
+        let detail = Box::new(HttpProfileEntryDetail {
+            entry: make_entry("req-1", "GET", Some(200)),
+            request_headers: vec![],
+            response_headers: vec![],
+            request_body: vec![],
+            response_body: b"updated response".to_vec(),
+            events: vec![],
+            connection_info: None,
+        });
+        handle_http_request_detail_received(&mut state, session_id, detail);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.network.body_wrap_cache.borrow().key.is_none(),
+            "handle_http_request_detail_received must invalidate the wrap cache"
+        );
+    }
+
+    /// C1 regression (belt-and-suspenders): `handle_network_select_request`
+    /// must also invalidate the body wrap cache so stale lines from a previous
+    /// selection do not survive until the new detail arrives.
+    #[test]
+    fn test_handle_network_select_request_invalidates_wrap_cache() {
+        use crate::session::{hash_body, BodyWrapCacheKey, NetworkDetailTab};
+
+        let mut state = make_devtools_state_with_entries(3);
+        let session_id = active_session_id(&state);
+
+        // Prime the wrap cache.
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            let body = "some body";
+            let key = BodyWrapCacheKey {
+                selected_index: Some(0),
+                detail_tab: NetworkDetailTab::ResponseBody,
+                content_width: 80,
+                body_len: body.len(),
+                body_hash: hash_body(body),
+            };
+            let _ = handle.session.network.get_or_compute_wrapped_lines(key, body, 80);
+            assert!(
+                handle.session.network.body_wrap_cache.borrow().key.is_some(),
+                "Cache must be populated before the select handler runs"
+            );
+        }
+
+        // Re-select a different index — must invalidate the cache.
+        handle_network_select_request(&mut state, Some(1));
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.network.body_wrap_cache.borrow().key.is_none(),
+            "handle_network_select_request must invalidate the wrap cache"
+        );
     }
 
     #[test]

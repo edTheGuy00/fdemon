@@ -18,7 +18,7 @@
 //! Invalid JSON or binary data falls back to raw text or a size placeholder.
 
 use fdemon_app::message::Message;
-use fdemon_app::session::{BodyWrapCacheKey, NetworkDetailTab, NetworkState};
+use fdemon_app::session::{hash_body, BodyWrapCacheKey, NetworkDetailTab, NetworkState};
 use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::network::{
     format_body_text, format_bytes, format_duration_ms, HttpProfileEntry, HttpProfileEntryDetail,
@@ -546,6 +546,7 @@ impl RequestDetails<'_> {
                         detail_tab: self.active_tab,
                         content_width,
                         body_len: formatted.len(),
+                        body_hash: hash_body(&formatted),
                     };
                     ns.get_or_compute_wrapped_lines(cache_key, &formatted, content_width)
                 } else {
@@ -715,6 +716,10 @@ fn wrap_text_owned(text: &str, max_width: usize) -> Vec<String> {
 /// Used for short label/value strings in the General and Headers tabs where
 /// content is typically short ASCII text (URIs, header values, Content-Type).
 /// For the body tab (which needs exact line counts), use [`wrap_text_owned`].
+///
+/// At `max_width` 1–2 (or any width narrower than the first char), the
+/// function still makes progress by advancing one whole character, so it
+/// never panics on multibyte input.
 fn split_at_width(text: &str, max_width: usize) -> Vec<&str> {
     if max_width == 0 || text.is_empty() {
         return Vec::new();
@@ -726,12 +731,19 @@ fn split_at_width(text: &str, max_width: usize) -> Vec<&str> {
         let split_at = if remaining.len() <= max_width {
             remaining.len()
         } else {
-            // Walk backward to a char boundary.
+            // Walk backward from max_width to find a valid char boundary.
             let mut idx = max_width;
             while idx > 0 && !remaining.is_char_boundary(idx) {
                 idx -= 1;
             }
-            idx.max(1) // ensure progress
+            if idx == 0 {
+                // max_width is smaller than the first char (e.g. width 1 with a
+                // 3-byte char). Advance by exactly one whole char so we never
+                // slice inside a multibyte code point and always make progress.
+                remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1)
+            } else {
+                idx
+            }
         };
         result.push(&remaining[..split_at]);
         remaining = &remaining[split_at..];
@@ -1815,11 +1827,78 @@ mod tests {
         }
     }
 
+    // ── W1 (Round 2): split_at_width tiny-width hardening ────────────────────
+
+    /// W1: `split_at_width` must not panic at widths 1–4 with a multibyte leading char.
+    ///
+    /// "応" is a 3-byte UTF-8 character. At max_width 1 or 2 the old `idx.max(1)`
+    /// path would produce `&remaining[..1]` or `&remaining[..2]`, slicing inside
+    /// the character boundary and panicking. The fix advances by one whole char
+    /// when the backward walk hits 0.
+    #[test]
+    fn test_split_at_width_multibyte_tiny_widths_no_panic() {
+        // 3-byte Japanese characters: "応用検索" (4 chars, 12 bytes each 3 bytes)
+        let text = "応用検索ABCD";
+
+        for max_width in 1..=8 {
+            // Must not panic.
+            let chunks = split_at_width(text, max_width);
+            // Reassembling the chunks must reconstruct the original.
+            let reassembled: String = chunks.concat();
+            assert_eq!(
+                reassembled, text,
+                "split_at_width({max_width}) must produce chunks that rejoin to the original string"
+            );
+            // Every chunk must be non-empty (no infinite loop / zero-progress).
+            for chunk in &chunks {
+                assert!(
+                    !chunk.is_empty(),
+                    "split_at_width({max_width}) produced an empty chunk (infinite-loop risk)"
+                );
+            }
+        }
+    }
+
+    /// W1: At width 1, a string starting with a multibyte char must still make
+    /// progress — each chunk must be a complete Unicode scalar value.
+    #[test]
+    fn test_split_at_width_width_1_multibyte_advances_one_char() {
+        // Each "応" is 3 bytes. At width=1 we cannot fit it in 1 byte, but we
+        // must still advance one whole char per iteration (not 1 byte).
+        let text = "応用";
+        let chunks = split_at_width(text, 1);
+        // Must produce exactly 2 chunks (one per char), not 6 (one per byte).
+        assert_eq!(
+            chunks.len(), 2,
+            "width=1 with 2 multibyte chars must produce 2 whole-char chunks, got: {chunks:?}"
+        );
+        assert_eq!(chunks[0], "応");
+        assert_eq!(chunks[1], "用");
+    }
+
+    /// W1: Render the General tab with a multibyte Content-Type at widths 1–4.
+    ///
+    /// Extends the Round 1 test to explicitly cover the tiny-width range that
+    /// was identified as a panic source in the convergence review.
+    #[test]
+    fn test_general_tab_multibyte_tiny_widths_no_panic() {
+        let mut entry = make_entry();
+        // Content-Type starting with a 3-byte char to stress the split boundary.
+        entry.content_type = Some("応用/json".to_string());
+
+        for width in [1u16, 2, 3, 4, 5] {
+            let widget =
+                RequestDetails::new(&entry, None, NetworkDetailTab::General, false, 0);
+            // Must not panic — that's the key requirement.
+            let _buf = render_to_buf(widget, width, 20);
+        }
+    }
+
     /// Item 5 (Q2): The wrap cache is reused for identical inputs and rebuilt
     /// when the selection or content width changes.
     #[test]
     fn test_wrap_cache_reuse_and_invalidation() {
-        use fdemon_app::session::{BodyWrapCacheKey, NetworkDetailTab, NetworkState};
+        use fdemon_app::session::{hash_body, BodyWrapCacheKey, NetworkDetailTab, NetworkState};
 
         let mut state = NetworkState::default();
         // Populate with a body entry so we can call get_or_compute_wrapped_lines.
@@ -1829,6 +1908,7 @@ mod tests {
             detail_tab: NetworkDetailTab::ResponseBody,
             content_width: 40,
             body_len: body.len(),
+            body_hash: hash_body(&body),
         };
 
         // First call — cache miss, computes lines.

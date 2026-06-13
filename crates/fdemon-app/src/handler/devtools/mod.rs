@@ -738,14 +738,9 @@ fn pause_builtin_polling_on_leave(state: &mut AppState) {
 /// Part of the out-of-tree DevTools panel seam — only reachable while an
 /// extension panel is focused, so stock fdemon never cycles this way.
 pub fn handle_cycle_panel(state: &mut AppState, forward: bool) -> UpdateResult {
-    let order = {
-        let mut ids: Vec<String> = crate::state::BUILTIN_DEVTOOLS_PANEL_IDS
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        ids.extend(state.extra_devtools_panels.iter().map(|p| p.id().to_string()));
-        ids
-    };
+    // Delegate to the single source of truth on AppState so the cycle order
+    // is never re-specified inline here.
+    let order = state.devtools_panel_id_order();
     if order.is_empty() {
         return UpdateResult::none();
     }
