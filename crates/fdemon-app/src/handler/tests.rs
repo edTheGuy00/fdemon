@@ -246,6 +246,10 @@ fn test_cancel_quit_returns_to_normal() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
+    // A confirm dialog always has a populated state at runtime; its key
+    // shortcuts are driven by the option list ("[q] Quit  [c] Cancel").
+    state.confirm_dialog_state =
+        Some(crate::confirm_dialog::ConfirmDialogState::quit_confirmation(1));
 
     update(&mut state, Message::CancelQuit);
 
@@ -259,6 +263,10 @@ fn test_y_key_in_confirm_dialog_confirms() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
+    // A confirm dialog always has a populated state at runtime; its key
+    // shortcuts are driven by the option list ("[q] Quit  [c] Cancel").
+    state.confirm_dialog_state =
+        Some(crate::confirm_dialog::ConfirmDialogState::quit_confirmation(1));
 
     let key = InputKey::Char('y');
     let result = handle_key(&state, key);
@@ -272,6 +280,10 @@ fn test_n_key_in_confirm_dialog_cancels() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
+    // A confirm dialog always has a populated state at runtime; its key
+    // shortcuts are driven by the option list ("[q] Quit  [c] Cancel").
+    state.confirm_dialog_state =
+        Some(crate::confirm_dialog::ConfirmDialogState::quit_confirmation(1));
 
     let key = InputKey::Char('n');
     let result = handle_key(&state, key);
@@ -285,6 +297,10 @@ fn test_esc_in_confirm_dialog_cancels() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
+    // A confirm dialog always has a populated state at runtime; its key
+    // shortcuts are driven by the option list ("[q] Quit  [c] Cancel").
+    state.confirm_dialog_state =
+        Some(crate::confirm_dialog::ConfirmDialogState::quit_confirmation(1));
 
     let key = InputKey::Esc;
     let result = handle_key(&state, key);
@@ -298,6 +314,10 @@ fn test_ctrl_c_in_confirm_dialog_force_quits() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
+    // A confirm dialog always has a populated state at runtime; its key
+    // shortcuts are driven by the option list ("[q] Quit  [c] Cancel").
+    state.confirm_dialog_state =
+        Some(crate::confirm_dialog::ConfirmDialogState::quit_confirmation(1));
 
     let key = InputKey::CharCtrl('c');
     let result = handle_key(&state, key);
@@ -312,6 +332,10 @@ fn test_q_in_confirm_dialog_confirms() {
 
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
+    // A confirm dialog always has a populated state at runtime; its key
+    // shortcuts are driven by the option list ("[q] Quit  [c] Cancel").
+    state.confirm_dialog_state =
+        Some(crate::confirm_dialog::ConfirmDialogState::quit_confirmation(1));
 
     let key = InputKey::Char('q');
     let result = handle_key(&state, key);

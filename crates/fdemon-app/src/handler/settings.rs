@@ -27,7 +27,7 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
         }
         "watcher.debounce_ms" => {
             if let SettingValue::Number(v) = &item.value {
-                settings.watcher.debounce_ms = *v as u64;
+                settings.watcher.debounce_ms = (*v).max(0) as u64;
             }
         }
         "watcher.auto_reload" => {
@@ -44,7 +44,7 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
         // UI
         "ui.log_buffer_size" => {
             if let SettingValue::Number(v) = &item.value {
-                settings.ui.log_buffer_size = *v as usize;
+                settings.ui.log_buffer_size = (*v).max(0) as usize;
             }
         }
         "ui.show_timestamps" => {
@@ -79,7 +79,7 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
         }
         "ui.stack_trace_max_frames" => {
             if let SettingValue::Number(v) = &item.value {
-                settings.ui.stack_trace_max_frames = *v as usize;
+                settings.ui.stack_trace_max_frames = (*v).max(0) as usize;
             }
         }
         "ui.enable_mouse" => {
@@ -112,7 +112,57 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
         }
         "devtools.inspector_fetch_timeout_secs" => {
             if let SettingValue::Number(v) = &item.value {
-                settings.devtools.inspector_fetch_timeout_secs = *v as u64;
+                settings.devtools.inspector_fetch_timeout_secs = (*v).max(0) as u64;
+            }
+        }
+        "devtools.default_panel" => {
+            if let SettingValue::Enum { value, .. } = &item.value {
+                settings.devtools.default_panel = value.clone();
+            }
+        }
+        "devtools.performance_refresh_ms" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.performance_refresh_ms = (*v).max(0) as u64;
+            }
+        }
+        "devtools.memory_history_size" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.memory_history_size = (*v).max(0) as usize;
+            }
+        }
+        "devtools.tree_max_depth" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.tree_max_depth = (*v).max(0) as u32;
+            }
+        }
+        "devtools.auto_repaint_rainbow" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.auto_repaint_rainbow = *v;
+            }
+        }
+        "devtools.auto_performance_overlay" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.auto_performance_overlay = *v;
+            }
+        }
+        "devtools.logging.hybrid_enabled" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.logging.hybrid_enabled = *v;
+            }
+        }
+        "devtools.logging.prefer_vm_level" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.logging.prefer_vm_level = *v;
+            }
+        }
+        "devtools.logging.show_source_indicator" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.logging.show_source_indicator = *v;
+            }
+        }
+        "devtools.logging.dedupe_threshold_ms" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.logging.dedupe_threshold_ms = (*v).max(0) as u64;
             }
         }
 

@@ -1445,7 +1445,14 @@ pub enum SettingsTab {
     UserPrefs,    // settings.local.toml - user-specific
     LaunchConfig, // launch.toml - shared launch configs
     VSCodeConfig, // launch.json - read-only display
+    /// Host-injected extra tab; the `usize` indexes into
+    /// `AppState::extra_settings_tabs`. Title/items/save come from the
+    /// corresponding `SettingsTabProvider`.
+    Extra(usize),
 }
+
+/// Number of built-in (non-`Extra`) settings tabs.
+pub const BUILTIN_SETTINGS_TAB_COUNT: usize = 4;
 
 impl SettingsTab {
     pub fn label(&self) -> &'static str {
@@ -1454,6 +1461,9 @@ impl SettingsTab {
             Self::UserPrefs => "User",
             Self::LaunchConfig => "Launch",
             Self::VSCodeConfig => "VSCode",
+            // Real label comes from the provider's `title()`; this is a
+            // placeholder for the rare caller that needs a `&'static str`.
+            Self::Extra(_) => "",
         }
     }
 
@@ -1463,6 +1473,7 @@ impl SettingsTab {
             Self::UserPrefs => 1,
             Self::LaunchConfig => 2,
             Self::VSCodeConfig => 3,
+            Self::Extra(i) => BUILTIN_SETTINGS_TAB_COUNT + i,
         }
     }
 
@@ -1476,12 +1487,52 @@ impl SettingsTab {
         }
     }
 
+    /// Count-aware variant of [`from_index`](Self::from_index) that resolves
+    /// indices past the built-in tabs to `Extra(idx - 4)`, bounded by
+    /// `extra_count`.
+    pub fn from_index_with(idx: usize, extra_count: usize) -> Option<Self> {
+        if idx < BUILTIN_SETTINGS_TAB_COUNT {
+            Self::from_index(idx)
+        } else if idx < BUILTIN_SETTINGS_TAB_COUNT + extra_count {
+            Some(Self::Extra(idx - BUILTIN_SETTINGS_TAB_COUNT))
+        } else {
+            None
+        }
+    }
+
     pub fn next(&self) -> Self {
-        Self::from_index((self.index() + 1) % 4).unwrap()
+        debug_assert!(
+            !matches!(self, Self::Extra(_)),
+            "use next_with/prev_with when extra tabs exist"
+        );
+        Self::from_index((self.index() + 1) % BUILTIN_SETTINGS_TAB_COUNT).unwrap()
     }
 
     pub fn prev(&self) -> Self {
-        Self::from_index((self.index() + 3) % 4).unwrap()
+        debug_assert!(
+            !matches!(self, Self::Extra(_)),
+            "use next_with/prev_with when extra tabs exist"
+        );
+        Self::from_index(
+            (self.index() + BUILTIN_SETTINGS_TAB_COUNT - 1) % BUILTIN_SETTINGS_TAB_COUNT,
+        )
+        .unwrap()
+    }
+
+    /// Count-aware variant of [`next`](Self::next) that wraps over the built-in
+    /// tabs plus `extra_count` host-injected tabs.
+    pub fn next_with(&self, extra_count: usize) -> Self {
+        let total = BUILTIN_SETTINGS_TAB_COUNT + extra_count;
+        Self::from_index_with((self.index() + 1) % total, extra_count)
+            .expect("modulo keeps the index within 0..(BUILTIN_SETTINGS_TAB_COUNT + extra_count)")
+    }
+
+    /// Count-aware variant of [`prev`](Self::prev) that wraps over the built-in
+    /// tabs plus `extra_count` host-injected tabs.
+    pub fn prev_with(&self, extra_count: usize) -> Self {
+        let total = BUILTIN_SETTINGS_TAB_COUNT + extra_count;
+        Self::from_index_with((self.index() + total - 1) % total, extra_count)
+            .expect("modulo keeps the index within 0..(BUILTIN_SETTINGS_TAB_COUNT + extra_count)")
     }
 
     /// Icon for tab (optional visual enhancement)
@@ -1491,6 +1542,7 @@ impl SettingsTab {
             Self::UserPrefs => "👤",    // Person for user prefs
             Self::LaunchConfig => "▶",  // Play for launch
             Self::VSCodeConfig => "📁", // Folder for VSCode
+            Self::Extra(_) => "•",      // Generic glyph for host-injected tabs
         }
     }
 
@@ -1935,6 +1987,58 @@ debounce_ms = 1000
         assert_eq!(SettingsTab::UserPrefs.index(), 1);
         assert_eq!(SettingsTab::LaunchConfig.index(), 2);
         assert_eq!(SettingsTab::VSCodeConfig.index(), 3);
+    }
+
+    #[test]
+    fn test_settings_tab_extra_index() {
+        assert_eq!(SettingsTab::Extra(0).index(), 4);
+        assert_eq!(SettingsTab::Extra(1).index(), 5);
+    }
+
+    #[test]
+    fn test_settings_tab_from_index_with_extra() {
+        // With one extra tab, index 4 resolves to Extra(0); 5 is out of range.
+        assert_eq!(
+            SettingsTab::from_index_with(4, 1),
+            Some(SettingsTab::Extra(0))
+        );
+        assert_eq!(SettingsTab::from_index_with(5, 1), None);
+        // Built-ins still resolve regardless of extra_count.
+        assert_eq!(
+            SettingsTab::from_index_with(0, 1),
+            Some(SettingsTab::Project)
+        );
+        // With no extras, index 4 is out of range.
+        assert_eq!(SettingsTab::from_index_with(4, 0), None);
+    }
+
+    #[test]
+    fn test_settings_tab_next_with_cycles_through_extra() {
+        // One extra tab: VSCode -> Extra(0) -> wrap to Project.
+        assert_eq!(
+            SettingsTab::VSCodeConfig.next_with(1),
+            SettingsTab::Extra(0)
+        );
+        assert_eq!(SettingsTab::Extra(0).next_with(1), SettingsTab::Project);
+        // prev_with wraps the other direction.
+        assert_eq!(SettingsTab::Project.prev_with(1), SettingsTab::Extra(0));
+        assert_eq!(
+            SettingsTab::Extra(0).prev_with(1),
+            SettingsTab::VSCodeConfig
+        );
+    }
+
+    #[test]
+    fn test_settings_tab_next_with_zero_extra_matches_no_arg() {
+        // With no extra tabs, the count-aware variants match the built-in ones.
+        assert_eq!(
+            SettingsTab::VSCodeConfig.next_with(0),
+            SettingsTab::VSCodeConfig.next()
+        );
+        assert_eq!(
+            SettingsTab::Project.prev_with(0),
+            SettingsTab::Project.prev()
+        );
     }
 
     #[test]

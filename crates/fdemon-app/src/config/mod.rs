@@ -8,6 +8,7 @@
 pub mod launch;
 pub mod priority;
 pub mod settings;
+pub mod toml_merge;
 pub mod types;
 pub mod vscode;
 pub mod writer;
@@ -34,7 +35,7 @@ pub use types::{
     DevToolsLoggingSettings, DevToolsSettings, EditorSettings, FlutterMode, IconMode, LaunchConfig,
     LaunchFile, NativeLogsSettings, ParentIde, ReadyCheck, ResolvedLaunchConfig, SettingItem,
     SettingValue, Settings, SettingsTab, TagConfig, UiSettings, UserPreferences, WatcherSettings,
-    WindowPrefs,
+    WindowPrefs, BUILTIN_SETTINGS_TAB_COUNT,
 };
 pub use vscode::load_vscode_configs;
 pub use writer::{

@@ -416,6 +416,10 @@ pub enum Message {
     /// Force close settings panel without saving
     ForceHideSettings,
 
+    /// Dismiss the unsaved-changes confirmation and return to the settings
+    /// panel with edits intact (the "Cancel" button on that dialog).
+    SettingsCancelClose,
+
     // ─────────────────────────────────────────────────────────────
     // Background Settings Persistence Handshake
     // (devtools-inspector-parity Phase 1.5, Task 02)

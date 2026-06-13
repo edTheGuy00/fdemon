@@ -43,6 +43,9 @@ crossterm = "0.29"
 
 # Config
 toml = "0.8"
+# Format-preserving TOML editing for in-place settings writes (keeps user
+# comments, key order, and unmodelled keys when persisting changed values).
+toml_edit = "0.22"
 dirs = "5"
 fs2 = "0.4"
 # fs4: cross-platform free-disk-space probe (statvfs/GetDiskFreeSpaceExW).

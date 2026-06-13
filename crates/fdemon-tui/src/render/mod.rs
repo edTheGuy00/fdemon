@@ -356,6 +356,27 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             }
         }
         UiMode::ConfirmDialog => {
+            // When the dialog was raised over the settings panel (the unsaved-
+            // changes prompt), draw the settings page as a dimmed backdrop so
+            // the dialog reads as an overlay rather than replacing the page.
+            // Regions are suppressed (ctx = None): only the dialog buttons are
+            // interactive while the prompt is up.
+            if state.confirm_dialog_backdrop == Some(UiMode::Settings) {
+                let settings_panel = widgets::SettingsPanel::new(
+                    &state.settings,
+                    &state.project_path,
+                    &state.extra_settings_tabs,
+                );
+                widgets::settings_panel::render_with_regions(
+                    content_area,
+                    frame.buffer_mut(),
+                    settings_panel,
+                    &mut state.settings_view_state,
+                    None,
+                );
+                widgets::modal_overlay::dim_background(frame.buffer_mut(), content_area);
+            }
+
             // Render confirmation dialog
             if let Some(ref dialog_state) = state.confirm_dialog_state {
                 let dialog = widgets::ConfirmDialog::new(dialog_state);
@@ -456,7 +477,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         }
         UiMode::Settings => {
             // Full-screen settings panel
-            let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
+            let settings_panel = widgets::SettingsPanel::new(
+                &state.settings,
+                &state.project_path,
+                &state.extra_settings_tabs,
+            );
             widgets::settings_panel::render_with_regions(
                 content_area,
                 frame.buffer_mut(),

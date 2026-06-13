@@ -25,7 +25,7 @@ fn test_settings_panel_renders() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -52,7 +52,7 @@ fn test_settings_panel_shows_active_tab() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -75,7 +75,7 @@ fn test_settings_panel_dirty_indicator() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -95,13 +95,13 @@ fn test_tab_navigation_wraps() {
     assert_eq!(state.active_tab, SettingsTab::Project);
 
     // Forward through all tabs
-    state.next_tab();
+    state.next_tab(0);
     assert_eq!(state.active_tab, SettingsTab::UserPrefs);
-    state.next_tab();
+    state.next_tab(0);
     assert_eq!(state.active_tab, SettingsTab::LaunchConfig);
-    state.next_tab();
+    state.next_tab(0);
     assert_eq!(state.active_tab, SettingsTab::VSCodeConfig);
-    state.next_tab(); // Wrap
+    state.next_tab(0); // Wrap
     assert_eq!(state.active_tab, SettingsTab::Project);
 }
 
@@ -110,7 +110,7 @@ fn test_tab_switch_resets_selection() {
     let mut state = SettingsViewState::new();
     state.selected_index = 5;
 
-    state.next_tab();
+    state.next_tab(0);
     assert_eq!(state.selected_index, 0);
 }
 
@@ -120,7 +120,7 @@ fn test_tab_switch_exits_edit_mode() {
     state.editing = true;
     state.edit_buffer = "test".to_string();
 
-    state.next_tab();
+    state.next_tab(0);
     assert!(!state.editing);
     assert!(state.edit_buffer.is_empty());
 }
@@ -153,7 +153,7 @@ fn test_render_shows_all_tabs() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -259,7 +259,7 @@ fn test_render_project_tab() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -267,10 +267,10 @@ fn test_render_project_tab() {
     let buffer = terminal.backend().buffer();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
-    // Check sections are rendered (spaced uppercase format from Phase 4, Task 03)
-    assert!(content.contains("B E H A V I O R"));
-    assert!(content.contains("W A T C H E R"));
-    assert!(content.contains("U I"));
+    // Check sections are rendered (normal uppercase letter spacing)
+    assert!(content.contains("BEHAVIOR"));
+    assert!(content.contains("WATCHER"));
+    assert!(content.contains("UI"));
 
     // Check some settings are rendered
     assert!(content.contains("Confirm Quit"));
@@ -312,7 +312,7 @@ fn test_render_launch_tab_empty() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -340,7 +340,7 @@ fn test_render_launch_tab_with_configs() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -806,7 +806,7 @@ fn test_section_header_renders_icon_and_uppercase() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -814,19 +814,16 @@ fn test_section_header_renders_icon_and_uppercase() {
     let buffer = terminal.backend().buffer();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
-    // Verify spaced uppercase section headers (from Phase 4, Task 03)
+    // Verify normal uppercase section headers (no inter-letter spacing).
     assert!(
-        content.contains("B E H A V I O R"),
-        "Should render 'BEHAVIOR' with spaced uppercase"
+        content.contains("BEHAVIOR"),
+        "Should render 'BEHAVIOR' in uppercase"
     );
     assert!(
-        content.contains("W A T C H E R"),
-        "Should render 'WATCHER' with spaced uppercase"
+        content.contains("WATCHER"),
+        "Should render 'WATCHER' in uppercase"
     );
-    assert!(
-        content.contains("U I"),
-        "Should render 'UI' with spaced uppercase"
-    );
+    assert!(content.contains("UI"), "Should render 'UI' in uppercase");
 
     // Icons are present in the buffer (but exact glyph may vary by IconMode)
     // We can verify by checking that section headers exist and are styled correctly
@@ -846,7 +843,7 @@ fn test_selected_row_has_accent_bar() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -893,7 +890,7 @@ fn test_selected_row_has_tinted_background() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -934,7 +931,7 @@ fn test_unselected_row_has_no_accent_bar() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -971,7 +968,7 @@ fn test_footer_normal_mode_shows_4_hints() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1017,7 +1014,7 @@ fn test_footer_editing_mode_shows_confirm_cancel() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1055,7 +1052,7 @@ fn test_tab_labels_uppercase() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1093,7 +1090,7 @@ fn test_header_shows_settings_title() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1124,7 +1121,7 @@ fn test_user_prefs_info_banner_shows_content() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1155,7 +1152,7 @@ fn test_vscode_info_banner_shows_content() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1190,7 +1187,7 @@ fn test_launch_empty_state_top_aligned() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1243,7 +1240,7 @@ fn test_vscode_empty_state_top_aligned() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1296,7 +1293,7 @@ fn test_empty_state_not_vertically_centered() {
 
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1352,7 +1349,7 @@ fn test_settings_panel_renders_dart_defines_modal_overlay() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1388,7 +1385,7 @@ fn test_settings_panel_renders_extra_args_modal_overlay() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1418,7 +1415,7 @@ fn test_settings_panel_no_overlay_when_no_modal() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1461,7 +1458,7 @@ fn test_render_add_config_button_visible_with_configs() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1508,7 +1505,7 @@ fn test_render_add_config_button_selected() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1549,7 +1546,7 @@ fn test_render_add_config_button_absent_when_no_configs() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1586,7 +1583,7 @@ fn test_render_dart_defines_modal_shows_define_key() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1629,7 +1626,7 @@ fn test_render_extra_args_modal_shows_item() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
-            let panel = SettingsPanel::new(&settings, temp.path());
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
             frame.render_stateful_widget(panel, frame.area(), &mut state);
         })
         .unwrap();
@@ -1665,7 +1662,7 @@ fn render_with_regions_records_four_tab_headers() {
 
     let settings = Settings::default();
     let project_path = std::path::Path::new("/tmp/test");
-    let panel = SettingsPanel::new(&settings, project_path);
+    let panel = SettingsPanel::new(&settings, project_path, &[]);
     let mut state = SettingsViewState::default();
 
     let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
@@ -1703,7 +1700,7 @@ fn render_with_regions_records_one_region_per_visible_setting_row() {
     // must equal the number of items returned by project_settings_items().
     let settings = Settings::default();
     let project_path = std::path::Path::new("/tmp/test");
-    let panel = SettingsPanel::new(&settings, project_path);
+    let panel = SettingsPanel::new(&settings, project_path, &[]);
     // Project tab is the default — no need to set active_tab explicitly.
     let mut state = SettingsViewState::default();
 
@@ -1738,7 +1735,7 @@ fn render_with_regions_indices_match_item_positions() {
     // Click the third item — expect SettingsClickRow { index: 2 }.
     let settings = Settings::default();
     let project_path = std::path::Path::new("/tmp/test");
-    let panel = SettingsPanel::new(&settings, project_path);
+    let panel = SettingsPanel::new(&settings, project_path, &[]);
     let mut state = SettingsViewState::default();
 
     let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 60));
@@ -1779,7 +1776,7 @@ fn render_with_regions_section_headers_are_not_clickable() {
     // number of items, NOT items + section headers.
     let settings = Settings::default();
     let project_path = std::path::Path::new("/tmp/test");
-    let panel = SettingsPanel::new(&settings, project_path);
+    let panel = SettingsPanel::new(&settings, project_path, &[]);
     // Project tab is the default — no need to set active_tab explicitly.
     let mut state = SettingsViewState::default();
 
@@ -1822,7 +1819,7 @@ fn render_with_regions_visual_output_unchanged() {
     let mut buf_with_regions =
         ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
 
-    let panel_a = SettingsPanel::new(&settings, project_path);
+    let panel_a = SettingsPanel::new(&settings, project_path, &[]);
     ratatui::widgets::StatefulWidget::render(
         panel_a,
         ratatui::layout::Rect::new(0, 0, 100, 40),
@@ -1830,7 +1827,7 @@ fn render_with_regions_visual_output_unchanged() {
         &mut state_a,
     );
 
-    let panel_b = SettingsPanel::new(&settings, project_path);
+    let panel_b = SettingsPanel::new(&settings, project_path, &[]);
     let mut regions = MouseRegions::default();
     {
         let builder = regions.builder();
@@ -1858,10 +1855,10 @@ fn render_with_regions_none_ctx_produces_same_output_as_widget_render() {
     let mut buf_widget = ratatui::buffer::Buffer::empty(area);
     let mut buf_no_ctx = ratatui::buffer::Buffer::empty(area);
 
-    let panel_a = SettingsPanel::new(&settings, project_path);
+    let panel_a = SettingsPanel::new(&settings, project_path, &[]);
     ratatui::widgets::StatefulWidget::render(panel_a, area, &mut buf_widget, &mut state_a);
 
-    let panel_b = SettingsPanel::new(&settings, project_path);
+    let panel_b = SettingsPanel::new(&settings, project_path, &[]);
     super::render_with_regions(area, &mut buf_no_ctx, panel_b, &mut state_b, None);
 
     assert_eq!(buf_widget, buf_no_ctx);
@@ -1893,7 +1890,7 @@ fn render_with_regions_row_rect_y_aligns_with_rendered_label() {
 
     let mut state = SettingsViewState::default();
     {
-        let panel = SettingsPanel::new(&settings, project_path);
+        let panel = SettingsPanel::new(&settings, project_path, &[]);
         let builder = regions.builder();
         let mut ctx = crate::render::MouseCtx::new(builder);
         super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
@@ -1971,7 +1968,7 @@ fn launch_config_add_new_sentinel_is_clickable() {
     state.active_tab = SettingsTab::LaunchConfig;
 
     {
-        let panel = SettingsPanel::new(&settings, temp.path());
+        let panel = SettingsPanel::new(&settings, temp.path(), &[]);
         let builder = regions.builder();
         let mut ctx = crate::render::MouseCtx::new(builder);
         super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
@@ -2038,7 +2035,7 @@ fn render_with_regions_launch_config_region_count_matches_renderer() {
     state.active_tab = SettingsTab::LaunchConfig;
 
     {
-        let panel = SettingsPanel::new(&settings, temp.path());
+        let panel = SettingsPanel::new(&settings, temp.path(), &[]);
         let builder = regions.builder();
         let mut ctx = crate::render::MouseCtx::new(builder);
         super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
@@ -2070,5 +2067,349 @@ fn render_with_regions_launch_config_region_count_matches_renderer() {
         "region count ({}) must equal item_count ({}) + 1 sentinel",
         row_indices.len(),
         item_count,
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Scroll viewport tests (S1)
+// ─────────────────────────────────────────────────────────
+
+/// On a short terminal, selecting an item near the end of the Project tab must
+/// push `scroll_offset` past 0 so the selection stays on-screen.
+#[test]
+fn short_buffer_scroll_follows_selection_to_end() {
+    use fdemon_app::settings_items::project_settings_items;
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+
+    let items = project_settings_items(&settings);
+    let last = items.len() - 1;
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::Project;
+    state.selected_index = last;
+
+    // Short buffer: header(5) + footer(3) leaves a small content viewport.
+    let backend = TestBackend::new(100, 12);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    assert!(
+        state.scroll_offset > 0,
+        "selecting the last item on a short terminal must scroll the viewport (got offset {})",
+        state.scroll_offset
+    );
+}
+
+/// A tall terminal must keep `scroll_offset` at 0 even with a late selection,
+/// because everything fits.
+#[test]
+fn tall_buffer_keeps_scroll_offset_zero() {
+    use fdemon_app::settings_items::project_settings_items;
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let items = project_settings_items(&settings);
+    let last = items.len() - 1;
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::Project;
+    state.selected_index = last;
+
+    let backend = TestBackend::new(100, 80);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path(), &[]);
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    assert_eq!(
+        state.scroll_offset, 0,
+        "everything fits on a tall terminal; scroll_offset must stay 0"
+    );
+}
+
+/// Renderer / region-recorder parity at a non-zero scroll offset: the click
+/// region registered for the selected row must sit on the same buffer row the
+/// renderer drew the selected label on.
+#[test]
+fn nonzero_offset_renderer_recorder_parity() {
+    use fdemon_app::message::Message;
+    use fdemon_app::settings_items::project_settings_items;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test_scroll");
+
+    let items = project_settings_items(&settings);
+    let last = items.len() - 1;
+
+    // Short content viewport forces a non-zero scroll for a late selection.
+    let area = ratatui::layout::Rect::new(0, 0, 100, 12);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut regions = MouseRegions::default();
+
+    let mut state = SettingsViewState {
+        active_tab: SettingsTab::Project,
+        selected_index: last,
+        ..Default::default()
+    };
+
+    {
+        let panel = SettingsPanel::new(&settings, project_path, &[]);
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
+    }
+
+    assert!(
+        state.scroll_offset > 0,
+        "test precondition: selection near the end must produce a non-zero scroll offset"
+    );
+
+    // Region for the selected (last) item.
+    let sel_rect = regions
+        .iter()
+        .find_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index }) if index == last => Some(e.rect),
+            _ => None,
+        })
+        .expect("selected row region must be registered when scrolled into view");
+
+    // The selected label must appear on that exact buffer row.
+    let label_prefix = &items[last].label[..items[last].label.len().min(3)];
+    let row_y = sel_rect.y;
+    let row_content: String = (sel_rect.x..sel_rect.x + sel_rect.width)
+        .map(|x| {
+            buf.cell((x, row_y))
+                .map_or(' ', |c| c.symbol().chars().next().unwrap_or(' '))
+        })
+        .collect();
+
+    assert!(
+        row_content.contains(label_prefix),
+        "region rect y={} must align with rendered selected label {:?}; row was {:?}",
+        row_y,
+        label_prefix,
+        &row_content[..row_content.len().min(40)],
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// S2: host-injected extra settings tab (generic seam)
+// ─────────────────────────────────────────────────────────
+
+/// Minimal provider used to exercise the generic render + region path.
+#[derive(Debug)]
+struct DemoProvider;
+
+impl fdemon_app::settings_tab_provider::SettingsTabProvider for DemoProvider {
+    fn title(&self) -> &str {
+        "Demo"
+    }
+
+    fn items(&self) -> Vec<SettingItem> {
+        vec![
+            SettingItem::new("demo.alpha", "Alpha")
+                .value(SettingValue::Bool(true))
+                .section("Demo".to_string()),
+            SettingItem::new("demo.beta", "Beta")
+                .value(SettingValue::String("x".to_string()))
+                .section("Demo".to_string()),
+        ]
+    }
+
+    fn apply(&mut self, _item: &SettingItem) {}
+
+    fn save(&self, _project_path: &std::path::Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn extra_tab_title_appears_in_tab_bar() {
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let extra: Vec<Box<dyn fdemon_app::settings_tab_provider::SettingsTabProvider>> =
+        vec![Box::new(DemoProvider)];
+    let mut state = SettingsViewState::new();
+
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path(), &extra);
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    // The provider title is numbered 5 and upper-cased in the tab bar.
+    assert!(content.contains("DEMO"), "extra tab title must render");
+}
+
+#[test]
+fn extra_tab_renders_provider_items_and_registers_regions() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test");
+    let extra: Vec<Box<dyn fdemon_app::settings_tab_provider::SettingsTabProvider>> =
+        vec![Box::new(DemoProvider)];
+    let panel = SettingsPanel::new(&settings, project_path, &extra);
+
+    let mut state = SettingsViewState {
+        active_tab: SettingsTab::Extra(0),
+        ..Default::default()
+    };
+
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
+    let mut regions = MouseRegions::default();
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(
+            ratatui::layout::Rect::new(0, 0, 100, 40),
+            &mut buf,
+            panel,
+            &mut state,
+            Some(&mut ctx),
+        );
+    }
+
+    // Five tab headers (4 built-in + 1 extra).
+    let tab_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsGotoTab(_))))
+        .count();
+    assert_eq!(tab_count, 5, "expected 5 tab-header regions");
+
+    // One row region per provider item (2).
+    let row_count = regions
+        .iter()
+        .filter(|e| matches!(extract_action(e), Some(Message::SettingsClickRow { .. })))
+        .count();
+    assert_eq!(row_count, 2, "expected one region per provider item");
+
+    // Provider item labels are drawn into the content area.
+    let content: String = buf.content().iter().map(|c| c.symbol()).collect();
+    assert!(content.contains("Alpha"));
+    assert!(content.contains("Beta"));
+}
+
+// ─────────────────────────────────────────────────────────
+// F12: scrolled Extra-tab renderer/recorder parity
+// ─────────────────────────────────────────────────────────
+
+/// A provider with enough items to overflow a short viewport (one section,
+/// 20 items), used to verify that a scrolled Extra tab keeps click rects
+/// aligned with the rendered rows.
+#[derive(Debug)]
+struct ScrollProvider;
+
+impl fdemon_app::settings_tab_provider::SettingsTabProvider for ScrollProvider {
+    fn title(&self) -> &str {
+        "Scroll"
+    }
+
+    fn items(&self) -> Vec<SettingItem> {
+        (0..20)
+            .map(|i| {
+                SettingItem::new(format!("scroll.item{}", i), format!("Item {}", i))
+                    .value(SettingValue::Bool(false))
+                    .section("Items".to_string())
+            })
+            .collect()
+    }
+
+    fn apply(&mut self, _item: &SettingItem) {}
+
+    fn save(&self, _project_path: &std::path::Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Renderer/recorder parity on a SCROLLED host-injected (Extra) tab.
+///
+/// Pushes a stub provider with 20 items, forcing a scroll on a short viewport.
+/// Selects a late item, renders via the region-recording path, then asserts:
+/// 1. `scroll_offset > 0` (the viewport actually scrolled).
+/// 2. The `SettingsClickRow` rect y for the selected item matches the buffer
+///    row where the selected label text was rendered.
+#[test]
+fn nonzero_offset_renderer_recorder_parity_extra_tab() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test_scroll_extra");
+    let extra: Vec<Box<dyn fdemon_app::settings_tab_provider::SettingsTabProvider>> =
+        vec![Box::new(ScrollProvider)];
+
+    use fdemon_app::settings_tab_provider::SettingsTabProvider as _;
+    let items = ScrollProvider.items();
+    let last = items.len() - 1; // index 19 — deep enough to force scrolling
+
+    // Short viewport: header(5) + content(short) + footer(3) = 12 rows total.
+    // Content viewport = 12 - 5 - 3 = 4 rows, far fewer than the 20 items.
+    let area = ratatui::layout::Rect::new(0, 0, 100, 12);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut regions = MouseRegions::default();
+
+    let mut state = SettingsViewState {
+        active_tab: SettingsTab::Extra(0),
+        selected_index: last,
+        ..Default::default()
+    };
+
+    let panel = SettingsPanel::new(&settings, project_path, &extra);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
+    }
+
+    assert!(
+        state.scroll_offset > 0,
+        "test precondition: selecting item {} on a short viewport must scroll (got offset {})",
+        last,
+        state.scroll_offset
+    );
+
+    // The region for the selected (last) item.
+    let sel_rect = regions
+        .iter()
+        .find_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index }) if index == last => Some(e.rect),
+            _ => None,
+        })
+        .expect("selected row region must be registered when scrolled into view");
+
+    // The selected label must appear on that exact buffer row.
+    let label_prefix = &items[last].label[..items[last].label.len().min(3)];
+    let row_y = sel_rect.y;
+    let row_content: String = (sel_rect.x..sel_rect.x + sel_rect.width)
+        .map(|x| {
+            buf.cell((x, row_y))
+                .map_or(' ', |c| c.symbol().chars().next().unwrap_or(' '))
+        })
+        .collect();
+
+    assert!(
+        row_content.contains(label_prefix),
+        "region rect y={} must align with rendered selected label {:?} on the Extra tab; row was {:?}",
+        row_y,
+        label_prefix,
+        &row_content[..row_content.len().min(40)],
     );
 }

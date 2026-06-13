@@ -55,7 +55,7 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
     match state.ui_mode {
         UiMode::Startup | UiMode::NewSessionDialog => handle_key_new_session_dialog(key, state),
         UiMode::SearchInput => handle_key_search_input(state, key),
-        UiMode::ConfirmDialog => handle_key_confirm_dialog(key),
+        UiMode::ConfirmDialog => handle_key_confirm_dialog(state, key),
         UiMode::EmulatorSelector => handle_key_emulator_selector(key),
         UiMode::Loading => handle_key_loading(key),
         UiMode::Normal => handle_key_normal(state, key),
@@ -67,17 +67,60 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
     }
 }
 
-/// Handle key events in device selector mode
-fn handle_key_confirm_dialog(key: InputKey) -> Option<Message> {
+/// Handle key events in confirm dialog mode
+fn handle_key_confirm_dialog(state: &AppState, key: InputKey) -> Option<Message> {
+    debug_assert!(
+        state.confirm_dialog_state.is_some(),
+        "ConfirmDialog mode entered without a dialog state"
+    );
+
+    // Drive the dialog from its OWN option list rather than hard-coded keys, so
+    // every confirmation (quit, unsaved-settings, …) responds to the same
+    // shortcuts shown in the UI: each button renders as "[<first-char>] <Label>".
+    let options = state
+        .confirm_dialog_state
+        .as_ref()
+        .map(|d| d.options.as_slice())
+        .unwrap_or(&[]);
+
+    // First option = primary action (Enter / 'y'); last option = cancel (Esc / 'n').
+    let primary = || options.first().map(|(_, msg)| msg.clone());
+    let cancel = || options.last().map(|(_, msg)| msg.clone());
+
+    // Whether this is the quit-confirmation dialog (buttons "[q] Quit  [c] Cancel").
+    // Only the quit dialog gets the backward-compatible y/n aliases to prevent 'y'
+    // from accidentally triggering "Save" on the unsaved-changes prompt.
+    let is_quit_dialog = options
+        .first()
+        .map(|(_, m)| matches!(m, Message::ConfirmQuit))
+        .unwrap_or(false);
+
     match key {
-        // Confirm quit
-        // 'y', 'Y', or 'q' confirms the dialog action
-        // Note: 'q' allows double-tap "qq" as quick quit shortcut
-        InputKey::Char('y' | 'Y' | 'q') | InputKey::Enter => Some(Message::ConfirmQuit),
-        // Cancel
-        InputKey::Char('n' | 'N') | InputKey::Esc => Some(Message::CancelQuit),
-        // Force quit with Ctrl+C even in dialog
+        // Force quit with Ctrl+C even inside a dialog.
         InputKey::CharCtrl('c') => Some(Message::Quit),
+        // Enter and Esc resolve even when options is empty (safe fallback prevents soft-lock).
+        InputKey::Enter => Some(primary().unwrap_or(Message::ConfirmQuit)),
+        InputKey::Esc => Some(cancel().unwrap_or(Message::CancelQuit)),
+        InputKey::Char(c) => {
+            let lc = c.to_ascii_lowercase();
+            // Match an option by its first-character shortcut ("[s] Save…" → 's').
+            if let Some((_, msg)) = options
+                .iter()
+                .find(|(label, _)| label.chars().next().map(|f| f.to_ascii_lowercase()) == Some(lc))
+            {
+                Some(msg.clone())
+            } else if is_quit_dialog {
+                // Backward-compatible y/n aliases restricted to the quit dialog only.
+                // This prevents 'y' from accidentally saving on the unsaved-changes prompt.
+                match lc {
+                    'y' => primary(),
+                    'n' => cancel(),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -1240,11 +1283,15 @@ fn handle_key_settings(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Tab => Some(Message::SettingsNextTab),
         InputKey::BackTab => Some(Message::SettingsPrevTab),
 
-        // Number keys for direct tab access
-        InputKey::Char('1') => Some(Message::SettingsGotoTab(0)),
-        InputKey::Char('2') => Some(Message::SettingsGotoTab(1)),
-        InputKey::Char('3') => Some(Message::SettingsGotoTab(2)),
-        InputKey::Char('4') => Some(Message::SettingsGotoTab(3)),
+        // Number keys for direct tab access. Covers the four built-in tabs and
+        // any host-injected (Extra) tabs that follow them — e.g. `5` selects the
+        // first injected tab. Out-of-range digits are ignored.
+        InputKey::Char(c @ '1'..='9') => {
+            let idx = c as usize - '1' as usize;
+            let tab_count =
+                crate::config::BUILTIN_SETTINGS_TAB_COUNT + state.extra_settings_tabs.len();
+            (idx < tab_count).then_some(Message::SettingsGotoTab(idx))
+        }
 
         // Item navigation
         InputKey::Char('j') | InputKey::Down => Some(Message::SettingsNextItem),
@@ -1280,6 +1327,7 @@ fn handle_key_settings_edit(state: &AppState, key: InputKey) -> Option<Message> 
         &state.settings,
         &state.project_path,
         &state.settings_view_state,
+        &state.extra_settings_tabs,
     )?;
 
     match &item.value {
@@ -1856,6 +1904,79 @@ mod settings_key_tests {
     }
 
     #[test]
+    fn test_number_key_five_jumps_to_injected_tab() {
+        use crate::config::SettingItem;
+        use crate::settings_tab_provider::SettingsTabProvider;
+
+        #[derive(Debug)]
+        struct StubTab;
+        impl SettingsTabProvider for StubTab {
+            fn title(&self) -> &str {
+                "Stub"
+            }
+            fn items(&self) -> Vec<SettingItem> {
+                Vec::new()
+            }
+            fn apply(&mut self, _item: &SettingItem) {}
+            fn save(&self, _project_path: &std::path::Path) -> Result<(), String> {
+                Ok(())
+            }
+        }
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        // No injected tabs: '5' is out of range and ignored.
+        assert!(handle_key_settings(&state, InputKey::Char('5')).is_none());
+
+        // One injected tab: '5' selects it (flat index 4); '6' stays out of range.
+        state.extra_settings_tabs.push(Box::new(StubTab));
+        let msg = handle_key_settings(&state, InputKey::Char('5'));
+        assert!(matches!(msg, Some(Message::SettingsGotoTab(4))));
+        assert!(handle_key_settings(&state, InputKey::Char('6')).is_none());
+    }
+
+    #[test]
+    fn test_confirm_dialog_keys_follow_option_list() {
+        use crate::confirm_dialog::ConfirmDialogState;
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+        state.confirm_dialog_state = Some(ConfirmDialogState::new(
+            "Unsaved Changes",
+            "You have unsaved changes. What do you want to do?",
+            vec![
+                ("Save & Close", Message::SettingsSaveAndClose),
+                ("Discard Changes", Message::ForceHideSettings),
+                ("Cancel", Message::SettingsCancelClose),
+            ],
+        ));
+
+        // Each button responds to its first-character shortcut.
+        assert!(matches!(
+            handle_key_confirm_dialog(&state, InputKey::Char('s')),
+            Some(Message::SettingsSaveAndClose)
+        ));
+        assert!(matches!(
+            handle_key_confirm_dialog(&state, InputKey::Char('d')),
+            Some(Message::ForceHideSettings)
+        ));
+        assert!(matches!(
+            handle_key_confirm_dialog(&state, InputKey::Char('c')),
+            Some(Message::SettingsCancelClose)
+        ));
+        // Enter activates the primary (first) option; Esc the cancel (last).
+        assert!(matches!(
+            handle_key_confirm_dialog(&state, InputKey::Enter),
+            Some(Message::SettingsSaveAndClose)
+        ));
+        assert!(matches!(
+            handle_key_confirm_dialog(&state, InputKey::Esc),
+            Some(Message::SettingsCancelClose)
+        ));
+    }
+
+    #[test]
     fn test_item_navigation() {
         let mut state = AppState::new();
         state.ui_mode = UiMode::Settings;
@@ -2179,22 +2300,22 @@ mod settings_view_state_tests {
         let mut state = SettingsViewState::new();
         assert_eq!(state.active_tab, SettingsTab::Project);
 
-        state.next_tab();
+        state.next_tab(0);
         assert_eq!(state.active_tab, SettingsTab::UserPrefs);
 
-        state.next_tab();
+        state.next_tab(0);
         assert_eq!(state.active_tab, SettingsTab::LaunchConfig);
 
-        state.next_tab();
+        state.next_tab(0);
         assert_eq!(state.active_tab, SettingsTab::VSCodeConfig);
 
-        state.next_tab();
+        state.next_tab(0);
         assert_eq!(state.active_tab, SettingsTab::Project); // Wraps around
 
-        state.prev_tab();
+        state.prev_tab(0);
         assert_eq!(state.active_tab, SettingsTab::VSCodeConfig);
 
-        state.prev_tab();
+        state.prev_tab(0);
         assert_eq!(state.active_tab, SettingsTab::LaunchConfig);
     }
 
@@ -2268,7 +2389,7 @@ mod settings_view_state_tests {
         state.editing = true;
         state.edit_buffer = "test".to_string();
 
-        state.next_tab();
+        state.next_tab(0);
         assert_eq!(state.selected_index, 0);
         assert!(!state.editing);
         assert!(state.edit_buffer.is_empty());

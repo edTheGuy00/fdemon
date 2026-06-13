@@ -23,10 +23,13 @@ use crate::widgets::new_session_dialog::{DartDefinesModal, FuzzyModal};
 
 use std::path::Path;
 
-use fdemon_app::config::{SettingItem, Settings, SettingsTab, UserPreferences};
+use fdemon_app::config::{
+    SettingItem, Settings, SettingsTab, UserPreferences, BUILTIN_SETTINGS_TAB_COUNT,
+};
 use fdemon_app::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_app::settings_items::{
-    launch_config_items, project_settings_items, user_prefs_items, vscode_config_items,
+    launch_config_items, project_settings_items, user_prefs_items, visual_row_of_item,
+    vscode_config_items,
 };
 use fdemon_app::state::SettingsViewState;
 
@@ -64,15 +67,23 @@ pub struct SettingsPanel<'a> {
     /// Project path for loading configurations
     project_path: &'a Path,
 
+    /// Host-injected extra settings tabs, rendered after the four built-ins.
+    extra_tabs: &'a [Box<dyn fdemon_app::settings_tab_provider::SettingsTabProvider>],
+
     /// Title to display in header
     title: &'a str,
 }
 
 impl<'a> SettingsPanel<'a> {
-    pub fn new(settings: &'a Settings, project_path: &'a Path) -> Self {
+    pub fn new(
+        settings: &'a Settings,
+        project_path: &'a Path,
+        extra_tabs: &'a [Box<dyn fdemon_app::settings_tab_provider::SettingsTabProvider>],
+    ) -> Self {
         Self {
             settings,
             project_path,
+            extra_tabs,
             title: "Settings",
         }
     }
@@ -175,12 +186,23 @@ impl SettingsPanel<'_> {
     }
 
     fn render_tab_bar(&self, area: Rect, buf: &mut Buffer, state: &SettingsViewState) {
-        let tabs = [
-            (SettingsTab::Project, "1. PROJECT"),
-            (SettingsTab::UserPrefs, "2. USER"),
-            (SettingsTab::LaunchConfig, "3. LAUNCH"),
-            (SettingsTab::VSCodeConfig, "4. VSCODE"),
+        let mut tabs: Vec<(SettingsTab, String)> = vec![
+            (SettingsTab::Project, "1. PROJECT".to_string()),
+            (SettingsTab::UserPrefs, "2. USER".to_string()),
+            (SettingsTab::LaunchConfig, "3. LAUNCH".to_string()),
+            (SettingsTab::VSCodeConfig, "4. VSCODE".to_string()),
         ];
+        // Append one pill per host-injected tab, numbered after the built-ins.
+        for (i, provider) in self.extra_tabs.iter().enumerate() {
+            tabs.push((
+                SettingsTab::Extra(i),
+                format!(
+                    "{}. {}",
+                    BUILTIN_SETTINGS_TAB_COUNT + 1 + i,
+                    provider.title().to_uppercase()
+                ),
+            ));
+        }
 
         let tab_width = SETTINGS_TAB_WIDTH;
         let gap = SETTINGS_TAB_GAP;
@@ -244,7 +266,36 @@ impl SettingsPanel<'_> {
                 let configs = load_vscode_configs(self.project_path);
                 self.render_vscode_tab(inner, buf, state, &icons, &configs);
             }
+            SettingsTab::Extra(i) => {
+                if let Some(provider) = self.extra_tabs.get(i) {
+                    let items = provider.items();
+                    self.render_generic_tab(inner, buf, state, &icons, &items);
+                }
+            }
         }
+    }
+
+    /// Clamp `state.scroll_offset` so the selected row (at visual row
+    /// `sel_vrow`) stays within the viewport of `viewport_rows` rows, then return
+    /// the resolved scroll offset.
+    ///
+    /// The region recorder reads the SAME `state.scroll_offset` after this runs,
+    /// so click targets and rendered rows stay in lockstep.
+    // EXCEPTION (TEA render purity): resolve_scroll writes the render-derived scroll_offset clamp; StatefulWidget supplies &mut state so a Cell<usize> is unnecessary. See docs/REVIEW_FOCUS.md.
+    fn resolve_scroll(
+        state: &mut SettingsViewState,
+        sel_vrow: usize,
+        viewport_rows: usize,
+    ) -> usize {
+        if viewport_rows == 0 {
+            return state.scroll_offset;
+        }
+        if sel_vrow < state.scroll_offset {
+            state.scroll_offset = sel_vrow;
+        } else if sel_vrow >= state.scroll_offset + viewport_rows {
+            state.scroll_offset = sel_vrow + 1 - viewport_rows;
+        }
+        state.scroll_offset
     }
 
     fn render_footer(&self, area: Rect, buf: &mut Buffer, state: &SettingsViewState) {
@@ -410,30 +461,43 @@ impl SettingsPanel<'_> {
     ) {
         let items = project_settings_items(self.settings);
 
-        // Group items by section
+        let list_top = area.y;
+        let list_bottom = area.bottom();
+        let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
+
+        // Scroll-follow: ensure the selected item is on-screen.
+        let sel_vrow = visual_row_of_item(&items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
+        let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
+
+        // Group items by section, walking visual rows so we can apply the scroll
+        // offset and break once we run off the bottom of the viewport.
         let mut current_section = String::new();
-        let mut y = area.y;
+        let mut vrow = 0usize;
 
         for (idx, item) in items.iter().enumerate() {
-            if y >= area.bottom() {
-                break; // Out of space
-            }
-
             // Section header
             if item.section != current_section {
                 if !current_section.is_empty() {
-                    y += 1; // Spacer between sections
+                    vrow += 1; // Spacer between sections (no draw)
                 }
-
-                if y < area.bottom() {
+                if vrow >= scroll {
+                    let y = list_top + (vrow - scroll) as u16;
+                    if y >= list_bottom {
+                        break;
+                    }
                     self.render_section_header(area.x, y, area.width, buf, &item.section, icons);
-                    y += 1;
                 }
+                vrow += 1;
                 current_section = item.section.clone();
             }
 
             // Setting row
-            if y < area.bottom() {
+            if vrow >= scroll {
+                let y = list_top + (vrow - scroll) as u16;
+                if y >= list_bottom {
+                    break;
+                }
                 let is_selected = idx == state.selected_index;
                 let is_editing = is_selected && state.editing;
                 self.render_setting_row(
@@ -446,8 +510,75 @@ impl SettingsPanel<'_> {
                     is_editing,
                     &state.edit_buffer,
                 );
-                y += 1;
             }
+            vrow += 1;
+        }
+    }
+
+    /// Render a host-injected (Extra) tab's item list.
+    ///
+    /// This is the generic sibling of [`render_project_tab`](Self::render_project_tab):
+    /// it performs the IDENTICAL scroll-aware, section-grouped visual-row walk
+    /// over a caller-supplied `items` slice. Keeping the two loops byte-identical
+    /// guarantees the mouse region recorder (which reuses
+    /// [`register_setting_row_regions`]) stays in lockstep with what is drawn.
+    fn render_generic_tab(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &mut SettingsViewState,
+        icons: &IconSet,
+        items: &[SettingItem],
+    ) {
+        let list_top = area.y;
+        let list_bottom = area.bottom();
+        let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
+
+        // Scroll-follow: ensure the selected item is on-screen.
+        let sel_vrow = visual_row_of_item(items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
+        let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
+
+        let mut current_section = String::new();
+        let mut vrow = 0usize;
+
+        for (idx, item) in items.iter().enumerate() {
+            // Section header
+            if item.section != current_section {
+                if !current_section.is_empty() {
+                    vrow += 1; // Spacer between sections (no draw)
+                }
+                if vrow >= scroll {
+                    let y = list_top + (vrow - scroll) as u16;
+                    if y >= list_bottom {
+                        break;
+                    }
+                    self.render_section_header(area.x, y, area.width, buf, &item.section, icons);
+                }
+                vrow += 1;
+                current_section = item.section.clone();
+            }
+
+            // Setting row
+            if vrow >= scroll {
+                let y = list_top + (vrow - scroll) as u16;
+                if y >= list_bottom {
+                    break;
+                }
+                let is_selected = idx == state.selected_index;
+                let is_editing = is_selected && state.editing;
+                self.render_setting_row(
+                    area.x,
+                    y,
+                    area.width,
+                    buf,
+                    item,
+                    is_selected,
+                    is_editing,
+                    &state.edit_buffer,
+                );
+            }
+            vrow += 1;
         }
     }
 
@@ -471,20 +602,12 @@ impl SettingsPanel<'_> {
             _ => icons.settings(),
         };
 
-        // Spaced uppercase: "Behavior" → "B E H A V I O R"
-        let upper = section.to_uppercase();
-        let chars: Vec<char> = upper.chars().collect();
-        let mut spaced = String::new();
-        for (i, ch) in chars.iter().enumerate() {
-            if i > 0 {
-                spaced.push(' ');
-            }
-            spaced.push(*ch);
-        }
+        // Normal uppercase letter spacing: "Behavior" → "BEHAVIOR".
+        let label = section.to_uppercase();
 
         let icon_span = Span::styled(format!("  {} ", icon), styles::group_header_icon_style());
         let label_span = Span::styled(
-            spaced,
+            label,
             styles::section_header_style(), // Now returns ACCENT_DIM + BOLD
         );
 
@@ -601,22 +724,29 @@ impl SettingsPanel<'_> {
 
         let items = user_prefs_items(&state.user_prefs, self.settings);
 
-        // Group items by section
+        let list_top = content_area.y;
+        let list_bottom = content_area.bottom();
+        let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
+
+        let sel_vrow = visual_row_of_item(&items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
+        let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
+
+        // Group items by section, walking visual rows (offset-aware).
         let mut current_section = String::new();
-        let mut y = content_area.y;
+        let mut vrow = 0usize;
 
         for (idx, item) in items.iter().enumerate() {
-            if y >= content_area.bottom() {
-                break;
-            }
-
             // Section header
             if item.section != current_section {
                 if !current_section.is_empty() {
-                    y += 1; // Spacer
+                    vrow += 1; // Spacer (no draw)
                 }
-
-                if y < content_area.bottom() {
+                if vrow >= scroll {
+                    let y = list_top + (vrow - scroll) as u16;
+                    if y >= list_bottom {
+                        break;
+                    }
                     self.render_section_header(
                         content_area.x,
                         y,
@@ -625,13 +755,17 @@ impl SettingsPanel<'_> {
                         &item.section,
                         icons,
                     );
-                    y += 1;
                 }
+                vrow += 1;
                 current_section = item.section.clone();
             }
 
             // Setting row
-            if y < content_area.bottom() {
+            if vrow >= scroll {
+                let y = list_top + (vrow - scroll) as u16;
+                if y >= list_bottom {
+                    break;
+                }
                 let is_selected = idx == state.selected_index;
                 let is_editing = is_selected && state.editing;
                 self.render_user_pref_row(
@@ -645,8 +779,8 @@ impl SettingsPanel<'_> {
                     is_editing,
                     &state.edit_buffer,
                 );
-                y += 1;
             }
+            vrow += 1;
         }
     }
 
@@ -826,30 +960,46 @@ impl SettingsPanel<'_> {
             all_items.extend(launch_config_items(&resolved.config, idx));
         }
 
-        // Render items with sections
+        let list_top = area.y;
+        let list_bottom = area.bottom();
+        let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
+
+        // Scroll-follow: the add-new sentinel selection (selected_index ==
+        // all_items.len()) maps to the trailing-sentinel visual row.
+        let sel_vrow = visual_row_of_item(&all_items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
+        let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
+
+        // Render items with sections (offset-aware visual-row walk).
         let mut current_section = String::new();
-        let mut y = area.y;
+        let mut vrow = 0usize;
+        let mut overflowed = false;
 
         for (idx, item) in all_items.iter().enumerate() {
-            if y >= area.bottom() {
-                break; // Out of space
-            }
-
             // Section header (configuration separator)
             if item.section != current_section {
                 if !current_section.is_empty() {
-                    y += 1; // Spacer between configurations
+                    vrow += 1; // Spacer between configurations (no draw)
                 }
-
-                if y < area.bottom() {
+                if vrow >= scroll {
+                    let y = list_top + (vrow - scroll) as u16;
+                    if y >= list_bottom {
+                        overflowed = true;
+                        break;
+                    }
                     self.render_config_header(area.x, y, area.width, buf, &item.section);
-                    y += 1;
                 }
+                vrow += 1;
                 current_section = item.section.clone();
             }
 
             // Setting row
-            if y < area.bottom() {
+            if vrow >= scroll {
+                let y = list_top + (vrow - scroll) as u16;
+                if y >= list_bottom {
+                    overflowed = true;
+                    break;
+                }
                 let is_selected = idx == state.selected_index;
                 let is_editing = is_selected && state.editing;
                 self.render_setting_row(
@@ -862,15 +1012,20 @@ impl SettingsPanel<'_> {
                     is_editing,
                     &state.edit_buffer,
                 );
-                y += 1;
             }
+            vrow += 1;
         }
 
-        // Add "New Configuration" option at bottom
-        if y + 2 < area.bottom() {
-            y += 1; // Spacer
-            let is_selected = state.selected_index == all_items.len();
-            self.render_add_config_option(area.x, y, area.width, buf, is_selected);
+        // Add "New Configuration" option at bottom (one spacer after last item).
+        if !overflowed {
+            let sentinel_vrow = vrow + 1; // matches visual_row_of_item(all_items.len())
+            if sentinel_vrow >= scroll {
+                let y = list_top + (sentinel_vrow - scroll) as u16;
+                if y < list_bottom {
+                    let is_selected = state.selected_index == all_items.len();
+                    self.render_add_config_option(area.x, y, area.width, buf, is_selected);
+                }
+            }
         }
     }
 
@@ -1017,22 +1172,29 @@ impl SettingsPanel<'_> {
             all_items.extend(vscode_config_items(&resolved.config, idx));
         }
 
-        // Render items with sections (read-only styling)
+        let list_top = content_area.y;
+        let list_bottom = content_area.bottom();
+        let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
+
+        let sel_vrow = visual_row_of_item(&all_items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
+        let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
+
+        // Render items with sections (read-only styling, offset-aware).
         let mut current_section = String::new();
-        let mut y = content_area.y;
+        let mut vrow = 0usize;
 
         for (idx, item) in all_items.iter().enumerate() {
-            if y >= content_area.bottom() {
-                break;
-            }
-
             // Section header
             if item.section != current_section {
                 if !current_section.is_empty() {
-                    y += 1; // Spacer
+                    vrow += 1; // Spacer (no draw)
                 }
-
-                if y < content_area.bottom() {
+                if vrow >= scroll {
+                    let y = list_top + (vrow - scroll) as u16;
+                    if y >= list_bottom {
+                        break;
+                    }
                     self.render_vscode_config_header(
                         content_area.x,
                         y,
@@ -1040,13 +1202,17 @@ impl SettingsPanel<'_> {
                         buf,
                         &item.section,
                     );
-                    y += 1;
                 }
+                vrow += 1;
                 current_section = item.section.clone();
             }
 
             // Setting row (read-only)
-            if y < content_area.bottom() {
+            if vrow >= scroll {
+                let y = list_top + (vrow - scroll) as u16;
+                if y >= list_bottom {
+                    break;
+                }
                 let is_selected = idx == state.selected_index;
                 self.render_readonly_row(
                     content_area.x,
@@ -1056,8 +1222,8 @@ impl SettingsPanel<'_> {
                     item,
                     is_selected,
                 );
-                y += 1;
             }
+            vrow += 1;
         }
     }
 
@@ -1366,7 +1532,12 @@ impl SettingsPanel<'_> {
     ///
     /// Delegated to the app layer's `get_selected_item` function (moved in Phase 1, Task 05).
     pub fn get_selected_item(&self, state: &SettingsViewState) -> Option<SettingItem> {
-        fdemon_app::settings_items::get_selected_item(self.settings, self.project_path, state)
+        fdemon_app::settings_items::get_selected_item(
+            self.settings,
+            self.project_path,
+            state,
+            self.extra_tabs,
+        )
     }
 }
 
@@ -1403,8 +1574,18 @@ pub fn render_with_regions(
     // We keep a copy of relevant layout references for region recording below.
     let settings = view.settings;
     let project_path = view.project_path;
+    // Capture extra-tab data BEFORE the `view` move so the region recorder can
+    // mirror the dynamic tab bar and the generic-tab rows. `items()` is called
+    // once here (and once inside render_content); both produce the same list.
+    let extra_count = view.extra_tabs.len();
+    let extra_items: Vec<Vec<SettingItem>> = view.extra_tabs.iter().map(|p| p.items()).collect();
 
     <SettingsPanel as StatefulWidget>::render(view, area, buf, state);
+
+    // StatefulWidget::render above wrote the corrected scroll offset into
+    // `state`. Capture it now so the region recorder uses the SAME value,
+    // guaranteeing click targets match the rendered rows.
+    let scroll = state.scroll_offset;
 
     // 2. If no context, we are done.
     let ctx = match ctx {
@@ -1447,7 +1628,7 @@ pub fn render_with_regions(
     let gap: u16 = SETTINGS_TAB_GAP;
 
     let mut x = tab_area_x;
-    for i in 0..4usize {
+    for i in 0..(BUILTIN_SETTINGS_TAB_COUNT + extra_count) {
         if x + tab_width > tab_area_x + tab_area_width {
             break;
         }
@@ -1480,7 +1661,15 @@ pub fn render_with_regions(
     match state.active_tab {
         SettingsTab::Project => {
             let items = project_settings_items(settings);
-            register_setting_row_regions(ctx, &items, inner_x, inner_y, inner_width, inner_bottom);
+            register_setting_row_regions(
+                ctx,
+                &items,
+                inner_x,
+                inner_y,
+                inner_width,
+                inner_bottom,
+                scroll,
+            );
         }
         SettingsTab::UserPrefs => {
             let items = user_prefs_items(&state.user_prefs, settings);
@@ -1493,6 +1682,7 @@ pub fn render_with_regions(
                 content_y,
                 inner_width,
                 inner_bottom,
+                scroll,
             );
         }
         SettingsTab::LaunchConfig => {
@@ -1512,25 +1702,30 @@ pub fn render_with_regions(
                     inner_y,
                     inner_width,
                     inner_bottom,
+                    scroll,
                 );
 
                 // ── Sentinel: "Add New Configuration" row ──────────────────
-                // Mirrors render_launch_tab: rendered at y+1 (spacer) after all
-                // items, guarded by `y + 2 < area.bottom()`.
+                // Mirrors render_launch_tab: rendered at the trailing-sentinel
+                // visual row (one spacer after the last item), only when no item
+                // overflowed the bottom (after_items_y stays in-bounds).
                 let sentinel_index = all_items.len();
-                let sentinel_y = after_items_y.saturating_add(1); // one spacer row
-                if after_items_y.saturating_add(2) < inner_bottom {
-                    let sentinel_rect =
-                        fdemon_app::MouseRect::new(inner_x, sentinel_y, inner_width, 1);
-                    if !sentinel_rect.is_empty() {
-                        ctx.click(
-                            sentinel_rect,
-                            fdemon_app::MouseAction::emit(
-                                fdemon_app::message::Message::SettingsClickRow {
-                                    index: sentinel_index,
-                                },
-                            ),
-                        );
+                let sentinel_vrow = visual_row_of_item(&all_items, sentinel_index);
+                if after_items_y < inner_bottom && sentinel_vrow >= scroll {
+                    let sentinel_y = inner_y.saturating_add((sentinel_vrow - scroll) as u16);
+                    if sentinel_y < inner_bottom {
+                        let sentinel_rect =
+                            fdemon_app::MouseRect::new(inner_x, sentinel_y, inner_width, 1);
+                        if !sentinel_rect.is_empty() {
+                            ctx.click(
+                                sentinel_rect,
+                                fdemon_app::MouseAction::emit(
+                                    fdemon_app::message::Message::SettingsClickRow {
+                                        index: sentinel_index,
+                                    },
+                                ),
+                            );
+                        }
                     }
                 }
             }
@@ -1555,6 +1750,22 @@ pub fn render_with_regions(
                     content_y,
                     inner_width,
                     inner_bottom,
+                    scroll,
+                );
+            }
+        }
+        SettingsTab::Extra(i) => {
+            // Host-injected tab: register rows over the provider's items,
+            // reusing the SAME offset-aware walk as render_generic_tab.
+            if let Some(items) = extra_items.get(i) {
+                register_setting_row_regions(
+                    ctx,
+                    items,
+                    inner_x,
+                    inner_y,
+                    inner_width,
+                    inner_bottom,
+                    scroll,
                 );
             }
         }
@@ -1579,29 +1790,35 @@ fn register_setting_row_regions(
     start_y: u16,
     width: u16,
     bottom: u16,
+    scroll_offset: usize,
 ) -> u16 {
     let mut current_section = String::new();
-    let mut y = start_y;
+    let mut vrow = 0usize;
 
     for (idx, item) in items.iter().enumerate() {
-        if y >= bottom {
-            break;
-        }
-
-        // Section header — mirrors the renderer's section-skip logic.
+        // Section header — mirrors the renderer's offset-aware section walk.
         if item.section != current_section {
             if !current_section.is_empty() {
-                y = y.saturating_add(1); // spacer row between sections
+                vrow += 1; // spacer row between sections (not drawn)
             }
-            if y < bottom {
-                // Section header row — NOT clickable, just advance y.
-                y = y.saturating_add(1);
+            if vrow >= scroll_offset {
+                let y = start_y + (vrow - scroll_offset) as u16;
+                if y >= bottom {
+                    // Header row would be off-screen → the rest is too.
+                    return y;
+                }
+                // Section header row — NOT clickable, just advance.
             }
+            vrow += 1;
             current_section = item.section.clone();
         }
 
-        // Setting row — register as clickable.
-        if y < bottom {
+        // Setting row — register as clickable when on-screen.
+        if vrow >= scroll_offset {
+            let y = start_y + (vrow - scroll_offset) as u16;
+            if y >= bottom {
+                return y;
+            }
             let rect = fdemon_app::MouseRect::new(x, y, width, 1);
             if !rect.is_empty() {
                 ctx.click(
@@ -1611,11 +1828,14 @@ fn register_setting_row_regions(
                     }),
                 );
             }
-            y = y.saturating_add(1);
         }
+        vrow += 1;
     }
 
-    y
+    // Return the visual-row count consumed (in absolute vrow space, mapped to a
+    // y coordinate). Callers needing the trailing sentinel y recompute it from
+    // `vrow` so the scroll math stays consistent.
+    start_y.saturating_add((vrow.saturating_sub(scroll_offset)) as u16)
 }
 
 #[cfg(test)]

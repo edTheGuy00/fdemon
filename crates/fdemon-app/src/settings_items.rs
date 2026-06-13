@@ -42,6 +42,7 @@ pub fn get_selected_item(
     settings: &Settings,
     project_path: &Path,
     view_state: &SettingsViewState,
+    extra_tabs: &[Box<dyn crate::settings_tab_provider::SettingsTabProvider>],
 ) -> Option<SettingItem> {
     let items = match view_state.active_tab {
         SettingsTab::Project => project_settings_items(settings),
@@ -72,9 +73,48 @@ pub fn get_selected_item(
             }
             all_items
         }
+        SettingsTab::Extra(i) => extra_tabs.get(i).map(|p| p.items()).unwrap_or_default(),
     };
 
     items.get(view_state.selected_index).cloned()
+}
+
+/// Compute the visual row of the item at `target_idx` within a section-grouped
+/// item list.
+///
+/// The settings panel renders items grouped by section: each section change
+/// emits one header row (preceded by a one-row spacer for every section after
+/// the first), then one row per item. This function replays that exact walk and
+/// returns the zero-based visual row of the requested item — the canonical
+/// mapping shared by every per-tab renderer, the mouse region recorder, and the
+/// scroll-follow logic, so click targets and scrolling always stay in sync.
+///
+/// If `target_idx >= items.len()`, the returned value is the visual row of a
+/// trailing sentinel row (e.g. the LaunchConfig "Add New" button): the row after
+/// the last item plus one spacer.
+pub fn visual_row_of_item(items: &[SettingItem], target_idx: usize) -> usize {
+    let mut vrow = 0usize;
+    let mut current_section = String::new();
+
+    for (idx, item) in items.iter().enumerate() {
+        // Section header (with a preceding spacer for every section after the
+        // first) — mirrors the renderer's section-skip logic.
+        if item.section != current_section {
+            if !current_section.is_empty() {
+                vrow += 1; // spacer row between sections
+            }
+            vrow += 1; // header row
+            current_section = item.section.clone();
+        }
+
+        if idx == target_idx {
+            return vrow;
+        }
+        vrow += 1; // the setting row itself
+    }
+
+    // Trailing sentinel (LaunchConfig "Add New"): one spacer after the last item.
+    vrow + 1
 }
 
 /// Generate settings items for the Project tab from Settings struct
@@ -540,6 +580,33 @@ pub fn vscode_config_items(config: &LaunchConfig, idx: usize) -> Vec<SettingItem
 mod tests {
     use super::*;
     use crate::config::Settings;
+
+    #[test]
+    fn test_visual_row_of_item_walks_headers_and_spacers() {
+        // Two sections of two items each:
+        //   vrow 0: header "A"
+        //   vrow 1: item 0
+        //   vrow 2: item 1
+        //   vrow 3: spacer
+        //   vrow 4: header "B"
+        //   vrow 5: item 2
+        //   vrow 6: item 3
+        let items = vec![
+            SettingItem::new("a.0", "A0").section("A"),
+            SettingItem::new("a.1", "A1").section("A"),
+            SettingItem::new("b.0", "B0").section("B"),
+            SettingItem::new("b.1", "B1").section("B"),
+        ];
+
+        assert_eq!(visual_row_of_item(&items, 0), 1);
+        assert_eq!(visual_row_of_item(&items, 1), 2);
+        assert_eq!(visual_row_of_item(&items, 2), 5);
+        assert_eq!(visual_row_of_item(&items, 3), 6);
+        // Trailing sentinel advances past the last item row (6) by the one-spacer
+        // rule: vrow 7 is the spacer, so the sentinel lands at vrow 8. The +1
+        // here is the sentinel advancement itself, not an extra rendered spacer row.
+        assert_eq!(visual_row_of_item(&items, 4), 8);
+    }
 
     #[test]
     fn test_behavior_auto_launch_item_present() {
