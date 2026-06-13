@@ -263,8 +263,8 @@ fn maybe_fetch_layout(inspector: &mut InspectorState) -> Option<String> {
 /// Handle widget tree fetch timeout.
 ///
 /// Sets `inspector.loading = false` and stores an error message with a retry
-/// hint, then marks `connection_status` as `TimedOut` so the tab bar can
-/// indicate the degraded state.
+/// hint, then marks the per-session `vm_connection_status` as `TimedOut` so
+/// the tab bar can indicate the degraded state.
 ///
 /// Clears the fetch debounce timer so the user can press `r` again
 /// immediately without waiting for the 2-second cooldown to expire.
@@ -283,7 +283,11 @@ pub fn handle_widget_tree_fetch_timeout(
             "Press [r] to retry",
         ));
         state.devtools_view_state.inspector.clear_fetch_debounce();
-        state.devtools_view_state.connection_status = VmConnectionStatus::TimedOut;
+    }
+    // Mark the per-session status as TimedOut unconditionally so the indicator
+    // reflects the RPC result even if the user switches sessions mid-fetch.
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.vm_connection_status = VmConnectionStatus::TimedOut;
     }
 
     UpdateResult::none()
@@ -361,7 +365,7 @@ pub fn handle_layout_data_fetch_failed(
 /// Handle layout data fetch timeout.
 ///
 /// Sets `inspector.layout_loading = false` and stores an error message with a
-/// retry hint, then marks `connection_status` as `TimedOut`.
+/// retry hint, then marks the per-session `vm_connection_status` as `TimedOut`.
 pub fn handle_layout_data_fetch_timeout(
     state: &mut AppState,
     session_id: SessionId,
@@ -376,9 +380,13 @@ pub fn handle_layout_data_fetch_timeout(
             "Request timed out",
             "Press [r] to retry",
         ));
-        state.devtools_view_state.connection_status = VmConnectionStatus::TimedOut;
         // Clear pending node ID so a subsequent switch will retry the fetch.
         state.devtools_view_state.inspector.pending_node_id = None;
+    }
+    // Mark the per-session status as TimedOut unconditionally so the indicator
+    // reflects the RPC result even if the user switches sessions mid-fetch.
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.vm_connection_status = VmConnectionStatus::TimedOut;
     }
 
     UpdateResult::none()

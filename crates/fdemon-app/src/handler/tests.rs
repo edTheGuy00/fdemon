@@ -4092,10 +4092,14 @@ fn test_vm_service_reconnecting_sets_connection_status() {
     let session_id = state.session_manager.create_session(&device).unwrap();
     state.session_manager.select_by_id(session_id);
 
-    // Verify initial state
+    // Verify initial per-session status is Disconnected.
     assert_eq!(
-        state.devtools_view_state.connection_status,
-        VmConnectionStatus::Connected
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Disconnected
     );
 
     // Action
@@ -4108,9 +4112,13 @@ fn test_vm_service_reconnecting_sets_connection_status() {
         },
     );
 
-    // Assert
+    // Assert: per-session status is updated.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Reconnecting {
             attempt: 2,
             max_attempts: 10,
@@ -4120,7 +4128,10 @@ fn test_vm_service_reconnecting_sets_connection_status() {
 }
 
 #[test]
-fn test_vm_service_reconnecting_ignores_inactive_session() {
+fn test_vm_service_reconnecting_updates_inactive_session() {
+    // With per-session status, VmServiceReconnecting updates the session's own
+    // status unconditionally — the inactive session's status should be updated
+    // while the active session's status remains unchanged.
     let mut state = AppState::new();
     let device1 = test_device("dev-1", "Device 1");
     let device2 = test_device("dev-2", "Device 2");
@@ -4140,11 +4151,28 @@ fn test_vm_service_reconnecting_ignores_inactive_session() {
         },
     );
 
-    // Assert: connection_status should NOT be Reconnecting (it's for inactive session)
+    // Assert: session 1's per-session status IS updated (per-session, not global).
     assert_eq!(
-        state.devtools_view_state.connection_status,
-        VmConnectionStatus::Connected,
-        "connection_status should not change for inactive session"
+        state
+            .session_manager
+            .get(session_1)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        },
+        "inactive session's vm_connection_status should be updated by VmServiceReconnecting"
+    );
+    // Session 2's status is untouched.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_2)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Disconnected,
+        "active session's vm_connection_status should not change"
     );
 }
 
@@ -4165,7 +4193,11 @@ fn test_vm_service_connected_after_reconnecting_resets_status() {
         },
     );
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Reconnecting {
             attempt: 1,
             max_attempts: 10,
@@ -4175,9 +4207,13 @@ fn test_vm_service_connected_after_reconnecting_resets_status() {
     // Then: simulate successful reconnection
     update(&mut state, Message::VmServiceConnected { session_id });
 
-    // Assert: status should be back to Connected
+    // Assert: per-session status should be back to Connected
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Connected,
     );
 }
@@ -4199,7 +4235,11 @@ fn test_vm_service_reconnecting_progressive_attempts() {
             },
         );
         assert_eq!(
-            state.devtools_view_state.connection_status,
+            state
+                .session_manager
+                .get(session_id)
+                .unwrap()
+                .vm_connection_status,
             VmConnectionStatus::Reconnecting {
                 attempt,
                 max_attempts: 10,
@@ -6631,11 +6671,15 @@ fn test_vm_service_reconnected_preserves_performance_state() {
         "vm_connected should be true after VmServiceReconnected"
     );
 
-    // connection_status must be Connected for the active session.
+    // per-session vm_connection_status must be Connected after reconnect.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Connected,
-        "connection_status should be Connected after VmServiceReconnected"
+        "vm_connection_status should be Connected after VmServiceReconnected"
     );
 
     // The session log should contain the word "reconnected".
@@ -6905,20 +6949,23 @@ fn test_switch_to_network_panel_passes_mode() {
 }
 
 #[test]
-fn test_vm_service_connected_background_session_no_status_change() {
-    // Two sessions: A is active, B is background.
-    // Sending VmServiceConnected for B must NOT overwrite the foreground status.
+fn test_vm_service_connected_background_session_updates_own_status() {
+    // Two sessions: A is active (reconnecting), B is background (disconnected).
+    // VmServiceConnected for B must update B's per-session status to Connected
+    // without touching A's per-session status.
     let mut state = AppState::new();
     let device_a = test_device("dev-a", "Device A");
     let device_b = test_device("dev-b", "Device B");
     let session_a = state.session_manager.create_session(&device_a).unwrap();
     let session_b = state.session_manager.create_session(&device_b).unwrap();
 
-    // Make A the active (selected) session.
+    // Make A the active (selected) session, mark it as Reconnecting.
     state.session_manager.select_by_id(session_a);
-
-    // Simulate A currently reconnecting.
-    state.devtools_view_state.connection_status = VmConnectionStatus::Reconnecting {
+    state
+        .session_manager
+        .get_mut(session_a)
+        .unwrap()
+        .vm_connection_status = VmConnectionStatus::Reconnecting {
         attempt: 3,
         max_attempts: 10,
     };
@@ -6931,34 +6978,54 @@ fn test_vm_service_connected_background_session_no_status_change() {
         },
     );
 
-    // Foreground status must still be Reconnecting — B's connect must not pollute it.
+    // B's per-session status must be Connected.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_b)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Connected,
+        "background session B must have vm_connection_status=Connected after VmServiceConnected"
+    );
+    // A's per-session status is unchanged.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_a)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Reconnecting {
             attempt: 3,
             max_attempts: 10,
         },
-        "connection_status must not be overwritten by a background session's VmServiceConnected"
+        "active session A's vm_connection_status must not be touched by B's VmServiceConnected"
     );
 }
 
 #[test]
-fn test_vm_service_disconnected_background_session_no_status_change() {
-    // Two sessions: A is active (Connected), B is background.
-    // Sending VmServiceDisconnected for B must NOT change the foreground status.
+fn test_vm_service_disconnected_background_session_updates_own_status() {
+    // Two sessions: A is active (Connected), B is background (Connected).
+    // VmServiceDisconnected for B must update B's per-session status to Disconnected
+    // without touching A's status.
     let mut state = AppState::new();
     let device_a = test_device("dev-a", "Device A");
     let device_b = test_device("dev-b", "Device B");
     let session_a = state.session_manager.create_session(&device_a).unwrap();
     let session_b = state.session_manager.create_session(&device_b).unwrap();
 
-    // A is active and Connected (default status).
+    // A is active; mark both sessions as Connected.
     state.session_manager.select_by_id(session_a);
-    assert_eq!(
-        state.devtools_view_state.connection_status,
-        VmConnectionStatus::Connected,
-        "initial status should be Connected"
-    );
+    state
+        .session_manager
+        .get_mut(session_a)
+        .unwrap()
+        .vm_connection_status = VmConnectionStatus::Connected;
+    state
+        .session_manager
+        .get_mut(session_b)
+        .unwrap()
+        .vm_connection_status = VmConnectionStatus::Connected;
 
     // Send VmServiceDisconnected for the background session B.
     update(
@@ -6968,11 +7035,25 @@ fn test_vm_service_disconnected_background_session_no_status_change() {
         },
     );
 
-    // Foreground status must still be Connected.
+    // B's per-session status must be Disconnected.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_b)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Disconnected,
+        "background session B must have vm_connection_status=Disconnected after VmServiceDisconnected"
+    );
+    // A's status is untouched.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_a)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Connected,
-        "connection_status must not change when a background session disconnects"
+        "active session A's vm_connection_status must not change when B disconnects"
     );
 }
 
@@ -10021,15 +10102,13 @@ fn test_enter_devtools_starts_monitoring_when_vm_connected() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
-    // Set VM connected and connection_status = Connected.
+    // Set VM connected; no perf task running (perf_shutdown_tx is None).
     state
         .session_manager
         .get_mut(session_id)
         .unwrap()
         .session
         .vm_connected = true;
-    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
-    // No perf task running (perf_shutdown_tx is None).
     assert!(state
         .session_manager
         .get(session_id)
@@ -10080,7 +10159,6 @@ fn test_enter_devtools_lazy_start_followup_dispatches_fetch_widget_tree() {
         .unwrap()
         .session
         .vm_connected = true;
-    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
     // Inspector is the default panel ("inspector"); no tree is loaded; not loading.
     assert!(state.devtools_view_state.inspector.root.is_none());
     assert!(!state.devtools_view_state.inspector.loading);
@@ -10200,7 +10278,6 @@ fn test_enter_devtools_does_not_restart_existing_task() {
         handle.perf_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
         handle.perf_pause_tx = Some(std::sync::Arc::new(perf_pause_tx));
     }
-    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
 
     let result = handle_enter_devtools_mode(&mut state);
 
@@ -10496,9 +10573,8 @@ fn test_session_switch_in_devtools_starts_monitoring_for_new_session() {
         // perf_shutdown_tx is None (no task running).
         assert!(handle.perf_shutdown_tx.is_none());
     }
-    // Note: devtools_view_state.connection_status is NOT used for this check.
-    // The maybe_start check uses session.vm_connected directly (view state is
-    // reset to Disconnected by DevToolsViewState::reset() on session switch).
+    // The maybe_start check uses session.vm_connected directly (the per-session
+    // vm_connection_status field on SessionHandle is the authoritative status).
 
     // Switch to session B by index (index 1).
     let result = update(&mut state, Message::SelectSessionByIndex(1));

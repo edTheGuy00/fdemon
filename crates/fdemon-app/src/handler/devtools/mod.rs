@@ -198,8 +198,8 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     // This happens on the first DevTools entry when the VM is connected but no
     // perf task was spawned yet (because VmServiceConnected skips the spawn
     // when DevTools is not active at connect time).
-    // Use `session.vm_connected` (the reliable per-session flag) rather than
-    // `devtools_view_state.connection_status` which may lag behind the session.
+    // Use `session.vm_connected` (the reliable per-session binary flag) as the
+    // gate — `SessionHandle::vm_connection_status` provides the richer TUI indicator.
     let needs_perf_start = if let Some(handle) = state.session_manager.selected() {
         handle.perf_shutdown_tx.is_none() && handle.session.vm_connected
     } else {
@@ -724,17 +724,17 @@ pub fn handle_debug_overlay_toggled(
     UpdateResult::none()
 }
 
-/// Handle VM Service reconnection attempt — updates connection status indicator.
+/// Handle VM Service reconnection attempt — updates per-session connection status indicator.
 pub fn handle_vm_service_reconnecting(
     state: &mut AppState,
     session_id: SessionId,
     attempt: u32,
     max_attempts: u32,
 ) -> UpdateResult {
-    let active_id = state.session_manager.selected().map(|h| h.session.id);
-
-    if active_id == Some(session_id) {
-        state.devtools_view_state.connection_status = VmConnectionStatus::Reconnecting {
+    // Update per-session status unconditionally so the indicator is correct even when
+    // this session is not the one currently displayed.
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.vm_connection_status = VmConnectionStatus::Reconnecting {
             attempt,
             max_attempts,
         };

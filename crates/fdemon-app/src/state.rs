@@ -761,19 +761,6 @@ pub struct DevToolsViewState {
     /// the generic "VM Service not connected" message.
     pub vm_connection_error: Option<String>,
 
-    /// Rich VM Service connection status (Phase 5, Task 02).
-    ///
-    /// Tracks connected / disconnected / reconnecting / timed-out states so
-    /// the TUI can display colour-coded indicators in the DevTools tab bar
-    /// and show appropriate messages in each panel.
-    ///
-    /// Updated by the handler in response to VM Service lifecycle messages:
-    /// - `VmServiceConnected`    → `Connected`
-    /// - `VmServiceDisconnected` → `Disconnected`
-    /// - `VmServiceReconnecting` → `Reconnecting { attempt, max_attempts }`
-    /// - `WidgetTreeFetchTimeout` / `LayoutDataFetchTimeout` → `TimedOut`
-    pub connection_status: VmConnectionStatus,
-
     /// Timestamp of the last debug overlay toggle.
     ///
     /// Used to debounce rapid key presses: overlay toggle RPCs are suppressed
@@ -797,7 +784,6 @@ impl DevToolsViewState {
         self.overlay_debug_paint = false;
         self.overlay_performance = false;
         self.vm_connection_error = None;
-        self.connection_status = VmConnectionStatus::Disconnected;
         self.last_overlay_toggle = None;
     }
 

@@ -39,6 +39,10 @@ const DEVTOOLS_MIN_WIDTH: u16 = 20;
 
 // ── DevToolsView ─────────────────────────────────────────────────────────────
 
+/// Maximum number of Unicode grapheme clusters to show from a device name in
+/// the DevTools title when multiple sessions are active.
+const DEVICE_NAME_MAX_CHARS: usize = 30;
+
 /// Top-level DevTools mode widget.
 ///
 /// Renders a sub-tab bar at the top and dispatches to the active panel below.
@@ -48,6 +52,11 @@ pub struct DevToolsView<'a> {
     state: &'a DevToolsViewState,
     session: Option<&'a SessionHandle>,
     icons: IconSet,
+    /// Total number of active sessions.
+    ///
+    /// When >1, the displayed session's device name is shown next to the
+    /// "DevTools" title in the tab bar so the user can identify the session.
+    session_count: usize,
 }
 
 impl<'a> DevToolsView<'a> {
@@ -56,11 +65,13 @@ impl<'a> DevToolsView<'a> {
         state: &'a DevToolsViewState,
         session: Option<&'a SessionHandle>,
         icons: IconSet,
+        session_count: usize,
     ) -> Self {
         Self {
             state,
             session,
             icons,
+            session_count,
         }
     }
 }
@@ -117,6 +128,15 @@ impl DevToolsView<'_> {
         // Sub-tab bar with optional click registration.
         self.render_tab_bar_inner(chunks[0], buf, ctx.as_deref_mut());
 
+        // Per-session connection status — falls back to Disconnected when no session
+        // is active. All sub-panels use this rather than the old global field so the
+        // status is always correct for the **displayed** session.
+        static DISCONNECTED: VmConnectionStatus = VmConnectionStatus::Disconnected;
+        let session_conn_status: &VmConnectionStatus = self
+            .session
+            .map(|h| &h.vm_connection_status)
+            .unwrap_or(&DISCONNECTED);
+
         // Panel dispatch — panel sister functions share render_impl with
         // Widget::render so region recording flows through cleanly.
         match self.state.active_panel {
@@ -128,7 +148,7 @@ impl DevToolsView<'_> {
                 let widget = WidgetInspector::new(
                     &self.state.inspector,
                     vm_connected,
-                    &self.state.connection_status,
+                    session_conn_status,
                 );
                 inspector::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
@@ -150,7 +170,7 @@ impl DevToolsView<'_> {
                     perf,
                     vm_connected,
                     self.icons,
-                    &self.state.connection_status,
+                    session_conn_status,
                 )
                 .with_connection_error(self.state.vm_connection_error.as_deref());
                 performance::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
@@ -168,7 +188,7 @@ impl DevToolsView<'_> {
                 };
 
                 let widget =
-                    MemoryPanel::new(mem, true, vm_connected, &self.state.connection_status);
+                    MemoryPanel::new(mem, true, vm_connected, session_conn_status);
                 memory::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Network => {
@@ -183,7 +203,7 @@ impl DevToolsView<'_> {
                     .unwrap_or_else(|| (&*DEFAULT_NETWORK, false));
 
                 let widget =
-                    NetworkMonitor::new(network_state, vm_connected, &self.state.connection_status);
+                    NetworkMonitor::new(network_state, vm_connected, session_conn_status);
                 network::render_with_regions(chunks[1], buf, widget, ctx);
             }
         }
@@ -206,9 +226,31 @@ impl DevToolsView<'_> {
         buf: &mut Buffer,
         mut ctx: Option<&mut MouseCtx<'_>>,
     ) {
-        // Outer block with border
+        // Outer block with border.
+        // When multiple sessions are active, append the displayed session's
+        // device name to the title so the user can identify which session they
+        // are inspecting. Truncate long names to avoid overflowing the border.
+        let title: std::borrow::Cow<'static, str> = if self.session_count > 1 {
+            if let Some(session) = self.session {
+                let name = &session.session.device_name;
+                let truncated: String = name
+                    .chars()
+                    .take(DEVICE_NAME_MAX_CHARS)
+                    .collect();
+                let suffix = if name.chars().count() > DEVICE_NAME_MAX_CHARS {
+                    "\u{2026}" // …
+                } else {
+                    ""
+                };
+                format!(" DevTools \u{2014} {truncated}{suffix} ").into()
+            } else {
+                " DevTools ".into()
+            }
+        } else {
+            " DevTools ".into()
+        };
         let block = ratatui::widgets::Block::bordered()
-            .title(" DevTools ")
+            .title(title.as_ref())
             .border_style(Style::default().fg(Color::Cyan));
 
         let inner = block.inner(area);
@@ -322,12 +364,23 @@ impl DevToolsView<'_> {
     }
 
     /// Return the connection indicator label and style for degraded states,
-    /// or `None` when the connection is healthy (Connected).
+    /// or `None` when the connection is healthy (Connected) or no session is active.
+    ///
+    /// Reads the per-session `vm_connection_status` from `self.session` so that
+    /// the indicator is always correct for the **displayed** session, regardless
+    /// of which session was most recently active when the handler fired.
     ///
     /// `label_buf` is used as backing storage so the returned `&str` can borrow
     /// from it without requiring a `String` return value.
     fn connection_indicator_text<'a>(&self, label_buf: &'a mut String) -> Option<(&'a str, Style)> {
-        match &self.state.connection_status {
+        // Fallback to Disconnected when no session is active (DevTools opened
+        // without an active session is a defensive guard — it should not occur
+        // in normal usage).
+        let status = self
+            .session
+            .map(|h| &h.vm_connection_status)
+            .unwrap_or(&VmConnectionStatus::Disconnected);
+        match status {
             VmConnectionStatus::Connected => None,
             VmConnectionStatus::Disconnected => {
                 *label_buf = "x Disconnected".to_string();
@@ -500,7 +553,7 @@ mod tests {
         let state = DevToolsViewState::default();
         assert_eq!(state.active_panel, DevToolsPanel::Inspector);
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
         // Should not panic
@@ -513,7 +566,7 @@ mod tests {
             ..Default::default()
         };
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
         // Should not panic
@@ -526,7 +579,7 @@ mod tests {
             ..Default::default()
         };
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -541,7 +594,7 @@ mod tests {
     #[test]
     fn test_tab_bar_shows_all_panels() {
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -572,7 +625,7 @@ mod tests {
             ..Default::default()
         };
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -594,7 +647,7 @@ mod tests {
             ..Default::default()
         };
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -608,7 +661,7 @@ mod tests {
     #[test]
     fn test_devtools_view_small_terminal() {
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
         // Should not panic
@@ -617,7 +670,7 @@ mod tests {
     #[test]
     fn test_devtools_view_very_small_terminal() {
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
         widget.render(Rect::new(0, 0, 40, 3), &mut buf);
         // Should not panic (height < 4 early return)
@@ -626,7 +679,7 @@ mod tests {
     #[test]
     fn test_devtools_view_large_terminal() {
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 120, 40));
         widget.render(Rect::new(0, 0, 120, 40), &mut buf);
         // Should not panic
@@ -638,7 +691,7 @@ mod tests {
         let state = DevToolsViewState::default();
         assert_eq!(state.active_panel, DevToolsPanel::Inspector);
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -649,14 +702,32 @@ mod tests {
     }
 
     // ── Connection indicator tests ─────────────────────────────────────────────
+    //
+    // The indicator reads the per-session `vm_connection_status` from
+    // `DevToolsView::session` (a `SessionHandle`). Tests below create a
+    // `SessionHandle` with the desired status and pass it to `DevToolsView`.
+
+    /// Build a minimal `SessionHandle` with the given per-session connection status.
+    fn make_session_handle_with_status(
+        status: VmConnectionStatus,
+    ) -> fdemon_app::session::SessionHandle {
+        use fdemon_app::session::{Session, SessionHandle};
+        let session = Session::new(
+            "test-device".to_string(),
+            "Test Device".to_string(),
+            "android".to_string(),
+            false,
+        );
+        let mut handle = SessionHandle::new(session);
+        handle.vm_connection_status = status;
+        handle
+    }
 
     #[test]
     fn test_connection_indicator_connected_shows_nothing() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::Connected,
-            ..Default::default()
-        };
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::Connected);
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
         assert!(
@@ -667,11 +738,9 @@ mod tests {
 
     #[test]
     fn test_connection_indicator_disconnected() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::Disconnected,
-            ..Default::default()
-        };
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::Disconnected);
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
         assert!(result.is_some(), "Disconnected should produce an indicator");
@@ -683,15 +752,32 @@ mod tests {
     }
 
     #[test]
+    fn test_connection_indicator_no_session_shows_disconnected() {
+        // When no session is active (DevTools opened without a session — defensive
+        // guard), the indicator falls back to Disconnected.
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
+        let mut label = String::new();
+        let result = widget.connection_indicator_text(&mut label);
+        assert!(
+            result.is_some(),
+            "No session should show Disconnected indicator"
+        );
+        let (text, _) = result.unwrap();
+        assert!(
+            text.contains("Disconnected"),
+            "Fallback should say Disconnected, got: {text:?}"
+        );
+    }
+
+    #[test]
     fn test_connection_indicator_reconnecting_shows_attempt_counter() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::Reconnecting {
-                attempt: 2,
-                max_attempts: 10,
-            },
-            ..Default::default()
-        };
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::Reconnecting {
+            attempt: 2,
+            max_attempts: 10,
+        });
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
         assert!(result.is_some(), "Reconnecting should produce an indicator");
@@ -708,11 +794,9 @@ mod tests {
 
     #[test]
     fn test_connection_indicator_timed_out() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::TimedOut,
-            ..Default::default()
-        };
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::TimedOut);
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
         assert!(result.is_some(), "TimedOut should produce an indicator");
@@ -725,12 +809,10 @@ mod tests {
 
     #[test]
     fn test_tab_bar_shows_disconnected_indicator() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::Disconnected,
-            ..Default::default()
-        };
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::Disconnected);
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -743,15 +825,13 @@ mod tests {
 
     #[test]
     fn test_tab_bar_shows_reconnecting_indicator() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::Reconnecting {
-                attempt: 3,
-                max_attempts: 10,
-            },
-            ..Default::default()
-        };
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        });
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -764,12 +844,10 @@ mod tests {
 
     #[test]
     fn test_tab_bar_no_indicator_when_connected() {
-        let state = DevToolsViewState {
-            connection_status: VmConnectionStatus::Connected,
-            ..Default::default()
-        };
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_status(VmConnectionStatus::Connected);
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -780,13 +858,104 @@ mod tests {
         );
     }
 
+    // ── Multi-session connection indicator tests (Acceptance A) ──────────────────
+
+    #[test]
+    fn test_per_session_indicator_session_a_connected_b_reconnecting() {
+        // Session A connected, session B reconnecting → switching selection to
+        // each session shows the correct per-session status.
+        use fdemon_app::session::{Session, SessionHandle};
+        let mut handle_a = SessionHandle::new(Session::new(
+            "dev-a".to_string(),
+            "Device A".to_string(),
+            "android".to_string(),
+            false,
+        ));
+        handle_a.vm_connection_status = VmConnectionStatus::Connected;
+
+        let mut handle_b = SessionHandle::new(Session::new(
+            "dev-b".to_string(),
+            "Device B".to_string(),
+            "ios".to_string(),
+            true,
+        ));
+        handle_b.vm_connection_status = VmConnectionStatus::Reconnecting {
+            attempt: 2,
+            max_attempts: 5,
+        };
+
+        let state = DevToolsViewState::default();
+
+        // Displaying session A → no indicator (Connected).
+        let widget_a = DevToolsView::new(&state, Some(&handle_a), IconSet::default(), 2);
+        let mut label = String::new();
+        assert!(
+            widget_a.connection_indicator_text(&mut label).is_none(),
+            "Session A is Connected — no indicator expected"
+        );
+
+        // Displaying session B → Reconnecting indicator.
+        let widget_b = DevToolsView::new(&state, Some(&handle_b), IconSet::default(), 2);
+        let mut label = String::new();
+        let result = widget_b.connection_indicator_text(&mut label);
+        assert!(result.is_some(), "Session B is Reconnecting — indicator expected");
+        let (text, _) = result.unwrap();
+        assert!(
+            text.contains("Reconnecting"),
+            "Session B indicator should say Reconnecting, got: {text:?}"
+        );
+        assert!(
+            text.contains("2") && text.contains("5"),
+            "Session B indicator should show attempt counts, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_per_session_indicator_disconnect_does_not_affect_other_session() {
+        // Session A disconnected, session B connected — each shows its own status.
+        use fdemon_app::session::{Session, SessionHandle};
+        let mut handle_a = SessionHandle::new(Session::new(
+            "dev-a".to_string(),
+            "Device A".to_string(),
+            "android".to_string(),
+            false,
+        ));
+        handle_a.vm_connection_status = VmConnectionStatus::Disconnected;
+
+        let mut handle_b = SessionHandle::new(Session::new(
+            "dev-b".to_string(),
+            "Device B".to_string(),
+            "ios".to_string(),
+            true,
+        ));
+        handle_b.vm_connection_status = VmConnectionStatus::Connected;
+
+        let state = DevToolsViewState::default();
+
+        // Session A → Disconnected indicator.
+        let widget_a = DevToolsView::new(&state, Some(&handle_a), IconSet::default(), 2);
+        let mut label = String::new();
+        let result_a = widget_a.connection_indicator_text(&mut label);
+        assert!(result_a.is_some(), "Session A is Disconnected — indicator expected");
+        let (text, _) = result_a.unwrap();
+        assert!(text.contains("Disconnected"), "got: {text:?}");
+
+        // Session B → no indicator (Connected).
+        let widget_b = DevToolsView::new(&state, Some(&handle_b), IconSet::default(), 2);
+        let mut label = String::new();
+        assert!(
+            widget_b.connection_indicator_text(&mut label).is_none(),
+            "Session B is Connected — no indicator expected"
+        );
+    }
+
     // ── Minimum size guard tests ───────────────────────────────────────────────
 
     #[test]
     fn test_devtools_panel_minimum_size_guard_shows_resize_message() {
         // 15x2 — both height and width below thresholds — should show resize message
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 15, 2));
         widget.render(Rect::new(0, 0, 15, 2), &mut buf);
 
@@ -801,7 +970,7 @@ mod tests {
     fn test_devtools_panel_minimum_height_guard_shows_message() {
         // Height < DEVTOOLS_MIN_HEIGHT (3) with adequate width
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 2));
         widget.render(Rect::new(0, 0, 80, 2), &mut buf);
 
@@ -816,7 +985,7 @@ mod tests {
     fn test_devtools_panel_minimum_width_guard_shows_message() {
         // Width < DEVTOOLS_MIN_WIDTH (20) with adequate height
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 15, 10));
         widget.render(Rect::new(0, 0, 15, 10), &mut buf);
 
@@ -831,7 +1000,7 @@ mod tests {
     fn test_devtools_panel_at_minimum_size_threshold_renders_normally() {
         // Exactly at the minimum thresholds (height=3, width=20) — should show tab bar
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 3));
         widget.render(Rect::new(0, 0, 20, 3), &mut buf);
         // Should not panic — minimum guard allows rendering at exactly the threshold
@@ -841,7 +1010,7 @@ mod tests {
     fn test_devtools_panel_20x5_no_panic() {
         // 20x5 — acceptance criteria extreme terminal size
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 5));
         widget.render(Rect::new(0, 0, 20, 5), &mut buf);
         // Should not panic
@@ -851,7 +1020,7 @@ mod tests {
     fn test_devtools_panel_40x10_no_panic() {
         // 40x10 — acceptance criteria terminal size
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
         // Should not panic
@@ -861,7 +1030,7 @@ mod tests {
     fn test_devtools_panel_60x15_no_panic() {
         // 60x15 — acceptance criteria terminal size
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 15));
         widget.render(Rect::new(0, 0, 60, 15), &mut buf);
         // Should not panic
@@ -871,7 +1040,7 @@ mod tests {
     fn test_devtools_panel_200x50_no_panic() {
         // 200x50 — large terminal (acceptance criteria)
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 200, 50));
         widget.render(Rect::new(0, 0, 200, 50), &mut buf);
         // Should not panic
@@ -885,7 +1054,7 @@ mod tests {
             ..Default::default()
         };
 
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
         // Should not panic
@@ -903,7 +1072,7 @@ mod tests {
 
         // 4 rows total: min-size guard passes (>= 3 height, >= 20 width).
         // Tab bar takes 3 rows, panel gets 1 row → compact summary path.
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 4));
         widget.render(Rect::new(0, 0, 40, 4), &mut buf);
         // Should not panic
@@ -924,7 +1093,7 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
 
         let mut buf_a = Buffer::empty(area);
-        DevToolsView::new(&state, None, IconSet::default()).render(area, &mut buf_a);
+        DevToolsView::new(&state, None, IconSet::default(), 1).render(area, &mut buf_a);
 
         let mut buf_b = Buffer::empty(area);
         {
@@ -934,7 +1103,7 @@ mod tests {
             super::render_with_regions(
                 area,
                 &mut buf_b,
-                DevToolsView::new(&state, None, IconSet::default()),
+                DevToolsView::new(&state, None, IconSet::default(), 1),
                 Some(&mut ctx),
             );
         }
@@ -961,7 +1130,7 @@ mod tests {
             super::render_with_regions(
                 Rect::new(0, 0, 80, 24),
                 &mut buf,
-                DevToolsView::new(&state, None, IconSet::default()),
+                DevToolsView::new(&state, None, IconSet::default(), 1),
                 Some(&mut ctx),
             );
             // ctx + builder borrow ends here; regions is accessible again
@@ -1000,7 +1169,7 @@ mod tests {
             super::render_with_regions(
                 Rect::new(0, 0, 80, 24),
                 &mut buf,
-                DevToolsView::new(&state, None, IconSet::default()),
+                DevToolsView::new(&state, None, IconSet::default(), 1),
                 Some(&mut ctx),
             );
         }
@@ -1053,7 +1222,7 @@ mod tests {
         super::render_with_regions(
             Rect::new(0, 0, 80, 24),
             &mut buf,
-            DevToolsView::new(&state, None, IconSet::default()),
+            DevToolsView::new(&state, None, IconSet::default(), 1),
             None,
         );
         // No assert needed — the absence of panic is the pass condition.
@@ -1080,7 +1249,7 @@ mod tests {
     fn footer_string(state: &DevToolsViewState) -> String {
         let area = Rect::new(0, 0, 200, 24);
         let mut buf = Buffer::empty(area);
-        DevToolsView::new(state, None, IconSet::default()).render(area, &mut buf);
+        DevToolsView::new(state, None, IconSet::default(), 1).render(area, &mut buf);
 
         // The layout splits the area into a 3-row tab bar (chunks[0]) and the
         // remaining 21 rows for panel content (chunks[1]).  render_footer draws
@@ -1152,7 +1321,7 @@ mod tests {
         };
         let area = Rect::new(0, 0, 200, 24);
         let mut buf = Buffer::empty(area);
-        DevToolsView::new(&state, Some(handle), IconSet::default()).render(area, &mut buf);
+        DevToolsView::new(&state, Some(handle), IconSet::default(), 1).render(area, &mut buf);
         let footer_y = area.height - 1;
         let mut row = String::new();
         for x in 0..area.width {
@@ -1297,7 +1466,7 @@ mod tests {
             active_panel: DevToolsPanel::Memory,
             ..Default::default()
         };
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
         // Should not panic — Memory panel renders real widget
@@ -1306,7 +1475,7 @@ mod tests {
     #[test]
     fn test_tab_bar_includes_memory_tab() {
         let state = DevToolsViewState::default();
-        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 1);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
@@ -1314,6 +1483,120 @@ mod tests {
         assert!(
             text.contains("Memory"),
             "expected Memory tab, got: {text:?}"
+        );
+    }
+
+    // ── Device-name-in-title tests (Acceptance B) ─────────────────────────────
+
+    /// Build a `SessionHandle` with the given device name.
+    fn make_session_handle_with_device_name(device_name: &str) -> fdemon_app::session::SessionHandle {
+        use fdemon_app::session::{Session, SessionHandle};
+        SessionHandle::new(Session::new(
+            "test-device".to_string(),
+            device_name.to_string(),
+            "android".to_string(),
+            false,
+        ))
+    }
+
+    #[test]
+    fn test_title_single_session_shows_devtools_only() {
+        // With session_count == 1, title should be " DevTools " (unchanged).
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_device_name("Pixel 7");
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 1);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            text.contains("DevTools"),
+            "Single session: title should contain 'DevTools', got: {text:?}"
+        );
+        assert!(
+            !text.contains("Pixel 7"),
+            "Single session: title must NOT contain device name, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_title_multi_session_shows_device_name() {
+        // With session_count > 1, title should include the session's device name.
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_device_name("Pixel 7");
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 2);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            text.contains("DevTools"),
+            "Multi-session: title must contain 'DevTools', got: {text:?}"
+        );
+        assert!(
+            text.contains("Pixel 7"),
+            "Multi-session: title must contain device name 'Pixel 7', got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_title_multi_session_no_session_shows_devtools_only() {
+        // With session_count > 1 but no active session (defensive guard), title
+        // falls back to " DevTools ".
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default(), 2);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            text.contains("DevTools"),
+            "Fallback: title must still contain 'DevTools', got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_title_long_device_name_is_truncated() {
+        // Device names longer than DEVICE_NAME_MAX_CHARS should be truncated so
+        // the title does not overflow the border.
+        let long_name: String = "A".repeat(DEVICE_NAME_MAX_CHARS + 10);
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_device_name(&long_name);
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 2);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 120, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 120, 3);
+        assert!(
+            text.contains("DevTools"),
+            "Long name: title must contain 'DevTools', got: {text:?}"
+        );
+        // The full long name should NOT appear — it is truncated.
+        assert!(
+            !text.contains(&long_name),
+            "Long name must be truncated in title, got: {text:?}"
+        );
+        // The ellipsis character should appear.
+        assert!(
+            text.contains('\u{2026}'),
+            "Truncated name should end with ellipsis (…), got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_title_device_name_at_max_chars_no_ellipsis() {
+        // A name exactly DEVICE_NAME_MAX_CHARS long should NOT get an ellipsis.
+        let exact_name: String = "B".repeat(DEVICE_NAME_MAX_CHARS);
+        let state = DevToolsViewState::default();
+        let handle = make_session_handle_with_device_name(&exact_name);
+        let widget = DevToolsView::new(&state, Some(&handle), IconSet::default(), 2);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 3));
+        widget.render_tab_bar_inner(Rect::new(0, 0, 120, 3), &mut buf, None);
+
+        let text = collect_buf_text(&buf, 120, 3);
+        assert!(
+            !text.contains('\u{2026}'),
+            "Name at exactly DEVICE_NAME_MAX_CHARS must NOT get an ellipsis, got: {text:?}"
         );
     }
 }

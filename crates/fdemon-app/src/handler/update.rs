@@ -1667,15 +1667,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     crate::session::MemoryState::with_history_size(memory_history_size);
                 handle.session.network.reset();
             }
-            // Clear any previous connection error and update status to Connected,
-            // but only when this session is currently active in the UI.
-            // Updating connection_status for a background session would mislead the
-            // user who is viewing a different session in DevTools mode.
+            // Set the per-session connection status unconditionally so it is correct
+            // regardless of which session is currently selected in the UI.
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_connection_status = crate::state::VmConnectionStatus::Connected;
+            }
+            // Clear any previous connection error when the connecting session is active.
             let active_id = state.session_manager.selected().map(|h| h.session.id);
             if active_id == Some(session_id) {
                 state.devtools_view_state.vm_connection_error = None;
-                state.devtools_view_state.connection_status =
-                    crate::state::VmConnectionStatus::Connected;
             }
 
             // If the user is already in DevTools/Inspector mode with no tree loaded,
@@ -1877,15 +1877,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // allocation_profile). New samples append to the existing history.
             }
 
-            // Clear any previous connection error and update status to Connected,
-            // but only when this session is currently active in the UI.
-            // Updating connection_status for a background session would mislead the
-            // user who is viewing a different session in DevTools mode.
+            // Set the per-session connection status unconditionally so it is correct
+            // regardless of which session is currently selected in the UI.
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_connection_status = crate::state::VmConnectionStatus::Connected;
+            }
+            // Clear any previous connection error when the reconnected session is active.
             let active_id = state.session_manager.selected().map(|h| h.session.id);
             if active_id == Some(session_id) {
                 state.devtools_view_state.vm_connection_error = None;
-                state.devtools_view_state.connection_status =
-                    crate::state::VmConnectionStatus::Connected;
             }
 
             // Re-subscribe to VM streams and restart performance monitoring only
@@ -1959,16 +1959,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::VmServiceDisconnected { session_id } => {
-            // Update rich connection status indicator, but only when the
-            // disconnecting session is the one currently active in the UI.
-            // A background session disconnect must not overwrite the foreground
-            // session's connection_status with Disconnected.
-            let active_id = state.session_manager.selected().map(|h| h.session.id);
-            if active_id == Some(session_id) {
-                state.devtools_view_state.connection_status =
-                    crate::state::VmConnectionStatus::Disconnected;
-            }
+            // Update per-session connection status unconditionally so every session's
+            // indicator is always current regardless of which one is selected.
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_connection_status = crate::state::VmConnectionStatus::Disconnected;
                 handle.session.vm_connected = false;
                 // Clear the request handle — the underlying channel is now closed.
                 // Making this explicit signals intent even though the handle itself

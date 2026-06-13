@@ -515,6 +515,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &state.devtools_view_state,
                 state.session_manager.selected(),
                 icons,
+                state.session_manager.len(),
             );
             widgets::devtools::render_with_regions(
                 areas.logs,
