@@ -2302,3 +2302,108 @@ fn extra_tab_renders_provider_items_and_registers_regions() {
     assert!(content.contains("Alpha"));
     assert!(content.contains("Beta"));
 }
+
+// ─────────────────────────────────────────────────────────
+// F12: scrolled Extra-tab renderer/recorder parity
+// ─────────────────────────────────────────────────────────
+
+/// A provider with enough items to overflow a short viewport (one section,
+/// 20 items), used to verify that a scrolled Extra tab keeps click rects
+/// aligned with the rendered rows.
+#[derive(Debug)]
+struct ScrollProvider;
+
+impl fdemon_app::settings_tab_provider::SettingsTabProvider for ScrollProvider {
+    fn title(&self) -> &str {
+        "Scroll"
+    }
+
+    fn items(&self) -> Vec<SettingItem> {
+        (0..20)
+            .map(|i| {
+                SettingItem::new(&format!("scroll.item{}", i), &format!("Item {}", i))
+                    .value(SettingValue::Bool(false))
+                    .section("Items".to_string())
+            })
+            .collect()
+    }
+
+    fn apply(&mut self, _item: &SettingItem) {}
+
+    fn save(&self, _project_path: &std::path::Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Renderer/recorder parity on a SCROLLED host-injected (Extra) tab.
+///
+/// Pushes a stub provider with 20 items, forcing a scroll on a short viewport.
+/// Selects a late item, renders via the region-recording path, then asserts:
+/// 1. `scroll_offset > 0` (the viewport actually scrolled).
+/// 2. The `SettingsClickRow` rect y for the selected item matches the buffer
+///    row where the selected label text was rendered.
+#[test]
+fn nonzero_offset_renderer_recorder_parity_extra_tab() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+
+    let settings = Settings::default();
+    let project_path = std::path::Path::new("/tmp/test_scroll_extra");
+    let extra: Vec<Box<dyn fdemon_app::settings_tab_provider::SettingsTabProvider>> =
+        vec![Box::new(ScrollProvider)];
+
+    use fdemon_app::settings_tab_provider::SettingsTabProvider as _;
+    let items = ScrollProvider.items();
+    let last = items.len() - 1; // index 19 — deep enough to force scrolling
+
+    // Short viewport: header(5) + content(short) + footer(3) = 12 rows total.
+    // Content viewport = 12 - 5 - 3 = 4 rows, far fewer than the 20 items.
+    let area = ratatui::layout::Rect::new(0, 0, 100, 12);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut regions = MouseRegions::default();
+
+    let mut state = SettingsViewState::default();
+    state.active_tab = SettingsTab::Extra(0);
+    state.selected_index = last;
+
+    let panel = SettingsPanel::new(&settings, project_path, &extra);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, panel, &mut state, Some(&mut ctx));
+    }
+
+    assert!(
+        state.scroll_offset > 0,
+        "test precondition: selecting item {} on a short viewport must scroll (got offset {})",
+        last,
+        state.scroll_offset
+    );
+
+    // The region for the selected (last) item.
+    let sel_rect = regions
+        .iter()
+        .find_map(|e| match extract_action(e) {
+            Some(Message::SettingsClickRow { index }) if index == last => Some(e.rect),
+            _ => None,
+        })
+        .expect("selected row region must be registered when scrolled into view");
+
+    // The selected label must appear on that exact buffer row.
+    let label_prefix = &items[last].label[..items[last].label.len().min(3)];
+    let row_y = sel_rect.y;
+    let row_content: String = (sel_rect.x..sel_rect.x + sel_rect.width)
+        .map(|x| {
+            buf.cell((x, row_y))
+                .map_or(' ', |c| c.symbol().chars().next().unwrap_or(' '))
+        })
+        .collect();
+
+    assert!(
+        row_content.contains(label_prefix),
+        "region rect y={} must align with rendered selected label {:?} on the Extra tab; row was {:?}",
+        row_y,
+        label_prefix,
+        &row_content[..row_content.len().min(40)],
+    );
+}

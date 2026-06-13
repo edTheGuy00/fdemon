@@ -282,8 +282,24 @@ fn apply_committed_item(state: &mut AppState, item: &SettingItem) {
                         } else {
                             state.settings_view_state.mark_dirty();
                         }
+                    } else {
+                        tracing::warn!(
+                            "apply_committed_item: launch config index {} out of range (item id: {})",
+                            config_idx,
+                            item.id
+                        );
                     }
+                } else {
+                    tracing::warn!(
+                        "apply_committed_item: malformed launch item id (expected launch.{{idx}}.field): {}",
+                        item.id
+                    );
                 }
+            } else {
+                tracing::warn!(
+                    "apply_committed_item: launch item id does not match expected format: {}",
+                    item.id
+                );
             }
         }
         SettingsTab::VSCodeConfig => {
@@ -295,6 +311,12 @@ fn apply_committed_item(state: &mut AppState, item: &SettingItem) {
             if let Some(provider) = state.extra_settings_tabs.get_mut(i) {
                 provider.apply(item);
                 state.settings_view_state.mark_dirty();
+            } else {
+                tracing::warn!(
+                    "apply_committed_item: extra settings tab index {} is out of range (item id: {})",
+                    i,
+                    item.id
+                );
             }
         }
     }

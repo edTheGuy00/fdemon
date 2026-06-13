@@ -1501,10 +1501,18 @@ impl SettingsTab {
     }
 
     pub fn next(&self) -> Self {
+        debug_assert!(
+            !matches!(self, Self::Extra(_)),
+            "use next_with/prev_with when extra tabs exist"
+        );
         Self::from_index((self.index() + 1) % BUILTIN_SETTINGS_TAB_COUNT).unwrap()
     }
 
     pub fn prev(&self) -> Self {
+        debug_assert!(
+            !matches!(self, Self::Extra(_)),
+            "use next_with/prev_with when extra tabs exist"
+        );
         Self::from_index(
             (self.index() + BUILTIN_SETTINGS_TAB_COUNT - 1) % BUILTIN_SETTINGS_TAB_COUNT,
         )
@@ -1515,14 +1523,16 @@ impl SettingsTab {
     /// tabs plus `extra_count` host-injected tabs.
     pub fn next_with(&self, extra_count: usize) -> Self {
         let total = BUILTIN_SETTINGS_TAB_COUNT + extra_count;
-        Self::from_index_with((self.index() + 1) % total, extra_count).unwrap()
+        Self::from_index_with((self.index() + 1) % total, extra_count)
+            .expect("modulo keeps the index within 0..(BUILTIN_SETTINGS_TAB_COUNT + extra_count)")
     }
 
     /// Count-aware variant of [`prev`](Self::prev) that wraps over the built-in
     /// tabs plus `extra_count` host-injected tabs.
     pub fn prev_with(&self, extra_count: usize) -> Self {
         let total = BUILTIN_SETTINGS_TAB_COUNT + extra_count;
-        Self::from_index_with((self.index() + total - 1) % total, extra_count).unwrap()
+        Self::from_index_with((self.index() + total - 1) % total, extra_count)
+            .expect("modulo keeps the index within 0..(BUILTIN_SETTINGS_TAB_COUNT + extra_count)")
     }
 
     /// Icon for tab (optional visual enhancement)

@@ -67,8 +67,13 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
     }
 }
 
-/// Handle key events in device selector mode
+/// Handle key events in confirm dialog mode
 fn handle_key_confirm_dialog(state: &AppState, key: InputKey) -> Option<Message> {
+    debug_assert!(
+        state.confirm_dialog_state.is_some(),
+        "ConfirmDialog mode entered without a dialog state"
+    );
+
     // Drive the dialog from its OWN option list rather than hard-coded keys, so
     // every confirmation (quit, unsaved-settings, …) responds to the same
     // shortcuts shown in the UI: each button renders as "[<first-char>] <Label>".
@@ -82,11 +87,20 @@ fn handle_key_confirm_dialog(state: &AppState, key: InputKey) -> Option<Message>
     let primary = || options.first().map(|(_, msg)| msg.clone());
     let cancel = || options.last().map(|(_, msg)| msg.clone());
 
+    // Whether this is the quit-confirmation dialog (buttons "[q] Quit  [c] Cancel").
+    // Only the quit dialog gets the backward-compatible y/n aliases to prevent 'y'
+    // from accidentally triggering "Save" on the unsaved-changes prompt.
+    let is_quit_dialog = options
+        .first()
+        .map(|(_, m)| matches!(m, Message::ConfirmQuit))
+        .unwrap_or(false);
+
     match key {
         // Force quit with Ctrl+C even inside a dialog.
         InputKey::CharCtrl('c') => Some(Message::Quit),
-        InputKey::Enter => primary(),
-        InputKey::Esc => cancel(),
+        // Enter and Esc resolve even when options is empty (safe fallback prevents soft-lock).
+        InputKey::Enter => Some(primary().unwrap_or(Message::ConfirmQuit)),
+        InputKey::Esc => Some(cancel().unwrap_or(Message::CancelQuit)),
         InputKey::Char(c) => {
             let lc = c.to_ascii_lowercase();
             // Match an option by its first-character shortcut ("[s] Save…" → 's').
@@ -95,14 +109,16 @@ fn handle_key_confirm_dialog(state: &AppState, key: InputKey) -> Option<Message>
                 .find(|(label, _)| label.chars().next().map(|f| f.to_ascii_lowercase()) == Some(lc))
             {
                 Some(msg.clone())
-            } else {
-                // Backward-compatible y/n aliases for the quit confirmation,
-                // whose buttons are "[q] Quit  [c] Cancel".
+            } else if is_quit_dialog {
+                // Backward-compatible y/n aliases restricted to the quit dialog only.
+                // This prevents 'y' from accidentally saving on the unsaved-changes prompt.
                 match lc {
                     'y' => primary(),
                     'n' => cancel(),
                     _ => None,
                 }
+            } else {
+                None
             }
         }
         _ => None,

@@ -51,6 +51,10 @@ pub trait SettingsTabProvider: std::fmt::Debug + Send + Sync {
     fn save(&self, project_path: &Path) -> Result<(), String>;
 
     /// Whether this tab is read-only (no editing). Defaults to `false`.
+    ///
+    /// TODO: enforce at the intended guard sites — `handle_settings_toggle_edit`
+    /// (to block edit-mode entry) and `apply_committed_item` (to silently no-op
+    /// committed items) in `handler/settings_handlers.rs`. Currently unused.
     fn is_readonly(&self) -> bool {
         false
     }

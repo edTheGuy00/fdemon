@@ -602,7 +602,9 @@ mod tests {
         assert_eq!(visual_row_of_item(&items, 1), 2);
         assert_eq!(visual_row_of_item(&items, 2), 5);
         assert_eq!(visual_row_of_item(&items, 3), 6);
-        // Trailing sentinel: one spacer after the last item (vrow 7 + spacer = 8).
+        // Trailing sentinel advances past the last item row (6) by the one-spacer
+        // rule: vrow 7 is the spacer, so the sentinel lands at vrow 8. The +1
+        // here is the sentinel advancement itself, not an extra rendered spacer row.
         assert_eq!(visual_row_of_item(&items, 4), 8);
     }
 

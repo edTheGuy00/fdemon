@@ -23,7 +23,9 @@ use crate::widgets::new_session_dialog::{DartDefinesModal, FuzzyModal};
 
 use std::path::Path;
 
-use fdemon_app::config::{SettingItem, Settings, SettingsTab, UserPreferences};
+use fdemon_app::config::{
+    SettingItem, Settings, SettingsTab, UserPreferences, BUILTIN_SETTINGS_TAB_COUNT,
+};
 use fdemon_app::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_app::settings_items::{
     launch_config_items, project_settings_items, user_prefs_items, visual_row_of_item,
@@ -194,7 +196,11 @@ impl SettingsPanel<'_> {
         for (i, provider) in self.extra_tabs.iter().enumerate() {
             tabs.push((
                 SettingsTab::Extra(i),
-                format!("{}. {}", 5 + i, provider.title().to_uppercase()),
+                format!(
+                    "{}. {}",
+                    BUILTIN_SETTINGS_TAB_COUNT + 1 + i,
+                    provider.title().to_uppercase()
+                ),
             ));
         }
 
@@ -275,6 +281,7 @@ impl SettingsPanel<'_> {
     ///
     /// The region recorder reads the SAME `state.scroll_offset` after this runs,
     /// so click targets and rendered rows stay in lockstep.
+    // EXCEPTION (TEA render purity): resolve_scroll writes the render-derived scroll_offset clamp; StatefulWidget supplies &mut state so a Cell<usize> is unnecessary. See docs/REVIEW_FOCUS.md.
     fn resolve_scroll(
         state: &mut SettingsViewState,
         sel_vrow: usize,
@@ -460,6 +467,7 @@ impl SettingsPanel<'_> {
 
         // Scroll-follow: ensure the selected item is on-screen.
         let sel_vrow = visual_row_of_item(&items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
         let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
 
         // Group items by section, walking visual rows so we can apply the scroll
@@ -528,6 +536,7 @@ impl SettingsPanel<'_> {
 
         // Scroll-follow: ensure the selected item is on-screen.
         let sel_vrow = visual_row_of_item(items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
         let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
 
         let mut current_section = String::new();
@@ -720,6 +729,7 @@ impl SettingsPanel<'_> {
         let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
 
         let sel_vrow = visual_row_of_item(&items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
         let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
 
         // Group items by section, walking visual rows (offset-aware).
@@ -957,6 +967,7 @@ impl SettingsPanel<'_> {
         // Scroll-follow: the add-new sentinel selection (selected_index ==
         // all_items.len()) maps to the trailing-sentinel visual row.
         let sel_vrow = visual_row_of_item(&all_items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
         let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
 
         // Render items with sections (offset-aware visual-row walk).
@@ -1166,6 +1177,7 @@ impl SettingsPanel<'_> {
         let viewport_rows = list_bottom.saturating_sub(list_top) as usize;
 
         let sel_vrow = visual_row_of_item(&all_items, state.selected_index);
+        // EXCEPTION (TEA): render-time scroll clamp (see resolve_scroll).
         let scroll = Self::resolve_scroll(state, sel_vrow, viewport_rows);
 
         // Render items with sections (read-only styling, offset-aware).
@@ -1616,7 +1628,7 @@ pub fn render_with_regions(
     let gap: u16 = SETTINGS_TAB_GAP;
 
     let mut x = tab_area_x;
-    for i in 0..(4usize + extra_count) {
+    for i in 0..(BUILTIN_SETTINGS_TAB_COUNT + extra_count) {
         if x + tab_width > tab_area_x + tab_area_width {
             break;
         }

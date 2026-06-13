@@ -1615,8 +1615,8 @@ pub struct AppState {
     ///
     /// Each provider supplies its own title, item list, and save logic via the
     /// content-free [`crate::settings_tab_provider::SettingsTabProvider`] seam.
-    /// The public binary leaves this empty; embedders push providers after
-    /// construction. `reset()` deliberately preserves this Vec.
+    /// The public binary leaves this empty; embedders push providers once at
+    /// startup and this field is never cleared during the `AppState` lifetime.
     pub extra_settings_tabs: Vec<Box<dyn crate::settings_tab_provider::SettingsTabProvider>>,
 
     /// The UI mode a confirmation dialog was raised over, if it should render
@@ -1914,6 +1914,7 @@ impl AppState {
             // Create dialog state with session count
             let session_count = self.session_manager.running_sessions().len();
             self.confirm_dialog_state = Some(ConfirmDialogState::quit_confirmation(session_count));
+            self.confirm_dialog_backdrop = None;
             self.ui_mode = UiMode::ConfirmDialog;
         } else {
             self.phase = AppPhase::Quitting;
