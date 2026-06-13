@@ -2,7 +2,7 @@
 //!
 //! Handles navigation, editing, and persistence of settings.
 
-use crate::config::{SettingValue, SettingsTab};
+use crate::config::{SettingItem, SettingValue, SettingsTab};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::message::Message;
 use crate::settings_items::get_selected_item;
@@ -26,9 +26,12 @@ pub fn handle_hide_settings(state: &mut AppState) -> UpdateResult {
             vec![
                 ("Save & Close", Message::SettingsSaveAndClose),
                 ("Discard Changes", Message::ForceHideSettings),
-                ("Cancel", Message::CancelQuit),
+                ("Cancel", Message::SettingsCancelClose),
             ],
         ));
+        // Keep the settings panel visible behind the dialog: the prompt is a
+        // confirmation *over* the page, not a replacement for it.
+        state.confirm_dialog_backdrop = Some(crate::state::UiMode::Settings);
         state.ui_mode = crate::state::UiMode::ConfirmDialog;
     } else {
         state.hide_settings();
@@ -42,7 +45,8 @@ pub fn handle_hide_settings(state: &mut AppState) -> UpdateResult {
 
 /// Handle settings next tab message
 pub fn handle_settings_next_tab(state: &mut AppState) -> UpdateResult {
-    state.settings_view_state.next_tab();
+    let extra_count = state.extra_settings_tabs.len();
+    state.settings_view_state.next_tab(extra_count);
     // Tab change invalidates any pending double-click pairing: row 5 on the
     // Project tab and row 5 on the User tab must not be treated as a pair.
     state.last_settings_click = None;
@@ -51,7 +55,8 @@ pub fn handle_settings_next_tab(state: &mut AppState) -> UpdateResult {
 
 /// Handle settings previous tab message
 pub fn handle_settings_prev_tab(state: &mut AppState) -> UpdateResult {
-    state.settings_view_state.prev_tab();
+    let extra_count = state.extra_settings_tabs.len();
+    state.settings_view_state.prev_tab(extra_count);
     // Tab change invalidates any pending double-click pairing.
     state.last_settings_click = None;
     UpdateResult::none()
@@ -59,7 +64,7 @@ pub fn handle_settings_prev_tab(state: &mut AppState) -> UpdateResult {
 
 /// Handle settings goto tab message
 pub fn handle_settings_goto_tab(state: &mut AppState, idx: usize) -> UpdateResult {
-    if let Some(tab) = SettingsTab::from_index(idx) {
+    if let Some(tab) = SettingsTab::from_index_with(idx, state.extra_settings_tabs.len()) {
         state.settings_view_state.goto_tab(tab);
         // Tab change invalidates any pending double-click pairing.
         state.last_settings_click = None;
@@ -92,6 +97,7 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
             &state.settings,
             &state.project_path,
             &state.settings_view_state,
+            &state.extra_settings_tabs,
         ) {
             use crate::settings_items::{FIELD_DART_DEFINES, FIELD_EXTRA_ARGS, SENTINEL_ADD_NEW};
 
@@ -167,7 +173,7 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
 /// was completed synchronously.  On failure an error is returned and the caller
 /// decides whether to close the settings panel.
 fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<Option<UpdateAction>> {
-    use crate::config::{launch::save_launch_configs, save_user_preferences};
+    use crate::config::save_user_preferences;
 
     match state.settings_view_state.active_tab {
         SettingsTab::Project => {
@@ -187,14 +193,21 @@ fn save_active_tab(state: &mut AppState) -> fdemon_core::error::Result<Option<Up
             save_user_preferences(&state.project_path, &state.settings_view_state.user_prefs)?;
         }
         SettingsTab::LaunchConfig => {
-            // Save launch configs (launch.toml)
-            use crate::config::launch::load_launch_configs;
-            let configs = load_launch_configs(&state.project_path);
-            let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
-            save_launch_configs(&state.project_path, &config_vec)?;
+            // Launch-config edits persist immediately on commit/toggle/cycle via
+            // `apply_committed_item`, so there is nothing to flush here. (The old
+            // load-then-resave was a no-op round-trip.)
         }
         SettingsTab::VSCodeConfig => {
             // Read-only tab — nothing to save.
+        }
+        SettingsTab::Extra(i) => {
+            // Host-injected tab: delegate persistence to the provider. Errors
+            // are surfaced as config errors so the panel shows them inline.
+            if let Some(provider) = state.extra_settings_tabs.get(i) {
+                provider
+                    .save(&state.project_path)
+                    .map_err(fdemon_core::error::Error::config)?;
+            }
         }
     }
 
@@ -229,83 +242,119 @@ pub fn handle_settings_reset_item(_state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
+/// Apply a committed/toggled setting item to the in-memory model for the active
+/// tab, marking the form dirty on success.
+///
+/// This is the single authoritative apply path shared by the bool-toggle,
+/// enum-cycle, and string/number/list commit handlers. Routing per tab:
+/// - `Project`: mutate `state.settings` in place (persisted later via the async
+///   `PersistSettings` action on save).
+/// - `UserPrefs`: mutate the in-memory `user_prefs` (persisted on save).
+/// - `LaunchConfig`: load configs, apply to the addressed config by index
+///   parsed from the `launch.{idx}.field` id, and save IMMEDIATELY to disk
+///   (launch edits have no separate save step). `dirty` is marked only when the
+///   write succeeds.
+/// - `VSCodeConfig`: read-only, no-op.
+fn apply_committed_item(state: &mut AppState, item: &SettingItem) {
+    match state.settings_view_state.active_tab {
+        SettingsTab::Project => {
+            super::settings::apply_project_setting(&mut state.settings, item);
+            state.settings_view_state.mark_dirty();
+        }
+        SettingsTab::UserPrefs => {
+            super::settings::apply_user_preference(&mut state.settings_view_state.user_prefs, item);
+            state.settings_view_state.mark_dirty();
+        }
+        SettingsTab::LaunchConfig => {
+            // For launch configs, we load, modify, and save immediately.
+            // Extract config index from item ID (format: "launch.{idx}.field").
+            let parts: Vec<&str> = item.id.split('.').collect();
+            if parts.len() >= 3 && parts[0] == "launch" {
+                if let Ok(config_idx) = parts[1].parse::<usize>() {
+                    use crate::config::launch::{load_launch_configs, save_launch_configs};
+                    let mut configs = load_launch_configs(&state.project_path);
+                    if let Some(resolved) = configs.get_mut(config_idx) {
+                        super::settings::apply_launch_config_change(&mut resolved.config, item);
+                        // Save the modified configs back to disk.
+                        let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
+                        if let Err(e) = save_launch_configs(&state.project_path, &config_vec) {
+                            tracing::error!("Failed to save launch configs: {}", e);
+                        } else {
+                            state.settings_view_state.mark_dirty();
+                        }
+                    }
+                }
+            }
+        }
+        SettingsTab::VSCodeConfig => {
+            // Read-only tab — ignore.
+        }
+        SettingsTab::Extra(i) => {
+            // Host-injected tab: route the committed item to the provider's
+            // in-memory model. Persistence happens on save via the provider.
+            if let Some(provider) = state.extra_settings_tabs.get_mut(i) {
+                provider.apply(item);
+                state.settings_view_state.mark_dirty();
+            }
+        }
+    }
+}
+
 /// Handle settings toggle bool message
 pub fn handle_settings_toggle_bool(state: &mut AppState) -> UpdateResult {
     if let Some(item) = get_selected_item(
         &state.settings,
         &state.project_path,
         &state.settings_view_state,
+        &state.extra_settings_tabs,
     ) {
         // Only toggle if it's a boolean value
         if let SettingValue::Bool(val) = &item.value {
             // Create new item with flipped value
-            let new_value = SettingValue::Bool(!val);
             let mut toggled_item = item.clone();
-            toggled_item.value = new_value;
+            toggled_item.value = SettingValue::Bool(!val);
+            apply_committed_item(state, &toggled_item);
+        }
+    }
+    UpdateResult::none()
+}
 
-            // Apply based on active tab
-            match state.settings_view_state.active_tab {
-                SettingsTab::Project => {
-                    super::settings::apply_project_setting(&mut state.settings, &toggled_item);
-                    state.settings_view_state.mark_dirty();
-                }
-                SettingsTab::UserPrefs => {
-                    super::settings::apply_user_preference(
-                        &mut state.settings_view_state.user_prefs,
-                        &toggled_item,
-                    );
-                    state.settings_view_state.mark_dirty();
-                }
-                SettingsTab::LaunchConfig => {
-                    // For launch configs, we need to load, modify, and save
-                    // Extract config index from item ID (format: "launch.{idx}.field")
-                    let parts: Vec<&str> = toggled_item.id.split('.').collect();
-                    if parts.len() >= 3 && parts[0] == "launch" {
-                        if let Ok(config_idx) = parts[1].parse::<usize>() {
-                            use crate::config::launch::{load_launch_configs, save_launch_configs};
-                            let mut configs = load_launch_configs(&state.project_path);
-                            if let Some(resolved) = configs.get_mut(config_idx) {
-                                super::settings::apply_launch_config_change(
-                                    &mut resolved.config,
-                                    &toggled_item,
-                                );
-                                // Save the modified configs back to disk
-                                let config_vec: Vec<_> =
-                                    configs.iter().map(|r| r.config.clone()).collect();
-                                if let Err(e) =
-                                    save_launch_configs(&state.project_path, &config_vec)
-                                {
-                                    tracing::error!("Failed to save launch configs: {}", e);
-                                } else {
-                                    state.settings_view_state.mark_dirty();
-                                }
-                            }
-                        }
-                    }
-                }
-                SettingsTab::VSCodeConfig => {
-                    // Read-only tab - ignore toggle
-                }
+/// Cycle the selected enum setting by `delta` (+1 = next option, -1 = previous,
+/// wrapping). No-op when the selected item is not an `Enum`.
+fn cycle_selected_enum(state: &mut AppState, delta: i64) -> UpdateResult {
+    if let Some(item) = get_selected_item(
+        &state.settings,
+        &state.project_path,
+        &state.settings_view_state,
+        &state.extra_settings_tabs,
+    ) {
+        if let SettingValue::Enum { value, options } = &item.value {
+            if options.is_empty() {
+                return UpdateResult::none();
             }
+            let current = options.iter().position(|o| o == value).unwrap_or(0);
+            let len = options.len() as i64;
+            let next = (((current as i64 + delta) % len + len) % len) as usize;
+
+            let mut new_item = item.clone();
+            new_item.value = SettingValue::Enum {
+                value: options[next].clone(),
+                options: options.clone(),
+            };
+            apply_committed_item(state, &new_item);
         }
     }
     UpdateResult::none()
 }
 
 /// Handle settings cycle enum next message
-pub fn handle_settings_cycle_enum_next(_state: &mut AppState) -> UpdateResult {
-    // stub — no-op until field-by-field cycle logic is implemented.
-    // Marking dirty without changing a value would mislead the user into seeing
-    // the unsaved-changes confirmation dialog for a cycle that changed nothing.
-    UpdateResult::none()
+pub fn handle_settings_cycle_enum_next(state: &mut AppState) -> UpdateResult {
+    cycle_selected_enum(state, 1)
 }
 
 /// Handle settings cycle enum previous message
-pub fn handle_settings_cycle_enum_prev(_state: &mut AppState) -> UpdateResult {
-    // stub — no-op until field-by-field cycle logic is implemented.
-    // Marking dirty without changing a value would mislead the user into seeing
-    // the unsaved-changes confirmation dialog for a cycle that changed nothing.
-    UpdateResult::none()
+pub fn handle_settings_cycle_enum_prev(state: &mut AppState) -> UpdateResult {
+    cycle_selected_enum(state, -1)
 }
 
 /// Handle settings increment message
@@ -344,13 +393,75 @@ pub fn handle_settings_clear_buffer(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle settings commit edit message
+///
+/// Parses the edit buffer according to the selected item's value type, applies
+/// the parsed value to the in-memory model via [`apply_committed_item`], then
+/// marks the form dirty and exits edit mode. On a parse failure (Number/Float)
+/// the error is surfaced via `settings_view_state.error` and the editor stays
+/// open so the user can correct the input — no change is applied, no dirty flag
+/// is set.
 pub fn handle_settings_commit_edit(state: &mut AppState) -> UpdateResult {
-    // Commit the current edit
-    // Actual value update needs to happen here
-    if state.settings_view_state.editing {
-        state.settings_view_state.mark_dirty();
-        state.settings_view_state.stop_editing();
+    if !state.settings_view_state.editing {
+        return UpdateResult::none();
     }
+
+    let buffer = state.settings_view_state.edit_buffer.clone();
+
+    let item = match get_selected_item(
+        &state.settings,
+        &state.project_path,
+        &state.settings_view_state,
+        &state.extra_settings_tabs,
+    ) {
+        Some(item) => item,
+        None => {
+            // Nothing to commit to — just exit edit mode.
+            state.settings_view_state.stop_editing();
+            return UpdateResult::none();
+        }
+    };
+
+    // Parse the buffer into a new value matching the item's current variant.
+    let parsed = match &item.value {
+        SettingValue::String(_) => SettingValue::String(buffer.clone()),
+        SettingValue::Number(_) => match buffer.trim().parse::<i64>() {
+            Ok(n) => SettingValue::Number(n),
+            Err(_) => {
+                state.settings_view_state.error =
+                    Some(format!("Invalid number: '{}'", buffer.trim()));
+                return UpdateResult::none();
+            }
+        },
+        SettingValue::Float(_) => match buffer.trim().parse::<f64>() {
+            Ok(f) => SettingValue::Float(f),
+            Err(_) => {
+                state.settings_view_state.error =
+                    Some(format!("Invalid number: '{}'", buffer.trim()));
+                return UpdateResult::none();
+            }
+        },
+        SettingValue::List(existing) => {
+            // Append the typed entry to the existing list (skip empty input).
+            let mut list = existing.clone();
+            let trimmed = buffer.trim();
+            if !trimmed.is_empty() {
+                list.push(trimmed.to_string());
+            }
+            SettingValue::List(list)
+        }
+        // Bool/Enum are never edited inline (toggled/cycled instead).
+        SettingValue::Bool(_) | SettingValue::Enum { .. } => {
+            state.settings_view_state.stop_editing();
+            return UpdateResult::none();
+        }
+    };
+
+    let mut committed = item.clone();
+    committed.value = parsed;
+    apply_committed_item(state, &committed);
+
+    state.settings_view_state.error = None;
+    state.settings_view_state.stop_editing();
     UpdateResult::none()
 }
 
@@ -362,9 +473,28 @@ pub fn handle_settings_cancel_edit(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle settings remove list item message
+///
+/// Removes the last entry from the selected `List` setting and applies the
+/// shortened list via [`apply_committed_item`]. No-op when the selected item is
+/// not a non-empty `List`.
 pub fn handle_settings_remove_list_item(state: &mut AppState) -> UpdateResult {
-    // Remove last item from list
-    state.settings_view_state.mark_dirty();
+    if let Some(item) = get_selected_item(
+        &state.settings,
+        &state.project_path,
+        &state.settings_view_state,
+        &state.extra_settings_tabs,
+    ) {
+        if let SettingValue::List(existing) = &item.value {
+            if existing.is_empty() {
+                return UpdateResult::none();
+            }
+            let mut list = existing.clone();
+            list.pop();
+            let mut new_item = item.clone();
+            new_item.value = SettingValue::List(list);
+            apply_committed_item(state, &new_item);
+        }
+    }
     UpdateResult::none()
 }
 
@@ -377,11 +507,13 @@ pub fn handle_settings_save_and_close(state: &mut AppState) -> UpdateResult {
             // happens in the background.  If it fails, a `tracing::warn!` is
             // emitted by the action dispatch arm; surfacing it to the UI is a
             // Phase-2-or-later concern.
+            dismiss_unsaved_dialog(state);
             state.hide_settings();
             tracing::info!("Settings save dispatched asynchronously, settings panel closed");
             UpdateResult::action(action)
         }
         Ok(None) => {
+            dismiss_unsaved_dialog(state);
             state.hide_settings();
             tracing::info!("Settings saved and closed");
             UpdateResult::none()
@@ -390,7 +522,10 @@ pub fn handle_settings_save_and_close(state: &mut AppState) -> UpdateResult {
             let error_msg = format!("Save failed: {}", e);
             tracing::error!("{}", error_msg);
             state.settings_view_state.error = Some(error_msg);
-            // Don't close on error — stay in settings so the error is visible.
+            // Don't close on error — return to the settings panel so the error
+            // is visible (the dialog had replaced the foreground).
+            dismiss_unsaved_dialog(state);
+            state.ui_mode = crate::state::UiMode::Settings;
             UpdateResult::none()
         }
     }
@@ -400,10 +535,26 @@ pub fn handle_settings_save_and_close(state: &mut AppState) -> UpdateResult {
 pub fn handle_force_hide_settings(state: &mut AppState) -> UpdateResult {
     // Force close without saving (discard changes)
     state.settings_view_state.clear_dirty();
+    dismiss_unsaved_dialog(state);
     state.hide_settings();
     // Clear the stamp for hygiene — mirrors last_log_click reset on session change.
     state.last_settings_click = None;
     UpdateResult::none()
+}
+
+/// Handle the "Cancel" choice on the unsaved-changes dialog: dismiss the prompt
+/// and return to the settings panel with edits intact.
+pub fn handle_settings_cancel_close(state: &mut AppState) -> UpdateResult {
+    dismiss_unsaved_dialog(state);
+    state.ui_mode = crate::state::UiMode::Settings;
+    UpdateResult::none()
+}
+
+/// Clear the confirmation-dialog state and its settings backdrop. Shared by the
+/// three exits of the unsaved-changes prompt (save / discard / cancel).
+fn dismiss_unsaved_dialog(state: &mut AppState) {
+    state.confirm_dialog_state = None;
+    state.confirm_dialog_backdrop = None;
 }
 
 /// Get the number of items in the currently active settings tab.
@@ -442,6 +593,11 @@ fn get_item_count_for_tab(state: &AppState) -> usize {
                 .map(|(idx, resolved)| vscode_config_items(&resolved.config, idx).len())
                 .sum()
         }
+        SettingsTab::Extra(i) => state
+            .extra_settings_tabs
+            .get(i)
+            .map(|p| p.items().len())
+            .unwrap_or(0),
     }
 }
 
@@ -520,6 +676,56 @@ mod tests {
         let mut state = AppState::new();
         state.settings_view_state.active_tab = tab;
         state
+    }
+
+    #[test]
+    fn test_dirty_esc_prompts_before_dismissing_settings() {
+        use crate::state::UiMode;
+
+        let mut state = state_with_tab(SettingsTab::Project);
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.dirty = true;
+
+        handle_hide_settings(&mut state);
+
+        // The dialog is raised and the settings panel stays as the backdrop —
+        // it is NOT dismissed until the user chooses an action.
+        assert_eq!(state.ui_mode, UiMode::ConfirmDialog);
+        assert!(state.confirm_dialog_state.is_some());
+        assert_eq!(state.confirm_dialog_backdrop, Some(UiMode::Settings));
+    }
+
+    #[test]
+    fn test_cancel_close_returns_to_settings_with_edits_intact() {
+        use crate::state::UiMode;
+
+        let mut state = state_with_tab(SettingsTab::Project);
+        state.settings_view_state.dirty = true;
+        handle_hide_settings(&mut state); // raise the unsaved-changes prompt
+
+        handle_settings_cancel_close(&mut state);
+
+        // Back in the settings panel; dialog + backdrop cleared; edits preserved.
+        assert_eq!(state.ui_mode, UiMode::Settings);
+        assert!(state.confirm_dialog_state.is_none());
+        assert_eq!(state.confirm_dialog_backdrop, None);
+        assert!(state.settings_view_state.dirty);
+    }
+
+    #[test]
+    fn test_discard_clears_dialog_and_closes_settings() {
+        use crate::state::UiMode;
+
+        let mut state = state_with_tab(SettingsTab::Project);
+        state.settings_view_state.dirty = true;
+        handle_hide_settings(&mut state);
+
+        handle_force_hide_settings(&mut state);
+
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert!(state.confirm_dialog_state.is_none());
+        assert_eq!(state.confirm_dialog_backdrop, None);
+        assert!(!state.settings_view_state.dirty);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -638,6 +844,7 @@ mod tests {
             &state.settings,
             &state.project_path,
             &state.settings_view_state,
+            &state.extra_settings_tabs,
         );
         assert!(item.is_some(), "should return sentinel at add-new index");
         assert_eq!(item.unwrap().id, "launch.__add_new__");
@@ -704,6 +911,7 @@ mod tests {
             &state.settings,
             &state.project_path,
             &state.settings_view_state,
+            &state.extra_settings_tabs,
         );
         assert!(selected.is_some(), "sentinel item should be returned");
         assert_eq!(
@@ -779,6 +987,7 @@ mod tests {
             &state.settings,
             &state.project_path,
             &state.settings_view_state,
+            &state.extra_settings_tabs,
         );
         // Either None or not the add-new sentinel
         if let Some(item) = selected {
@@ -911,5 +1120,258 @@ mod tests {
                 count.saturating_sub(1)
             );
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Commit / cycle round-trip tests (S1): an edit must reach state.settings
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Helper: position the Project tab on the item with the given id.
+    fn select_project_item(state: &mut AppState, id: &str) {
+        let items = crate::settings_items::project_settings_items(&state.settings);
+        let idx = items
+            .iter()
+            .position(|i| i.id == id)
+            .unwrap_or_else(|| panic!("project item {id} not found"));
+        state.settings_view_state.selected_index = idx;
+    }
+
+    #[test]
+    fn test_commit_number_round_trips_to_settings() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.show_settings();
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "watcher.debounce_ms");
+
+        s.settings_view_state.start_editing("1234");
+        handle_settings_commit_edit(&mut s);
+
+        assert_eq!(s.settings.watcher.debounce_ms, 1234);
+        assert!(s.settings_view_state.dirty, "commit must mark dirty");
+        assert!(!s.settings_view_state.editing, "commit must exit edit mode");
+        assert!(s.settings_view_state.error.is_none());
+    }
+
+    #[test]
+    fn test_commit_invalid_number_sets_error_and_keeps_editing() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "watcher.debounce_ms");
+        let original = s.settings.watcher.debounce_ms;
+
+        s.settings_view_state.start_editing("not-a-number");
+        handle_settings_commit_edit(&mut s);
+
+        assert_eq!(
+            s.settings.watcher.debounce_ms, original,
+            "invalid number must not change the value"
+        );
+        assert!(
+            s.settings_view_state.error.is_some(),
+            "invalid number must surface an error"
+        );
+        assert!(
+            s.settings_view_state.editing,
+            "editor must stay open on parse failure"
+        );
+        assert!(
+            !s.settings_view_state.dirty,
+            "parse failure must not mark dirty"
+        );
+    }
+
+    #[test]
+    fn test_commit_string_round_trips_to_settings() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "devtools.browser");
+
+        s.settings_view_state.start_editing("firefox");
+        handle_settings_commit_edit(&mut s);
+
+        assert_eq!(s.settings.devtools.browser, "firefox");
+        assert!(s.settings_view_state.dirty);
+    }
+
+    #[test]
+    fn test_cycle_enum_round_trips_to_settings() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "ui.theme");
+
+        // ui.theme options: ["default", "dark", "light"]; default value "default".
+        assert_eq!(s.settings.ui.theme, "default");
+        handle_settings_cycle_enum_next(&mut s);
+        assert_eq!(s.settings.ui.theme, "dark", "next must advance to 'dark'");
+        assert!(s.settings_view_state.dirty);
+
+        handle_settings_cycle_enum_prev(&mut s);
+        assert_eq!(s.settings.ui.theme, "default", "prev must wrap back");
+    }
+
+    #[test]
+    fn test_cycle_enum_wraps_around() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "ui.theme");
+
+        // From the first option, prev wraps to the last ("light").
+        handle_settings_cycle_enum_prev(&mut s);
+        assert_eq!(s.settings.ui.theme, "light");
+    }
+
+    /// New devtools apply arm coverage via the commit path (enum field).
+    #[test]
+    fn test_cycle_enum_devtools_default_panel_round_trips() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "devtools.default_panel");
+
+        assert_eq!(s.settings.devtools.default_panel, "inspector");
+        handle_settings_cycle_enum_next(&mut s);
+        assert_eq!(s.settings.devtools.default_panel, "performance");
+    }
+
+    #[test]
+    fn test_toggle_bool_devtools_logging_round_trips() {
+        let mut s = state_with_tab(SettingsTab::Project);
+        s.settings_view_state.active_tab = SettingsTab::Project;
+        select_project_item(&mut s, "devtools.logging.hybrid_enabled");
+
+        let before = s.settings.devtools.logging.hybrid_enabled;
+        handle_settings_toggle_bool(&mut s);
+        assert_eq!(
+            s.settings.devtools.logging.hybrid_enabled, !before,
+            "toggling a devtools logging bool must flip it"
+        );
+        assert!(s.settings_view_state.dirty);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Extra (host-injected) settings-tab seam
+    // ─────────────────────────────────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A minimal in-test [`SettingsTabProvider`] that exposes two items and
+    /// records how many times `apply`/`save` were invoked.
+    #[derive(Debug)]
+    struct FakeProvider {
+        toggle: bool,
+        applied: Arc<AtomicUsize>,
+        saved: Arc<AtomicUsize>,
+    }
+
+    impl FakeProvider {
+        fn new() -> Self {
+            Self {
+                toggle: false,
+                applied: Arc::new(AtomicUsize::new(0)),
+                saved: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl crate::settings_tab_provider::SettingsTabProvider for FakeProvider {
+        fn title(&self) -> &str {
+            "Fake"
+        }
+
+        fn items(&self) -> Vec<SettingItem> {
+            vec![
+                SettingItem::new("fake.toggle", "Toggle")
+                    .value(SettingValue::Bool(self.toggle))
+                    .section("Fake".to_string()),
+                SettingItem::new("fake.note", "Note")
+                    .value(SettingValue::String("hi".to_string()))
+                    .section("Fake".to_string()),
+            ]
+        }
+
+        fn apply(&mut self, item: &SettingItem) {
+            self.applied.fetch_add(1, Ordering::SeqCst);
+            if item.id == "fake.toggle" {
+                if let SettingValue::Bool(b) = item.value {
+                    self.toggle = b;
+                }
+            }
+        }
+
+        fn save(&self, _project_path: &std::path::Path) -> Result<(), String> {
+            self.saved.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn state_with_one_extra_tab() -> (AppState, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let mut state = AppState::new();
+        let provider = FakeProvider::new();
+        let applied = provider.applied.clone();
+        let saved = provider.saved.clone();
+        state.extra_settings_tabs.push(Box::new(provider));
+        state.settings_view_state.active_tab = SettingsTab::Extra(0);
+        (state, applied, saved)
+    }
+
+    #[test]
+    fn test_extra_tab_item_count() {
+        let (state, _, _) = state_with_one_extra_tab();
+        assert_eq!(get_item_count_for_tab(&state), 2);
+    }
+
+    #[test]
+    fn test_extra_tab_next_prev_navigation() {
+        let mut state = AppState::new();
+        state
+            .extra_settings_tabs
+            .push(Box::new(FakeProvider::new()));
+        // VSCode -> Extra(0) -> wrap to Project.
+        state.settings_view_state.active_tab = SettingsTab::VSCodeConfig;
+        handle_settings_next_tab(&mut state);
+        assert_eq!(state.settings_view_state.active_tab, SettingsTab::Extra(0));
+        handle_settings_next_tab(&mut state);
+        assert_eq!(state.settings_view_state.active_tab, SettingsTab::Project);
+    }
+
+    #[test]
+    fn test_extra_tab_goto_tab() {
+        let mut state = AppState::new();
+        state
+            .extra_settings_tabs
+            .push(Box::new(FakeProvider::new()));
+        // Index 4 is the first extra tab.
+        handle_settings_goto_tab(&mut state, 4);
+        assert_eq!(state.settings_view_state.active_tab, SettingsTab::Extra(0));
+        // Index 5 is out of range (only one extra tab) — no change.
+        handle_settings_goto_tab(&mut state, 5);
+        assert_eq!(state.settings_view_state.active_tab, SettingsTab::Extra(0));
+    }
+
+    #[test]
+    fn test_extra_tab_toggle_bool_routes_to_provider() {
+        let (mut state, applied, _) = state_with_one_extra_tab();
+        // Select the bool item (index 0) and toggle it.
+        state.settings_view_state.selected_index = 0;
+        handle_settings_toggle_bool(&mut state);
+        assert_eq!(applied.load(Ordering::SeqCst), 1, "apply must be called");
+        // The provider's model flipped, so its rebuilt items reflect the change.
+        let item = get_selected_item(
+            &state.settings,
+            &state.project_path,
+            &state.settings_view_state,
+            &state.extra_settings_tabs,
+        )
+        .unwrap();
+        assert_eq!(item.value, SettingValue::Bool(true));
+        assert!(state.settings_view_state.dirty);
+    }
+
+    #[test]
+    fn test_extra_tab_save_routes_to_provider() {
+        let (mut state, _, saved) = state_with_one_extra_tab();
+        let result = save_active_tab(&mut state);
+        assert!(result.is_ok());
+        assert_eq!(saved.load(Ordering::SeqCst), 1, "save must be called");
     }
 }

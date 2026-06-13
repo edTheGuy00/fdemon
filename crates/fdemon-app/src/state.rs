@@ -831,6 +831,15 @@ pub struct SettingsViewState {
     /// Currently selected item index within the active tab
     pub selected_index: usize,
 
+    /// Vertical scroll offset, counted in VISUAL rows (setting rows, section
+    /// headers, and inter-section spacers) skipped from the top of the list.
+    ///
+    /// The per-tab renderers track a running visual-row counter and only draw a
+    /// row when its visual row is `>= scroll_offset`, at
+    /// `list_top + (vrow - scroll_offset)`. The mouse region recorder mirrors
+    /// the same walk so click targets always match the rendered rows.
+    pub scroll_offset: usize,
+
     /// Whether we're in edit mode for the current item
     pub editing: bool,
 
@@ -871,6 +880,7 @@ impl Default for SettingsViewState {
         Self {
             active_tab: SettingsTab::Project,
             selected_index: 0,
+            scroll_offset: 0,
             editing: false,
             edit_buffer: String::new(),
             dirty: false,
@@ -903,18 +913,26 @@ impl SettingsViewState {
         }
     }
 
-    /// Switch to next tab
-    pub fn next_tab(&mut self) {
-        self.active_tab = self.active_tab.next();
+    /// Switch to next tab.
+    ///
+    /// `extra_count` is the number of host-injected extra tabs so the wraparound
+    /// includes them (pass `0` when there are none).
+    pub fn next_tab(&mut self, extra_count: usize) {
+        self.active_tab = self.active_tab.next_with(extra_count);
         self.selected_index = 0;
+        self.scroll_offset = 0;
         self.editing = false;
         self.edit_buffer.clear();
     }
 
-    /// Switch to previous tab
-    pub fn prev_tab(&mut self) {
-        self.active_tab = self.active_tab.prev();
+    /// Switch to previous tab.
+    ///
+    /// `extra_count` is the number of host-injected extra tabs so the wraparound
+    /// includes them (pass `0` when there are none).
+    pub fn prev_tab(&mut self, extra_count: usize) {
+        self.active_tab = self.active_tab.prev_with(extra_count);
         self.selected_index = 0;
+        self.scroll_offset = 0;
         self.editing = false;
         self.edit_buffer.clear();
     }
@@ -923,6 +941,7 @@ impl SettingsViewState {
     pub fn goto_tab(&mut self, tab: SettingsTab) {
         self.active_tab = tab;
         self.selected_index = 0;
+        self.scroll_offset = 0;
         self.editing = false;
         self.edit_buffer.clear();
     }
@@ -1591,6 +1610,21 @@ pub struct AppState {
     /// **Access contract:** only the Engine drains this queue. Do not drain or
     /// iterate it from outside the crate.
     pub pending_engine_events: Vec<crate::engine_event::EngineEvent>,
+
+    /// Host-injected extra settings tabs, rendered after the four built-in tabs.
+    ///
+    /// Each provider supplies its own title, item list, and save logic via the
+    /// content-free [`crate::settings_tab_provider::SettingsTabProvider`] seam.
+    /// The public binary leaves this empty; embedders push providers after
+    /// construction. `reset()` deliberately preserves this Vec.
+    pub extra_settings_tabs: Vec<Box<dyn crate::settings_tab_provider::SettingsTabProvider>>,
+
+    /// The UI mode a confirmation dialog was raised over, if it should render
+    /// that mode as a backdrop. `Some(UiMode::Settings)` makes the unsaved-
+    /// changes prompt appear as an overlay on the still-visible settings panel
+    /// rather than replacing it. `None` (the default) draws the dialog over the
+    /// normal background.
+    pub confirm_dialog_backdrop: Option<UiMode>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1669,6 +1703,8 @@ impl AppState {
             animation_frame: 0,
             pending_runner_actions: Vec::new(),
             pending_engine_events: Vec::new(),
+            extra_settings_tabs: Vec::new(),
+            confirm_dialog_backdrop: None,
         }
     }
 
@@ -1897,6 +1933,7 @@ impl AppState {
     /// Cancel quit (from confirmation dialog)
     pub fn cancel_quit(&mut self) {
         self.confirm_dialog_state = None;
+        self.confirm_dialog_backdrop = None;
         self.ui_mode = UiMode::Normal;
     }
 

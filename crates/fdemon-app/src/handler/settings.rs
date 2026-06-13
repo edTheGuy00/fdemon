@@ -115,6 +115,56 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.devtools.inspector_fetch_timeout_secs = *v as u64;
             }
         }
+        "devtools.default_panel" => {
+            if let SettingValue::Enum { value, .. } = &item.value {
+                settings.devtools.default_panel = value.clone();
+            }
+        }
+        "devtools.performance_refresh_ms" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.performance_refresh_ms = *v as u64;
+            }
+        }
+        "devtools.memory_history_size" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.memory_history_size = *v as usize;
+            }
+        }
+        "devtools.tree_max_depth" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.tree_max_depth = *v as u32;
+            }
+        }
+        "devtools.auto_repaint_rainbow" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.auto_repaint_rainbow = *v;
+            }
+        }
+        "devtools.auto_performance_overlay" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.auto_performance_overlay = *v;
+            }
+        }
+        "devtools.logging.hybrid_enabled" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.logging.hybrid_enabled = *v;
+            }
+        }
+        "devtools.logging.prefer_vm_level" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.logging.prefer_vm_level = *v;
+            }
+        }
+        "devtools.logging.show_source_indicator" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.devtools.logging.show_source_indicator = *v;
+            }
+        }
+        "devtools.logging.dedupe_threshold_ms" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.logging.dedupe_threshold_ms = *v as u64;
+            }
+        }
 
         // Editor
         "editor.command" => {

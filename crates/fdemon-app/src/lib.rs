@@ -86,6 +86,7 @@ pub mod services;
 pub mod session;
 pub mod session_manager;
 pub mod settings_items;
+pub mod settings_tab_provider;
 pub(crate) mod signals;
 pub mod spawn;
 pub mod state;
@@ -100,6 +101,7 @@ pub use message::{DebugOverlayKind, Message};
 pub use plugin::EnginePlugin;
 pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
+pub use settings_tab_provider::SettingsTabProvider;
 pub use state::{
     AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, StatusBadge,
     StatusBadgeKind, TagFilterUiState, ToastLevel,

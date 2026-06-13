@@ -1042,6 +1042,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::ForceHideSettings => settings_handlers::handle_force_hide_settings(state),
 
+        Message::SettingsCancelClose => settings_handlers::handle_settings_cancel_close(state),
+
         // ─────────────────────────────────────────────────────────
         // Launch Config Editing Messages (Phase 5, Task 07)
         // ─────────────────────────────────────────────────────────
