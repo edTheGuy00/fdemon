@@ -164,8 +164,7 @@ pub enum DevToolsPanel {
 /// Host-registered panels (`AppState::extra_devtools_panels`) must not reuse
 /// these ids. The combined cycle order is these ids followed by the registered
 /// panels in registration order.
-pub const BUILTIN_DEVTOOLS_PANEL_IDS: [&str; 4] =
-    ["inspector", "performance", "memory", "network"];
+pub const BUILTIN_DEVTOOLS_PANEL_IDS: [&str; 4] = ["inspector", "performance", "memory", "network"];
 
 impl DevToolsPanel {
     /// Stable string id for this built-in panel.
@@ -1663,8 +1662,7 @@ pub struct AppState {
     /// this field is never cleared during the `AppState` lifetime.
     ///
     /// **Stability: UNSTABLE embedder API** — see the module docs.
-    pub extra_devtools_panels:
-        Vec<Box<dyn crate::devtools_panel_provider::DevToolsPanelProvider>>,
+    pub extra_devtools_panels: Vec<Box<dyn crate::devtools_panel_provider::DevToolsPanelProvider>>,
 
     /// The UI mode a confirmation dialog was raised over, if it should render
     /// that mode as a backdrop. `Some(UiMode::Settings)` makes the unsaved-
@@ -1904,7 +1902,11 @@ impl AppState {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        ids.extend(self.extra_devtools_panels.iter().map(|p| p.id().to_string()));
+        ids.extend(
+            self.extra_devtools_panels
+                .iter()
+                .map(|p| p.id().to_string()),
+        );
         ids
     }
 

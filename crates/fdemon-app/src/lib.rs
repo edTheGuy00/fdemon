@@ -95,6 +95,7 @@ pub(crate) mod version_check;
 pub mod watcher;
 
 // Re-export primary types
+pub use devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
 pub use engine::Engine;
 pub use engine_event::EngineEvent;
 pub use handler::{update, Task, UpdateAction, UpdateResult};
@@ -102,7 +103,6 @@ pub use message::{DebugOverlayKind, Message};
 pub use plugin::EnginePlugin;
 pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
-pub use devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
 pub use settings_tab_provider::SettingsTabProvider;
 pub use state::{
     AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, StatusBadge,

@@ -516,7 +516,10 @@ mod tests {
         let result = format_body_text(input);
         // JSON arrays should also be pretty-printed.
         assert!(result.contains('\n'), "JSON array should be pretty-printed");
-        assert!(result.contains('1'), "Pretty result should contain element 1");
+        assert!(
+            result.contains('1'),
+            "Pretty result should contain element 1"
+        );
     }
 
     #[test]

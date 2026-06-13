@@ -5,8 +5,8 @@
 //! and UI interaction state (filter, sort, recording toggle).
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail, SocketEntry};
@@ -784,7 +784,10 @@ mod tests {
             ..Default::default()
         };
         state.reset();
-        assert_eq!(state.details_scroll_offset, 0, "reset() must clear details_scroll_offset");
+        assert_eq!(
+            state.details_scroll_offset, 0,
+            "reset() must clear details_scroll_offset"
+        );
     }
 
     #[test]
@@ -794,7 +797,10 @@ mod tests {
             ..Default::default()
         };
         state.clear();
-        assert_eq!(state.details_scroll_offset, 0, "clear() must clear details_scroll_offset");
+        assert_eq!(
+            state.details_scroll_offset, 0,
+            "clear() must clear details_scroll_offset"
+        );
     }
 
     #[test]
@@ -891,7 +897,11 @@ mod tests {
         // Two bodies that are exactly the same byte-length but different content.
         let body_a = "AAAAAAAAAA"; // 10 chars
         let body_b = "BBBBBBBBBB"; // 10 chars — equal length, different content
-        assert_eq!(body_a.len(), body_b.len(), "Bodies must be equal length for this test");
+        assert_eq!(
+            body_a.len(),
+            body_b.len(),
+            "Bodies must be equal length for this test"
+        );
 
         let key_a = BodyWrapCacheKey {
             selected_index: Some(0),
@@ -909,19 +919,33 @@ mod tests {
         };
 
         // Keys must differ (different body_hash).
-        assert_ne!(key_a, key_b, "Equal-length but distinct bodies must produce distinct keys");
+        assert_ne!(
+            key_a, key_b,
+            "Equal-length but distinct bodies must produce distinct keys"
+        );
 
         // Warm cache with body_a.
         let lines_a = state.get_or_compute_wrapped_lines(key_a, body_a, 80);
-        assert_eq!(lines_a, vec![body_a], "First body must wrap to itself at width 80");
+        assert_eq!(
+            lines_a,
+            vec![body_a],
+            "First body must wrap to itself at width 80"
+        );
 
         // Invalidate (as the detail handler would do on body update).
         state.invalidate_wrap_cache();
 
         // Now cache body_b — must NOT return body_a's lines.
         let lines_b = state.get_or_compute_wrapped_lines(key_b, body_b, 80);
-        assert_eq!(lines_b, vec![body_b], "Second body must return its own content, not the stale first body");
-        assert_ne!(lines_a, lines_b, "Different bodies must produce different wrapped lines");
+        assert_eq!(
+            lines_b,
+            vec![body_b],
+            "Second body must return its own content, not the stale first body"
+        );
+        assert_ne!(
+            lines_a, lines_b,
+            "Different bodies must produce different wrapped lines"
+        );
     }
 
     /// Verify that `hash_body` produces different hashes for distinct content
@@ -984,7 +1008,10 @@ mod tests {
 
         // Prime cache with body1.
         let result1 = state.get_or_compute_wrapped_lines(key1.clone(), body1, 40);
-        assert!(result1.iter().any(|l| l.contains("ok")), "Cache must contain body1 content");
+        assert!(
+            result1.iter().any(|l| l.contains("ok")),
+            "Cache must contain body1 content"
+        );
 
         // Without explicit invalidation, ask for body2's key.
         // body_hash differs → cache miss → returns body2's content.
@@ -994,7 +1021,9 @@ mod tests {
             "Should return body2 content, not stale body1; got: {result2:?}"
         );
         assert!(
-            !result2.iter().any(|l| l.contains("ok") && !l.contains("no")),
+            !result2
+                .iter()
+                .any(|l| l.contains("ok") && !l.contains("no")),
             "Must not contain stale 'ok' from body1; got: {result2:?}"
         );
     }

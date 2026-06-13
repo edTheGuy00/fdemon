@@ -456,15 +456,32 @@ mod tests {
     #[test]
     fn ctrl_only_is_no_op_in_inspector() {
         let inspector = state_with_panel(DevToolsPanel::Inspector);
-        assert!(handle_scroll(&inspector, ScrollDir::Up, KeyModSet::new(false, true, false)).is_none());
-        assert!(handle_scroll(&inspector, ScrollDir::Down, KeyModSet::new(false, true, false)).is_none());
+        assert!(handle_scroll(
+            &inspector,
+            ScrollDir::Up,
+            KeyModSet::new(false, true, false)
+        )
+        .is_none());
+        assert!(handle_scroll(
+            &inspector,
+            ScrollDir::Down,
+            KeyModSet::new(false, true, false)
+        )
+        .is_none());
     }
 
     #[test]
     fn alt_only_is_no_op_in_network() {
         let network = state_with_panel(DevToolsPanel::Network);
-        assert!(handle_scroll(&network, ScrollDir::Up, KeyModSet::new(false, false, true)).is_none());
-        assert!(handle_scroll(&network, ScrollDir::Down, KeyModSet::new(false, false, true)).is_none());
+        assert!(
+            handle_scroll(&network, ScrollDir::Up, KeyModSet::new(false, false, true)).is_none()
+        );
+        assert!(handle_scroll(
+            &network,
+            ScrollDir::Down,
+            KeyModSet::new(false, false, true)
+        )
+        .is_none());
     }
 
     #[test]

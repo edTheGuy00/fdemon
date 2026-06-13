@@ -259,7 +259,11 @@ mod tests {
     fn dummy_panel_renders_via_mut_self_and_records_keys() {
         let mut panel = DummyPanel::default();
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 3));
-        panel.render(Rect::new(0, 0, 10, 3), &mut buf, DevToolsPanelCtx::new(true, 0));
+        panel.render(
+            Rect::new(0, 0, 10, 3),
+            &mut buf,
+            DevToolsPanelCtx::new(true, 0),
+        );
         assert_eq!(panel.renders, 1, "render must run via &mut self");
 
         let h = panel.handle_key(InputKey::Char('x'));

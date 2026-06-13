@@ -688,7 +688,10 @@ fn pause_builtin_polling_on_leave(state: &mut AppState) {
     let old_panel = state.devtools_view_state.active_panel;
 
     // Alloc polling (Performance + Memory).
-    if matches!(old_panel, DevToolsPanel::Performance | DevToolsPanel::Memory) {
+    if matches!(
+        old_panel,
+        DevToolsPanel::Performance | DevToolsPanel::Memory
+    ) {
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {
                 let _ = tx.send(true);
@@ -774,7 +777,11 @@ pub fn handle_extension_panel_key(
     key: crate::input_key::InputKey,
 ) -> UpdateResult {
     if let Some(id) = state.devtools_view_state.active_extension_panel.clone() {
-        if let Some(panel) = state.extra_devtools_panels.iter_mut().find(|p| p.id() == id) {
+        if let Some(panel) = state
+            .extra_devtools_panels
+            .iter_mut()
+            .find(|p| p.id() == id)
+        {
             let _ = panel.handle_key(key);
         }
     }

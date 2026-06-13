@@ -476,10 +476,19 @@ mod tests {
                 body_len: body.len(),
                 body_hash: hash_body(body),
             };
-            let _ = handle.session.network.get_or_compute_wrapped_lines(key, body, 80);
+            let _ = handle
+                .session
+                .network
+                .get_or_compute_wrapped_lines(key, body, 80);
             // Verify the cache is populated.
             assert!(
-                handle.session.network.body_wrap_cache.borrow().key.is_some(),
+                handle
+                    .session
+                    .network
+                    .body_wrap_cache
+                    .borrow()
+                    .key
+                    .is_some(),
                 "Cache must be populated before the detail handler runs"
             );
         }
@@ -498,7 +507,13 @@ mod tests {
 
         let handle = state.session_manager.get(session_id).unwrap();
         assert!(
-            handle.session.network.body_wrap_cache.borrow().key.is_none(),
+            handle
+                .session
+                .network
+                .body_wrap_cache
+                .borrow()
+                .key
+                .is_none(),
             "handle_http_request_detail_received must invalidate the wrap cache"
         );
     }
@@ -524,9 +539,18 @@ mod tests {
                 body_len: body.len(),
                 body_hash: hash_body(body),
             };
-            let _ = handle.session.network.get_or_compute_wrapped_lines(key, body, 80);
+            let _ = handle
+                .session
+                .network
+                .get_or_compute_wrapped_lines(key, body, 80);
             assert!(
-                handle.session.network.body_wrap_cache.borrow().key.is_some(),
+                handle
+                    .session
+                    .network
+                    .body_wrap_cache
+                    .borrow()
+                    .key
+                    .is_some(),
                 "Cache must be populated before the select handler runs"
             );
         }
@@ -536,7 +560,13 @@ mod tests {
 
         let handle = state.session_manager.get(session_id).unwrap();
         assert!(
-            handle.session.network.body_wrap_cache.borrow().key.is_none(),
+            handle
+                .session
+                .network
+                .body_wrap_cache
+                .borrow()
+                .key
+                .is_none(),
             "handle_network_select_request must invalidate the wrap cache"
         );
     }

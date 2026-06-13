@@ -646,18 +646,12 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                 InputKey::Tab => Some(Message::CycleDevToolsPanel { forward: true }),
                 InputKey::BackTab => Some(Message::CycleDevToolsPanel { forward: false }),
                 InputKey::Esc => Some(Message::DevToolsEscape),
-                InputKey::Char('i') => {
-                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector))
-                }
+                InputKey::Char('i') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector)),
                 InputKey::Char('p') => {
                     Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance))
                 }
-                InputKey::Char('m') => {
-                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory))
-                }
-                InputKey::Char('n') => {
-                    Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
-                }
+                InputKey::Char('m') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Memory)),
+                InputKey::Char('n') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network)),
                 other => Some(Message::DevToolsExtensionPanelKey(other)),
             };
         }

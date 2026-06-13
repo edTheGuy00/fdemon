@@ -5447,20 +5447,28 @@ fn test_app_stop_resets_network_state_including_pending_entry() {
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
         // Completed request.
-        handle.session.network.entries.push_back(make_test_http_entry("req-done"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("req-done"));
         // Pending request: same shape but no end time.
-        handle.session.network.entries.push_back(fdemon_core::network::HttpProfileEntry {
-            id: "req-pending".to_string(),
-            method: "POST".to_string(),
-            uri: "https://example.com/upload".to_string(),
-            status_code: None,
-            content_type: None,
-            start_time_us: 2_000_000,
-            end_time_us: None, // still in-flight
-            request_content_length: None,
-            response_content_length: None,
-            error: None,
-        });
+        handle
+            .session
+            .network
+            .entries
+            .push_back(fdemon_core::network::HttpProfileEntry {
+                id: "req-pending".to_string(),
+                method: "POST".to_string(),
+                uri: "https://example.com/upload".to_string(),
+                status_code: None,
+                content_type: None,
+                start_time_us: 2_000_000,
+                end_time_us: None, // still in-flight
+                request_content_length: None,
+                response_content_length: None,
+                error: None,
+            });
     }
 
     // Precondition: two entries present, one of which is pending.
@@ -5468,7 +5476,12 @@ fn test_app_stop_resets_network_state_including_pending_entry() {
         let handle = state.session_manager.get(session_id).unwrap();
         assert_eq!(handle.session.network.entries.len(), 2);
         assert!(
-            handle.session.network.entries.iter().any(|e| e.is_pending()),
+            handle
+                .session
+                .network
+                .entries
+                .iter()
+                .any(|e| e.is_pending()),
             "Precondition: a pending entry must be present"
         );
     }
@@ -5507,8 +5520,16 @@ fn test_vm_service_connected_resets_network_state() {
     // Seed network entries from a hypothetical prior run.
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
-        handle.session.network.entries.push_back(make_test_http_entry("old-req-1"));
-        handle.session.network.entries.push_back(make_test_http_entry("old-req-2"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("old-req-1"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("old-req-2"));
         // Simulate a stale poll cursor left over from the old VM.
         handle.session.network.last_poll_timestamp = Some(999_999);
     }
@@ -5537,8 +5558,7 @@ fn test_vm_service_connected_resets_network_state() {
         "Network entries must be empty after VmServiceConnected (no pre-restart rows)"
     );
     assert_eq!(
-        handle.session.network.last_poll_timestamp,
-        None,
+        handle.session.network.last_poll_timestamp, None,
         "Poll cursor must be reset to None after VmServiceConnected"
     );
 }
@@ -5557,8 +5577,16 @@ fn test_vm_service_reconnected_preserves_network_history() {
     // transient WebSocket blip.
     {
         let handle = state.session_manager.get_mut(session_id).unwrap();
-        handle.session.network.entries.push_back(make_test_http_entry("live-req-1"));
-        handle.session.network.entries.push_back(make_test_http_entry("live-req-2"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("live-req-1"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("live-req-2"));
         handle.session.network.last_poll_timestamp = Some(12_345);
     }
 
@@ -14130,13 +14158,7 @@ mod devtools_panel_registry_tests {
         let mut state = make_devtools_state(DevToolsPanel::Inspector);
         state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
 
-        let expected = [
-            "performance",
-            "memory",
-            "network",
-            "preview",
-            "inspector",
-        ];
+        let expected = ["performance", "memory", "network", "preview", "inspector"];
         for want in expected {
             state.cycle_devtools_panel(true);
             assert_eq!(
@@ -14175,7 +14197,10 @@ mod devtools_panel_registry_tests {
         // Key router: a plain char becomes DevToolsExtensionPanelKey.
         let msg = handle_key(&state, InputKey::Char('z'));
         assert!(
-            matches!(msg, Some(Message::DevToolsExtensionPanelKey(InputKey::Char('z')))),
+            matches!(
+                msg,
+                Some(Message::DevToolsExtensionPanelKey(InputKey::Char('z')))
+            ),
             "focused extension panel keys route to DevToolsExtensionPanelKey, got: {msg:?}"
         );
 

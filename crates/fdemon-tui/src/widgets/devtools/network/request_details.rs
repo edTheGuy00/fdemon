@@ -340,12 +340,7 @@ impl RequestDetails<'_> {
                 if y >= area.bottom() {
                     break;
                 }
-                buf.set_string(
-                    area.x + 3,
-                    y,
-                    chunk,
-                    Style::default().fg(Color::Red),
-                );
+                buf.set_string(area.x + 3, y, chunk, Style::default().fg(Color::Red));
                 y += 1;
             }
         }
@@ -589,8 +584,11 @@ impl RequestDetails<'_> {
                 // Render scrollbar when content overflows.
                 if total_lines > viewport_height {
                     let mut scrollbar_state = ScrollbarState::new(max_offset).position(scroll);
-                    Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                        .render(area, buf, &mut scrollbar_state);
+                    Scrollbar::new(ScrollbarOrientation::VerticalRight).render(
+                        area,
+                        buf,
+                        &mut scrollbar_state,
+                    );
                 }
             }
         }
@@ -683,12 +681,7 @@ impl RequestDetails<'_> {
                 } else {
                     &line
                 };
-                buf.set_string(
-                    area.x + 1,
-                    y,
-                    display,
-                    Style::default().fg(Color::Gray),
-                );
+                buf.set_string(area.x + 1, y, display, Style::default().fg(Color::Gray));
                 y += 1;
             }
         }
@@ -1216,7 +1209,8 @@ mod tests {
     fn test_general_tab_shows_connection_info() {
         let entry = make_entry();
         let detail = make_detail();
-        let widget = RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::General, false, 0);
+        let widget =
+            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::General, false, 0);
         let buf = render_to_buf(widget, 80, 30);
 
         assert!(
@@ -1232,7 +1226,8 @@ mod tests {
     fn test_headers_tab_shows_request_headers() {
         let entry = make_entry();
         let detail = make_detail();
-        let widget = RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::Headers, false, 0);
+        let widget =
+            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::Headers, false, 0);
         let buf = render_to_buf(widget, 80, 24);
 
         assert!(
@@ -1249,7 +1244,8 @@ mod tests {
     fn test_headers_tab_shows_response_headers() {
         let entry = make_entry();
         let detail = make_detail();
-        let widget = RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::Headers, false, 0);
+        let widget =
+            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::Headers, false, 0);
         let buf = render_to_buf(widget, 80, 24);
 
         assert!(
@@ -1281,7 +1277,8 @@ mod tests {
         detail.request_headers.clear();
         detail.response_headers.clear();
 
-        let widget = RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::Headers, false, 0);
+        let widget =
+            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::Headers, false, 0);
         let buf = render_to_buf(widget, 80, 24);
 
         // Should show "(none)" for empty headers
@@ -1297,8 +1294,13 @@ mod tests {
     fn test_request_body_tab_empty_body_shows_message() {
         let entry = make_entry();
         let detail = make_detail(); // request_body is empty in make_detail
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::RequestBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::RequestBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1311,8 +1313,13 @@ mod tests {
     fn test_response_body_tab_shows_text() {
         let entry = make_entry();
         let detail = make_detail(); // response_body = b"{\"users\":[]}"
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1327,8 +1334,13 @@ mod tests {
         let mut detail = make_detail();
         detail.response_body.clear();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1344,8 +1356,13 @@ mod tests {
         // Non-UTF-8 bytes (binary data)
         detail.response_body = vec![0xFF, 0xFE, 0x00, 0x01, 0xD8, 0x00];
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1376,8 +1393,13 @@ mod tests {
         let mut detail = make_detail();
         detail.request_body = b"{\"name\":\"Alice\"}".to_vec();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::RequestBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::RequestBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1607,8 +1629,13 @@ mod tests {
         let mut detail = make_detail();
         detail.response_body = b"line one\nline two\nline three".to_vec();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1632,8 +1659,13 @@ mod tests {
         let long_line = "a".repeat(100);
         detail.response_body = long_line.as_bytes().to_vec();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         // Narrow width: 30
         let buf = render_to_buf(widget, 30, 20);
 
@@ -1663,8 +1695,13 @@ mod tests {
         detail.response_body = body.into_bytes();
 
         // Without scroll: should see LINE01.
-        let widget_no_scroll =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget_no_scroll = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf_no_scroll = render_to_buf(widget_no_scroll, 40, 6); // 1 tab + 5 body
         assert!(
             buf_contains(&buf_no_scroll, 40, 6, "LINE01"),
@@ -1672,8 +1709,13 @@ mod tests {
         );
 
         // With scroll=10: should see LINE11, not LINE01.
-        let widget_scroll =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 10);
+        let widget_scroll = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            10,
+        );
         let buf_scroll = render_to_buf(widget_scroll, 40, 6);
         assert!(
             buf_contains(&buf_scroll, 40, 6, "LINE11"),
@@ -1693,8 +1735,13 @@ mod tests {
         let body: String = (1..=5).map(|i| format!("LINE{i}\n")).collect();
         detail.response_body = body.into_bytes();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 9999);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            9999,
+        );
         let buf = render_to_buf(widget, 40, 10);
         // Should not panic; at least LINE5 should be visible.
         let text = collect_buf_text(&buf, 40, 10);
@@ -1711,8 +1758,13 @@ mod tests {
         let mut detail = make_detail();
         detail.response_body = br#"{"name":"Alice","age":30}"#.to_vec();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         // After pretty-printing, "name" and "Alice" appear on separate (indented) lines.
@@ -1734,8 +1786,13 @@ mod tests {
         let mut detail = make_detail();
         detail.response_body = b"plain text response, not JSON at all".to_vec();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1751,8 +1808,13 @@ mod tests {
         let mut detail = make_detail();
         detail.response_body = b"{invalid json}".to_vec();
 
-        let widget =
-            RequestDetails::new(&entry, Some(&detail), NetworkDetailTab::ResponseBody, false, 0);
+        let widget = RequestDetails::new(
+            &entry,
+            Some(&detail),
+            NetworkDetailTab::ResponseBody,
+            false,
+            0,
+        );
         let buf = render_to_buf(widget, 80, 20);
 
         assert!(
@@ -1812,8 +1874,7 @@ mod tests {
         entry.content_type = Some("応用/json; charset=UTF-8".to_string());
 
         for width in [5u16, 6, 7, 8, 10, 15, 20, 80] {
-            let widget =
-                RequestDetails::new(&entry, None, NetworkDetailTab::General, false, 0);
+            let widget = RequestDetails::new(&entry, None, NetworkDetailTab::General, false, 0);
             // Must not panic at any terminal width.
             let buf = render_to_buf(widget, width, 20);
             // At wide enough widths, some content must be visible.
@@ -1869,7 +1930,8 @@ mod tests {
         let chunks = split_at_width(text, 1);
         // Must produce exactly 2 chunks (one per char), not 6 (one per byte).
         assert_eq!(
-            chunks.len(), 2,
+            chunks.len(),
+            2,
             "width=1 with 2 multibyte chars must produce 2 whole-char chunks, got: {chunks:?}"
         );
         assert_eq!(chunks[0], "応");
@@ -1887,8 +1949,7 @@ mod tests {
         entry.content_type = Some("応用/json".to_string());
 
         for width in [1u16, 2, 3, 4, 5] {
-            let widget =
-                RequestDetails::new(&entry, None, NetworkDetailTab::General, false, 0);
+            let widget = RequestDetails::new(&entry, None, NetworkDetailTab::General, false, 0);
             // Must not panic — that's the key requirement.
             let _buf = render_to_buf(widget, width, 20);
         }

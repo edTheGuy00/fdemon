@@ -210,8 +210,7 @@ impl DevToolsView<'_> {
             let mut footer_hint: Option<String> = None;
             if let Some(panels) = self.panels.as_deref_mut() {
                 if let Some(panel) = panels.iter_mut().find(|p| p.id() == ext_id) {
-                    let ctx =
-                        DevToolsPanelCtx::with_status(conn_status, animation_frame);
+                    let ctx = DevToolsPanelCtx::with_status(conn_status, animation_frame);
                     panel.render(chunks[1], buf, ctx);
                     footer_hint = Some(panel.key_hint().to_string());
                 }
@@ -231,11 +230,8 @@ impl DevToolsView<'_> {
                     .session
                     .map(|s| s.session.vm_connected)
                     .unwrap_or(false);
-                let widget = WidgetInspector::new(
-                    &self.state.inspector,
-                    vm_connected,
-                    session_conn_status,
-                );
+                let widget =
+                    WidgetInspector::new(&self.state.inspector, vm_connected, session_conn_status);
                 inspector::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Performance => {
@@ -252,13 +248,9 @@ impl DevToolsView<'_> {
                     }
                 };
 
-                let widget = PerformancePanel::new(
-                    perf,
-                    vm_connected,
-                    self.icons,
-                    session_conn_status,
-                )
-                .with_connection_error(self.state.vm_connection_error.as_deref());
+                let widget =
+                    PerformancePanel::new(perf, vm_connected, self.icons, session_conn_status)
+                        .with_connection_error(self.state.vm_connection_error.as_deref());
                 performance::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Memory => {
@@ -273,8 +265,7 @@ impl DevToolsView<'_> {
                     }
                 };
 
-                let widget =
-                    MemoryPanel::new(mem, true, vm_connected, session_conn_status);
+                let widget = MemoryPanel::new(mem, true, vm_connected, session_conn_status);
                 memory::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
             }
             DevToolsPanel::Network => {
@@ -291,8 +282,7 @@ impl DevToolsView<'_> {
                     }
                 };
 
-                let widget =
-                    NetworkMonitor::new(network_state, vm_connected, session_conn_status);
+                let widget = NetworkMonitor::new(network_state, vm_connected, session_conn_status);
                 network::render_with_regions(chunks[1], buf, widget, ctx);
             }
         }
@@ -322,10 +312,7 @@ impl DevToolsView<'_> {
         let title: std::borrow::Cow<'static, str> = if self.session_count > 1 {
             if let Some(session) = self.session {
                 let name = &session.session.device_name;
-                let truncated: String = name
-                    .chars()
-                    .take(DEVICE_NAME_MAX_CHARS)
-                    .collect();
+                let truncated: String = name.chars().take(DEVICE_NAME_MAX_CHARS).collect();
                 let suffix = if name.chars().count() > DEVICE_NAME_MAX_CHARS {
                     "\u{2026}" // …
                 } else {
@@ -1046,7 +1033,10 @@ mod tests {
         let widget_b = DevToolsView::new(&state, Some(&handle_b), IconSet::default(), 2);
         let mut label = String::new();
         let result = widget_b.connection_indicator_text(&mut label);
-        assert!(result.is_some(), "Session B is Reconnecting — indicator expected");
+        assert!(
+            result.is_some(),
+            "Session B is Reconnecting — indicator expected"
+        );
         let (text, _) = result.unwrap();
         assert!(
             text.contains("Reconnecting"),
@@ -1084,7 +1074,10 @@ mod tests {
         let widget_a = DevToolsView::new(&state, Some(&handle_a), IconSet::default(), 2);
         let mut label = String::new();
         let result_a = widget_a.connection_indicator_text(&mut label);
-        assert!(result_a.is_some(), "Session A is Disconnected — indicator expected");
+        assert!(
+            result_a.is_some(),
+            "Session A is Disconnected — indicator expected"
+        );
         let (text, _) = result_a.unwrap();
         assert!(text.contains("Disconnected"), "got: {text:?}");
 
@@ -1637,7 +1630,9 @@ mod tests {
     // ── Device-name-in-title tests (Acceptance B) ─────────────────────────────
 
     /// Build a `SessionHandle` with the given device name.
-    fn make_session_handle_with_device_name(device_name: &str) -> fdemon_app::session::SessionHandle {
+    fn make_session_handle_with_device_name(
+        device_name: &str,
+    ) -> fdemon_app::session::SessionHandle {
         use fdemon_app::session::{Session, SessionHandle};
         SessionHandle::new(Session::new(
             "test-device".to_string(),
@@ -1784,14 +1779,18 @@ mod tests {
     #[test]
     fn ext_tab_bar_shows_registered_title() {
         let state = DevToolsViewState::default();
-        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> = vec![Box::new(MarkerPanel::default())];
-        let widget = DevToolsView::new(&state, None, IconSet::default(), 1)
-            .with_panels(&mut panels, 0);
+        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> =
+            vec![Box::new(MarkerPanel::default())];
+        let widget =
+            DevToolsView::new(&state, None, IconSet::default(), 1).with_panels(&mut panels, 0);
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, 3));
         widget.render_tab_bar_inner(Rect::new(0, 0, 100, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 100, 3);
-        assert!(text.contains("Inspector"), "built-ins still shown: {text:?}");
+        assert!(
+            text.contains("Inspector"),
+            "built-ins still shown: {text:?}"
+        );
         assert!(
             text.contains("Preview"),
             "registered panel title must appear in tab bar, got: {text:?}"
@@ -1806,9 +1805,10 @@ mod tests {
             active_extension_panel: Some("preview".to_string()),
             ..Default::default()
         };
-        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> = vec![Box::new(MarkerPanel::default())];
-        let widget = DevToolsView::new(&state, None, IconSet::default(), 1)
-            .with_panels(&mut panels, 0);
+        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> =
+            vec![Box::new(MarkerPanel::default())];
+        let widget =
+            DevToolsView::new(&state, None, IconSet::default(), 1).with_panels(&mut panels, 0);
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -1835,9 +1835,10 @@ mod tests {
             active_extension_panel: Some("gone".to_string()),
             ..Default::default()
         };
-        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> = vec![Box::new(MarkerPanel::default())];
-        let widget = DevToolsView::new(&state, None, IconSet::default(), 1)
-            .with_panels(&mut panels, 0);
+        let mut panels: Vec<Box<dyn DevToolsPanelProvider>> =
+            vec![Box::new(MarkerPanel::default())];
+        let widget =
+            DevToolsView::new(&state, None, IconSet::default(), 1).with_panels(&mut panels, 0);
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
