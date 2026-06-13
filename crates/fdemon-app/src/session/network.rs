@@ -984,7 +984,7 @@ mod tests {
     ///    different hash) — must return body #2, not the stale body #1.
     #[test]
     fn test_cache_key_with_body_hash_prevents_stale_render() {
-        let mut state = NetworkState::default();
+        let state = NetworkState::default();
 
         let body1 = "response: ok!"; // 13 chars
         let body2 = "response: no!"; // 13 chars — equal length, different at position 11

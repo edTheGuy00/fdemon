@@ -938,7 +938,6 @@ mod tests {
         handle_network_details_scroll_down(&mut state);
         let handle = state.session_manager.selected().unwrap();
         assert_eq!(handle.session.network.details_scroll_offset, 1);
-        drop(handle);
         handle_network_details_scroll_down(&mut state);
         let handle = state.session_manager.selected().unwrap();
         assert_eq!(handle.session.network.details_scroll_offset, 2);
