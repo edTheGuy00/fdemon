@@ -172,6 +172,7 @@ fn handle_network_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> O
         return None;
     }
 
+    // Shift+wheel → page navigation in the request list.
     if mods.is_shift_only() {
         return match dir {
             ScrollDir::Up => Some(Message::NetworkNavigate(NetworkNav::PageUp)),
@@ -180,6 +181,16 @@ fn handle_network_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> O
         };
     }
 
+    // Ctrl+wheel (no Shift, no Alt) → scroll the details pane body viewport.
+    if mods.ctrl && !mods.shift && !mods.alt {
+        return match dir {
+            ScrollDir::Up => Some(Message::NetworkDetailsScrollUp),
+            ScrollDir::Down => Some(Message::NetworkDetailsScrollDown),
+            ScrollDir::Left | ScrollDir::Right => None,
+        };
+    }
+
+    // Alt or remaining Ctrl combos → no-op (consistent with other panels).
     if mods.ctrl || mods.alt {
         return None;
     }
@@ -443,15 +454,56 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_or_alt_only_is_no_op_in_inspector_and_network() {
+    fn ctrl_only_is_no_op_in_inspector() {
         let inspector = state_with_panel(DevToolsPanel::Inspector);
+        assert!(handle_scroll(
+            &inspector,
+            ScrollDir::Up,
+            KeyModSet::new(false, true, false)
+        )
+        .is_none());
+        assert!(handle_scroll(
+            &inspector,
+            ScrollDir::Down,
+            KeyModSet::new(false, true, false)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn alt_only_is_no_op_in_network() {
         let network = state_with_panel(DevToolsPanel::Network);
-        for s in [&inspector, &network] {
-            assert!(handle_scroll(s, ScrollDir::Up, KeyModSet::new(false, true, false)).is_none());
-            assert!(
-                handle_scroll(s, ScrollDir::Down, KeyModSet::new(false, false, true)).is_none()
-            );
-        }
+        assert!(
+            handle_scroll(&network, ScrollDir::Up, KeyModSet::new(false, false, true)).is_none()
+        );
+        assert!(handle_scroll(
+            &network,
+            ScrollDir::Down,
+            KeyModSet::new(false, false, true)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn network_ctrl_wheel_scrolls_details_pane() {
+        let s = state_with_panel(DevToolsPanel::Network);
+        let mods = KeyModSet::new(false, true, false); // Ctrl only
+        assert!(matches!(
+            handle_scroll(&s, ScrollDir::Up, mods),
+            Some(Message::NetworkDetailsScrollUp)
+        ));
+        assert!(matches!(
+            handle_scroll(&s, ScrollDir::Down, mods),
+            Some(Message::NetworkDetailsScrollDown)
+        ));
+    }
+
+    #[test]
+    fn network_ctrl_wheel_horizontal_is_noop() {
+        let s = state_with_panel(DevToolsPanel::Network);
+        let mods = KeyModSet::new(false, true, false);
+        assert!(handle_scroll(&s, ScrollDir::Left, mods).is_none());
+        assert!(handle_scroll(&s, ScrollDir::Right, mods).is_none());
     }
 
     #[test]

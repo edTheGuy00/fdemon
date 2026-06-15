@@ -7,6 +7,7 @@ use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, FlutterProcess, 
 
 use super::native_tags::NativeTagState;
 use super::session::Session;
+use crate::state::VmConnectionStatus;
 
 /// Handle for a running custom log source process.
 ///
@@ -243,6 +244,19 @@ pub struct SessionHandle {
     /// spawned. Cleared (and each source shut down) when the session ends.
     /// Multiple sources can run simultaneously.
     pub custom_source_handles: Vec<CustomSourceHandle>,
+
+    /// Per-session VM Service connection status for the DevTools tab-bar indicator.
+    ///
+    /// Unlike the old global `DevToolsViewState::connection_status`, this field
+    /// is scoped to this session and updated unconditionally for every lifecycle
+    /// event — regardless of which session is currently selected in the UI.
+    ///
+    /// Initialised to `Disconnected` and transitions are:
+    /// - `VmServiceConnected` / `VmServiceReconnected` → `Connected`
+    /// - `VmServiceReconnecting`                       → `Reconnecting { attempt, max_attempts }`
+    /// - `VmServiceDisconnected`                       → `Disconnected`
+    /// - `WidgetTreeFetchTimeout` / `LayoutDataFetchTimeout` (active session) → `TimedOut`
+    pub vm_connection_status: VmConnectionStatus,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -286,6 +300,7 @@ impl std::fmt::Debug for SessionHandle {
             )
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
+            .field("vm_connection_status", &self.vm_connection_status)
             .finish()
     }
 }
@@ -318,6 +333,7 @@ impl SessionHandle {
             devtools_service_monitoring: false,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
+            vm_connection_status: VmConnectionStatus::Disconnected,
         }
     }
 

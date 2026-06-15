@@ -198,8 +198,8 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     // This happens on the first DevTools entry when the VM is connected but no
     // perf task was spawned yet (because VmServiceConnected skips the spawn
     // when DevTools is not active at connect time).
-    // Use `session.vm_connected` (the reliable per-session flag) rather than
-    // `devtools_view_state.connection_status` which may lag behind the session.
+    // Use `session.vm_connected` (the reliable per-session binary flag) as the
+    // gate — `SessionHandle::vm_connection_status` provides the richer TUI indicator.
     let needs_perf_start = if let Some(handle) = state.session_manager.selected() {
         handle.perf_shutdown_tx.is_none() && handle.session.vm_connected
     } else {
@@ -639,6 +639,155 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
     UpdateResult::none()
 }
 
+/// Handle switching to a host-registered DevTools panel by id.
+///
+/// Part of the out-of-tree DevTools panel seam. No-op when no registered panel
+/// has the given id. When a built-in panel was active before, its background
+/// polling is paused exactly as the built-in switch path would do (by routing
+/// through [`handle_switch_panel`] first), then the extension panel is made
+/// active. This keeps the built-in pause/unpause invariants intact while an
+/// extension panel is shown.
+pub fn handle_switch_extension_panel(state: &mut AppState, id: String) -> UpdateResult {
+    // Only act if the id resolves to a registered panel.
+    if !state.extra_devtools_panels.iter().any(|p| p.id() == id) {
+        return UpdateResult::none();
+    }
+
+    // Pause any built-in panel's polling by performing a "switch away" to the
+    // current built-in's own id (a no-op selection that still runs the
+    // leaving-panel pause logic). We pause by treating the move as leaving the
+    // alloc/timeline/network panels: route through handle_switch_panel using a
+    // panel that is NOT the current one so the leave-side pauses fire, then
+    // restore. Simpler and correct: directly run the leave-side pauses via a
+    // dedicated helper.
+    pause_builtin_polling_on_leave(state);
+
+    state.devtools_view_state.active_extension_panel = Some(id);
+
+    // Extension panels never participate in the RebuiltWidgets gate (that is
+    // Performance-only); switching to one closes the gate for all sessions.
+    for handle in state.session_manager.iter_mut() {
+        if let Some(ref tx) = handle.rebuilt_widgets_gate_tx {
+            let _ = tx.send(false);
+        }
+    }
+
+    UpdateResult::none()
+}
+
+/// Pause the background polling owned by whichever built-in panel is currently
+/// the active *built-in* (`devtools_view_state.active_panel`), as if the user
+/// were navigating away from it. Used when switching to a host-registered
+/// extension panel so no built-in RPC traffic continues behind it.
+///
+/// When leaving the Performance panel this also clears the timeline event
+/// buffer, matching the clean-state semantics of [`handle_switch_panel`]'s
+/// leave-Performance path so that a Performance→extension→Performance
+/// round-trip is indistinguishable from a normal panel-leave/re-enter cycle.
+fn pause_builtin_polling_on_leave(state: &mut AppState) {
+    let old_panel = state.devtools_view_state.active_panel;
+
+    // Alloc polling (Performance + Memory).
+    if matches!(
+        old_panel,
+        DevToolsPanel::Performance | DevToolsPanel::Memory
+    ) {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.alloc_pause_tx {
+                let _ = tx.send(true);
+            }
+        }
+    }
+
+    // Timeline polling (Performance).
+    if old_panel == DevToolsPanel::Performance {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.timeline_pause_tx {
+                let _ = tx.send(true);
+            }
+        }
+        // Clear timeline buffers so re-entering Performance shows fresh data,
+        // mirroring the leave-Performance path in handle_switch_panel.
+        if let Some(handle) = state.session_manager.selected_mut() {
+            let perf = &mut handle.session.performance;
+            perf.timeline_tracks.clear();
+            perf.timeline_thread_name_map.clear();
+            perf.timeline_thread_scroll_offset = 0;
+            perf.committed_frame_anchor = None;
+            perf.frame_anchor_map.clear();
+            perf.timeline_search_query = None;
+            perf.timeline_search_input_active = false;
+            perf.timeline_search_match_cursor = 0;
+        }
+    }
+
+    // Network polling (Network), unless a service consumer needs it.
+    if old_panel == DevToolsPanel::Network {
+        if let Some(handle) = state.session_manager.selected() {
+            if !handle.devtools_service_monitoring {
+                if let Some(ref tx) = handle.network_pause_tx {
+                    let _ = tx.send(true);
+                }
+            }
+        }
+    }
+}
+
+/// Cycle the active DevTools panel through the combined set (built-ins +
+/// registered), wrapping. When the cycle lands on a built-in, the built-in
+/// switch path runs (with its pause/unpause + auto-fetch side effects); when it
+/// lands on a registered panel, built-in polling is paused.
+///
+/// Part of the out-of-tree DevTools panel seam — only reachable while an
+/// extension panel is focused, so stock fdemon never cycles this way.
+pub fn handle_cycle_panel(state: &mut AppState, forward: bool) -> UpdateResult {
+    // Delegate to the single source of truth on AppState so the cycle order
+    // is never re-specified inline here.
+    let order = state.devtools_panel_id_order();
+    if order.is_empty() {
+        return UpdateResult::none();
+    }
+    let current = state.active_devtools_panel_id().to_string();
+    let cur_idx = order.iter().position(|id| *id == current).unwrap_or(0);
+    let next_idx = if forward {
+        (cur_idx + 1) % order.len()
+    } else {
+        (cur_idx + order.len() - 1) % order.len()
+    };
+    let next_id = order[next_idx].clone();
+
+    match DevToolsPanel::from_id(&next_id) {
+        // Route built-in selection through the full switch path so its
+        // pause/unpause and auto-fetch side effects run exactly as normal.
+        Some(builtin) => handle_switch_panel(state, builtin),
+        // Registered panel — reuse the extension-switch path.
+        None => handle_switch_extension_panel(state, next_id),
+    }
+}
+
+/// Route a panel-scoped key to the active host-registered DevTools panel.
+///
+/// Only reached while an extension panel is active (the key router gates this).
+/// Calls the focused provider's `handle_key`. The TUI redraws on the next ~50 ms
+/// tick regardless of the return value, so no redraw signalling is needed.
+///
+/// Part of the out-of-tree DevTools panel seam — never reached in stock fdemon.
+pub fn handle_extension_panel_key(
+    state: &mut AppState,
+    key: crate::input_key::InputKey,
+) -> UpdateResult {
+    if let Some(id) = state.devtools_view_state.active_extension_panel.clone() {
+        if let Some(panel) = state
+            .extra_devtools_panels
+            .iter_mut()
+            .find(|p| p.id() == id)
+        {
+            let _ = panel.handle_key(key);
+        }
+    }
+    UpdateResult::none()
+}
+
 /// Handle opening Flutter DevTools in the system browser.
 ///
 /// Prefers the served DevTools endpoint (`session.devtools_endpoint`) when
@@ -724,17 +873,17 @@ pub fn handle_debug_overlay_toggled(
     UpdateResult::none()
 }
 
-/// Handle VM Service reconnection attempt — updates connection status indicator.
+/// Handle VM Service reconnection attempt — updates per-session connection status indicator.
 pub fn handle_vm_service_reconnecting(
     state: &mut AppState,
     session_id: SessionId,
     attempt: u32,
     max_attempts: u32,
 ) -> UpdateResult {
-    let active_id = state.session_manager.selected().map(|h| h.session.id);
-
-    if active_id == Some(session_id) {
-        state.devtools_view_state.connection_status = VmConnectionStatus::Reconnecting {
+    // Update per-session status unconditionally so the indicator is correct even when
+    // this session is not the one currently displayed.
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.vm_connection_status = VmConnectionStatus::Reconnecting {
             attempt,
             max_attempts,
         };
@@ -2249,6 +2398,175 @@ mod tests {
         assert_eq!(
             perf.timeline_thread_scroll_offset, 0,
             "handle_exit_devtools_mode should reset timeline_thread_scroll_offset to 0"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Polling-stop guarantee tests (T2: polling-stop-guarantee, W5)
+    //
+    // These regression tests prove that closing the DevTools page pauses ALL
+    // four VM polling channels (performance, allocation, network, timeline) so
+    // no further VM Service RPCs fire. The VM WebSocket itself is NOT torn down
+    // (socket teardown is on session close, not DevTools close).
+    //
+    // The pause channels are watch::channel<bool> senders stored on SessionHandle.
+    // When paused (`true`), each poll loop body checks the channel and executes
+    // `continue` — a true no-op that issues no RPC.  We prove this by asserting
+    // the channel values after handle_exit_devtools_mode returns.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Build a state with all four polling pause channels wired up and active
+    /// (channel value = false = polling active). Returns the AppState and four
+    /// receivers so tests can assert the channel values after the handler runs.
+    #[allow(clippy::type_complexity)]
+    fn make_state_with_all_pollers_active() -> (
+        AppState,
+        tokio::sync::watch::Receiver<bool>, // perf_pause_rx
+        tokio::sync::watch::Receiver<bool>, // alloc_pause_rx
+        tokio::sync::watch::Receiver<bool>, // network_pause_rx
+        tokio::sync::watch::Receiver<bool>, // timeline_pause_rx
+    ) {
+        let mut state = make_state_with_session();
+
+        let (perf_tx, perf_rx) = tokio::sync::watch::channel(false); // active
+        let (alloc_tx, alloc_rx) = tokio::sync::watch::channel(false); // active
+        let (net_tx, net_rx) = tokio::sync::watch::channel(false); // active
+        let (timeline_tx, timeline_rx) = tokio::sync::watch::channel(false); // active
+
+        // Also wire shutdown senders so the handlers that check `is_none()` see
+        // running tasks (some guards check shutdown_tx.is_some() before pausing).
+        let (perf_shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let (net_shutdown_tx, _) = tokio::sync::watch::channel(false);
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(perf_shutdown_tx));
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_tx));
+        handle.alloc_pause_tx = Some(std::sync::Arc::new(alloc_tx));
+        handle.network_shutdown_tx = Some(std::sync::Arc::new(net_shutdown_tx));
+        handle.network_pause_tx = Some(std::sync::Arc::new(net_tx));
+        handle.timeline_pause_tx = Some(std::sync::Arc::new(timeline_tx));
+
+        (state, perf_rx, alloc_rx, net_rx, timeline_rx)
+    }
+
+    /// Regression test: after `handle_exit_devtools_mode`, ALL four polling
+    /// channels (perf, alloc, network, timeline) must be set to `true` (paused).
+    ///
+    /// This proves the invariant: "closing the DevTools page produces zero VM
+    /// RPC traffic from all devtools pollers" because each poll loop body
+    /// checks its pause channel and executes `continue` when `true`, issuing
+    /// no RPC. Socket teardown is NOT triggered — only the pause flags change.
+    #[test]
+    fn devtools_close_pauses_all_four_pollers() {
+        let (mut state, perf_rx, alloc_rx, net_rx, timeline_rx) =
+            make_state_with_all_pollers_active();
+
+        // Precondition: all four pollers are active (false = not paused).
+        assert!(!*perf_rx.borrow(), "precondition: perf should be active");
+        assert!(!*alloc_rx.borrow(), "precondition: alloc should be active");
+        assert!(!*net_rx.borrow(), "precondition: network should be active");
+        assert!(
+            !*timeline_rx.borrow(),
+            "precondition: timeline should be active"
+        );
+
+        handle_exit_devtools_mode(&mut state);
+
+        // All four pause channels must now be `true` (paused = no RPC traffic).
+        assert!(
+            *perf_rx.borrow(),
+            "DevTools close must pause perf polling (no getMemoryUsage/getIsolate RPCs)"
+        );
+        assert!(
+            *alloc_rx.borrow(),
+            "DevTools close must pause alloc polling (no getAllocationProfile RPCs)"
+        );
+        assert!(
+            *net_rx.borrow(),
+            "DevTools close must pause network polling (no getHttpProfile RPCs)"
+        );
+        assert!(
+            *timeline_rx.borrow(),
+            "DevTools close must pause timeline polling (no getVMTimeline RPCs)"
+        );
+    }
+
+    /// Regression test: when `devtools_service_monitoring` is enabled, closing
+    /// the DevTools page must NOT pause the perf or network pollers (external
+    /// MCP/headless consumers need the telemetry to keep flowing). The alloc
+    /// and timeline pollers are always paused on DevTools close because the
+    /// service monitoring path only manages perf and network.
+    ///
+    /// This mirrors the behaviour in `monitoring.rs`'s
+    /// `handle_start_devtools_monitoring` which only unpauses perf+network.
+    #[test]
+    fn devtools_close_with_service_monitoring_keeps_perf_and_network_active() {
+        let (mut state, perf_rx, _alloc_rx, net_rx, _timeline_rx) =
+            make_state_with_all_pollers_active();
+
+        // Enable service-layer monitoring for this session.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .devtools_service_monitoring = true;
+
+        handle_exit_devtools_mode(&mut state);
+
+        // Perf and network must remain active (false) while service monitoring is on.
+        assert!(
+            !*perf_rx.borrow(),
+            "exit must NOT pause perf polling while service monitoring is active \
+             (MCP/headless consumers need memory samples)"
+        );
+        assert!(
+            !*net_rx.borrow(),
+            "exit must NOT pause network polling while service monitoring is active \
+             (MCP/headless consumers need HTTP profile entries)"
+        );
+    }
+
+    /// `update(CycleDevToolsPanel { forward: true })` fires the full
+    /// `handle_switch_panel` / `handle_switch_extension_panel` side-effect
+    /// chain — not just the key router emitting the message.
+    ///
+    /// Scenario: start on Performance (alloc + timeline active), cycle forward
+    /// to the *next* built-in (Memory). We expect:
+    /// - alloc poller stays active  (Performance → Memory is alloc→alloc, no pause)
+    /// - timeline poller is paused  (leaving Performance)
+    /// - active panel changes to Memory
+    ///
+    /// This is an update()-level test; `handle_cycle_panel` alone could pass
+    /// while a wiring bug in `update.rs` silently drops the message.
+    #[test]
+    fn cycle_devtools_panel_via_update_fires_pause_side_effects() {
+        use crate::handler::update::update;
+        use crate::message::Message;
+
+        let (mut state, _perf_rx, alloc_rx, _net_rx, timeline_rx) =
+            make_state_with_all_pollers_active();
+
+        // Pre-condition: start on Performance.
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+        // Cycle forward: Inspector(0) → Performance(1) → Memory(2) — but we
+        // start at Performance(1) so forward lands on Memory(2).
+        update(&mut state, Message::CycleDevToolsPanel { forward: true });
+
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Memory,
+            "cycling forward from Performance must select Memory"
+        );
+        // alloc polling: Performance→Memory is alloc→alloc, no pause expected.
+        assert!(
+            !*alloc_rx.borrow(),
+            "alloc poller must remain active when cycling between alloc panels"
+        );
+        // timeline polling: leaving Performance must pause timeline.
+        assert!(
+            *timeline_rx.borrow(),
+            "timeline poller must be paused when cycling away from Performance"
         );
     }
 }

@@ -965,8 +965,28 @@ pub enum Message {
     /// - Otherwise → exit DevTools back to Logs.
     DevToolsEscape,
 
-    /// Switch to a specific DevTools sub-panel.
+    /// Switch to a specific built-in DevTools sub-panel.
     SwitchDevToolsPanel(DevToolsPanel),
+
+    /// Switch to a host-registered DevTools panel by its stable id.
+    ///
+    /// No-op (panel unchanged) if no registered panel has that id. Part of the
+    /// out-of-tree DevTools panel seam — never emitted by stock fdemon.
+    SwitchDevToolsExtensionPanel(String),
+
+    /// Cycle the active DevTools panel through the combined ordered set
+    /// (built-ins + host-registered), wrapping at the ends.
+    ///
+    /// `forward = true` is `Tab`, `forward = false` is `Shift+Tab`. Emitted by
+    /// the key router only while a host-registered panel is focused, so built-in
+    /// `Tab` semantics are unchanged in stock fdemon.
+    CycleDevToolsPanel { forward: bool },
+
+    /// Deliver a panel-scoped key to the active host-registered DevTools panel.
+    ///
+    /// Routed to the focused provider's `handle_key`. Only emitted while a
+    /// host-registered panel is active; never reached in stock fdemon.
+    DevToolsExtensionPanelKey(InputKey),
 
     /// Open Flutter DevTools in the system browser.
     OpenBrowserDevTools,
@@ -1193,6 +1213,12 @@ pub enum Message {
 
     /// Delete last character from filter input buffer.
     NetworkFilterBackspace,
+
+    /// Scroll the network request details pane up by one line.
+    NetworkDetailsScrollUp,
+
+    /// Scroll the network request details pane down by one line.
+    NetworkDetailsScrollDown,
 
     // ── Memory Panel UI Messages ──────────────────────────────────────────────
     /// Cycle focus within the Memory panel sections (Chart ↔ AllocationList).

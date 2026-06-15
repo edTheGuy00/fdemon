@@ -66,6 +66,7 @@
 pub(crate) mod actions;
 pub mod config;
 pub mod confirm_dialog;
+pub mod devtools_panel_provider;
 pub mod editor;
 pub mod engine;
 pub mod engine_event;
@@ -94,6 +95,7 @@ pub(crate) mod version_check;
 pub mod watcher;
 
 // Re-export primary types
+pub use devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
 pub use engine::Engine;
 pub use engine_event::EngineEvent;
 pub use handler::{update, Task, UpdateAction, UpdateResult};

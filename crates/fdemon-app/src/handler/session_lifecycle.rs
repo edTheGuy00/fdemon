@@ -137,9 +137,10 @@ pub fn handle_previous_session(state: &mut AppState) -> UpdateResult {
 /// DevTools — the new session may never have had monitoring started (it was
 /// connected before the user first opened DevTools) so we must start it now.
 ///
-/// Uses `session.vm_connected` (the session's own connection flag) rather than
-/// `devtools_view_state.connection_status` because the view state is reset to
-/// `Disconnected` by `DevToolsViewState::reset()` during session switching.
+/// Uses `session.vm_connected` (the session's own connection flag) as the
+/// authoritative per-session source of truth. The per-session
+/// `SessionHandle::vm_connection_status` provides the richer indicator for the
+/// TUI, but the binary `vm_connected` flag is the canonical gate here.
 fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateResult {
     if state.ui_mode != UiMode::DevTools {
         return UpdateResult::none();

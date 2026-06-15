@@ -4092,10 +4092,14 @@ fn test_vm_service_reconnecting_sets_connection_status() {
     let session_id = state.session_manager.create_session(&device).unwrap();
     state.session_manager.select_by_id(session_id);
 
-    // Verify initial state
+    // Verify initial per-session status is Disconnected.
     assert_eq!(
-        state.devtools_view_state.connection_status,
-        VmConnectionStatus::Connected
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Disconnected
     );
 
     // Action
@@ -4108,9 +4112,13 @@ fn test_vm_service_reconnecting_sets_connection_status() {
         },
     );
 
-    // Assert
+    // Assert: per-session status is updated.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Reconnecting {
             attempt: 2,
             max_attempts: 10,
@@ -4120,7 +4128,10 @@ fn test_vm_service_reconnecting_sets_connection_status() {
 }
 
 #[test]
-fn test_vm_service_reconnecting_ignores_inactive_session() {
+fn test_vm_service_reconnecting_updates_inactive_session() {
+    // With per-session status, VmServiceReconnecting updates the session's own
+    // status unconditionally — the inactive session's status should be updated
+    // while the active session's status remains unchanged.
     let mut state = AppState::new();
     let device1 = test_device("dev-1", "Device 1");
     let device2 = test_device("dev-2", "Device 2");
@@ -4140,11 +4151,28 @@ fn test_vm_service_reconnecting_ignores_inactive_session() {
         },
     );
 
-    // Assert: connection_status should NOT be Reconnecting (it's for inactive session)
+    // Assert: session 1's per-session status IS updated (per-session, not global).
     assert_eq!(
-        state.devtools_view_state.connection_status,
-        VmConnectionStatus::Connected,
-        "connection_status should not change for inactive session"
+        state
+            .session_manager
+            .get(session_1)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        },
+        "inactive session's vm_connection_status should be updated by VmServiceReconnecting"
+    );
+    // Session 2's status is untouched.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_2)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Disconnected,
+        "active session's vm_connection_status should not change"
     );
 }
 
@@ -4165,7 +4193,11 @@ fn test_vm_service_connected_after_reconnecting_resets_status() {
         },
     );
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Reconnecting {
             attempt: 1,
             max_attempts: 10,
@@ -4175,9 +4207,13 @@ fn test_vm_service_connected_after_reconnecting_resets_status() {
     // Then: simulate successful reconnection
     update(&mut state, Message::VmServiceConnected { session_id });
 
-    // Assert: status should be back to Connected
+    // Assert: per-session status should be back to Connected
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Connected,
     );
 }
@@ -4199,7 +4235,11 @@ fn test_vm_service_reconnecting_progressive_attempts() {
             },
         );
         assert_eq!(
-            state.devtools_view_state.connection_status,
+            state
+                .session_manager
+                .get(session_id)
+                .unwrap()
+                .vm_connection_status,
             VmConnectionStatus::Reconnecting {
                 attempt,
                 max_attempts: 10,
@@ -5378,6 +5418,196 @@ fn test_app_stop_cleans_up_network_monitoring() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Network state reset on app stop / restart (T1 regression guards)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// AppStop must clear all network entries — including any that are still
+/// pending (no end_time_us) — so they don't persist as "stuck loading" rows
+/// when the app is restarted.
+#[test]
+fn test_app_stop_resets_network_state_including_pending_entry() {
+    use fdemon_core::{AppStart, AppStop, DaemonMessage};
+
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark session as started.
+    let start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "dev-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &start_msg);
+
+    // Seed network state with a completed entry AND a pending entry
+    // (end_time_us = None → is_pending() == true).
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        // Completed request.
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("req-done"));
+        // Pending request: same shape but no end time.
+        handle
+            .session
+            .network
+            .entries
+            .push_back(fdemon_core::network::HttpProfileEntry {
+                id: "req-pending".to_string(),
+                method: "POST".to_string(),
+                uri: "https://example.com/upload".to_string(),
+                status_code: None,
+                content_type: None,
+                start_time_us: 2_000_000,
+                end_time_us: None, // still in-flight
+                request_content_length: None,
+                response_content_length: None,
+                error: None,
+            });
+    }
+
+    // Precondition: two entries present, one of which is pending.
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.session.network.entries.len(), 2);
+        assert!(
+            handle
+                .session
+                .network
+                .entries
+                .iter()
+                .any(|e| e.is_pending()),
+            "Precondition: a pending entry must be present"
+        );
+    }
+
+    // Action: send AppStop.
+    let stop_msg = DaemonMessage::AppStop(AppStop {
+        app_id: "test-app".to_string(),
+        error: None,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &stop_msg);
+
+    // Assert: network entries are cleared.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.session.network.entries.is_empty(),
+        "Network entries must be empty after AppStop (no stale pending rows)"
+    );
+    // Config-derived fields must survive the reset.
+    // (recording defaults to true; max_entries is set from config — both are
+    // preserved by NetworkState::reset().)
+    assert!(
+        handle.session.network.recording,
+        "recording flag must survive AppStop reset"
+    );
+}
+
+/// After a VmServiceConnected (i.e. fresh connect or hot-restart), network
+/// entries accumulated during the *previous* connection must not be visible.
+#[test]
+fn test_vm_service_connected_resets_network_state() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Seed network entries from a hypothetical prior run.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("old-req-1"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("old-req-2"));
+        // Simulate a stale poll cursor left over from the old VM.
+        handle.session.network.last_poll_timestamp = Some(999_999);
+    }
+
+    // Assert precondition.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .network
+            .entries
+            .len(),
+        2,
+        "Precondition: two stale entries present"
+    );
+
+    // Action: fresh VmServiceConnected (e.g. after hot-restart).
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    // Assert: network entries are gone and cursor is reset.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.session.network.entries.is_empty(),
+        "Network entries must be empty after VmServiceConnected (no pre-restart rows)"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp, None,
+        "Poll cursor must be reset to None after VmServiceConnected"
+    );
+}
+
+/// Regression guard: VmServiceReconnected (transient WebSocket reconnect)
+/// must NOT wipe accumulated network history.  Only a full app stop/restart
+/// should clear the network state.
+#[test]
+fn test_vm_service_reconnected_preserves_network_history() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Populate network entries to simulate live history accumulated before a
+    // transient WebSocket blip.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("live-req-1"));
+        handle
+            .session
+            .network
+            .entries
+            .push_back(make_test_http_entry("live-req-2"));
+        handle.session.network.last_poll_timestamp = Some(12_345);
+    }
+
+    // Action: transient reconnect.
+    update(&mut state, Message::VmServiceReconnected { session_id });
+
+    // Assert: history is intact.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.network.entries.len(),
+        2,
+        "Network history must be preserved across VmServiceReconnected"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp,
+        Some(12_345),
+        "Poll cursor must be preserved across VmServiceReconnected"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DevTools: RequestWidgetTree / RequestLayoutData VM guard regression tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -6469,11 +6699,15 @@ fn test_vm_service_reconnected_preserves_performance_state() {
         "vm_connected should be true after VmServiceReconnected"
     );
 
-    // connection_status must be Connected for the active session.
+    // per-session vm_connection_status must be Connected after reconnect.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Connected,
-        "connection_status should be Connected after VmServiceReconnected"
+        "vm_connection_status should be Connected after VmServiceReconnected"
     );
 
     // The session log should contain the word "reconnected".
@@ -6743,20 +6977,23 @@ fn test_switch_to_network_panel_passes_mode() {
 }
 
 #[test]
-fn test_vm_service_connected_background_session_no_status_change() {
-    // Two sessions: A is active, B is background.
-    // Sending VmServiceConnected for B must NOT overwrite the foreground status.
+fn test_vm_service_connected_background_session_updates_own_status() {
+    // Two sessions: A is active (reconnecting), B is background (disconnected).
+    // VmServiceConnected for B must update B's per-session status to Connected
+    // without touching A's per-session status.
     let mut state = AppState::new();
     let device_a = test_device("dev-a", "Device A");
     let device_b = test_device("dev-b", "Device B");
     let session_a = state.session_manager.create_session(&device_a).unwrap();
     let session_b = state.session_manager.create_session(&device_b).unwrap();
 
-    // Make A the active (selected) session.
+    // Make A the active (selected) session, mark it as Reconnecting.
     state.session_manager.select_by_id(session_a);
-
-    // Simulate A currently reconnecting.
-    state.devtools_view_state.connection_status = VmConnectionStatus::Reconnecting {
+    state
+        .session_manager
+        .get_mut(session_a)
+        .unwrap()
+        .vm_connection_status = VmConnectionStatus::Reconnecting {
         attempt: 3,
         max_attempts: 10,
     };
@@ -6769,34 +7006,54 @@ fn test_vm_service_connected_background_session_no_status_change() {
         },
     );
 
-    // Foreground status must still be Reconnecting — B's connect must not pollute it.
+    // B's per-session status must be Connected.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_b)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Connected,
+        "background session B must have vm_connection_status=Connected after VmServiceConnected"
+    );
+    // A's per-session status is unchanged.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_a)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Reconnecting {
             attempt: 3,
             max_attempts: 10,
         },
-        "connection_status must not be overwritten by a background session's VmServiceConnected"
+        "active session A's vm_connection_status must not be touched by B's VmServiceConnected"
     );
 }
 
 #[test]
-fn test_vm_service_disconnected_background_session_no_status_change() {
-    // Two sessions: A is active (Connected), B is background.
-    // Sending VmServiceDisconnected for B must NOT change the foreground status.
+fn test_vm_service_disconnected_background_session_updates_own_status() {
+    // Two sessions: A is active (Connected), B is background (Connected).
+    // VmServiceDisconnected for B must update B's per-session status to Disconnected
+    // without touching A's status.
     let mut state = AppState::new();
     let device_a = test_device("dev-a", "Device A");
     let device_b = test_device("dev-b", "Device B");
     let session_a = state.session_manager.create_session(&device_a).unwrap();
     let session_b = state.session_manager.create_session(&device_b).unwrap();
 
-    // A is active and Connected (default status).
+    // A is active; mark both sessions as Connected.
     state.session_manager.select_by_id(session_a);
-    assert_eq!(
-        state.devtools_view_state.connection_status,
-        VmConnectionStatus::Connected,
-        "initial status should be Connected"
-    );
+    state
+        .session_manager
+        .get_mut(session_a)
+        .unwrap()
+        .vm_connection_status = VmConnectionStatus::Connected;
+    state
+        .session_manager
+        .get_mut(session_b)
+        .unwrap()
+        .vm_connection_status = VmConnectionStatus::Connected;
 
     // Send VmServiceDisconnected for the background session B.
     update(
@@ -6806,11 +7063,25 @@ fn test_vm_service_disconnected_background_session_no_status_change() {
         },
     );
 
-    // Foreground status must still be Connected.
+    // B's per-session status must be Disconnected.
     assert_eq!(
-        state.devtools_view_state.connection_status,
+        state
+            .session_manager
+            .get(session_b)
+            .unwrap()
+            .vm_connection_status,
+        VmConnectionStatus::Disconnected,
+        "background session B must have vm_connection_status=Disconnected after VmServiceDisconnected"
+    );
+    // A's status is untouched.
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_a)
+            .unwrap()
+            .vm_connection_status,
         VmConnectionStatus::Connected,
-        "connection_status must not change when a background session disconnects"
+        "active session A's vm_connection_status must not change when B disconnects"
     );
 }
 
@@ -9859,15 +10130,13 @@ fn test_enter_devtools_starts_monitoring_when_vm_connected() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
-    // Set VM connected and connection_status = Connected.
+    // Set VM connected; no perf task running (perf_shutdown_tx is None).
     state
         .session_manager
         .get_mut(session_id)
         .unwrap()
         .session
         .vm_connected = true;
-    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
-    // No perf task running (perf_shutdown_tx is None).
     assert!(state
         .session_manager
         .get(session_id)
@@ -9918,7 +10187,6 @@ fn test_enter_devtools_lazy_start_followup_dispatches_fetch_widget_tree() {
         .unwrap()
         .session
         .vm_connected = true;
-    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
     // Inspector is the default panel ("inspector"); no tree is loaded; not loading.
     assert!(state.devtools_view_state.inspector.root.is_none());
     assert!(!state.devtools_view_state.inspector.loading);
@@ -10038,7 +10306,6 @@ fn test_enter_devtools_does_not_restart_existing_task() {
         handle.perf_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
         handle.perf_pause_tx = Some(std::sync::Arc::new(perf_pause_tx));
     }
-    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
 
     let result = handle_enter_devtools_mode(&mut state);
 
@@ -10334,9 +10601,8 @@ fn test_session_switch_in_devtools_starts_monitoring_for_new_session() {
         // perf_shutdown_tx is None (no task running).
         assert!(handle.perf_shutdown_tx.is_none());
     }
-    // Note: devtools_view_state.connection_status is NOT used for this check.
-    // The maybe_start check uses session.vm_connected directly (view state is
-    // reset to Disconnected by DevToolsViewState::reset() on session switch).
+    // The maybe_start check uses session.vm_connected directly (the per-session
+    // vm_connection_status field on SessionHandle is the authoritative status).
 
     // Switch to session B by index (index 1).
     let result = update(&mut state, Message::SelectSessionByIndex(1));
@@ -13792,5 +14058,262 @@ mod status_badge_tests {
         update(&mut state, Message::SetStatusBadge { badge: None });
 
         assert!(state.status_badge.is_none(), "badge must be cleared");
+    }
+}
+
+// ── Out-of-tree DevTools panel registry (T5) ─────────────────────────────────
+
+mod devtools_panel_registry_tests {
+    use super::*;
+    use crate::devtools_panel_provider::{DevToolsPanelCtx, DevToolsPanelProvider, Handled};
+    use crate::state::DevToolsPanel;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    /// Build a state in DevTools mode with the given active built-in panel.
+    fn make_devtools_state(panel: DevToolsPanel) -> AppState {
+        let mut state = AppState::new();
+        let device = test_device("d1", "iPhone");
+        state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = panel;
+        state
+    }
+
+    /// Stateful dummy panel: counts renders and keys via shared atomics so a
+    /// test can observe mutation through the `Box<dyn _>` trait object.
+    #[derive(Debug)]
+    struct DummyPanel {
+        id: String,
+        renders: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        keys: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        last_key: std::sync::Arc<std::sync::Mutex<Option<InputKey>>>,
+    }
+
+    impl DummyPanel {
+        fn new(id: &str) -> Self {
+            Self {
+                id: id.to_string(),
+                renders: Default::default(),
+                keys: Default::default(),
+                last_key: Default::default(),
+            }
+        }
+    }
+
+    impl DevToolsPanelProvider for DummyPanel {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn title(&self) -> &str {
+            "Dummy"
+        }
+        fn render(&mut self, _area: Rect, _buf: &mut Buffer, _ctx: DevToolsPanelCtx) {
+            self.renders
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn handle_key(&mut self, key: InputKey) -> Handled {
+            self.keys.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.last_key.lock().unwrap() = Some(key);
+            Handled::Consumed
+        }
+    }
+
+    /// A registered panel can be selected by id and becomes the active panel.
+    #[test]
+    fn extension_panel_registers_and_is_selectable() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+
+        assert_eq!(state.extra_devtools_panels.len(), 1);
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+
+        update(
+            &mut state,
+            Message::SwitchDevToolsExtensionPanel("preview".to_string()),
+        );
+        assert_eq!(
+            state.active_devtools_panel_id(),
+            "preview",
+            "selecting a registered panel makes it the visible panel"
+        );
+    }
+
+    /// Switching to a non-existent extension id is a no-op.
+    #[test]
+    fn extension_panel_switch_unknown_id_is_noop() {
+        let mut state = make_devtools_state(DevToolsPanel::Network);
+        update(
+            &mut state,
+            Message::SwitchDevToolsExtensionPanel("ghost".to_string()),
+        );
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+        assert_eq!(state.active_devtools_panel_id(), "network");
+    }
+
+    /// The registered panel appears AFTER the four built-ins in the Tab cycle:
+    /// inspector → performance → memory → network → preview → inspector.
+    #[test]
+    fn extension_panel_appears_after_builtins_in_cycle() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+
+        let expected = ["performance", "memory", "network", "preview", "inspector"];
+        for want in expected {
+            state.cycle_devtools_panel(true);
+            assert_eq!(
+                state.active_devtools_panel_id(),
+                want,
+                "Tab cycle order: built-ins then registered, wrapping"
+            );
+        }
+    }
+
+    /// Shift+Tab from the first built-in wraps backward to the registered panel.
+    #[test]
+    fn extension_panel_reverse_cycle_wraps_to_registered() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+
+        state.cycle_devtools_panel(false);
+        assert_eq!(
+            state.active_devtools_panel_id(),
+            "preview",
+            "Shift+Tab from inspector wraps to the last (registered) panel"
+        );
+    }
+
+    /// When a registered panel is focused, a non-reserved key is routed to it
+    /// (its `handle_key` is called and it can mutate its own state).
+    #[test]
+    fn extension_panel_receives_focused_keys() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        let panel = DummyPanel::new("preview");
+        let key_count = panel.keys.clone();
+        let last_key = panel.last_key.clone();
+        state.register_devtools_panel(Box::new(panel));
+        state.select_devtools_extension_panel("preview");
+
+        // Key router: a plain char becomes DevToolsExtensionPanelKey.
+        let msg = handle_key(&state, InputKey::Char('z'));
+        assert!(
+            matches!(
+                msg,
+                Some(Message::DevToolsExtensionPanelKey(InputKey::Char('z')))
+            ),
+            "focused extension panel keys route to DevToolsExtensionPanelKey, got: {msg:?}"
+        );
+
+        // Dispatching it reaches the provider's handle_key (observed via atomics).
+        update(&mut state, msg.unwrap());
+        assert_eq!(
+            key_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "provider.handle_key must be called exactly once"
+        );
+        assert_eq!(
+            *last_key.lock().unwrap(),
+            Some(InputKey::Char('z')),
+            "the routed key must reach the provider"
+        );
+    }
+
+    /// Reserved keys are NOT delivered to the panel: Tab cycles, Esc exits,
+    /// i/p/m/n switch to built-ins.
+    #[test]
+    fn extension_panel_reserved_keys_not_delivered() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+        state.select_devtools_extension_panel("preview");
+
+        assert!(matches!(
+            handle_key(&state, InputKey::Tab),
+            Some(Message::CycleDevToolsPanel { forward: true })
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::BackTab),
+            Some(Message::CycleDevToolsPanel { forward: false })
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Esc),
+            Some(Message::DevToolsEscape)
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('i')),
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector))
+        ));
+        assert!(matches!(
+            handle_key(&state, InputKey::Char('n')),
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+        ));
+    }
+
+    /// Selecting a built-in clears the active extension panel.
+    #[test]
+    fn switching_to_builtin_clears_extension_panel() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        state.register_devtools_panel(Box::new(DummyPanel::new("preview")));
+        state.select_devtools_extension_panel("preview");
+        assert_eq!(state.active_devtools_panel_id(), "preview");
+
+        update(
+            &mut state,
+            Message::SwitchDevToolsPanel(DevToolsPanel::Memory),
+        );
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+        assert_eq!(state.active_devtools_panel_id(), "memory");
+    }
+
+    /// STOCK BEHAVIOUR: with no registered panels, the key router never produces
+    /// any extension message, and the cycle helper still cycles the four
+    /// built-ins in order (no behaviour change).
+    #[test]
+    fn stock_no_registered_panels_behaviour_unchanged() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+        assert!(state.extra_devtools_panels.is_empty());
+        assert!(state.devtools_view_state.active_extension_panel.is_none());
+
+        // The extension routing block is never entered: Tab keeps its built-in
+        // meaning (Inspector tree mode → not a cycle message).
+        let tab_msg = handle_key(&state, InputKey::Tab);
+        assert!(
+            !matches!(tab_msg, Some(Message::CycleDevToolsPanel { .. })),
+            "Tab must keep built-in semantics when no panels are registered, got: {tab_msg:?}"
+        );
+        assert!(
+            !matches!(tab_msg, Some(Message::DevToolsExtensionPanelKey(_))),
+            "no key is ever routed to an extension panel in stock builds"
+        );
+
+        // The combined cycle degrades to the four built-ins.
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "performance");
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "memory");
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "network");
+        state.cycle_devtools_panel(true);
+        assert_eq!(state.active_devtools_panel_id(), "inspector");
+    }
+
+    /// A stale active extension id (provider removed) falls back to the built-in
+    /// for both the active-id query and the key router.
+    #[test]
+    fn stale_extension_id_falls_back_to_builtin() {
+        let mut state = make_devtools_state(DevToolsPanel::Performance);
+        // Set an active extension id with NO matching registered panel.
+        state.devtools_view_state.active_extension_panel = Some("gone".to_string());
+
+        assert_eq!(
+            state.active_devtools_panel_id(),
+            "performance",
+            "stale id falls back to active built-in"
+        );
+        // Key router does not treat it as a live extension panel.
+        let msg = handle_key(&state, InputKey::Char('q'));
+        assert!(
+            !matches!(msg, Some(Message::DevToolsExtensionPanelKey(_))),
+            "stale extension id must not route keys to a (missing) panel"
+        );
     }
 }

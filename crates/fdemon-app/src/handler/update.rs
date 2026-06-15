@@ -1656,22 +1656,26 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     LogSource::App,
                     "VM Service connected — enhanced logging active",
                 ));
-                // Reset performance and memory state on (re)connection so stale
-                // data from a previous session or hot-restart is not shown.
+                // Reset performance, memory, and network state on (re)connection
+                // so stale data from a previous session or hot-restart is not shown.
                 // Use configurable memory history size from settings for MemoryState.
+                // NetworkState::reset() preserves `max_entries` and `recording` so
+                // user config survives the restart; it clears all entries and the
+                // poll cursor so the new VM's HTTP profile starts fresh.
                 handle.session.performance = crate::session::PerformanceState::default();
                 handle.session.memory =
                     crate::session::MemoryState::with_history_size(memory_history_size);
+                handle.session.network.reset();
             }
-            // Clear any previous connection error and update status to Connected,
-            // but only when this session is currently active in the UI.
-            // Updating connection_status for a background session would mislead the
-            // user who is viewing a different session in DevTools mode.
+            // Set the per-session connection status unconditionally so it is correct
+            // regardless of which session is currently selected in the UI.
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_connection_status = crate::state::VmConnectionStatus::Connected;
+            }
+            // Clear any previous connection error when the connecting session is active.
             let active_id = state.session_manager.selected().map(|h| h.session.id);
             if active_id == Some(session_id) {
                 state.devtools_view_state.vm_connection_error = None;
-                state.devtools_view_state.connection_status =
-                    crate::state::VmConnectionStatus::Connected;
             }
 
             // If the user is already in DevTools/Inspector mode with no tree loaded,
@@ -1873,15 +1877,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // allocation_profile). New samples append to the existing history.
             }
 
-            // Clear any previous connection error and update status to Connected,
-            // but only when this session is currently active in the UI.
-            // Updating connection_status for a background session would mislead the
-            // user who is viewing a different session in DevTools mode.
+            // Set the per-session connection status unconditionally so it is correct
+            // regardless of which session is currently selected in the UI.
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_connection_status = crate::state::VmConnectionStatus::Connected;
+            }
+            // Clear any previous connection error when the reconnected session is active.
             let active_id = state.session_manager.selected().map(|h| h.session.id);
             if active_id == Some(session_id) {
                 state.devtools_view_state.vm_connection_error = None;
-                state.devtools_view_state.connection_status =
-                    crate::state::VmConnectionStatus::Connected;
             }
 
             // Re-subscribe to VM streams and restart performance monitoring only
@@ -1955,16 +1959,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::VmServiceDisconnected { session_id } => {
-            // Update rich connection status indicator, but only when the
-            // disconnecting session is the one currently active in the UI.
-            // A background session disconnect must not overwrite the foreground
-            // session's connection_status with Disconnected.
-            let active_id = state.session_manager.selected().map(|h| h.session.id);
-            if active_id == Some(session_id) {
-                state.devtools_view_state.connection_status =
-                    crate::state::VmConnectionStatus::Disconnected;
-            }
+            // Update per-session connection status unconditionally so every session's
+            // indicator is always current regardless of which one is selected.
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_connection_status = crate::state::VmConnectionStatus::Disconnected;
                 handle.session.vm_connected = false;
                 // Clear the request handle — the underlying channel is now closed.
                 // Making this explicit signals intent even though the handle itself
@@ -2232,6 +2230,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::DevToolsEscape => devtools::handle_devtools_escape(state),
 
         Message::SwitchDevToolsPanel(panel) => devtools::handle_switch_panel(state, panel),
+
+        Message::SwitchDevToolsExtensionPanel(id) => {
+            devtools::handle_switch_extension_panel(state, id)
+        }
+
+        Message::CycleDevToolsPanel { forward } => devtools::handle_cycle_panel(state, forward),
+
+        Message::DevToolsExtensionPanelKey(key) => devtools::handle_extension_panel_key(state, key),
 
         Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
 
@@ -2603,6 +2609,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::NetworkFilterInput(c) => devtools::network::handle_filter_input(state, c),
 
         Message::NetworkFilterBackspace => devtools::network::handle_filter_backspace(state),
+
+        Message::NetworkDetailsScrollUp => {
+            devtools::network::handle_network_details_scroll_up(state)
+        }
+
+        Message::NetworkDetailsScrollDown => {
+            devtools::network::handle_network_details_scroll_down(state)
+        }
 
         // ── Memory Panel UI Messages ──────────────────────────────────────────
         Message::MemToggleSort => devtools::memory::handle_toggle_allocation_sort(state),
