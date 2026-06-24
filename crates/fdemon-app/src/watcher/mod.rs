@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use notify::event::{EventKind, ModifyKind};
 use notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use tokio::sync::mpsc;
@@ -31,6 +32,30 @@ pub const DEFAULT_WATCH_PATHS: &[&str] = &["lib"];
 
 /// File extensions to watch
 pub const DART_EXTENSIONS: &[&str] = &["dart"];
+
+/// Decide whether a filesystem event kind represents a genuine change that
+/// should trigger a hot reload.
+///
+/// The OS-level watcher (`notify` v7 on Linux/inotify) subscribes to
+/// `IN_OPEN` by default, so it reports an `Access(Open(_))` event every time a
+/// file is merely *read* — including reads by editors, language servers, and AI
+/// agents scanning the project. The same applies to `ATTRIB`, surfaced as
+/// `Modify(Metadata(_))`, for atime/permission churn. Treating those as changes
+/// caused a storm of spurious reloads when many `.dart` files were read in
+/// parallel.
+///
+/// We therefore accept everything *except* read-style access events and
+/// metadata-only modifications. This is an allow-by-default policy on purpose:
+/// a real save emits `Modify(Data(_))` on Linux, but coarser backends (macOS
+/// FSEvents, Windows) may collapse writes into `Modify(Any)` or `Any`, and we
+/// must not drop those. A no-op `Ctrl-S` still rewrites the file and so still
+/// emits a write event — that path is preserved intentionally.
+pub(crate) fn is_reload_relevant_kind(kind: &EventKind) -> bool {
+    !matches!(
+        kind,
+        EventKind::Access(_) | EventKind::Modify(ModifyKind::Metadata(_))
+    )
+}
 
 /// Configuration for the file watcher
 #[derive(Debug, Clone)]
@@ -158,19 +183,23 @@ impl FileWatcher {
             move |result: DebounceEventResult| {
                 match result {
                     Ok(events) => {
-                        // Filter events by extension
+                        // Filter events by kind and extension. The kind check
+                        // drops read-style access events (file opens/closes)
+                        // and metadata-only churn, which would otherwise spam
+                        // reloads when files are merely read in parallel.
                         let relevant_events: Vec<_> = events
                             .iter()
                             .filter(|event| {
-                                event.paths.iter().any(|path| {
-                                    if extensions.is_empty() {
-                                        return true;
-                                    }
-                                    path.extension()
-                                        .and_then(|ext| ext.to_str())
-                                        .map(|ext| extensions.iter().any(|e| e == ext))
-                                        .unwrap_or(false)
-                                })
+                                is_reload_relevant_kind(&event.kind)
+                                    && event.paths.iter().any(|path| {
+                                        if extensions.is_empty() {
+                                            return true;
+                                        }
+                                        path.extension()
+                                            .and_then(|ext| ext.to_str())
+                                            .map(|ext| extensions.iter().any(|e| e == ext))
+                                            .unwrap_or(false)
+                                    })
                             })
                             .collect();
 
@@ -389,6 +418,88 @@ mod tests {
     #[test]
     fn test_dart_extensions() {
         assert!(DART_EXTENSIONS.contains(&"dart"));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Event-kind filtering (is_reload_relevant_kind)
+    // ─────────────────────────────────────────────────────────
+
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, DataChange, MetadataKind, RemoveKind, RenameMode,
+    };
+
+    /// Read-style access events are the root cause of the parallel-read reload
+    /// storm: notify reports `Access(Open(_))` on every file open. These must
+    /// NOT trigger a reload.
+    #[test]
+    fn test_access_events_are_ignored() {
+        assert!(!is_reload_relevant_kind(&EventKind::Access(
+            AccessKind::Open(AccessMode::Any)
+        )));
+        assert!(!is_reload_relevant_kind(&EventKind::Access(
+            AccessKind::Open(AccessMode::Read)
+        )));
+        assert!(!is_reload_relevant_kind(&EventKind::Access(
+            AccessKind::Close(AccessMode::Read)
+        )));
+        assert!(!is_reload_relevant_kind(&EventKind::Access(
+            AccessKind::Read
+        )));
+        assert!(!is_reload_relevant_kind(&EventKind::Access(
+            AccessKind::Any
+        )));
+    }
+
+    /// Metadata-only changes (atime/permission churn, surfaced from inotify's
+    /// `ATTRIB`) are not real edits and must NOT trigger a reload.
+    #[test]
+    fn test_metadata_only_modify_is_ignored() {
+        assert!(!is_reload_relevant_kind(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::Any)
+        )));
+        assert!(!is_reload_relevant_kind(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::WriteTime)
+        )));
+    }
+
+    /// A genuine in-place save emits `Modify(Data(_))` on Linux — including a
+    /// no-op `Ctrl-S`, which still rewrites the file. This MUST trigger a
+    /// reload (preserving the existing single-user behavior).
+    #[test]
+    fn test_data_modify_triggers_reload() {
+        assert!(is_reload_relevant_kind(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Any)
+        )));
+        assert!(is_reload_relevant_kind(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Content)
+        )));
+        assert!(is_reload_relevant_kind(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Size)
+        )));
+    }
+
+    /// Structural changes — create, rename, remove — are real changes and must
+    /// trigger a reload (covers atomic-save temp+rename and new/deleted files).
+    #[test]
+    fn test_structural_changes_trigger_reload() {
+        assert!(is_reload_relevant_kind(&EventKind::Create(
+            CreateKind::File
+        )));
+        assert!(is_reload_relevant_kind(&EventKind::Modify(
+            ModifyKind::Name(RenameMode::Both)
+        )));
+        assert!(is_reload_relevant_kind(&EventKind::Remove(
+            RemoveKind::File
+        )));
+    }
+
+    /// Coarse backends (macOS FSEvents, Windows) collapse writes into
+    /// `Modify(Any)` or `Any`. Allow-by-default must keep those, otherwise real
+    /// saves would be dropped on those platforms.
+    #[test]
+    fn test_coarse_kinds_trigger_reload() {
+        assert!(is_reload_relevant_kind(&EventKind::Modify(ModifyKind::Any)));
+        assert!(is_reload_relevant_kind(&EventKind::Any));
     }
 
     #[test]
