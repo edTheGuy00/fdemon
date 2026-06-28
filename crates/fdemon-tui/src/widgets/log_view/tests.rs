@@ -3301,3 +3301,251 @@ fn launch_spinner_advances_with_frame() {
         );
     }
 }
+
+// ── Drag-to-select: character-wrap + selection mapping/highlight/text ─────────
+
+#[test]
+fn wrap_line_chars_splits_at_width_preserving_styles() {
+    use ratatui::text::{Line, Span};
+
+    let style_a = Style::default().fg(Color::Red);
+    let line = Line::from(vec![Span::styled("abcdef", style_a)]);
+    let rows = LogView::wrap_line_chars(&line, 4);
+    assert_eq!(rows.len(), 2);
+
+    let row0: String = rows[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    let row1: String = rows[1].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(row0, "abcd");
+    assert_eq!(row1, "ef");
+    assert_eq!(
+        rows[0].spans[0].style.fg,
+        Some(Color::Red),
+        "style preserved"
+    );
+}
+
+#[test]
+fn wrap_line_chars_empty_line_yields_one_empty_row() {
+    use ratatui::text::Line;
+
+    let line = Line::from("");
+    let rows = LogView::wrap_line_chars(&line, 10);
+    assert_eq!(rows.len(), 1);
+    let txt: String = rows[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(txt, "");
+}
+
+#[test]
+fn wrap_line_chars_row_count_matches_wrapped_row_count() {
+    use ratatui::text::Line;
+
+    let line = Line::from("a".repeat(25));
+    let width = 10;
+    let rows = LogView::wrap_line_chars(&line, width);
+    assert_eq!(rows.len(), LogView::wrapped_row_count(25, width));
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn wrap_line_chars_zero_width_yields_single_row() {
+    use ratatui::text::Line;
+
+    let line = Line::from("abc");
+    assert_eq!(LogView::wrap_line_chars(&line, 0).len(), 1);
+}
+
+#[test]
+fn render_publishes_selection_rows_nowrap() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    assert_eq!(state.selection_rows.len(), 3, "one row per visible entry");
+    assert!(state.content_bottom_y > state.content_top_y);
+    assert!(state.selection_top.is_some());
+    assert!(state.selection_bottom.is_some());
+    assert_eq!(
+        state.selection_rows[0].wrap_width, 0,
+        "nowrap → wrap_width 0"
+    );
+}
+
+#[test]
+fn render_highlights_selected_cells() {
+    use crate::render::MouseCtx;
+    use fdemon_app::log_view_state::{LogSelection, SelPoint};
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(1);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    // First render publishes selection_rows (entry id + geometry).
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+    let row = state.selection_rows[0];
+
+    // Select columns [0, 5) on that line.
+    state.selection = Some(LogSelection {
+        anchor: SelPoint {
+            entry_id: row.entry_id,
+            frame_index: None,
+            col: 0,
+        },
+        focus: SelPoint {
+            entry_id: row.entry_id,
+            frame_index: None,
+            col: 5,
+        },
+        dragging: false,
+    });
+
+    // Second render applies the highlight pass.
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let y = row.rect.y;
+    for x in row.rect.x..row.rect.x + 5 {
+        assert_eq!(
+            buf.cell((x, y)).unwrap().bg,
+            crate::theme::palette::SELECTION_BG,
+            "cell ({x},{y}) should carry the selection background"
+        );
+    }
+    assert_ne!(
+        buf.cell((row.rect.x + 5, y)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "the cell just past the selection must not be highlighted"
+    );
+}
+
+#[test]
+fn render_publishes_exact_selection_text_slice() {
+    use crate::render::MouseCtx;
+    use fdemon_app::log_view_state::{LogSelection, SelPoint};
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // Rendered message line = "HH:MM:SS" (8) + " • " (3) + "[app] " (6) = 17-char
+    // prefix, then the message. Selecting [17, 22) yields the first 5 message chars.
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "HELLOworld",
+    )]);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+    let entry_id = state.selection_rows[0].entry_id;
+
+    const PREFIX: usize = 17;
+    state.selection = Some(LogSelection {
+        anchor: SelPoint {
+            entry_id,
+            frame_index: None,
+            col: PREFIX,
+        },
+        focus: SelPoint {
+            entry_id,
+            frame_index: None,
+            col: PREFIX + 5,
+        },
+        dragging: false,
+    });
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    assert_eq!(
+        state.selection_text.as_deref(),
+        Some("HELLO"),
+        "WYSIWYG slice of the rendered message text"
+    );
+}
+
+#[test]
+fn render_selection_text_spans_multiple_lines() {
+    use crate::render::MouseCtx;
+    use fdemon_app::log_view_state::{LogSelection, SelPoint};
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+    let first = state.selection_rows[0];
+    let third = state.selection_rows[2];
+
+    // Select from start of line 0 through end of line 2 → 3 newline-joined lines.
+    state.selection = Some(LogSelection {
+        anchor: SelPoint {
+            entry_id: first.entry_id,
+            frame_index: None,
+            col: 0,
+        },
+        focus: SelPoint {
+            entry_id: third.entry_id,
+            frame_index: None,
+            col: third.text_len,
+        },
+        dragging: false,
+    });
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let text = state.selection_text.as_deref().unwrap();
+    assert_eq!(text.lines().count(), 3, "three lines selected");
+}

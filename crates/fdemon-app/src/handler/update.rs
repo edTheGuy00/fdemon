@@ -106,6 +106,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Expire stale toast notifications.
             state.expire_toasts();
 
+            // Drive drag-selection edge auto-scroll while a drag is held past the
+            // viewport top/bottom.
+            tick_selection_autoscroll(state);
+
             UpdateResult::none()
         }
 
@@ -657,16 +661,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Clear the double-click stamp so a cross-session entry_id collision
             // cannot trigger a spurious ToggleStackTraceForEntry on the new session.
             state.last_log_click = None;
+            clear_active_log_selection(state);
             session_lifecycle::handle_select_session_by_index(state, index)
         }
 
         Message::NextSession => {
             state.last_log_click = None;
+            clear_active_log_selection(state);
             session_lifecycle::handle_next_session(state)
         }
 
         Message::PreviousSession => {
             state.last_log_click = None;
+            clear_active_log_selection(state);
             session_lifecycle::handle_previous_session(state)
         }
 
@@ -3521,6 +3528,38 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::action(UpdateAction::WriteClipboard { text: entry_text })
         }
 
+        // ── Drag-selection copy (character-precise text selection) ─────────────
+        Message::CopySelection => {
+            // The renderer publishes the exact WYSIWYG selection text onto the
+            // selected session's log_view_state; read it here (no re-formatting).
+            let text = state
+                .session_manager
+                .selected()
+                .and_then(|h| h.session.log_view_state.selection_text.clone())
+                .unwrap_or_default();
+            if text.is_empty() {
+                return UpdateResult::none();
+            }
+            let line_count = text.lines().count();
+            let label = if line_count > 1 {
+                format!("Copied {line_count} lines")
+            } else {
+                format!(
+                    "Copied: {}",
+                    truncate_with_ellipsis(&text, COPY_TOAST_PREVIEW_CHARS)
+                )
+            };
+            state.push_toast(crate::state::ToastLevel::Info, label);
+            UpdateResult::action(UpdateAction::WriteClipboard { text })
+        }
+
+        Message::ClearLogSelection => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.clear_selection();
+            }
+            UpdateResult::none()
+        }
+
         Message::ToggleMouseCapture => {
             let target = !state.mouse_capture_active;
             UpdateResult::action(UpdateAction::SetMouseCapture(target))
@@ -3557,6 +3596,71 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 /// Maximum Unicode scalar values shown in the "Copied: …" toast preview.
 /// Documented user-facing in docs/MOUSE.md; keep in sync if changed.
 pub(crate) const COPY_TOAST_PREVIEW_CHARS: usize = 60;
+
+/// Clear the active session's drag-selection.
+///
+/// Used when switching sessions so a selection (or an in-progress drag) does not
+/// linger on a backgrounded session and reappear or resume on return.
+fn clear_active_log_selection(state: &mut AppState) {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.log_view_state.clear_selection();
+    }
+}
+
+/// Lines scrolled per `Tick` while a drag-selection is held past a viewport edge.
+///
+/// At the ~50ms tick cadence this sets the edge auto-scroll velocity: a value of
+/// `N` yields roughly `N * 20` lines/second. Higher values make long selections
+/// quicker to drag through.
+pub(crate) const SELECTION_AUTOSCROLL_LINES_PER_TICK: usize = 4;
+
+/// Advance drag-selection edge auto-scroll by [`SELECTION_AUTOSCROLL_LINES_PER_TICK`] lines.
+///
+/// When the user holds a left-drag past the top/bottom of the log content area,
+/// the drag handler sets `drag_autoscroll` (−1 up / +1 down). On each `Tick` we
+/// scroll in that direction and extend the selection focus to the new edge line
+/// (start-of-line for upward, end-of-line for downward). The edge metadata is
+/// render-published, so the focus trails the scroll by at most one frame — the
+/// continuous catch-up is what makes the selection keep growing while the cursor
+/// is held still beyond the edge.
+pub(crate) fn tick_selection_autoscroll(state: &mut AppState) {
+    use crate::log_view_state::SelPoint;
+
+    let Some(handle) = state.session_manager.selected_mut() else {
+        return;
+    };
+    let lvs = &mut handle.session.log_view_state;
+    let (Some(sel), Some(dir)) = (lvs.selection, lvs.drag_autoscroll) else {
+        return;
+    };
+    if !sel.dragging {
+        return;
+    }
+
+    if dir < 0 {
+        lvs.scroll_up(SELECTION_AUTOSCROLL_LINES_PER_TICK);
+        if let Some(top) = lvs.selection_top {
+            if let Some(s) = lvs.selection.as_mut() {
+                s.focus = SelPoint {
+                    entry_id: top.entry_id,
+                    frame_index: top.frame_index,
+                    col: 0,
+                };
+            }
+        }
+    } else {
+        lvs.scroll_down(SELECTION_AUTOSCROLL_LINES_PER_TICK);
+        if let Some(bot) = lvs.selection_bottom {
+            if let Some(s) = lvs.selection.as_mut() {
+                s.focus = SelPoint {
+                    entry_id: bot.entry_id,
+                    frame_index: bot.frame_index,
+                    col: bot.text_len,
+                };
+            }
+        }
+    }
+}
 
 /// Resolve a log entry's rendered text from the active session by entry id.
 ///
@@ -3801,6 +3905,200 @@ mod tests {
         handle.session.app_id = Some("test-app".to_string());
         handle.cmd_sender = Some(fdemon_daemon::CommandSender::new_for_test());
         (state, id)
+    }
+
+    // ── Drag-selection: tick auto-scroll, copy, clear ──────────────────────
+
+    fn selectable_session_state() -> AppState {
+        let mut state = AppState::new();
+        state
+            .session_manager
+            .create_session(&make_test_device("d1", "D1"))
+            .unwrap();
+        state.ui_mode = UiMode::Normal;
+        state
+    }
+
+    #[test]
+    fn tick_autoscroll_down_scrolls_and_extends_focus_to_bottom_edge() {
+        use crate::log_view_state::{LogSelection, SelPoint, SelectionEdge};
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.total_lines = 100;
+            lvs.visible_lines = 10;
+            lvs.offset = 0;
+            lvs.auto_scroll = false;
+            lvs.selection = Some(LogSelection::new(SelPoint {
+                entry_id: 1,
+                frame_index: None,
+                col: 0,
+            }));
+            lvs.drag_autoscroll = Some(1);
+            lvs.selection_bottom = Some(SelectionEdge {
+                entry_id: 5,
+                frame_index: None,
+                text_len: 20,
+            });
+        }
+        tick_selection_autoscroll(&mut state);
+        let lvs = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .log_view_state;
+        assert_eq!(lvs.offset, 1, "scrolled down one line");
+        assert_eq!(
+            lvs.selection.unwrap().focus,
+            SelPoint {
+                entry_id: 5,
+                frame_index: None,
+                col: 20
+            }
+        );
+    }
+
+    #[test]
+    fn tick_autoscroll_up_scrolls_and_extends_focus_to_top_edge() {
+        use crate::log_view_state::{LogSelection, SelPoint, SelectionEdge};
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.total_lines = 100;
+            lvs.visible_lines = 10;
+            lvs.offset = 5;
+            lvs.selection = Some(LogSelection::new(SelPoint {
+                entry_id: 9,
+                frame_index: None,
+                col: 3,
+            }));
+            lvs.drag_autoscroll = Some(-1);
+            lvs.selection_top = Some(SelectionEdge {
+                entry_id: 2,
+                frame_index: None,
+                text_len: 50,
+            });
+        }
+        tick_selection_autoscroll(&mut state);
+        let lvs = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .log_view_state;
+        assert_eq!(lvs.offset, 4, "scrolled up one line");
+        assert_eq!(
+            lvs.selection.unwrap().focus,
+            SelPoint {
+                entry_id: 2,
+                frame_index: None,
+                col: 0
+            }
+        );
+    }
+
+    #[test]
+    fn tick_autoscroll_noop_when_not_dragging() {
+        use crate::log_view_state::{LogSelection, SelPoint};
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.total_lines = 100;
+            lvs.visible_lines = 10;
+            lvs.offset = 3;
+            let mut sel = LogSelection::new(SelPoint {
+                entry_id: 1,
+                frame_index: None,
+                col: 0,
+            });
+            sel.dragging = false;
+            lvs.selection = Some(sel);
+            lvs.drag_autoscroll = Some(1);
+        }
+        tick_selection_autoscroll(&mut state);
+        let lvs = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .log_view_state;
+        assert_eq!(lvs.offset, 3, "no scroll while not dragging");
+    }
+
+    #[test]
+    fn copy_selection_writes_clipboard_text_and_toasts() {
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.selection_text = Some("hello\nworld".to_string());
+        }
+        let toasts_before = state.toasts.len();
+        let result = update(&mut state, Message::CopySelection);
+        match result.action {
+            Some(UpdateAction::WriteClipboard { text }) => assert_eq!(text, "hello\nworld"),
+            other => panic!("expected WriteClipboard, got {other:?}"),
+        }
+        assert_eq!(
+            state.toasts.len(),
+            toasts_before + 1,
+            "a confirmation toast is pushed"
+        );
+    }
+
+    #[test]
+    fn copy_selection_with_no_text_is_noop() {
+        let mut state = selectable_session_state();
+        let result = update(&mut state, Message::CopySelection);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn clear_log_selection_clears_active_selection() {
+        use crate::log_view_state::{LogSelection, SelPoint};
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.selection = Some(LogSelection::new(SelPoint {
+                entry_id: 1,
+                frame_index: None,
+                col: 0,
+            }));
+        }
+        update(&mut state, Message::ClearLogSelection);
+        assert!(state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .log_view_state
+            .selection
+            .is_none());
     }
 
     #[test]

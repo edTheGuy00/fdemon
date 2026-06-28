@@ -214,6 +214,17 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         };
     }
 
+    // Esc first clears an active log-view text selection (before falling through
+    // to the quit prompt). 'q' still quits directly.
+    if matches!(key, InputKey::Esc)
+        && state
+            .session_manager
+            .selected()
+            .is_some_and(|h| h.session.log_view_state.selection.is_some())
+    {
+        return Some(Message::ClearLogSelection);
+    }
+
     // Check if any session is busy (reloading)
     let is_busy = state.session_manager.any_session_busy();
 

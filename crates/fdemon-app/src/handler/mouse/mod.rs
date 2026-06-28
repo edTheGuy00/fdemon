@@ -11,6 +11,7 @@ mod install_wizard;
 mod link_highlight;
 mod new_session;
 mod normal;
+mod selection; // log-view drag-to-select
 mod settings;
 mod tag_filter; // Phase 5 task 05
 
@@ -42,8 +43,8 @@ pub fn handle_mouse(state: &mut AppState, input: MouseInput) -> Option<Message> 
             button,
             modifiers,
         } => handle_press(state, x, y, button, modifiers),
-        // Phase 4+ may wire drag-to-select etc. — currently no-op.
-        MouseInput::Release { .. } | MouseInput::Drag { .. } => None,
+        MouseInput::Drag { x, y, button, .. } => selection::handle_drag(state, x, y, button),
+        MouseInput::Release { button, .. } => selection::handle_release(state, button),
     }
 }
 
@@ -84,6 +85,20 @@ fn handle_press(
     // Tag-filter overlay routes to its own handler regardless of underlying ui_mode.
     if state.tag_filter_visible {
         return tag_filter::handle_press(state, x, y, button, mods);
+    }
+
+    // ── In-app drag-select start ─────────────────────────────────────────────
+    // A plain (no-Shift) left press over log content begins a character-precise
+    // text selection. Shift+Left is left to the terminal's native selection
+    // (works when mouse capture is suspended via `Alt+m`). When the press is not
+    // on a log row, `try_start_left_press` clears any selection and returns false,
+    // so we fall through to the normal click handlers below.
+    if state.ui_mode == UiMode::Normal
+        && button == MouseButton::Left
+        && !mods.shift
+        && selection::try_start_left_press(state, x, y)
+    {
+        return None;
     }
 
     match state.ui_mode {
