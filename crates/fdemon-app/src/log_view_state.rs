@@ -47,9 +47,9 @@ impl FocusInfo {
 ///
 /// `col` is a character (Unicode scalar) offset into the line's **full rendered
 /// text** — i.e., the concatenation of the styled spans the log view draws for
-/// that line, gutter included. Char offsets (not display columns) match the
-/// widget's existing width math (`line_width` counts `chars()`); wide-character
-/// display width is a pre-existing limitation and out of scope.
+/// that line, gutter included. Cell→char conversion is display-width aware in
+/// wrap mode (see [`SelectionRow::locate`]); no-wrap horizontal scrolling
+/// remains char-cell based (wide chars there are a pre-existing limitation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelPoint {
     /// [`fdemon_core::LogEntry::id`] of the entry this point falls in.
@@ -91,6 +91,98 @@ fn frame_rank(frame_index: Option<usize>) -> usize {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Display-width wrap math (shared with the log-view renderer)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The renderer (fdemon-tui) wraps logical lines into screen rows by **display
+// width** (a CJK/emoji char occupies 2 terminal cells, combining marks 0), and
+// the selection mapping below must reproduce those row boundaries exactly, or
+// highlight/copy drift from what is on screen. Both sides call these functions
+// so the greedy packing rule lives in one place.
+
+/// Terminal display width of `c` in cells (0 for combining/zero-width chars).
+pub fn char_display_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+/// Greedy display-width row packing over a sequence of per-char cell widths.
+///
+/// Returns the char index at which each wrapped sub-row starts (always begins
+/// with `0`, so the result is never empty). A char is placed on the current row
+/// when its width still fits; otherwise a new row starts at that char.
+/// Zero-width chars never trigger a wrap — they stay with their base char.
+/// A single char wider than `width` is placed alone on its own row (the
+/// terminal clips it; the alternative is an infinite loop).
+pub fn wrap_row_starts_widths(widths: impl Iterator<Item = usize>, width: usize) -> Vec<usize> {
+    let mut starts = vec![0usize];
+    if width == 0 {
+        return starts;
+    }
+    let mut col = 0usize;
+    for (i, w) in widths.enumerate() {
+        if w == 0 {
+            continue;
+        }
+        if col + w > width && col > 0 {
+            starts.push(i);
+            col = 0;
+        }
+        col += w;
+    }
+    starts
+}
+
+/// [`wrap_row_starts_widths`] over the chars of `text`.
+pub fn wrap_row_starts(text: &str, width: usize) -> Vec<usize> {
+    wrap_row_starts_widths(text.chars().map(char_display_width), width)
+}
+
+/// Number of screen rows the given per-char widths occupy under the same greedy
+/// packing rule as [`wrap_row_starts_widths`], without allocating (this runs
+/// per entry per frame in the scroll-bounds calculation).
+pub fn wrapped_row_count_widths(widths: impl Iterator<Item = usize>, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    for w in widths {
+        if w == 0 {
+            continue;
+        }
+        if col + w > width && col > 0 {
+            rows += 1;
+            col = 0;
+        }
+        col += w;
+    }
+    rows
+}
+
+/// Map a display-column offset `dx` within one wrapped sub-row (`row_start..
+/// row_end` in char indices) back to the char index whose cells cover `dx`.
+/// Returns `row_end` when `dx` lies past the row's last cell.
+fn char_index_at_display_col(text: &str, row_start: usize, row_end: usize, dx: usize) -> usize {
+    let mut cum = 0usize;
+    for (i, c) in text
+        .chars()
+        .enumerate()
+        .skip(row_start)
+        .take(row_end.saturating_sub(row_start))
+    {
+        let w = char_display_width(c);
+        if w == 0 {
+            continue;
+        }
+        if dx < cum + w {
+            return i;
+        }
+        cum += w;
+    }
+    row_end
+}
+
 /// An active or just-completed drag-selection in the log view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogSelection {
@@ -128,22 +220,33 @@ impl LogSelection {
 /// and consumed by the mouse handler ([`LogViewState::locate_selection_point`])
 /// and the selection highlight pass. This keeps all fragile cell↔char mapping in
 /// one place — the renderer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionRow {
     /// Screen rect of the (clipped) visible portion of the logical line.
     pub rect: MouseRect,
     pub entry_id: u64,
     pub frame_index: Option<usize>,
-    /// Char offset of the first character of the first **visible** row of this
-    /// logical line (wrap: `top_clip * wrap_width`; no-wrap: `h_offset`).
+    /// No-wrap only: char offset of the first **visible** character (`h_offset`
+    /// plus one when the `←` indicator replaces the first content cell). Unused
+    /// (0) in wrap mode, which derives offsets from `top_clip` + `text`.
     pub base_col: usize,
     /// No-wrap only: a `←` indicator occupies the first column when scrolled.
     pub left_indicator: bool,
+    /// No-wrap only: a `→` indicator occupies the last column when the line
+    /// continues past the right edge.
+    pub right_indicator: bool,
     /// Full character length of the logical line's rendered text.
     pub text_len: usize,
     /// Wrap width (content width) in wrap mode; `0` in no-wrap mode (each logical
     /// line is exactly one screen row).
     pub wrap_width: u16,
+    /// Wrap mode only: number of wrapped sub-rows scrolled off the top of the
+    /// viewport (the rect covers sub-rows `top_clip..top_clip + rect.height`).
+    pub top_clip: usize,
+    /// Wrap mode only: the logical line's full rendered text, used for
+    /// display-width-aware sub-row boundaries and cell→char mapping. Empty in
+    /// no-wrap mode (which stays char-cell based).
+    pub text: String,
 }
 
 impl SelectionRow {
@@ -160,9 +263,18 @@ impl SelectionRow {
         }
         let dx = (x - self.rect.x) as usize;
         let col = if self.wrap_width > 0 {
-            // Wrap mode: which visible sub-row, then column within it.
-            let sub_row = (y - self.rect.y) as usize;
-            self.base_col + sub_row * self.wrap_width as usize + dx
+            // Wrap mode: find the sub-row's char range with the same
+            // display-width packing the renderer used, then map the cell
+            // offset back to a char index (wide chars cover 2 cells).
+            let sub_row = self.top_clip + (y - self.rect.y) as usize;
+            let starts = wrap_row_starts(&self.text, self.wrap_width as usize);
+            match starts.get(sub_row) {
+                Some(&row_start) => {
+                    let row_end = starts.get(sub_row + 1).copied().unwrap_or(self.text_len);
+                    char_index_at_display_col(&self.text, row_start, row_end, dx)
+                }
+                None => self.text_len,
+            }
         } else {
             // No-wrap mode: single row; discount the leading `←` indicator.
             self.base_col + dx.saturating_sub(self.left_indicator as usize)
@@ -516,55 +628,130 @@ mod tests {
         assert_eq!(SelPoint::ordered(later, earlier), (earlier, later));
     }
 
+    // ── Selection: display-width wrap math ────────────────────────────────────
+
+    #[test]
+    fn wrap_row_starts_ascii_chunks_by_width() {
+        assert_eq!(wrap_row_starts(&"a".repeat(25), 10), vec![0, 10, 20]);
+    }
+
+    #[test]
+    fn wrap_row_starts_wide_chars_fit_half_as_many() {
+        // 10 CJK chars × 2 cells in a 10-cell row → 5 chars per row.
+        let text: String = "漢".repeat(10);
+        assert_eq!(wrap_row_starts(&text, 10), vec![0, 5]);
+    }
+
+    #[test]
+    fn wrap_row_starts_wide_char_never_splits_across_rows() {
+        // width 3: 'a'(1) + '漢'(2) fills row 0 exactly; next '漢' starts row 1.
+        assert_eq!(wrap_row_starts("a漢漢b", 3), vec![0, 2]);
+        // width 2 with alternating widths: a row holding 'a' cannot also take a
+        // 2-cell char, so every wide char starts its own row.
+        assert_eq!(wrap_row_starts("a漢b漢", 2), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn wrap_row_starts_zero_width_stays_with_base_char() {
+        // "e" + combining acute (width 0) at a row boundary must not split.
+        let text = "abce\u{0301}f";
+        assert_eq!(wrap_row_starts(text, 4), vec![0, 5]);
+    }
+
+    #[test]
+    fn wrapped_row_count_widths_matches_wrap_row_starts() {
+        for text in ["", "abc", "a漢b漢", &"漢".repeat(13), "abce\u{0301}fghij"] {
+            for width in 1..8 {
+                assert_eq!(
+                    wrapped_row_count_widths(text.chars().map(char_display_width), width),
+                    wrap_row_starts(text, width).len(),
+                    "row-count and row-starts must agree for {text:?} at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrapped_row_count_widths_empty_is_one() {
+        assert_eq!(wrapped_row_count_widths(std::iter::empty(), 10), 1);
+        assert_eq!(
+            wrapped_row_count_widths("abc".chars().map(char_display_width), 0),
+            1
+        );
+    }
+
     // ── Selection: SelectionRow::locate ───────────────────────────────────────
 
-    fn wrap_row(text_len: usize) -> SelectionRow {
+    fn wrap_row(text: &str) -> SelectionRow {
         SelectionRow {
             rect: MouseRect::new(2, 5, 10, 2),
             entry_id: 7,
             frame_index: None,
             base_col: 0,
             left_indicator: false,
-            text_len,
+            right_indicator: false,
+            text_len: text.chars().count(),
             wrap_width: 10,
+            top_clip: 0,
+            text: text.to_string(),
         }
     }
 
     #[test]
     fn locate_wrap_first_subrow_maps_column() {
-        let row = wrap_row(25);
+        let row = wrap_row(&"a".repeat(25));
         assert_eq!(row.locate(2, 5).unwrap().col, 0);
         assert_eq!(row.locate(5, 5).unwrap().col, 3);
     }
 
     #[test]
     fn locate_wrap_second_subrow_adds_width() {
-        let row = wrap_row(25);
-        // sub-row 1 starts at col 10 (= 1 * wrap_width).
+        let row = wrap_row(&"a".repeat(25));
+        // sub-row 1 starts at col 10 (= 1 * wrap_width for all-ASCII text).
         assert_eq!(row.locate(2, 6).unwrap().col, 10);
         assert_eq!(row.locate(11, 6).unwrap().col, 19);
     }
 
     #[test]
+    fn locate_wrap_wide_chars_map_cells_to_chars() {
+        // 10-cell rows of 2-cell chars: sub-row 1 starts at char 5, and each
+        // char covers two cells (both cells of a glyph map to the same char).
+        let row = wrap_row(&"漢".repeat(10));
+        assert_eq!(row.locate(2, 5).unwrap().col, 0);
+        assert_eq!(
+            row.locate(3, 5).unwrap().col,
+            0,
+            "second cell of a wide glyph"
+        );
+        assert_eq!(row.locate(4, 5).unwrap().col, 1);
+        assert_eq!(
+            row.locate(2, 6).unwrap().col,
+            5,
+            "sub-row 1 starts at char 5"
+        );
+        assert_eq!(row.locate(8, 6).unwrap().col, 8);
+    }
+
+    #[test]
     fn locate_wrap_top_clip_offsets_base_col() {
-        // First wrapped row scrolled off the top: base_col = 1 * width.
-        let mut row = wrap_row(25);
+        // First wrapped sub-row scrolled off the top: rect covers sub-row 1.
+        let mut row = wrap_row(&"a".repeat(25));
         row.rect = MouseRect::new(2, 5, 10, 1);
-        row.base_col = 10;
+        row.top_clip = 1;
         assert_eq!(row.locate(2, 5).unwrap().col, 10);
         assert_eq!(row.locate(4, 5).unwrap().col, 12);
     }
 
     #[test]
     fn locate_clamps_to_text_len() {
-        let row = wrap_row(3);
-        // Pointer maps to col 5 but text is only 3 chars long.
+        let row = wrap_row("abc");
+        // Pointer maps past the 3-char text → clamped to its end.
         assert_eq!(row.locate(7, 5).unwrap().col, 3);
     }
 
     #[test]
     fn locate_outside_rect_is_none() {
-        let row = wrap_row(25);
+        let row = wrap_row(&"a".repeat(25));
         assert!(row.locate(2, 7).is_none(), "below the 2-row rect");
         assert!(row.locate(1, 5).is_none(), "left of the rect");
         assert!(row.locate(12, 5).is_none(), "right of the rect");
@@ -576,15 +763,20 @@ mod tests {
             rect: MouseRect::new(2, 5, 10, 1),
             entry_id: 7,
             frame_index: None,
-            base_col: 7, // h_offset
+            // h_offset = 7; the `←` indicator replaces the char at index 7, so
+            // the first visible char is index 8 (see apply_horizontal_scroll).
+            base_col: 8,
             left_indicator: true,
+            right_indicator: true,
             text_len: 50,
             wrap_width: 0,
+            top_clip: 0,
+            text: String::new(),
         };
         // The `←` indicator occupies the first column → maps to base_col.
-        assert_eq!(row.locate(2, 5).unwrap().col, 7);
-        assert_eq!(row.locate(3, 5).unwrap().col, 7);
-        assert_eq!(row.locate(4, 5).unwrap().col, 8);
+        assert_eq!(row.locate(2, 5).unwrap().col, 8);
+        assert_eq!(row.locate(3, 5).unwrap().col, 8);
+        assert_eq!(row.locate(4, 5).unwrap().col, 9);
     }
 
     #[test]
@@ -595,8 +787,11 @@ mod tests {
             frame_index: None,
             base_col: 0,
             left_indicator: false,
+            right_indicator: false,
             text_len: 50,
             wrap_width: 0,
+            top_clip: 0,
+            text: String::new(),
         };
         assert_eq!(row.locate(0, 0).unwrap().col, 0);
         assert_eq!(row.locate(5, 0).unwrap().col, 5);

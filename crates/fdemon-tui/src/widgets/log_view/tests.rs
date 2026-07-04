@@ -3336,14 +3336,70 @@ fn wrap_line_chars_empty_line_yields_one_empty_row() {
 }
 
 #[test]
-fn wrap_line_chars_row_count_matches_wrapped_row_count() {
+fn wrap_line_chars_row_count_matches_line_wrapped_row_count() {
     use ratatui::text::Line;
 
     let line = Line::from("a".repeat(25));
     let width = 10;
     let rows = LogView::wrap_line_chars(&line, width);
-    assert_eq!(rows.len(), LogView::wrapped_row_count(25, width));
+    assert_eq!(rows.len(), LogView::line_wrapped_row_count(&line, width));
     assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn wrap_line_chars_wide_chars_split_by_display_width() {
+    use ratatui::text::Line;
+
+    // 10 CJK chars (2 cells each) in a 10-cell row → 5 glyphs per row, and no
+    // row's display width may exceed the content width (that overflow was
+    // silently clipped by the non-wrapping Paragraph before).
+    let line = Line::from("漢".repeat(10));
+    let rows = LogView::wrap_line_chars(&line, 10);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), LogView::line_wrapped_row_count(&line, 10));
+    for row in &rows {
+        let txt: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(txt.chars().count(), 5);
+        let display_width: usize = txt
+            .chars()
+            .map(fdemon_app::log_view_state::char_display_width)
+            .sum();
+        assert!(display_width <= 10, "no wrapped row may overflow its width");
+    }
+}
+
+#[test]
+fn wrap_line_chars_mixed_width_never_overflows() {
+    use ratatui::text::Line;
+
+    let line = Line::from("ab漢c漢漢d🎉e");
+    for width in 2..12 {
+        let rows = LogView::wrap_line_chars(&line, width);
+        assert_eq!(
+            rows.len(),
+            LogView::line_wrapped_row_count(&line, width),
+            "row count must match at width {width}"
+        );
+        for row in &rows {
+            let display_width: usize = row
+                .spans
+                .iter()
+                .flat_map(|s| s.content.chars())
+                .map(fdemon_app::log_view_state::char_display_width)
+                .sum();
+            assert!(
+                display_width <= width,
+                "row overflows {width} cells: {row:?}"
+            );
+        }
+        // Nothing lost: concatenating all rows restores the full text.
+        let total: String = rows
+            .iter()
+            .flat_map(|r| r.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert_eq!(total, "ab漢c漢漢d🎉e");
+    }
 }
 
 #[test]
@@ -3384,6 +3440,201 @@ fn render_publishes_selection_rows_nowrap() {
 }
 
 #[test]
+fn nowrap_h_scroll_locate_matches_displayed_char() {
+    use crate::render::MouseCtx;
+    use fdemon_app::log_view_state::{LogSelection, SelPoint};
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // A long line with a distinct char at every position, horizontally scrolled.
+    // The char a cell locates to must be exactly the char drawn in that cell —
+    // the `←` indicator replaces the char at index h_offset, so content starts
+    // at h_offset + 1 (this was off by one before).
+    let msg: String = (0..120u32)
+        .map(|i| char::from_u32('a' as u32 + (i % 26)).unwrap())
+        .collect();
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, &msg)]);
+    let mut state = LogViewState::new();
+    state.wrap_mode = false;
+    state.h_offset = 5;
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let row = state.selection_rows[0].clone();
+    assert!(row.left_indicator, "h-scrolled line shows the ← indicator");
+    assert!(row.right_indicator, "long line overflows → indicator");
+    assert_eq!(
+        row.base_col,
+        state.h_offset + 1,
+        "first visible char sits one past h_offset (the indicator's cell)"
+    );
+
+    // Map a mid-row cell to a SelPoint, then prove the selection text for that
+    // single char equals the glyph the cell displays (WYSIWYG).
+    let (x, y) = (row.rect.x + 10, row.rect.y);
+    let displayed = buf.cell((x, y)).unwrap().symbol().to_string();
+    let p = row.locate(x, y).unwrap();
+    state.selection = Some(LogSelection {
+        anchor: p,
+        focus: SelPoint {
+            col: p.col + 1,
+            ..p
+        },
+        dragging: false,
+    });
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    assert_eq!(
+        state.selection_text.as_deref(),
+        Some(displayed.as_str()),
+        "the located char must be the one the cell displays"
+    );
+    // And the highlight lands on the very cell that was clicked.
+    assert_eq!(
+        buf.cell((x, y)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "highlight paints the clicked cell"
+    );
+    // The `→` indicator cell (last content column) must never be painted even
+    // when the selection covers the whole line.
+    state.selection = Some(LogSelection {
+        anchor: SelPoint {
+            entry_id: row.entry_id,
+            frame_index: None,
+            col: 0,
+        },
+        focus: SelPoint {
+            entry_id: row.entry_id,
+            frame_index: None,
+            col: row.text_len,
+        },
+        dragging: false,
+    });
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+    let right_edge = (row.rect.x + row.rect.width - 1, row.rect.y);
+    assert_eq!(
+        buf.cell(right_edge).unwrap().symbol(),
+        "→",
+        "sanity: the right indicator is drawn at the row's last cell"
+    );
+    assert_ne!(
+        buf.cell(right_edge).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "the → indicator cell is not selectable content"
+    );
+}
+
+#[test]
+fn wrap_mode_wide_char_locate_and_highlight_are_width_aware() {
+    use crate::render::MouseCtx;
+    use fdemon_app::log_view_state::{LogSelection, SelPoint};
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // CJK message: every char occupies two terminal cells.
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        &"漢".repeat(30),
+    )]);
+    let mut state = LogViewState::new();
+    state.wrap_mode = true;
+    let area = Rect::new(0, 0, 40, 24);
+    let mut buf = Buffer::empty(area);
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(true);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let row = state.selection_rows[0].clone();
+    assert!(
+        row.rect.height > 1,
+        "60-cell CJK payload must wrap across rows in a 38-cell content area"
+    );
+    assert!(!row.text.is_empty(), "wrap rows carry the line text");
+
+    // A cell on the second sub-row must locate to a char the FIRST sub-row does
+    // not contain, and both cells of one wide glyph must map to the same char.
+    let y2 = row.rect.y + 1;
+    let p_first = row.locate(row.rect.x, row.rect.y).unwrap();
+    let p_second = row.locate(row.rect.x, y2).unwrap();
+    let starts = fdemon_app::log_view_state::wrap_row_starts(&row.text, row.wrap_width as usize);
+    assert_eq!(
+        p_second.col, starts[1],
+        "second sub-row starts at the width-aware row boundary"
+    );
+    assert!(p_second.col > p_first.col);
+    let glyph_cell_a = row.locate(row.rect.x + 20, y2).unwrap();
+    let glyph_cell_b = row.locate(row.rect.x + 21, y2).unwrap();
+    assert_eq!(
+        glyph_cell_a.col, glyph_cell_b.col,
+        "both cells of a wide glyph map to the same char"
+    );
+
+    // Selecting one wide char must paint exactly its two cells on that sub-row.
+    state.selection = Some(LogSelection {
+        anchor: p_second,
+        focus: SelPoint {
+            col: p_second.col + 1,
+            ..p_second
+        },
+        dragging: false,
+    });
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(true);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+    assert_eq!(
+        buf.cell((row.rect.x, y2)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "first cell of the wide glyph highlighted"
+    );
+    assert_eq!(
+        buf.cell((row.rect.x + 1, y2)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "second cell of the wide glyph highlighted"
+    );
+    assert_ne!(
+        buf.cell((row.rect.x + 2, y2)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "the next glyph is not highlighted"
+    );
+    assert_eq!(
+        state.selection_text.as_deref(),
+        Some("漢"),
+        "copying the single selected wide char yields exactly that char"
+    );
+}
+
+#[test]
 fn render_highlights_selected_cells() {
     use crate::render::MouseCtx;
     use fdemon_app::log_view_state::{LogSelection, SelPoint};
@@ -3403,7 +3654,7 @@ fn render_highlights_selected_cells() {
         let mut ctx = MouseCtx::new(builder);
         super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
     }
-    let row = state.selection_rows[0];
+    let row = state.selection_rows[0].clone();
 
     // Select columns [0, 5) on that line.
     state.selection = Some(LogSelection {
@@ -3520,8 +3771,8 @@ fn render_selection_text_spans_multiple_lines() {
         let mut ctx = MouseCtx::new(builder);
         super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
     }
-    let first = state.selection_rows[0];
-    let third = state.selection_rows[2];
+    let first = state.selection_rows[0].clone();
+    let third = state.selection_rows[2].clone();
 
     // Select from start of line 0 through end of line 2 → 3 newline-joined lines.
     state.selection = Some(LogSelection {

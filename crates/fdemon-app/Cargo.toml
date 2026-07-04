@@ -33,6 +33,9 @@ trait-variant.workspace = true
 tempfile.workspace = true
 arboard = { version = "3", default-features = false }
 textwrap = { version = "0.16", default-features = false }
+# Display-width math shared by the log-view renderer (fdemon-tui) and the
+# drag-selection cell→char mapping (log_view_state) — both must wrap identically.
+unicode-width = "0.2"
 base64.workspace = true
 reqwest.workspace = true
 tokio-util.workspace = true

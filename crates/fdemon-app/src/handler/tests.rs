@@ -78,6 +78,35 @@ fn test_escape_key_produces_request_quit_message() {
 }
 
 #[test]
+fn test_escape_key_clears_active_log_selection_before_quit() {
+    use crate::log_view_state::{LogSelection, SelPoint};
+
+    let mut state = AppState::new();
+    state
+        .session_manager
+        .create_session(&test_device("d1", "D1"))
+        .unwrap();
+    state.ui_mode = UiMode::Normal;
+    state
+        .session_manager
+        .selected_mut()
+        .unwrap()
+        .session
+        .log_view_state
+        .selection = Some(LogSelection::new(SelPoint {
+        entry_id: 1,
+        frame_index: None,
+        col: 0,
+    }));
+
+    let result = handle_key(&state, InputKey::Esc);
+    assert!(
+        matches!(result, Some(Message::ClearLogSelection)),
+        "Esc with an active selection clears it instead of quitting"
+    );
+}
+
+#[test]
 fn test_ctrl_c_produces_quit_message() {
     let state = AppState::new();
     let key = InputKey::CharCtrl('c');

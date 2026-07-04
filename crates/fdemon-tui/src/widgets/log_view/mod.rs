@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use fdemon_app::config::FlutterMode;
 use fdemon_app::hyperlinks::LinkHighlightState;
-use fdemon_app::log_view_state::{FocusInfo, LogViewState, SelPoint, SelectionEdge, SelectionRow};
+use fdemon_app::log_view_state::{
+    char_display_width, wrap_row_starts, wrap_row_starts_widths, wrapped_row_count_widths,
+    FocusInfo, LogViewState, SelPoint, SelectionEdge, SelectionRow,
+};
 use fdemon_core::{
     AppPhase, FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter,
     SearchState, StackFrame,
@@ -704,23 +707,31 @@ impl<'a> LogView<'a> {
         }
     }
 
-    /// Calculate how many terminal rows a line occupies when wrapped.
-    fn wrapped_row_count(char_width: usize, visible_width: usize) -> usize {
-        if visible_width == 0 || char_width <= visible_width {
-            return 1;
-        }
-        char_width.div_ceil(visible_width)
+    /// Terminal rows a rendered line occupies when wrapped, using the same
+    /// greedy display-width packing as [`Self::wrap_line_chars`] (wide CJK/emoji
+    /// chars count 2 cells). Allocation-free — iterates the spans' chars.
+    fn line_wrapped_row_count(line: &Line, visible_width: usize) -> usize {
+        wrapped_row_count_widths(
+            line.spans
+                .iter()
+                .flat_map(|s| s.content.chars())
+                .map(char_display_width),
+            visible_width,
+        )
     }
 
-    /// Estimate the character width of a formatted message line (without full formatting).
-    /// Used to compute wrapped row counts for scroll bounds.
-    fn estimate_message_width(&self, entry: &LogEntry) -> usize {
+    /// Estimate the display width (terminal cells) of the gutter prefix of a
+    /// formatted message line (without full formatting): timestamp, separator,
+    /// and source tag — all single-width ASCII plus the `•` bullet (width 1).
+    /// Used together with the message text to compute wrapped row counts for
+    /// scroll bounds.
+    fn estimate_prefix_width(&self, entry: &LogEntry) -> usize {
         let mut w = 0;
         // Timestamp: "HH:MM:SS" = 8 chars
         if self.show_timestamps {
             w += 8;
         }
-        // Bullet separator: " • " = 3 chars (when both timestamp and source shown)
+        // Bullet separator: " • " = 3 cells (when both timestamp and source shown)
         if self.show_timestamps && self.show_source {
             w += 3;
         } else if self.show_timestamps {
@@ -730,8 +741,6 @@ impl<'a> LogView<'a> {
         if self.show_source {
             w += 1 + entry.source.prefix().len() + 2; // "[" + prefix + "] "
         }
-        // Message content
-        w += entry.message.chars().count();
         w
     }
 
@@ -741,8 +750,14 @@ impl<'a> LogView<'a> {
         if visible_width == 0 {
             return self.calculate_entry_lines(entry);
         }
-        let msg_width = self.estimate_message_width(entry);
-        let msg_rows = Self::wrapped_row_count(msg_width, visible_width);
+        let prefix_width = self.estimate_prefix_width(entry);
+        // Same greedy packing as the renderer: prefix cells first (all width 1),
+        // then the message's display widths.
+        let msg_rows = wrapped_row_count_widths(
+            std::iter::repeat_n(1, prefix_width)
+                .chain(entry.message.chars().map(char_display_width)),
+            visible_width,
+        );
         // Stack frame lines rarely exceed terminal width, count as 1 row each
         let logical_lines = self.calculate_entry_lines(entry);
         let frame_lines = logical_lines.saturating_sub(1);
@@ -1204,18 +1219,27 @@ impl<'a> LogView<'a> {
         Line::from(spans)
     }
 
-    /// Wrap a logical line into screen rows by **character** count (not word
-    /// boundaries), preserving each character's `Style`.
+    /// Concatenate a rendered line's span contents into its full text.
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Wrap a logical line into screen rows by **display width** (not word
+    /// boundaries), preserving each character's `Style`. Wide CJK/emoji chars
+    /// occupy 2 cells and are never split across rows; combining marks stay
+    /// with their base char.
     ///
     /// This is the wrap-mode counterpart to [`Self::apply_horizontal_scroll`].
     /// We deliberately avoid ratatui's word-wrap (`Wrap { trim: false }`) so the
-    /// on-screen cell→character mapping is exact and consistent with
-    /// [`Self::wrapped_row_count`] (which is character-based via `div_ceil`).
-    /// This is what makes character-precise drag-selection possible.
+    /// on-screen cell→character mapping is exact and shared with the selection
+    /// mapping: row boundaries come from [`wrap_row_starts_widths`], the same
+    /// greedy packing used by [`Self::line_wrapped_row_count`] and
+    /// `SelectionRow::locate`. This is what makes character-precise
+    /// drag-selection possible.
     ///
     /// An empty (or whitespace-flattened-to-empty) line yields a single empty
     /// row so the logical line still occupies one terminal row, matching
-    /// `wrapped_row_count(0, _) == 1`.
+    /// `line_wrapped_row_count`'s minimum of 1.
     fn wrap_line_chars(line: &Line, width: usize) -> Vec<Line<'static>> {
         // Degenerate width: nothing can be laid out; emit one empty row.
         if width == 0 {
@@ -1235,8 +1259,12 @@ impl<'a> LogView<'a> {
             return vec![Line::from(String::new())];
         }
 
-        let mut rows: Vec<Line<'static>> = Vec::with_capacity(chars.len().div_ceil(width));
-        for chunk in chars.chunks(width) {
+        let starts =
+            wrap_row_starts_widths(chars.iter().map(|&(c, _)| char_display_width(c)), width);
+        let mut rows: Vec<Line<'static>> = Vec::with_capacity(starts.len());
+        for (k, &start) in starts.iter().enumerate() {
+            let end = starts.get(k + 1).copied().unwrap_or(chars.len());
+            let chunk = &chars[start..end];
             // Group consecutive chars sharing a style into spans.
             let mut spans: Vec<Span<'static>> = Vec::new();
             let mut current_style = chunk[0].1;
@@ -1297,32 +1325,56 @@ impl<'a> LogView<'a> {
             }
 
             if row.wrap_width > 0 {
-                // Wrap mode: each visible sub-row covers `wrap_width` characters.
+                // Wrap mode: sub-row boundaries and per-char cell positions come
+                // from the same display-width packing the renderer used, so the
+                // highlight tracks wide (2-cell) glyphs exactly.
                 let w = row.wrap_width as usize;
+                let starts = wrap_row_starts(&row.text, w);
                 let height = row.rect.height as usize;
+                let x_end = row.rect.x.saturating_add(row.rect.width);
                 for k in 0..height {
-                    let row_lo = row.base_col + k * w;
-                    if row_lo >= row.text_len {
+                    let sub = row.top_clip + k;
+                    let Some(&row_lo) = starts.get(sub) else {
                         break; // no characters on this or any later sub-row
-                    }
-                    let row_hi = (row_lo + w).min(row.text_len);
+                    };
+                    let row_hi = starts.get(sub + 1).copied().unwrap_or(row.text_len);
                     let a = lo.max(row_lo);
                     let b = hi.min(row_hi);
                     if a >= b {
                         continue;
                     }
                     let y = row.rect.y + k as u16;
-                    for c in a..b {
-                        let x = row.rect.x + (c - row_lo) as u16;
-                        if let Some(cell) = buf.cell_mut((x, y)) {
-                            cell.set_style(sel_style);
+                    // Walk the sub-row's chars, accumulating display width to
+                    // find each selected char's cells (wide chars cover 2).
+                    let mut x = row.rect.x;
+                    for (i, ch) in row
+                        .text
+                        .chars()
+                        .enumerate()
+                        .skip(row_lo)
+                        .take(row_hi - row_lo)
+                    {
+                        let cw = char_display_width(ch) as u16;
+                        if i >= b || x >= x_end {
+                            break;
                         }
+                        if i >= a {
+                            for d in 0..cw {
+                                if let Some(cell) = buf.cell_mut((x + d, y)) {
+                                    cell.set_style(sel_style);
+                                }
+                            }
+                        }
+                        x = x.saturating_add(cw);
                     }
                 }
             } else {
-                // No-wrap mode: a single screen row, possibly with a `←` indicator.
+                // No-wrap mode: a single screen row; `←`/`→` indicators occupy
+                // the first/last columns when the line is scrolled/overflows,
+                // and must not be painted as selected content.
                 let left = row.left_indicator as usize;
-                let cap = (row.rect.width as usize).saturating_sub(left);
+                let right = row.right_indicator as usize;
+                let cap = (row.rect.width as usize).saturating_sub(left + right);
                 let row_lo = row.base_col;
                 let row_hi = (row.base_col + cap).min(row.text_len);
                 let a = lo.max(row_lo);
@@ -1422,7 +1474,7 @@ impl<'a> LogView<'a> {
 struct RowAction {
     /// Y position relative to `content_area.y` (0 = first content row).
     rel_y: u16,
-    /// Height in terminal rows (1 in nowrap mode; `wrapped_row_count` in wrap mode).
+    /// Height in terminal rows (1 in nowrap mode; `line_wrapped_row_count` in wrap mode).
     height: u16,
     /// `LogEntry::id` of the entry this row belongs to.
     entry_id: u64,
@@ -1431,6 +1483,10 @@ struct RowAction {
     /// Full character length of this logical line's rendered text (the
     /// concatenation of its span contents). Used to bound drag-selection columns.
     text_len: usize,
+    /// Full rendered text of the logical line (wrap mode only; empty in no-wrap
+    /// mode). Carried into `SelectionRow` for display-width-aware cell→char
+    /// mapping of wide (CJK/emoji) characters.
+    text: String,
 }
 
 /// Per-badge metadata accumulated during the render loop for link-badge region recording.
@@ -1635,7 +1691,7 @@ impl<'a> LogView<'a> {
                 let line = self.format_entry(entry, idx);
                 let text_len = Self::line_width(&line);
                 let row_h: u16 = if self.wrap_mode {
-                    let wrc = Self::wrapped_row_count(text_len, visible_width) as u16;
+                    let wrc = Self::line_wrapped_row_count(&line, visible_width) as u16;
                     units_added += wrc as usize;
                     wrc
                 } else {
@@ -1653,6 +1709,11 @@ impl<'a> LogView<'a> {
                         entry_id: entry.id,
                         frame_index: None,
                         text_len,
+                        text: if self.wrap_mode {
+                            Self::line_text(&line)
+                        } else {
+                            String::new()
+                        },
                     });
                     rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                 }
@@ -1694,7 +1755,7 @@ impl<'a> LogView<'a> {
                         let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
                         let text_len = Self::line_width(&line);
                         let row_h: u16 = if self.wrap_mode {
-                            let wrc = Self::wrapped_row_count(text_len, visible_width) as u16;
+                            let wrc = Self::line_wrapped_row_count(&line, visible_width) as u16;
                             units_added += wrc as usize;
                             wrc
                         } else {
@@ -1716,6 +1777,11 @@ impl<'a> LogView<'a> {
                                 entry_id: entry.id,
                                 frame_index: Some(frame_idx),
                                 text_len,
+                                text: if self.wrap_mode {
+                                    Self::line_text(&line)
+                                } else {
+                                    String::new()
+                                },
                             });
                             rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                         }
@@ -1754,7 +1820,7 @@ impl<'a> LogView<'a> {
                         let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
                         let text_len = Self::line_width(&line);
                         let row_h: u16 = if self.wrap_mode {
-                            let wrc = Self::wrapped_row_count(text_len, visible_width) as u16;
+                            let wrc = Self::line_wrapped_row_count(&line, visible_width) as u16;
                             units_added += wrc as usize;
                             wrc
                         } else {
@@ -1776,6 +1842,11 @@ impl<'a> LogView<'a> {
                                 entry_id: entry.id,
                                 frame_index: Some(frame_idx),
                                 text_len,
+                                text: if self.wrap_mode {
+                                    Self::line_text(&line)
+                                } else {
+                                    String::new()
+                                },
                             });
                             rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                         }
@@ -1909,7 +1980,7 @@ impl<'a> LogView<'a> {
             let mut selection_rows: Vec<SelectionRow> = Vec::with_capacity(row_actions.len());
             let h_offset = state.h_offset;
 
-            for r in &row_actions {
+            for r in row_actions {
                 // Skip rows fully scrolled off the top (entirely above the viewport).
                 if r.rel_y.saturating_add(r.height) <= wio {
                     continue;
@@ -1952,32 +2023,54 @@ impl<'a> LogView<'a> {
                     }),
                 );
 
-                // Parallel selection-mapping row. `base_col` is the char offset of
-                // the first visible character of this logical line: in wrap mode the
-                // top-clipped rows contribute `top_clip * width`; in no-wrap mode the
-                // line is horizontally scrolled by `h_offset` (with a `←` indicator).
-                let (base_col, left_indicator, wrap_width) = if self.wrap_mode {
-                    (
-                        top_clip as usize * content_area.width as usize,
-                        false,
-                        content_area.width,
-                    )
-                } else {
-                    (h_offset, h_offset > 0, 0)
-                };
+                // Parallel selection-mapping row. Wrap mode carries the line's
+                // full text plus `top_clip` so `SelectionRow::locate` can
+                // recompute the display-width-aware sub-row boundaries. No-wrap
+                // mode stays char-cell based: `apply_horizontal_scroll` draws
+                // the `←` indicator IN PLACE OF the char at index `h_offset`
+                // and starts content at `h_offset + 1`, so the first visible
+                // char (`base_col`) must account for the indicator cell; a `→`
+                // indicator likewise replaces the last cell when the line
+                // continues past the right edge.
+                let (base_col, left_indicator, right_indicator, wrap_width, top_clip_rows, text) =
+                    if self.wrap_mode {
+                        (
+                            0,
+                            false,
+                            false,
+                            content_area.width,
+                            top_clip as usize,
+                            r.text,
+                        )
+                    } else {
+                        let left = h_offset > 0;
+                        let right = h_offset + visible_width < r.text_len;
+                        (h_offset + left as usize, left, right, 0, 0, String::new())
+                    };
                 selection_rows.push(SelectionRow {
                     rect,
                     entry_id: r.entry_id,
                     frame_index: r.frame_index,
                     base_col,
                     left_indicator,
+                    right_indicator,
                     text_len: r.text_len,
                     wrap_width,
+                    top_clip: top_clip_rows,
+                    text,
                 });
             }
 
             // Publish render-derived selection data for the mouse handler and the
             // highlight pass (mirrors how `focus_info`/`total_lines` are published).
+            //
+            // EXCEPTION (TEA): render-hint write-back onto `&mut LogViewState` —
+            // see docs/CODE_STANDARDS.md Principle 3 and docs/REVIEW_FOCUS.md
+            // "Current usage" ("LogViewState drag-selection geometry fields" and
+            // "LogViewState::selection_text"). The geometry fields are per-frame
+            // layout hints; `selection_text` is the WYSIWYG clipboard cache whose
+            // soundness rests on the event loop rendering before each input event
+            // is read (the registry entry spells out the invariant).
             state.content_top_y = content_area.y;
             state.content_bottom_y = content_area.y.saturating_add(content_area.height);
             state.selection_top = selection_rows.first().map(|r| SelectionEdge {

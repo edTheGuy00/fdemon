@@ -3554,9 +3554,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::ClearLogSelection => {
-            if let Some(handle) = state.session_manager.selected_mut() {
-                handle.session.log_view_state.clear_selection();
-            }
+            clear_active_log_selection(state);
             UpdateResult::none()
         }
 
@@ -3567,6 +3565,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::MouseCaptureChanged { active } => {
             state.mouse_capture_active = active;
+            if !active {
+                // With capture off the terminal will never deliver the release
+                // event for an in-flight drag; an orphaned drag would edge
+                // auto-scroll forever. Native selection takes over anyway, so
+                // drop ours entirely.
+                clear_active_log_selection(state);
+            }
             let label = if active {
                 "Mouse capture on"
             } else {
@@ -3650,6 +3655,11 @@ pub(crate) fn tick_selection_autoscroll(state: &mut AppState) {
         }
     } else {
         lvs.scroll_down(SELECTION_AUTOSCROLL_LINES_PER_TICK);
+        // `scroll_down` re-arms tail-follow when it reaches the bottom. While the
+        // button is still held that would make the view chase every new arrival
+        // and grow the selection unbounded on a live session — keep follow off
+        // until the drag ends (mirrors `scroll_up`, which never re-arms).
+        lvs.auto_scroll = false;
         if let Some(bot) = lvs.selection_bottom {
             if let Some(s) = lvs.selection.as_mut() {
                 s.focus = SelPoint {
@@ -3953,7 +3963,10 @@ mod tests {
             .unwrap()
             .session
             .log_view_state;
-        assert_eq!(lvs.offset, 1, "scrolled down one line");
+        assert_eq!(
+            lvs.offset, SELECTION_AUTOSCROLL_LINES_PER_TICK,
+            "scrolled one tick's worth"
+        );
         assert_eq!(
             lvs.selection.unwrap().focus,
             SelPoint {
@@ -3997,7 +4010,11 @@ mod tests {
             .unwrap()
             .session
             .log_view_state;
-        assert_eq!(lvs.offset, 4, "scrolled up one line");
+        assert_eq!(
+            lvs.offset,
+            5_usize.saturating_sub(SELECTION_AUTOSCROLL_LINES_PER_TICK),
+            "scrolled up one tick's worth"
+        );
         assert_eq!(
             lvs.selection.unwrap().focus,
             SelPoint {
@@ -4039,6 +4056,81 @@ mod tests {
             .session
             .log_view_state;
         assert_eq!(lvs.offset, 3, "no scroll while not dragging");
+    }
+
+    #[test]
+    fn tick_autoscroll_down_does_not_rearm_tail_follow_mid_drag() {
+        use crate::log_view_state::{LogSelection, SelPoint, SelectionEdge};
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.total_lines = 20;
+            lvs.visible_lines = 10;
+            // One tick's scroll reaches the natural bottom (max_offset = 10),
+            // where scroll_down would normally re-enable auto_scroll.
+            lvs.offset = 10_usize.saturating_sub(SELECTION_AUTOSCROLL_LINES_PER_TICK);
+            lvs.auto_scroll = false;
+            lvs.selection = Some(LogSelection::new(SelPoint {
+                entry_id: 1,
+                frame_index: None,
+                col: 0,
+            }));
+            lvs.drag_autoscroll = Some(1);
+            lvs.selection_bottom = Some(SelectionEdge {
+                entry_id: 9,
+                frame_index: None,
+                text_len: 12,
+            });
+        }
+        tick_selection_autoscroll(&mut state);
+        let lvs = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .log_view_state;
+        assert_eq!(lvs.offset, 10, "scrolled to the natural bottom");
+        assert!(
+            !lvs.auto_scroll,
+            "tail-follow must stay off while the drag is held, or the \
+             selection would swallow every newly arriving line"
+        );
+    }
+
+    #[test]
+    fn mouse_capture_off_clears_in_flight_drag() {
+        use crate::log_view_state::{LogSelection, SelPoint};
+        let mut state = selectable_session_state();
+        {
+            let lvs = &mut state
+                .session_manager
+                .selected_mut()
+                .unwrap()
+                .session
+                .log_view_state;
+            lvs.selection = Some(LogSelection::new(SelPoint {
+                entry_id: 1,
+                frame_index: None,
+                col: 0,
+            }));
+            lvs.drag_autoscroll = Some(1);
+        }
+        // Capture-off guarantees the release event can never arrive; the drag
+        // must be dropped or it would edge auto-scroll forever.
+        update(&mut state, Message::MouseCaptureChanged { active: false });
+        let lvs = &state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .log_view_state;
+        assert!(lvs.selection.is_none());
+        assert!(lvs.drag_autoscroll.is_none());
     }
 
     #[test]

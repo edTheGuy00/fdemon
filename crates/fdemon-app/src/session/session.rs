@@ -436,6 +436,9 @@ impl Session {
         // Clear search matches since logs are gone
         self.search_state.matches.clear();
         self.search_state.current_match = None;
+        // A selection anchored to wiped entries would be invisible yet still
+        // consume the next Esc and keep dead text cached for CopySelection.
+        self.log_view_state.clear_selection();
     }
 
     // ─────────────────────────────────────────────────────────
@@ -830,16 +833,21 @@ impl Session {
     /// Cycle the log level filter
     pub fn cycle_level_filter(&mut self) {
         self.filter_state.level_filter = self.filter_state.level_filter.cycle();
+        // Entries inside the selection may no longer be visible; drop it so a
+        // stale (possibly invisible) highlight can't be copied or eat Esc.
+        self.log_view_state.clear_selection();
     }
 
     /// Cycle the log source filter
     pub fn cycle_source_filter(&mut self) {
         self.filter_state.source_filter = self.filter_state.source_filter.cycle();
+        self.log_view_state.clear_selection();
     }
 
     /// Reset all filters to default
     pub fn reset_filters(&mut self) {
         self.filter_state.reset();
+        self.log_view_state.clear_selection();
     }
 
     /// Get filtered logs (returns indices of matching entries)
@@ -1091,6 +1099,54 @@ mod tests {
         s.clear_logs();
         assert_eq!(s.unseen_log_count, 0);
         assert!(s.logs.is_empty());
+    }
+
+    fn install_selection(s: &mut Session) {
+        use crate::log_view_state::{LogSelection, SelPoint};
+        let mut sel = LogSelection::new(SelPoint {
+            entry_id: 1,
+            frame_index: None,
+            col: 0,
+        });
+        sel.focus.col = 5;
+        sel.dragging = false;
+        s.log_view_state.selection = Some(sel);
+        s.log_view_state.selection_text = Some("hello".to_string());
+        s.log_view_state.selection_text_key = Some(sel);
+    }
+
+    #[test]
+    fn clear_logs_clears_selection() {
+        let mut s = make_session();
+        s.add_log(make_log_entry("a"));
+        install_selection(&mut s);
+        s.clear_logs();
+        assert!(s.log_view_state.selection.is_none());
+        assert!(s.log_view_state.selection_text.is_none());
+    }
+
+    #[test]
+    fn cycle_level_filter_clears_selection() {
+        let mut s = make_session();
+        install_selection(&mut s);
+        s.cycle_level_filter();
+        assert!(s.log_view_state.selection.is_none());
+    }
+
+    #[test]
+    fn cycle_source_filter_clears_selection() {
+        let mut s = make_session();
+        install_selection(&mut s);
+        s.cycle_source_filter();
+        assert!(s.log_view_state.selection.is_none());
+    }
+
+    #[test]
+    fn reset_filters_clears_selection() {
+        let mut s = make_session();
+        install_selection(&mut s);
+        s.reset_filters();
+        assert!(s.log_view_state.selection.is_none());
     }
 
     // ─────────────────────────────────────────────────────────

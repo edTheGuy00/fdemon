@@ -177,14 +177,18 @@ mod tests {
             frame_index: None,
             base_col: 0,
             left_indicator: false,
+            right_indicator: false,
             text_len,
             wrap_width: 0,
+            top_clip: 0,
+            text: String::new(),
         }
     }
 
     /// Publish one selection row + a matching `ClickLogRow` region so press/drag
     /// mapping has something to resolve. Sets content edges from the row's rect.
     fn install_row(state: &mut AppState, row: SelectionRow) {
+        let (rect, entry_id, frame_index) = (row.rect, row.entry_id, row.frame_index);
         {
             let lvs = &mut state
                 .session_manager
@@ -192,16 +196,16 @@ mod tests {
                 .unwrap()
                 .session
                 .log_view_state;
-            lvs.content_top_y = row.rect.y;
-            lvs.content_bottom_y = row.rect.y + 1;
+            lvs.content_top_y = rect.y;
+            lvs.content_bottom_y = rect.y + 1;
             lvs.selection_rows = vec![row];
         }
         let mut regions = state.mouse_regions.take();
         regions.builder().click(
-            row.rect,
+            rect,
             MouseAction::emit(Message::ClickLogRow {
-                entry_id: row.entry_id,
-                frame_index: row.frame_index,
+                entry_id,
+                frame_index,
             }),
         );
         state.mouse_regions.set(regions);
