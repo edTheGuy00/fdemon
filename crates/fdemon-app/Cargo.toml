@@ -42,7 +42,9 @@ arboard = { version = "3", default-features = false, features = [
 textwrap = { version = "0.16", default-features = false }
 # Display-width math shared by the log-view renderer (fdemon-tui) and the
 # drag-selection cell→char mapping (log_view_state) — both must wrap identically.
+# ratatui renders per grapheme cluster, so segmentation must match it too.
 unicode-width = "0.2"
+unicode-segmentation = "1"
 base64.workspace = true
 reqwest.workspace = true
 tokio-util.workspace = true

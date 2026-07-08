@@ -830,6 +830,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "trait-variant",
+ "unicode-segmentation",
  "unicode-width",
  "wiremock",
 ]

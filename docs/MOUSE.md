@@ -26,14 +26,16 @@ toast confirmation (`Copied: <preview…>` or `Copied N lines`).
 - A plain click (press and release without moving) is **not** a selection — it still
   toggles a stack trace on double-click, exactly as before.
 - Switching sessions, clearing logs (`c`), changing level/source filters, or suspending
-  mouse capture (`Alt+m`) clears the selection (and cancels any in-progress drag).
+  mouse capture (`Alt+m`) clears the selection (and cancels any in-progress drag). The
+  selection is also cleared when the log ring buffer evicts the entries it points at.
 
 > Note: in wrap mode the log view wraps long lines at the character boundary (rather than
 > the word boundary) so the selection maps exactly to the characters under the cursor.
-> Wrapping is display-width aware: wide characters (CJK, emoji) occupy two terminal cells
-> and are never split across rows, and selecting either cell of a wide glyph selects that
-> character. In no-wrap mode, horizontal scrolling measures in characters; lines containing
-> wide characters may highlight approximately there.
+> Wrapping measures **grapheme clusters** with the same width function ratatui uses: CJK
+> and emoji — including variation-selector (`⚠️`) and ZWJ (`👨‍👩‍👧`) sequences — occupy two
+> terminal cells, a cluster is never split across rows, and selecting any cell of a
+> cluster selects the whole cluster. In no-wrap mode, horizontal scrolling measures in
+> characters; lines containing wide characters may highlight approximately there.
 
 ### Shift+drag — native terminal selection (fallback)
 

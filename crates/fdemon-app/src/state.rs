@@ -1596,10 +1596,12 @@ pub struct AppState {
 
     /// Whether terminal mouse capture is currently active.
     ///
-    /// Initialized from `settings.ui.enable_mouse` at construction. Mutated only
-    /// by the `MouseCaptureChanged` handler arm (Task 06) after the runner has
-    /// performed the corresponding `terminal::set_mouse_capture` call. The
-    /// indicator in the bottom metadata bar (Task 08) reads this field.
+    /// Initialized from `settings.ui.enable_mouse` at construction. Mutated
+    /// only via [`Self::set_mouse_capture_active`] — by the
+    /// `MouseCaptureChanged` handler arm (Task 06) after the runner has
+    /// performed the corresponding `terminal::set_mouse_capture` call, or by
+    /// the runner's channel-full fallback. The indicator in the bottom
+    /// metadata bar (Task 08) reads this field.
     pub mouse_capture_active: bool,
 
     /// Monotonic animation tick, advanced once per `Message::Tick` (≈50 ms)
@@ -1751,6 +1753,25 @@ impl AppState {
             extra_settings_tabs: Vec::new(),
             extra_devtools_panels: Vec::new(),
             confirm_dialog_backdrop: None,
+        }
+    }
+
+    /// Apply an observed mouse-capture state change.
+    ///
+    /// Shared by the `MouseCaptureChanged` handler and the TUI runner's
+    /// channel-full fallback (which mutates state directly when the message
+    /// bus is saturated) so the two paths cannot drift.
+    ///
+    /// With capture off the terminal will never deliver the release event for
+    /// an in-flight drag; an orphaned drag would edge auto-scroll forever.
+    /// Native selection takes over anyway, so the active session's selection
+    /// is dropped entirely.
+    pub fn set_mouse_capture_active(&mut self, active: bool) {
+        self.mouse_capture_active = active;
+        if !active {
+            if let Some(handle) = self.session_manager.selected_mut() {
+                handle.session.log_view_state.clear_selection();
+            }
         }
     }
 

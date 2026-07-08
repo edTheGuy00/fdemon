@@ -3564,14 +3564,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::MouseCaptureChanged { active } => {
-            state.mouse_capture_active = active;
-            if !active {
-                // With capture off the terminal will never deliver the release
-                // event for an in-flight drag; an orphaned drag would edge
-                // auto-scroll forever. Native selection takes over anyway, so
-                // drop ours entirely.
-                clear_active_log_selection(state);
-            }
+            // Sets the flag and, on capture-off, clears the active selection
+            // (an orphaned drag would edge auto-scroll forever). Shared with
+            // the runner's channel-full fallback so the paths cannot drift.
+            state.set_mouse_capture_active(active);
             let label = if active {
                 "Mouse capture on"
             } else {
@@ -3654,12 +3650,10 @@ pub(crate) fn tick_selection_autoscroll(state: &mut AppState) {
             }
         }
     } else {
+        // `scroll_down` itself suppresses the at-bottom tail-follow re-arm
+        // while a drag is active (see `LogViewState::scroll_down`), so the
+        // view can't chase new arrivals and grow the selection unbounded.
         lvs.scroll_down(SELECTION_AUTOSCROLL_LINES_PER_TICK);
-        // `scroll_down` re-arms tail-follow when it reaches the bottom. While the
-        // button is still held that would make the view chase every new arrival
-        // and grow the selection unbounded on a live session — keep follow off
-        // until the drag ends (mirrors `scroll_up`, which never re-arms).
-        lvs.auto_scroll = false;
         if let Some(bot) = lvs.selection_bottom {
             if let Some(s) = lvs.selection.as_mut() {
                 s.focus = SelPoint {

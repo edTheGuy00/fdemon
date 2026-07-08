@@ -376,8 +376,10 @@ impl Session {
         }
 
         // Trim oldest entries if over max size (ring buffer behavior)
+        let mut evicted_any = false;
         while self.logs.len() > self.max_logs {
             if let Some(evicted) = self.logs.pop_front() {
+                evicted_any = true;
                 // Update error count if evicting an error
                 if evicted.is_error() {
                     self.error_count = self.error_count.saturating_sub(1);
@@ -397,6 +399,22 @@ impl Session {
 
             // Adjust scroll offset
             self.log_view_state.offset = self.log_view_state.offset.saturating_sub(1);
+        }
+
+        // Same failure class as clear_logs(): a selection whose entries were
+        // evicted turns invisible yet still eats the next Esc, and its cached
+        // selection_text would let CopySelection copy deleted content. Entry
+        // ids are monotonic, so "evicted" is an id older than the new front.
+        // A selection on still-live entries survives unrelated eviction.
+        if evicted_any {
+            if let Some(sel) = self.log_view_state.selection {
+                let stale = self.logs.front().is_none_or(|front| {
+                    sel.anchor.entry_id < front.id || sel.focus.entry_id < front.id
+                });
+                if stale {
+                    self.log_view_state.clear_selection();
+                }
+            }
         }
 
         // Track unseen logs for the jump-to-latest indicator (issue #31).
@@ -1101,10 +1119,10 @@ mod tests {
         assert!(s.logs.is_empty());
     }
 
-    fn install_selection(s: &mut Session) {
+    fn install_selection_on(s: &mut Session, entry_id: u64) {
         use crate::log_view_state::{LogSelection, SelPoint};
         let mut sel = LogSelection::new(SelPoint {
-            entry_id: 1,
+            entry_id,
             frame_index: None,
             col: 0,
         });
@@ -1113,6 +1131,10 @@ mod tests {
         s.log_view_state.selection = Some(sel);
         s.log_view_state.selection_text = Some("hello".to_string());
         s.log_view_state.selection_text_key = Some(sel);
+    }
+
+    fn install_selection(s: &mut Session) {
+        install_selection_on(s, 1);
     }
 
     #[test]
@@ -1147,6 +1169,46 @@ mod tests {
         install_selection(&mut s);
         s.reset_filters();
         assert!(s.log_view_state.selection.is_none());
+    }
+
+    #[test]
+    fn eviction_past_selection_clears_it() {
+        let mut s = make_session();
+        s.max_logs = 2;
+        s.add_log(make_log_entry("a"));
+        let first_id = s.logs.front().unwrap().id;
+        install_selection_on(&mut s, first_id);
+        // Two more appends push "a" out of the 2-entry ring buffer.
+        s.add_log(make_log_entry("b"));
+        s.add_log(make_log_entry("c"));
+        assert!(
+            s.logs.iter().all(|e| e.id != first_id),
+            "the selected entry must have been evicted"
+        );
+        assert!(
+            s.log_view_state.selection.is_none(),
+            "a selection on evicted entries is invisible yet would eat the next Esc"
+        );
+        assert!(
+            s.log_view_state.selection_text.is_none(),
+            "the cached copy text of evicted entries must not survive"
+        );
+    }
+
+    #[test]
+    fn eviction_keeps_selection_on_live_entries() {
+        let mut s = make_session();
+        s.max_logs = 2;
+        s.add_log(make_log_entry("a"));
+        s.add_log(make_log_entry("b"));
+        s.add_log(make_log_entry("c")); // evicts "a"
+        let live_id = s.logs.back().unwrap().id;
+        install_selection_on(&mut s, live_id);
+        s.add_log(make_log_entry("d")); // evicts "b"; "c" stays selected
+        assert!(
+            s.log_view_state.selection.is_some(),
+            "eviction of unrelated entries must not clear a live selection"
+        );
     }
 
     // ─────────────────────────────────────────────────────────

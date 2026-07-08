@@ -3360,9 +3360,8 @@ fn wrap_line_chars_wide_chars_split_by_display_width() {
     for row in &rows {
         let txt: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(txt.chars().count(), 5);
-        let display_width: usize = txt
-            .chars()
-            .map(fdemon_app::log_view_state::char_display_width)
+        let display_width: usize = fdemon_app::log_view_state::grapheme_cell_widths(&txt)
+            .map(|(_, _, w)| w)
             .sum();
         assert!(display_width <= 10, "no wrapped row may overflow its width");
     }
@@ -3381,11 +3380,9 @@ fn wrap_line_chars_mixed_width_never_overflows() {
             "row count must match at width {width}"
         );
         for row in &rows {
-            let display_width: usize = row
-                .spans
-                .iter()
-                .flat_map(|s| s.content.chars())
-                .map(fdemon_app::log_view_state::char_display_width)
+            let txt: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            let display_width: usize = fdemon_app::log_view_state::grapheme_cell_widths(&txt)
+                .map(|(_, _, w)| w)
                 .sum();
             assert!(
                 display_width <= width,
@@ -3408,6 +3405,85 @@ fn wrap_line_chars_zero_width_yields_single_row() {
 
     let line = Line::from("abc");
     assert_eq!(LogView::wrap_line_chars(&line, 0).len(), 1);
+}
+
+/// VS16 emoji (⚠️/❤️) and ZWJ sequences (👨‍👩‍👧) render 2 cells but char-sum
+/// differently — wrapping must measure grapheme clusters or ratatui silently
+/// clips rows packed too wide (PR #72 review, R1).
+#[test]
+fn wrap_line_chars_grapheme_clusters_never_overflow() {
+    use fdemon_app::log_view_state::grapheme_cell_widths;
+    use ratatui::text::Line;
+
+    let text = "a⚠\u{FE0F}b❤\u{FE0F}c👨\u{200D}👩\u{200D}👧d";
+    let cluster_starts: Vec<usize> = grapheme_cell_widths(text).map(|(i, _, _)| i).collect();
+    let total_chars = text.chars().count();
+    let line = Line::from(text);
+    for width in 2..12 {
+        let rows = LogView::wrap_line_chars(&line, width);
+        assert_eq!(
+            rows.len(),
+            LogView::line_wrapped_row_count(&line, width),
+            "row count must match at width {width}"
+        );
+        let mut boundary = 0usize;
+        for row in &rows {
+            let txt: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            let display_width: usize = grapheme_cell_widths(&txt).map(|(_, _, w)| w).sum();
+            assert!(
+                display_width <= width,
+                "row overflows {width} cells: {txt:?}"
+            );
+            assert!(
+                boundary == total_chars || cluster_starts.contains(&boundary),
+                "row boundary at char {boundary} splits a cluster (width {width})"
+            );
+            boundary += txt.chars().count();
+        }
+        // Nothing lost: concatenating all rows restores the full text.
+        let total: String = rows
+            .iter()
+            .flat_map(|r| r.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert_eq!(total, text);
+    }
+}
+
+/// R1's actual symptom, tested against real ratatui rendering: every wrapped
+/// row must fit its width, so rendering a row into a buffer exactly that wide
+/// never clips its tail cluster.
+#[test]
+fn wrap_line_chars_rows_render_without_clipping() {
+    use fdemon_app::log_view_state::grapheme_cell_widths;
+    use ratatui::text::Line;
+    use ratatui::widgets::Widget;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let text = "a⚠\u{FE0F}b❤\u{FE0F}c👨\u{200D}👩\u{200D}👧d";
+    let line = Line::from(text);
+    for width in 2..12 {
+        for row in LogView::wrap_line_chars(&line, width) {
+            let txt: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            let Some(last_cluster) = grapheme_cell_widths(&txt)
+                .last()
+                .map(|(start, n, _)| txt.chars().skip(start).take(n).collect::<String>())
+            else {
+                continue;
+            };
+            let area = Rect::new(0, 0, width as u16, 1);
+            let mut buf = Buffer::empty(area);
+            (&row).render(area, &mut buf);
+            let rendered: String = (0..area.width)
+                .filter_map(|x| buf.cell((x, 0)).map(|c| c.symbol()))
+                .collect();
+            assert!(
+                rendered.contains(&last_cluster),
+                "width {width}: row {txt:?} lost its tail {last_cluster:?} when \
+                 rendered (got {rendered:?})"
+            );
+        }
+    }
 }
 
 #[test]
@@ -3632,6 +3708,151 @@ fn wrap_mode_wide_char_locate_and_highlight_are_width_aware() {
         Some("漢"),
         "copying the single selected wide char yields exactly that char"
     );
+}
+
+/// Mirror of the CJK test for VS16 emoji: `⚠️` is a 2-**char** cluster (⚠ +
+/// U+FE0F) rendering 2 cells, so per-char width sums drift from ratatui's
+/// per-grapheme layout (PR #72 review, R1). Flutter logs emit `⚠️` constantly.
+#[test]
+fn wrap_mode_vs16_emoji_locate_and_highlight_are_cluster_aware() {
+    use crate::render::MouseCtx;
+    use fdemon_app::log_view_state::{LogSelection, SelPoint};
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let warn = "⚠\u{FE0F}";
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        &warn.repeat(30),
+    )]);
+    let mut state = LogViewState::new();
+    state.wrap_mode = true;
+    let area = Rect::new(0, 0, 40, 24);
+    let mut buf = Buffer::empty(area);
+
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(true);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let row = state.selection_rows[0].clone();
+    assert!(
+        row.rect.height > 1,
+        "60-cell VS16 payload must wrap across rows in a 38-cell content area"
+    );
+
+    // Sub-row boundaries must be cluster-aware, and both cells of one cluster
+    // must map to the same (first) char index.
+    let y2 = row.rect.y + 1;
+    let p_first = row.locate(row.rect.x, row.rect.y).unwrap();
+    let p_second = row.locate(row.rect.x, y2).unwrap();
+    let starts = fdemon_app::log_view_state::wrap_row_starts(&row.text, row.wrap_width as usize);
+    assert_eq!(
+        p_second.col, starts[1],
+        "second sub-row starts at the cluster-aware row boundary"
+    );
+    assert!(p_second.col > p_first.col);
+    let cluster_cell_a = row.locate(row.rect.x + 20, y2).unwrap();
+    let cluster_cell_b = row.locate(row.rect.x + 21, y2).unwrap();
+    assert_eq!(
+        cluster_cell_a.col, cluster_cell_b.col,
+        "both cells of a VS16 cluster map to the same char"
+    );
+
+    // Selecting one cluster spans TWO chars (base + VS16), paints exactly its
+    // two cells, and copies exactly that cluster.
+    state.selection = Some(LogSelection {
+        anchor: p_second,
+        focus: SelPoint {
+            col: p_second.col + 2,
+            ..p_second
+        },
+        dragging: false,
+    });
+    {
+        let view = LogView::new(&logs, test_icons()).wrap_mode(true);
+        let mut regions = MouseRegions::with_capacity();
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+    assert_eq!(
+        buf.cell((row.rect.x, y2)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "first cell of the cluster highlighted"
+    );
+    assert_eq!(
+        buf.cell((row.rect.x + 1, y2)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "second cell of the cluster highlighted"
+    );
+    assert_ne!(
+        buf.cell((row.rect.x + 2, y2)).unwrap().bg,
+        crate::theme::palette::SELECTION_BG,
+        "the next cluster is not highlighted"
+    );
+    assert_eq!(
+        state.selection_text.as_deref(),
+        Some(warn),
+        "copying the single selected cluster yields exactly that cluster"
+    );
+}
+
+/// At degenerate `wrap_width == 1` a 2-cell cluster overflows its row; the
+/// highlight must clamp to the row rect instead of painting the neighbor cell
+/// (PR #72 review, optional item).
+#[test]
+fn highlight_never_paints_past_rect_at_degenerate_width() {
+    use fdemon_app::log_view_state::{LogSelection, SelPoint, SelectionRow};
+    use fdemon_app::MouseRect;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let text = "漢漢";
+    let mut state = LogViewState::new();
+    state.selection_rows = vec![SelectionRow {
+        rect: MouseRect::new(0, 0, 1, 2),
+        entry_id: 1,
+        frame_index: None,
+        base_col: 0,
+        left_indicator: false,
+        right_indicator: false,
+        text_len: text.chars().count(),
+        wrap_width: 1,
+        top_clip: 0,
+        text: text.to_string(),
+    }];
+    state.selection = Some(LogSelection {
+        anchor: SelPoint {
+            entry_id: 1,
+            frame_index: None,
+            col: 0,
+        },
+        focus: SelPoint {
+            entry_id: 1,
+            frame_index: None,
+            col: 2,
+        },
+        dragging: false,
+    });
+
+    let area = Rect::new(0, 0, 5, 3);
+    let mut buf = Buffer::empty(area);
+    LogView::render_selection_highlight(&state, &mut buf);
+
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let inside = x < 1 && y < 2;
+            let painted = buf.cell((x, y)).unwrap().bg == crate::theme::palette::SELECTION_BG;
+            assert_eq!(
+                painted, inside,
+                "cell ({x}, {y}) painted={painted}, expected inside-rect only"
+            );
+        }
+    }
 }
 
 #[test]

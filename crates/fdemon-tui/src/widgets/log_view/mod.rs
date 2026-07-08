@@ -6,7 +6,7 @@ use std::time::Duration;
 use fdemon_app::config::FlutterMode;
 use fdemon_app::hyperlinks::LinkHighlightState;
 use fdemon_app::log_view_state::{
-    char_display_width, wrap_row_starts, wrap_row_starts_widths, wrapped_row_count_widths,
+    grapheme_cell_widths, wrap_row_starts, wrap_row_starts_cells, wrapped_row_count_widths,
     FocusInfo, LogViewState, SelPoint, SelectionEdge, SelectionRow,
 };
 use fdemon_core::{
@@ -708,14 +708,17 @@ impl<'a> LogView<'a> {
     }
 
     /// Terminal rows a rendered line occupies when wrapped, using the same
-    /// greedy display-width packing as [`Self::wrap_line_chars`] (wide CJK/emoji
-    /// chars count 2 cells). Allocation-free — iterates the spans' chars.
+    /// greedy grapheme-cluster packing as [`Self::wrap_line_chars`].
+    ///
+    /// Concatenates the spans' text before segmenting (one allocation, visible
+    /// lines only): grapheme clusters can span a style boundary, so segmenting
+    /// per span would produce different cluster widths than the whole-line
+    /// `SelectionRow::text` the selection math uses — the row counts must come
+    /// from the same segmentation domain or scroll/highlight geometry drifts.
     fn line_wrapped_row_count(line: &Line, visible_width: usize) -> usize {
+        let text = Self::line_text(line);
         wrapped_row_count_widths(
-            line.spans
-                .iter()
-                .flat_map(|s| s.content.chars())
-                .map(char_display_width),
+            grapheme_cell_widths(&text).map(|(_, _, w)| w),
             visible_width,
         )
     }
@@ -752,10 +755,10 @@ impl<'a> LogView<'a> {
         }
         let prefix_width = self.estimate_prefix_width(entry);
         // Same greedy packing as the renderer: prefix cells first (all width 1),
-        // then the message's display widths.
+        // then the message's per-cluster display widths.
         let msg_rows = wrapped_row_count_widths(
             std::iter::repeat_n(1, prefix_width)
-                .chain(entry.message.chars().map(char_display_width)),
+                .chain(grapheme_cell_widths(&entry.message).map(|(_, _, w)| w)),
             visible_width,
         );
         // Stack frame lines rarely exceed terminal width, count as 1 row each
@@ -1225,17 +1228,23 @@ impl<'a> LogView<'a> {
     }
 
     /// Wrap a logical line into screen rows by **display width** (not word
-    /// boundaries), preserving each character's `Style`. Wide CJK/emoji chars
-    /// occupy 2 cells and are never split across rows; combining marks stay
-    /// with their base char.
+    /// boundaries), preserving styles per grapheme cluster. Clusters (CJK,
+    /// emoji including VS16/ZWJ sequences) are measured with the same str-width
+    /// function ratatui uses and are never split across rows; combining marks
+    /// stay with their base char.
     ///
     /// This is the wrap-mode counterpart to [`Self::apply_horizontal_scroll`].
     /// We deliberately avoid ratatui's word-wrap (`Wrap { trim: false }`) so the
     /// on-screen cell→character mapping is exact and shared with the selection
-    /// mapping: row boundaries come from [`wrap_row_starts_widths`], the same
-    /// greedy packing used by [`Self::line_wrapped_row_count`] and
-    /// `SelectionRow::locate`. This is what makes character-precise
-    /// drag-selection possible.
+    /// mapping: row boundaries come from [`wrap_row_starts_cells`] over the
+    /// whole line's grapheme clusters, the same greedy packing used by
+    /// [`Self::line_wrapped_row_count`] and `SelectionRow::locate`. This is
+    /// what makes character-precise drag-selection possible.
+    ///
+    /// Styles are normalized cluster-atomically (every char of a cluster takes
+    /// the cluster's first char's style) so no output span can split a cluster
+    /// — otherwise ratatui would segment each span separately and measure
+    /// different cluster widths than the packing did.
     ///
     /// An empty (or whitespace-flattened-to-empty) line yields a single empty
     /// row so the logical line still occupies one terminal row, matching
@@ -1259,8 +1268,19 @@ impl<'a> LogView<'a> {
             return vec![Line::from(String::new())];
         }
 
+        // Segment the whole concatenated text (byte-identical to `line_text` /
+        // `SelectionRow::text`) so cluster boundaries match the selection math
+        // even when a cluster spans a style boundary.
+        let text: String = chars.iter().map(|&(c, _)| c).collect();
+        for (start, n, _) in grapheme_cell_widths(&text) {
+            let style = chars[start].1;
+            for c in &mut chars[start + 1..start + n] {
+                c.1 = style;
+            }
+        }
+
         let starts =
-            wrap_row_starts_widths(chars.iter().map(|&(c, _)| char_display_width(c)), width);
+            wrap_row_starts_cells(grapheme_cell_widths(&text).map(|(i, _, w)| (i, w)), width);
         let mut rows: Vec<Line<'static>> = Vec::with_capacity(starts.len());
         for (k, &start) in starts.iter().enumerate() {
             let end = starts.get(k + 1).copied().unwrap_or(chars.len());
@@ -1325,9 +1345,10 @@ impl<'a> LogView<'a> {
             }
 
             if row.wrap_width > 0 {
-                // Wrap mode: sub-row boundaries and per-char cell positions come
-                // from the same display-width packing the renderer used, so the
-                // highlight tracks wide (2-cell) glyphs exactly.
+                // Wrap mode: sub-row boundaries and per-cluster cell positions
+                // come from the same grapheme packing the renderer used, so the
+                // highlight tracks multi-cell clusters (CJK, VS16/ZWJ emoji)
+                // exactly.
                 let w = row.wrap_width as usize;
                 let starts = wrap_row_starts(&row.text, w);
                 let height = row.rect.height as usize;
@@ -1344,28 +1365,34 @@ impl<'a> LogView<'a> {
                         continue;
                     }
                     let y = row.rect.y + k as u16;
-                    // Walk the sub-row's chars, accumulating display width to
-                    // find each selected char's cells (wide chars cover 2).
+                    // Walk the sub-row's clusters, accumulating display width
+                    // to find each selected cluster's cells. Any overlap with
+                    // [a, b) selects the whole cluster (locate only ever emits
+                    // cluster-start cols; this also tolerates stale mid-cluster
+                    // cols from older state).
                     let mut x = row.rect.x;
-                    for (i, ch) in row
-                        .text
-                        .chars()
-                        .enumerate()
-                        .skip(row_lo)
-                        .take(row_hi - row_lo)
-                    {
-                        let cw = char_display_width(ch) as u16;
-                        if i >= b || x >= x_end {
+                    for (start, n, cw) in grapheme_cell_widths(&row.text) {
+                        if start < row_lo {
+                            continue;
+                        }
+                        if start >= b || x >= x_end {
                             break;
                         }
-                        if i >= a {
-                            for d in 0..cw {
-                                if let Some(cell) = buf.cell_mut((x + d, y)) {
+                        if start + n > a {
+                            for d in 0..cw as u16 {
+                                let cx = x.saturating_add(d);
+                                // Clamp inside the loop too: at degenerate
+                                // widths (wrap_width == 1) a wide cluster's
+                                // cells would otherwise paint past the rect.
+                                if cx >= x_end {
+                                    break;
+                                }
+                                if let Some(cell) = buf.cell_mut((cx, y)) {
                                     cell.set_style(sel_style);
                                 }
                             }
                         }
-                        x = x.saturating_add(cw);
+                        x = x.saturating_add(cw as u16);
                     }
                 }
             } else {

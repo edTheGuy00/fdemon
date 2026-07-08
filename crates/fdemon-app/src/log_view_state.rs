@@ -96,31 +96,62 @@ fn frame_rank(frame_index: Option<usize>) -> usize {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // The renderer (fdemon-tui) wraps logical lines into screen rows by **display
-// width** (a CJK/emoji char occupies 2 terminal cells, combining marks 0), and
-// the selection mapping below must reproduce those row boundaries exactly, or
-// highlight/copy drift from what is on screen. Both sides call these functions
-// so the greedy packing rule lives in one place.
+// width**, and the selection mapping below must reproduce those row boundaries
+// exactly, or highlight/copy drift from what is on screen. Both sides call
+// these functions so the greedy packing rule lives in one place.
+//
+// The unit of measurement is the **grapheme cluster**, not the `char`: ratatui
+// lays out each output span by walking `UnicodeSegmentation::graphemes` and
+// measuring each cluster with `UnicodeWidthStr`. Per-char sums diverge from
+// that for variation-selector emoji (`⚠️` = base + U+FE0F: char-sum 1, rendered
+// 2 cells) and ZWJ sequences (👨‍👩‍👧: char-sum 6, rendered 2), so all wrap math
+// here iterates clusters and measures them with the same str-width function.
+// Clusters are atomic: never split across rows, and every cell of a cluster
+// maps to its first char's index. Positions (`SelPoint::col`, row starts) stay
+// **char** offsets — grapheme boundaries always fall on char indices.
 
-/// Terminal display width of `c` in cells (0 for combining/zero-width chars).
-pub fn char_display_width(c: char) -> usize {
-    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+/// Grapheme clusters of `text` as `(start char index, char count, cell width)`.
+///
+/// Width is measured per cluster with `UnicodeWidthStr`, plus one cell per
+/// halfwidth katakana sound mark (U+FF9E/U+FF9F), matching how ratatui 0.30
+/// measures each grapheme at render time (`ratatui-core::buffer::cell_width`).
+/// Zero-width clusters (control chars, stray combining marks) yield width 0.
+pub fn grapheme_cell_widths(text: &str) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut char_idx = 0usize;
+    text.graphemes(true).map(move |g| {
+        let n = g.chars().count();
+        let sound_marks = g
+            .chars()
+            .filter(|&c| c == '\u{FF9E}' || c == '\u{FF9F}')
+            .count();
+        let w = unicode_width::UnicodeWidthStr::width(g) + sound_marks;
+        let start = char_idx;
+        char_idx += n;
+        (start, n, w)
+    })
 }
 
-/// Greedy display-width row packing over a sequence of per-char cell widths.
+/// Greedy display-width row packing over `(start char index, cell width)`
+/// cluster atoms (as produced by [`grapheme_cell_widths`]).
 ///
 /// Returns the char index at which each wrapped sub-row starts (always begins
-/// with `0`, so the result is never empty). A char is placed on the current row
-/// when its width still fits; otherwise a new row starts at that char.
-/// Zero-width chars never trigger a wrap — they stay with their base char.
-/// A single char wider than `width` is placed alone on its own row (the
-/// terminal clips it; the alternative is an infinite loop).
-pub fn wrap_row_starts_widths(widths: impl Iterator<Item = usize>, width: usize) -> Vec<usize> {
+/// with `0`, so the result is never empty). A cluster is placed on the current
+/// row when its width still fits; otherwise a new row starts at that cluster —
+/// a cluster is never split across rows. Zero-width clusters never trigger a
+/// wrap — they stay with the preceding cluster. A single cluster wider than
+/// `width` is placed alone on its own row (the terminal clips it; the
+/// alternative is an infinite loop).
+pub fn wrap_row_starts_cells(
+    cells: impl Iterator<Item = (usize, usize)>,
+    width: usize,
+) -> Vec<usize> {
     let mut starts = vec![0usize];
     if width == 0 {
         return starts;
     }
     let mut col = 0usize;
-    for (i, w) in widths.enumerate() {
+    for (i, w) in cells {
         if w == 0 {
             continue;
         }
@@ -133,14 +164,15 @@ pub fn wrap_row_starts_widths(widths: impl Iterator<Item = usize>, width: usize)
     starts
 }
 
-/// [`wrap_row_starts_widths`] over the chars of `text`.
+/// [`wrap_row_starts_cells`] over the grapheme clusters of `text`.
 pub fn wrap_row_starts(text: &str, width: usize) -> Vec<usize> {
-    wrap_row_starts_widths(text.chars().map(char_display_width), width)
+    wrap_row_starts_cells(grapheme_cell_widths(text).map(|(i, _, w)| (i, w)), width)
 }
 
-/// Number of screen rows the given per-char widths occupy under the same greedy
-/// packing rule as [`wrap_row_starts_widths`], without allocating (this runs
-/// per entry per frame in the scroll-bounds calculation).
+/// Number of screen rows the given per-cluster widths occupy under the same
+/// greedy packing rule as [`wrap_row_starts_cells`], without allocating (this
+/// runs per entry per frame in the scroll-bounds calculation). Items are
+/// **grapheme-cluster** widths (see [`grapheme_cell_widths`]), not per-char.
 pub fn wrapped_row_count_widths(widths: impl Iterator<Item = usize>, width: usize) -> usize {
     if width == 0 {
         return 1;
@@ -162,21 +194,22 @@ pub fn wrapped_row_count_widths(widths: impl Iterator<Item = usize>, width: usiz
 
 /// Map a display-column offset `dx` within one wrapped sub-row (`row_start..
 /// row_end` in char indices) back to the char index whose cells cover `dx`.
+/// Any cell of a multi-char cluster maps to the cluster's first char index.
 /// Returns `row_end` when `dx` lies past the row's last cell.
 fn char_index_at_display_col(text: &str, row_start: usize, row_end: usize, dx: usize) -> usize {
     let mut cum = 0usize;
-    for (i, c) in text
-        .chars()
-        .enumerate()
-        .skip(row_start)
-        .take(row_end.saturating_sub(row_start))
-    {
-        let w = char_display_width(c);
+    for (start, _, w) in grapheme_cell_widths(text) {
+        if start < row_start {
+            continue;
+        }
+        if start >= row_end {
+            break;
+        }
         if w == 0 {
             continue;
         }
         if dx < cum + w {
-            return i;
+            return start;
         }
         cum += w;
     }
@@ -264,8 +297,9 @@ impl SelectionRow {
         let dx = (x - self.rect.x) as usize;
         let col = if self.wrap_width > 0 {
             // Wrap mode: find the sub-row's char range with the same
-            // display-width packing the renderer used, then map the cell
-            // offset back to a char index (wide chars cover 2 cells).
+            // grapheme-cluster packing the renderer used (measured with
+            // `UnicodeWidthStr` to match ratatui), then map the cell offset
+            // back to a char index (any cell of a cluster → its first char).
             let sub_row = self.top_clip + (y - self.rect.y) as usize;
             let starts = wrap_row_starts(&self.text, self.wrap_width as usize);
             match starts.get(sub_row) {
@@ -422,13 +456,21 @@ impl LogViewState {
         self.auto_scroll = false;
     }
 
+    /// True while a drag-selection is in progress (mouse button held).
+    fn drag_active(&self) -> bool {
+        self.selection.as_ref().is_some_and(|s| s.dragging)
+    }
+
     /// Scroll down by n lines
     pub fn scroll_down(&mut self, n: usize) {
         let max_offset = self.total_lines.saturating_sub(self.visible_lines);
         self.offset = (self.offset + n).min(max_offset);
 
-        // Re-enable auto-scroll if at bottom
-        if self.offset >= max_offset {
+        // Re-enable auto-scroll if at bottom — but never while a drag is in
+        // progress: tail-follow mid-drag would chase every new arrival and
+        // grow the selection unbounded on a live session (follow re-arms
+        // normally once the drag ends).
+        if self.offset >= max_offset && !self.drag_active() {
             self.auto_scroll = true;
         }
     }
@@ -439,10 +481,12 @@ impl LogViewState {
         self.auto_scroll = false;
     }
 
-    /// Scroll to bottom and enable auto-scroll
+    /// Scroll to bottom and enable auto-scroll (unless a drag is in progress —
+    /// the viewport still jumps, but tail-follow mid-drag would grow the
+    /// selection unbounded on a live session).
     pub fn scroll_to_bottom(&mut self) {
         self.offset = self.total_lines.saturating_sub(self.visible_lines);
-        self.auto_scroll = true;
+        self.auto_scroll = !self.drag_active();
     }
 
     /// Page up
@@ -660,10 +704,17 @@ mod tests {
 
     #[test]
     fn wrapped_row_count_widths_matches_wrap_row_starts() {
-        for text in ["", "abc", "a漢b漢", &"漢".repeat(13), "abce\u{0301}fghij"] {
+        for text in [
+            "",
+            "abc",
+            "a漢b漢",
+            &"漢".repeat(13),
+            "abce\u{0301}fghij",
+            "a⚠\u{FE0F}b❤\u{FE0F}c👨\u{200D}👩\u{200D}👧d",
+        ] {
             for width in 1..8 {
                 assert_eq!(
-                    wrapped_row_count_widths(text.chars().map(char_display_width), width),
+                    wrapped_row_count_widths(grapheme_cell_widths(text).map(|(_, _, w)| w), width),
                     wrap_row_starts(text, width).len(),
                     "row-count and row-starts must agree for {text:?} at width {width}"
                 );
@@ -675,9 +726,28 @@ mod tests {
     fn wrapped_row_count_widths_empty_is_one() {
         assert_eq!(wrapped_row_count_widths(std::iter::empty(), 10), 1);
         assert_eq!(
-            wrapped_row_count_widths("abc".chars().map(char_display_width), 0),
+            wrapped_row_count_widths(grapheme_cell_widths("abc").map(|(_, _, w)| w), 0),
             1
         );
+    }
+
+    #[test]
+    fn grapheme_cell_widths_reports_cluster_geometry() {
+        // "a" (1 char, 1 cell), "⚠️" = ⚠ + VS16 (2 chars, 2 cells),
+        // "b" (1 char, 1 cell), 👨‍👩‍👧 = 3 emoji + 2 ZWJ (5 chars, 2 cells).
+        let text = "a⚠\u{FE0F}b👨\u{200D}👩\u{200D}👧";
+        let clusters: Vec<_> = grapheme_cell_widths(text).collect();
+        assert_eq!(clusters, vec![(0, 1, 1), (1, 2, 2), (3, 1, 1), (4, 5, 2)]);
+    }
+
+    #[test]
+    fn wrap_row_starts_never_splits_vs16_or_zwj_clusters() {
+        // width 2: 'a' fills 1 cell; the 2-cell ⚠️ cluster cannot share the
+        // row, so it starts row 1 at char index 1; 'b' starts row 2 at 3.
+        assert_eq!(wrap_row_starts("a⚠\u{FE0F}b", 2), vec![0, 1, 3]);
+        // The 5-char ZWJ family renders 2 cells: it fills row 0 alone (width
+        // 2) and 'x' starts row 1 at char index 5.
+        assert_eq!(wrap_row_starts("👨\u{200D}👩\u{200D}👧x", 2), vec![0, 5]);
     }
 
     // ── Selection: SelectionRow::locate ───────────────────────────────────────
@@ -730,6 +800,28 @@ mod tests {
             "sub-row 1 starts at char 5"
         );
         assert_eq!(row.locate(8, 6).unwrap().col, 8);
+    }
+
+    #[test]
+    fn locate_wrap_cluster_cells_map_to_cluster_start() {
+        // "⚠️" (⚠ + VS16) is one 2-char cluster rendering 2 cells: 5 clusters
+        // fill a 10-cell row, so sub-row 1 starts at char index 10. Both cells
+        // of every cluster map to the cluster's first char index (0, 2, 4, …).
+        let row = wrap_row(&"⚠\u{FE0F}".repeat(10));
+        assert_eq!(row.locate(2, 5).unwrap().col, 0);
+        assert_eq!(
+            row.locate(3, 5).unwrap().col,
+            0,
+            "second cell of a VS16 cluster"
+        );
+        assert_eq!(row.locate(4, 5).unwrap().col, 2);
+        assert_eq!(row.locate(5, 5).unwrap().col, 2);
+        assert_eq!(
+            row.locate(2, 6).unwrap().col,
+            10,
+            "sub-row 1 starts at char 10 (5 clusters × 2 chars)"
+        );
+        assert_eq!(row.locate(8, 6).unwrap().col, 16);
     }
 
     #[test]
@@ -822,5 +914,57 @@ mod tests {
         let mut moved = still;
         moved.focus = sp(1, None, 4);
         assert!(moved.is_nonempty());
+    }
+
+    // ── Tail-follow vs. drag ─────────────────────────────────────────────────
+
+    /// State scrolled away from the bottom with content that has a bottom to
+    /// reach: total 20 lines, 5 visible, offset 10 (max_offset = 15).
+    fn scrolled_state() -> LogViewState {
+        let mut state = LogViewState::new();
+        state.total_lines = 20;
+        state.visible_lines = 5;
+        state.offset = 10;
+        state.auto_scroll = false;
+        state
+    }
+
+    #[test]
+    fn scroll_down_rearms_follow_at_bottom_without_drag() {
+        let mut state = scrolled_state();
+        state.scroll_down(100);
+        assert!(state.auto_scroll, "reaching bottom re-arms tail-follow");
+    }
+
+    #[test]
+    fn scroll_down_does_not_rearm_follow_while_dragging() {
+        let mut state = scrolled_state();
+        state.selection = Some(LogSelection::new(sp(1, None, 0)));
+        state.scroll_down(100);
+        assert_eq!(state.offset, 15, "still scrolls to the bottom");
+        assert!(
+            !state.auto_scroll,
+            "tail-follow must not re-arm mid-drag (selection would grow unbounded)"
+        );
+    }
+
+    #[test]
+    fn scroll_to_bottom_does_not_rearm_follow_while_dragging() {
+        let mut state = scrolled_state();
+        state.selection = Some(LogSelection::new(sp(1, None, 0)));
+        state.scroll_to_bottom();
+        assert_eq!(state.offset, 15, "viewport still jumps to the bottom");
+        assert!(!state.auto_scroll, "tail-follow must not re-arm mid-drag");
+    }
+
+    #[test]
+    fn scroll_to_bottom_rearms_follow_after_drag_ends() {
+        let mut state = scrolled_state();
+        // A completed (released) selection no longer counts as a drag.
+        let mut sel = LogSelection::new(sp(1, None, 0));
+        sel.dragging = false;
+        state.selection = Some(sel);
+        state.scroll_to_bottom();
+        assert!(state.auto_scroll, "follow re-arms once the drag has ended");
     }
 }
