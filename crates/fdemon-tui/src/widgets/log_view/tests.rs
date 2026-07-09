@@ -4307,3 +4307,75 @@ fn test_calculate_entry_display_rows_matches_render_with_link_badge_at_wrap_boun
         "estimate must include badge width while link mode is active, got estimate={estimate} rendered={rendered}"
     );
 }
+
+/// Follow-up to #73 (review round 0, minor): at narrow widths the collapsed
+/// indicator line itself wraps. The render loop must measure it with
+/// `line_wrapped_row_count` (as `calculate_entry_display_rows` now does) —
+/// under the old `+= 1` accounting, `rel_y_cursor` under-advances and every
+/// click region registered BELOW a wrapped indicator lands one row above the
+/// text it belongs to.
+#[test]
+fn test_click_regions_below_wrapped_collapsed_indicator_stay_aligned() {
+    use crate::render::MouseCtx;
+    use fdemon_app::{Message, MouseButton, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // Collapsed entry: 18 frames, default max_collapsed_frames = 3 -> the
+    // indicator "    ▶ 15 more frames..." (23 cells) wraps to 2 rows at
+    // content width 12. A plain entry AFTER it is the alignment probe.
+    let mut collapsed = make_entry(LogLevel::Error, LogSource::App, "boom");
+    let mut trace = ParsedStackTrace::new("synthetic");
+    for i in 0..18 {
+        trace.add_frame(StackFrame::new(
+            i,
+            format!("f{i}"),
+            "a.dart".to_string(),
+            1,
+            0,
+        ));
+    }
+    trace.is_complete = true;
+    collapsed.stack_trace = Some(trace);
+    let after = make_entry(LogLevel::Info, LogSource::App, "aftertext");
+    let after_id = after.id;
+    let entries = vec![collapsed, after];
+
+    let logs = logs_from(entries);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .wrap_mode(true);
+
+    // Width 14 -> content width 12 (borders). Tall enough that the collapsed
+    // entry, wrapped indicator, and probe entry are all on screen.
+    let area = Rect::new(0, 0, 14, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    // Locate where the probe text actually rendered.
+    let y_text = (0..area.height)
+        .find(|&y| read_row(&buf, y).contains("aftertext"))
+        .expect("probe entry must be visible");
+
+    // The click region at that row must resolve to the probe entry.
+    let resolved = regions
+        .hit_test(2, y_text, MouseButton::Left)
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(2, y_text));
+    match resolved {
+        Some(Message::ClickLogRow { entry_id, .. }) => assert_eq!(
+            entry_id, after_id,
+            "region under the rendered probe row must belong to the probe entry"
+        ),
+        other => panic!(
+            "expected ClickLogRow for the probe entry at y={y_text}, got {other:?} — \
+             regions below a wrapped collapsed indicator are misaligned"
+        ),
+    }
+}

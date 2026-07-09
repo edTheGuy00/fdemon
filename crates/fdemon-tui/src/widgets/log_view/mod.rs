@@ -2050,11 +2050,21 @@ impl<'a> LogView<'a> {
                     if hidden_count > 0 && units_added < target {
                         let indicator_position = 1 + visible_count;
                         if indicator_position > skip_in_entry {
-                            all_lines.push(Self::format_collapsed_indicator(hidden_count));
-                            units_added += 1; // collapsed indicator is always short
-                                              // Advance rel_y_cursor so subsequent rows are placed correctly.
+                            let line = Self::format_collapsed_indicator(hidden_count);
+                            // Measure like every other line: at narrow widths the
+                            // indicator wraps, and total_lines (via
+                            // calculate_entry_display_rows) already counts it
+                            // wrapped — the two accountings must agree.
+                            let row_h: u16 = if self.wrap_mode {
+                                Self::line_wrapped_row_count(&line, visible_width) as u16
+                            } else {
+                                1
+                            };
+                            all_lines.push(line);
+                            units_added += row_h as usize;
+                            // Advance rel_y_cursor so subsequent rows are placed correctly.
                             if has_mouse_ctx {
-                                rel_y_cursor = rel_y_cursor.saturating_add(1);
+                                rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                             }
                         }
                     }
