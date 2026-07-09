@@ -43,6 +43,10 @@ pub const CONTRAST_FG: Color = Color::Rgb(0, 0, 0); // High contrast foreground 
 /// Approximates ACCENT at 10% opacity on CARD_BG.
 pub const SELECTED_ROW_BG: Color = Color::Rgb(17, 25, 40); // #111928
 
+/// Background for drag-selected text in the log view (WYSIWYG text selection).
+/// A clear selection blue with good contrast on the dark log background.
+pub const SELECTION_BG: Color = Color::Rgb(38, 79, 120); // #264F78
+
 // --- Gradients ---
 pub const GRADIENT_BLUE: Color = Color::Rgb(37, 99, 235); // Button gradient start
 #[allow(dead_code)]

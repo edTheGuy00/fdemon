@@ -11,18 +11,39 @@ For the on/off setting, see `[ui] enable_mouse` in [CONFIGURATION.md](CONFIGURAT
 
 ## Selecting and Copying Log Text
 
-Three affordances are available for getting log text onto your clipboard:
+Four affordances are available for getting log text onto your clipboard:
 
-### Shift+drag — arbitrary substring selection
+### Drag — in-app character-precise selection (copies on release)
 
-Hold `Shift` and drag the mouse to select any run of characters in the log view. The
-terminal's native selection engine handles the highlight and the copy; `Cmd+C` /
-`Ctrl+Shift+C` (or your terminal's copy shortcut) copies the selection.
+Press the left button on a log line and drag to select an arbitrary run of characters —
+within a line or across many lines. The selection is highlighted in-app and, when you
+drag past the top or bottom edge of the log area, the view **auto-scrolls** and keeps
+extending the selection. **Releasing the button copies the exact highlighted text** to
+the system clipboard (WYSIWYG — what you see is what you copy, gutter included), with a
+toast confirmation (`Copied: <preview…>` or `Copied N lines`).
 
-This works because fdemon no longer requests the `?1003` (any-motion) mouse-tracking
-mode. With only `?1000`/`?1002` enabled, modern terminals pass `Shift+drag` through to
-their native selection handler. See [Platform Caveats](#platform-caveats) if Shift+drag
-still misbehaves in your terminal.
+- Press `Esc` to clear the selection.
+- A plain click (press and release without moving) is **not** a selection — it still
+  toggles a stack trace on double-click, exactly as before.
+- Switching sessions, clearing logs (`c`), changing level/source filters, or suspending
+  mouse capture (`Alt+m`) clears the selection (and cancels any in-progress drag). The
+  selection is also cleared when the log ring buffer evicts the entries it points at.
+
+> Note: in wrap mode the log view wraps long lines at the character boundary (rather than
+> the word boundary) so the selection maps exactly to the characters under the cursor.
+> Wrapping measures **grapheme clusters** with the same width function ratatui uses: CJK
+> and emoji — including variation-selector (`⚠️`) and ZWJ (`👨‍👩‍👧`) sequences — occupy two
+> terminal cells, a cluster is never split across rows, and selecting any cell of a
+> cluster selects the whole cluster. In no-wrap mode, horizontal scrolling measures in
+> characters; lines containing wide characters may highlight approximately there.
+
+### Shift+drag — native terminal selection (fallback)
+
+Hold `Shift` and drag to bypass fdemon's in-app selection and use the terminal's own
+selection engine instead; `Cmd+C` / `Ctrl+Shift+C` (or your terminal's copy shortcut)
+copies it. Because mouse capture is active (`?1000`/`?1002`), some terminals route the
+drag to fdemon anyway — if Shift+drag does not select natively, use `Alt+m` (below) to
+fully suspend capture first. fdemon does not request `?1003` (any-motion) tracking.
 
 ### Right-click — full-line copy with toast confirmation
 

@@ -418,7 +418,9 @@ pub(crate) fn handle_runner_actions(engine: &mut Engine, clipboard: &mut dyn Cli
                             error!(
                                 "MouseCaptureChanged channel full; applying state directly: {e}"
                             );
-                            engine.state.mouse_capture_active = target;
+                            // Shared helper: also clears an in-flight drag on
+                            // capture-off, exactly like the handler would have.
+                            engine.state.set_mouse_capture_active(target);
                             engine.state.push_toast(
                                 ToastLevel::Warn,
                                 if target {
@@ -700,6 +702,24 @@ mod tests {
         // First set it to true explicitly so the transition is observable.
         engine.state.mouse_capture_active = true;
 
+        // Install an in-flight drag on a selected session: capture-off through
+        // the fallback must clear it exactly like the normal handler would
+        // (an orphaned drag would edge auto-scroll forever).
+        engine
+            .state
+            .session_manager
+            .create_session(&crate::test_utils::test_device("d1", "iPhone"))
+            .unwrap();
+        {
+            use fdemon_app::log_view_state::{LogSelection, SelPoint};
+            let handle = engine.state.session_manager.selected_mut().unwrap();
+            handle.session.log_view_state.selection = Some(LogSelection::new(SelPoint {
+                entry_id: 1,
+                frame_index: None,
+                col: 0,
+            }));
+        }
+
         // Push a SetMouseCapture(false) action — terminal succeeds (idempotency guard),
         // but try_send should fail because the channel is full.
         engine
@@ -714,6 +734,20 @@ mod tests {
         assert!(
             !engine.state.mouse_capture_active,
             "mouse_capture_active must be false after channel-full direct mutation"
+        );
+
+        // ...and cleared the in-flight drag (shared helper with the handler).
+        assert!(
+            engine
+                .state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .log_view_state
+                .selection
+                .is_none(),
+            "channel-full capture-off must clear an in-flight drag-selection"
         );
 
         // A Warn toast should have been pushed (not an Info toast, which would indicate

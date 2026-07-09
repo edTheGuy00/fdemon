@@ -2212,6 +2212,18 @@ pub enum Message {
     /// `workflow/plans/bugs/log-text-selection-broken/BUG.md`.
     CopyLogEntryToClipboard { entry_id: u64 },
 
+    /// Copy the active drag-selection's text to the clipboard.
+    ///
+    /// Emitted by the mouse handler on left-button release when a non-empty
+    /// drag-selection exists in the log view (see `handler/mouse/selection.rs`).
+    /// The update handler reads the render-published selection text from the
+    /// selected session's `log_view_state` and writes it via the `Clipboard`
+    /// service; a confirmation toast is pushed onto `AppState::toasts`.
+    CopySelection,
+
+    /// Clear any active log-view drag-selection (e.g. `Esc`).
+    ClearLogSelection,
+
     /// Request a runtime toggle of terminal mouse capture.
     ///
     /// Emitted by the `Alt+m` keybinding. The update handler returns
