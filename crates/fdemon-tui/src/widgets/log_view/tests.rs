@@ -4021,3 +4021,289 @@ fn render_selection_text_spans_multiple_lines() {
     let text = state.selection_text.as_deref().unwrap();
     assert_eq!(text.lines().count(), 3, "three lines selected");
 }
+
+// ─────────────────────────────────────────────────────────
+// Exact frame-line measurement in calculate_entry_display_rows (issue #73)
+// ─────────────────────────────────────────────────────────
+
+/// Ground truth for [`LogView::calculate_entry_display_rows`]: mirrors the
+/// render loop's line selection and row counting exactly — message line via
+/// `format_entry`, frame lines via `format_stack_frame_line_with_links`
+/// (respecting expand/collapse), collapsed indicator via
+/// `format_collapsed_indicator` — summing `LogView::line_wrapped_row_count`
+/// over each line the render loop would actually produce for this entry.
+fn rendered_row_count(view: &LogView, entry: &LogEntry, entry_index: usize, width: usize) -> usize {
+    let msg_line = view.format_entry(entry, entry_index);
+    let mut rows = LogView::line_wrapped_row_count(&msg_line, width);
+
+    let Some(trace) = &entry.stack_trace else {
+        return rows;
+    };
+    let frame_count = trace.frames.len();
+    if frame_count == 0 {
+        return rows;
+    }
+
+    let is_expanded = view.is_entry_expanded(entry);
+    let (visible_frames, has_indicator) = if is_expanded {
+        (frame_count, false)
+    } else {
+        let visible = view.max_collapsed_frames.min(frame_count);
+        (visible, frame_count > view.max_collapsed_frames)
+    };
+
+    for (frame_idx, frame) in trace.frames[..visible_frames].iter().enumerate() {
+        let line = view.format_stack_frame_line_with_links(frame, entry_index, frame_idx);
+        rows += LogView::line_wrapped_row_count(&line, width);
+    }
+
+    if has_indicator {
+        let hidden_count = frame_count.saturating_sub(view.max_collapsed_frames);
+        let line = LogView::format_collapsed_indicator(hidden_count);
+        rows += LogView::line_wrapped_row_count(&line, width);
+    }
+
+    rows
+}
+
+/// Build a stack trace covering every shape the invariant test must exercise:
+/// a normal frame, an async-gap frame, a frame with a long function name and
+/// long short_path, a frame with CJK/emoji in the path and no column, and a
+/// frame with a `frame_number >= 1000` (exercising the `{:<3}` *minimum*-width
+/// frame-number field, which widens instead of truncating).
+fn wrap_invariant_trace() -> ParsedStackTrace {
+    let mut trace = ParsedStackTrace::new("synthetic");
+    trace.add_frame(StackFrame::new(0, "main", "package:app/main.dart", 15, 3));
+    trace.add_frame(StackFrame::async_gap(1));
+    trace.add_frame(StackFrame::new(
+        2,
+        "_SomeVeryLongPrivateClassNameWithLotsOfCharacters.someEvenLongerMethodNameThatKeepsGoingForAWhile",
+        "package:app/very/deeply/nested/path/structure/that/is/quite/long/indeed/file_with_a_very_long_name.dart",
+        1000,
+        1,
+    ));
+    trace.add_frame(StackFrame::new(
+        3,
+        "handleTap",
+        "package:app/组件/emoji😀文件/文件名.dart",
+        7,
+        0, // column absent
+    ));
+    trace.add_frame(StackFrame::new(
+        1234,
+        "frame1234",
+        "package:app/other.dart",
+        42,
+        5,
+    ));
+    trace.is_complete = true;
+    trace
+}
+
+/// Acceptance invariant for #73: `calculate_entry_display_rows` must equal the
+/// sum of `line_wrapped_row_count` over the exact formatted lines the render
+/// loop produces, across expanded and collapsed traces, async gaps, long
+/// function names/paths, CJK/emoji in the message AND the path, frame numbers
+/// >= 1000, and columns present/absent — at multiple widths (narrow to wide).
+#[test]
+fn test_calculate_entry_display_rows_matches_render_expanded_and_collapsed() {
+    let mut entry = make_entry(
+        LogLevel::Error,
+        LogSource::App,
+        "错误 😀 occurred in component 组件 with a fairly long message that should wrap across several rows on a narrow viewport",
+    );
+    entry.stack_trace = Some(wrap_invariant_trace());
+    let logs = logs_from(vec![entry]);
+
+    let expanded_view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .default_collapsed(false);
+
+    let collapsed_view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .default_collapsed(true)
+        .max_collapsed_frames(3);
+
+    // Collapsed-by-default view explicitly re-expanded via `CollapseState`
+    // (exercises the `is_entry_expanded` collapse_state-lookup branch too).
+    let mut collapse_state = CollapseState::new();
+    collapse_state.toggle(logs[0].id, true);
+    let collapse_state_expanded_view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .default_collapsed(true)
+        .max_collapsed_frames(3)
+        .collapse_state(&collapse_state);
+
+    for width in [10usize, 20, 40, 80] {
+        for (label, view) in [
+            ("expanded", &expanded_view),
+            ("collapsed", &collapsed_view),
+            ("collapse_state_expanded", &collapse_state_expanded_view),
+        ] {
+            let estimate = view.calculate_entry_display_rows(&logs[0], 0, width);
+            let rendered = rendered_row_count(view, &logs[0], 0, width);
+            assert_eq!(
+                estimate, rendered,
+                "{label} view at width={width}: estimate={estimate} rendered={rendered}"
+            );
+        }
+    }
+}
+
+/// Regression for #73: stack-frame lines were previously counted as exactly
+/// 1 row regardless of length. Here the message fits in 1 row and the single
+/// frame line's true rendered width is 53 cells — it wraps to 2 rows at
+/// width=40 (40 + 13). The pre-fix formula gave `1 (msg) + 1 (frame,
+/// hardcoded) = 2`; the correct total is `1 + 2 = 3`.
+#[test]
+fn test_calculate_entry_display_rows_wrapping_frame_line_issue_73() {
+    let mut entry = make_entry(LogLevel::Error, LogSource::App, "Error");
+    let mut trace = ParsedStackTrace::new("synthetic");
+    trace.add_frame(StackFrame::new(
+        0,
+        "f".repeat(15),
+        format!("package:app/{}.dart", "p".repeat(15)),
+        123,
+        45,
+    ));
+    trace.is_complete = true;
+    entry.stack_trace = Some(trace);
+    let logs = logs_from(vec![entry]);
+
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false);
+
+    let width = 40;
+    let estimate = view.calculate_entry_display_rows(&logs[0], 0, width);
+    let rendered = rendered_row_count(&view, &logs[0], 0, width);
+
+    assert_eq!(
+        rendered, 3,
+        "expected message(1) + frame(2) = 3 rendered rows, got {rendered}"
+    );
+    assert_eq!(
+        estimate, rendered,
+        "estimate must match rendered rows exactly (#73), got estimate={estimate} rendered={rendered}"
+    );
+}
+
+/// Scroll-bounds regression for #73: with a wrapping frame line inflating
+/// `total_lines`, the viewport must auto-scroll so that the true LAST
+/// rendered row (the frame line's second wrapped sub-row) lands at the
+/// bottom of the buffer — not clipped off or replaced by a phantom blank row.
+#[test]
+fn test_scroll_bounds_last_wrapped_frame_row_reachable_issue_73() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 10 short filler entries (1 row each, no stack trace) provide real
+    // scrollback above the entry under test.
+    let mut entries: Vec<LogEntry> = (0..10)
+        .map(|i| make_entry(LogLevel::Info, LogSource::App, &format!("filler {i}")))
+        .collect();
+
+    // Final entry: short message + one frame line whose full rendered width
+    // (53 cells) wraps to exactly 2 rows at content width 40. The suffix
+    // ":123:45)" only appears on the frame line's SECOND wrapped row.
+    let mut last_entry = make_entry(LogLevel::Error, LogSource::App, "boom");
+    let mut trace = ParsedStackTrace::new("synthetic");
+    trace.add_frame(StackFrame::new(
+        0,
+        "f".repeat(15),
+        format!("package:app/{}.dart", "p".repeat(15)),
+        123,
+        45,
+    ));
+    trace.is_complete = true;
+    last_entry.stack_trace = Some(trace);
+    entries.push(last_entry);
+
+    let logs = logs_from(entries);
+    let mut state = LogViewState::new(); // auto_scroll = true by default
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .wrap_mode(true);
+
+    // Width 42 -> content_area width 40 (1-cell border each side).
+    // Height 10 -> content_area height 6 (inner height 8, minus 1 metadata
+    // row and a 1-row gap).
+    let area = Rect::new(0, 0, 42, 10);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    assert!(
+        state.total_lines > state.visible_lines,
+        "scenario must actually require scrolling: total={} visible={}",
+        state.total_lines,
+        state.visible_lines
+    );
+
+    let found = (0..area.height).any(|y| read_row(&buf, y).contains(":123:45)"));
+    assert!(
+        found,
+        "last wrapped frame row (tail ':123:45)') must be reachable in the rendered buffer"
+    );
+}
+
+/// Link-badge test: a frame line whose length sits exactly at the wrap
+/// boundary (fits width without the badge, overflows with it) — the estimate
+/// must react to the badge exactly like the renderer while link mode is
+/// active, since the badge is real, wrap-geometry-affecting text.
+#[test]
+fn test_calculate_entry_display_rows_matches_render_with_link_badge_at_wrap_boundary() {
+    let mut entry = make_entry(LogLevel::Error, LogSource::App, "boom");
+    let mut trace = ParsedStackTrace::new("synthetic");
+    trace.add_frame(StackFrame::new(
+        0,
+        "f".repeat(10),
+        format!("package:app/{}.dart", "p".repeat(12)),
+        1,
+        0, // column absent
+    ));
+    trace.is_complete = true;
+    entry.stack_trace = Some(trace);
+    let logs = logs_from(vec![entry]);
+
+    let width = 40;
+
+    // Sanity: without the badge, this frame line fits in exactly one row.
+    let view_no_badge = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false);
+    let baseline_rendered = rendered_row_count(&view_no_badge, &logs[0], 0, width);
+    assert_eq!(
+        baseline_rendered, 2,
+        "sanity: without the badge, message(1) + frame(1) = 2, got {baseline_rendered}"
+    );
+
+    // With the badge granted (link mode active), the 3-cell badge pushes the
+    // frame line to 2 rows.
+    let link_state = make_link_state(&[(0, Some(0), '1', "irrelevant")]);
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .link_highlight_state(&link_state);
+
+    let estimate = view.calculate_entry_display_rows(&logs[0], 0, width);
+    let rendered = rendered_row_count(&view, &logs[0], 0, width);
+
+    assert_eq!(
+        rendered, 3,
+        "expected message(1) + frame-with-badge(2) = 3 rendered rows, got {rendered}"
+    );
+    assert_eq!(
+        estimate, rendered,
+        "estimate must include badge width while link mode is active, got estimate={estimate} rendered={rendered}"
+    );
+}
