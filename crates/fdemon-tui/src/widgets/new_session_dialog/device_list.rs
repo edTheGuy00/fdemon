@@ -836,7 +836,7 @@ mod tests {
         assert!(
             content.contains("[ ]"),
             "unchecked rows should display '[ ]'; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             !content.contains("[x]"),
@@ -864,7 +864,7 @@ mod tests {
         assert!(
             content.contains("[x]"),
             "checked device should display '[x]'; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("[ ]"),
@@ -887,7 +887,7 @@ mod tests {
         assert!(
             !content.contains("[ ]") && !content.contains("[x]"),
             "without with_checked(), no checkbox glyphs should appear; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
@@ -931,7 +931,7 @@ mod tests {
         assert!(
             content.contains("No connected devices"),
             "empty device list should show 'No connected devices'; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             !content.contains("none runnable"),
@@ -967,7 +967,7 @@ mod tests {
         assert!(
             content.contains("none runnable"),
             "all-unsupported list should show 'none runnable' message; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             !content.contains("No connected devices"),
@@ -990,7 +990,7 @@ mod tests {
         assert!(
             content.contains("Pixel 9"),
             "supported device name should appear; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             !content.contains("No connected devices"),
@@ -1077,17 +1077,17 @@ mod tests {
         assert!(
             content.contains("Pixel 9"),
             "supported device name should appear; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("1 hidden"),
             "footer should contain '1 hidden'; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("not runnable"),
             "footer should contain 'not runnable'; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
@@ -1109,7 +1109,7 @@ mod tests {
         assert!(
             !content.contains("hidden"),
             "all-supported list must NOT show 'hidden' footer; got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
