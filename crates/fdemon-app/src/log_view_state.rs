@@ -344,7 +344,7 @@ pub struct SelectionEdge {
 /// renderer re-reads `expanded` fresh from `CollapseState` every frame and
 /// compares it against the cached value, so a toggle produces a guaranteed
 /// miss (recompute + overwrite) rather than a correctness hazard.
-/// REVIEW_FOCUS.md registry entry pending (task 02).
+/// Registered in docs/REVIEW_FOCUS.md ("Current usage" list of the approved TEA exception).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CachedRows {
     /// The entry's collapse/expand state at the time `rows` was computed.
@@ -405,14 +405,14 @@ pub struct LogViewState {
     /// cache miss, read on every subsequent frame. Safe default: empty (every
     /// entry starts as a miss). Wrap mode only — nowrap uses
     /// `calculate_entry_lines` (no measured widths) and leaves this untouched.
-    /// REVIEW_FOCUS.md registry entry pending (task 02).
+    /// Registered in docs/REVIEW_FOCUS.md ("Current usage" list of the approved TEA exception).
     pub row_cache: HashMap<u64, CachedRows>,
     /// Global cache key for `row_cache`: `(content width, wrap_mode)` at the
     /// last render that touched the cache. A mismatch at render start clears
     /// `row_cache` wholesale (a resize or the first wrap-mode render
     /// invalidates every cached row count). Safe default: `None` (a `None`
     /// key never matches, so the first render always "clears" an already-
-    /// empty map). REVIEW_FOCUS.md registry entry pending (task 02).
+    /// empty map). Registered in docs/REVIEW_FOCUS.md ("Current usage" list of the approved TEA exception).
     pub row_cache_key: Option<(u16, bool)>,
 }
 

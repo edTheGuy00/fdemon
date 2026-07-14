@@ -796,7 +796,7 @@ impl<'a> LogView<'a> {
         } else {
             digits(hidden_count as u64) + " more frames...".chars().count()
         };
-        std::iter::repeat_n(1, 4)
+        std::iter::repeat_n(1, FRAME_INDENT_WIDTH)
             .chain(grapheme_cell_widths("▶ ").map(|(_, _, w)| w))
             .chain(std::iter::repeat_n(1, text_len))
     }
@@ -1032,8 +1032,17 @@ impl<'a> LogView<'a> {
             CachedRows {
                 expanded,
                 // Saturating: a single entry occupying more than 65535 wrap
-                // rows is not a realistic scenario (see CachedRows docs).
-                rows: u16::try_from(rows).unwrap_or(u16::MAX),
+                // rows is not a realistic scenario (see CachedRows docs); the
+                // debug_assert surfaces it loudly in test builds if a future
+                // change ever inflates row counts.
+                rows: {
+                    debug_assert!(
+                        rows <= u16::MAX as usize,
+                        "entry {} row count {rows} exceeds the u16 cache field",
+                        entry.id
+                    );
+                    u16::try_from(rows).unwrap_or(u16::MAX)
+                },
             },
         );
         rows
@@ -1821,6 +1830,12 @@ impl<'a> LogView<'a> {
     ) {
         // Handle empty state specially
         if self.logs.is_empty() {
+            // A fully-empty buffer (clear-logs) means every cached row count
+            // is stale — and this early return skips the pruning pass below,
+            // so clear here. (An active filter matching nothing takes the
+            // later empty-filtered return instead and keeps the cache: its
+            // ids are still live.)
+            state.row_cache.clear();
             self.render_empty(area, buf);
             return;
         }
@@ -1897,7 +1912,7 @@ impl<'a> LogView<'a> {
         // the cache is left untouched there. A global-key mismatch (width or
         // wrap-mode change) invalidates every cached row count at once.
         if self.wrap_mode {
-            let key = (visible_width as u16, true);
+            let key = (visible_width as u16, self.wrap_mode);
             if state.row_cache_key != Some(key) {
                 state.row_cache.clear();
             }
@@ -1926,8 +1941,16 @@ impl<'a> LogView<'a> {
         if self.wrap_mode {
             let prune_threshold = 2 * filtered_indices.len() + 64;
             if state.row_cache.len() > prune_threshold {
-                let front_id = self.logs.front().map(|e| e.id).unwrap_or(0);
-                state.row_cache.retain(|id, _| *id >= front_id);
+                // An empty buffer means every cached id is stale — clear
+                // outright (a `0` fallback would make the retain a no-op,
+                // since all u64 ids are >= 0).
+                match self.logs.front() {
+                    Some(front) => {
+                        let front_id = front.id;
+                        state.row_cache.retain(|id, _| *id >= front_id);
+                    }
+                    None => state.row_cache.clear(),
+                }
             }
         }
 

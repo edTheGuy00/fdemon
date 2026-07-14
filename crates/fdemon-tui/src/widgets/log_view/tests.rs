@@ -4842,3 +4842,48 @@ fn test_row_cache_pruning_drops_stale_ids_past_threshold() {
         );
     }
 }
+
+/// #75 review round 0 (minor): after a full log clear the buffer is empty, so
+/// there is no front id to prune against — the old `unwrap_or(0)` fallback
+/// made the retain a no-op (all u64 ids are >= 0) and a large pre-clear cache
+/// lingered indefinitely. An empty buffer must clear the cache outright.
+#[test]
+fn test_row_cache_cleared_when_buffer_empties() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let mut logs = make_logs_no_traces(100);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 40, 14);
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert_eq!(state.row_cache.len(), 100);
+
+    // Clear-logs equivalent: the buffer empties entirely.
+    logs.clear();
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+
+    // Threshold = 2 * 0 + 64 = 64; pre-clear size (100) exceeds it, so the
+    // pruning pass runs — and with no front entry it must drop everything.
+    assert!(
+        state.row_cache.is_empty(),
+        "an emptied buffer must clear the row cache, got {} stale entries",
+        state.row_cache.len()
+    );
+}
