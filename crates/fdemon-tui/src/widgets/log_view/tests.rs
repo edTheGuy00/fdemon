@@ -4379,3 +4379,511 @@ fn test_click_regions_below_wrapped_collapsed_indicator_stay_aligned() {
         ),
     }
 }
+
+// ─────────────────────────────────────────────────────────
+// Per-entry display-row-count cache (issue #75)
+// ─────────────────────────────────────────────────────────
+
+/// Build a `LogView` for the row-cache tests with a consistent baseline
+/// configuration: timestamps/source hidden (isolates row-count math from the
+/// prefix-width constants) and stack traces expanded by default (no
+/// `collapse_state` — `is_entry_expanded` always returns `true`).
+fn row_cache_test_view(logs: &VecDeque<LogEntry>) -> LogView<'_> {
+    LogView::new(logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .default_collapsed(false)
+}
+
+/// Ground-truth total: the sum of `rendered_row_count` (the #74 exact
+/// formatter path) over every entry in `logs`, at content-area `width`.
+/// Compared against `LogViewState::total_lines` to prove the row cache
+/// (issue #75) never drifts from what the render loop actually produces.
+fn expected_total_lines(view: &LogView, logs: &VecDeque<LogEntry>, width: usize) -> usize {
+    (0..logs.len())
+        .map(|idx| rendered_row_count(view, &logs[idx], idx, width))
+        .sum()
+}
+
+/// Mixed fixture for the coherence tests: a one-row entry, a message that
+/// wraps across several rows, and an entry with the full [`wrap_invariant_trace`]
+/// (async gap, long names/paths, CJK/emoji, frame numbers >= 1000).
+fn row_cache_mixed_logs() -> VecDeque<LogEntry> {
+    let mut logs = VecDeque::new();
+    logs.push_back(make_entry(LogLevel::Info, LogSource::App, "short"));
+    logs.push_back(make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "a fairly long message that should wrap across multiple rows on a narrow viewport indeed",
+    ));
+    let mut with_trace = make_entry(LogLevel::Error, LogSource::App, "boom");
+    with_trace.stack_trace = Some(wrap_invariant_trace());
+    logs.push_back(with_trace);
+    logs
+}
+
+/// Acceptance criterion #1: a steady-state second render must READ the
+/// cache rather than recompute. Proven by overwriting a cached `rows` value
+/// with a sentinel between two identical renders and observing `total_lines`
+/// reflect the sentinel exactly. A width-change invalidation afterward must
+/// both drop the sentinel and recompute the correct total.
+#[test]
+fn test_row_cache_sentinel_probe_proves_second_render_reads_cache() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let logs = make_logs_no_traces(6);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 40, 12);
+
+    // First render populates the cache.
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert!(
+        !state.row_cache.is_empty(),
+        "first render must populate the cache"
+    );
+    let correct_total = state.total_lines;
+
+    // Pick one cached entry and overwrite its `rows` with an obviously-wrong
+    // sentinel that no real measurement of these short entries could produce.
+    let id = *state
+        .row_cache
+        .keys()
+        .next()
+        .expect("at least one cached entry");
+    let original_rows = state.row_cache[&id].rows as usize;
+    const SENTINEL: u16 = 9_999;
+    state.row_cache.get_mut(&id).unwrap().rows = SENTINEL;
+
+    // Second render with identical state/geometry: if the cache is actually
+    // READ (not recomputed), total_lines must reflect the sentinel exactly.
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    let expected_with_sentinel = correct_total - original_rows + SENTINEL as usize;
+    assert_eq!(
+        state.total_lines, expected_with_sentinel,
+        "second render must read the sentinel from the cache rather than recomputing \
+         (proves the cache is consulted, not recomputed, in steady state)"
+    );
+
+    // Invalidate via a width change: the sentinel must be gone, and the
+    // recomputed total must match a fresh render at the new width exactly
+    // (not merely differ from the sentinel-corrupted total).
+    let area2 = Rect::new(0, 0, 30, 12);
+    {
+        let mut buf = Buffer::empty(area2);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area2,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert_ne!(
+        state.row_cache.get(&id).map(|c| c.rows),
+        Some(SENTINEL),
+        "sentinel must not survive a width-change invalidation"
+    );
+
+    let mut fresh_state = LogViewState::new();
+    {
+        let mut buf = Buffer::empty(area2);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area2,
+            &mut buf,
+            &mut fresh_state,
+        );
+    }
+    assert_eq!(
+        state.total_lines, fresh_state.total_lines,
+        "after invalidation, the recomputed total must match a fresh render exactly"
+    );
+}
+
+/// Coherence: a content-width change must invalidate the cache (global key
+/// mismatch) and every subsequent render must be exact.
+#[test]
+fn test_row_cache_coherent_after_width_change() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let logs = row_cache_mixed_logs();
+    let mut state = LogViewState::new();
+
+    for area in [
+        Rect::new(0, 0, 42, 14),
+        Rect::new(0, 0, 27, 14),
+        Rect::new(0, 0, 62, 14),
+    ] {
+        {
+            let mut buf = Buffer::empty(area);
+            StatefulWidget::render(
+                row_cache_test_view(&logs).wrap_mode(true),
+                area,
+                &mut buf,
+                &mut state,
+            );
+        }
+        let width = area.width as usize - 2;
+        let expected = expected_total_lines(&row_cache_test_view(&logs), &logs, width);
+        assert_eq!(
+            state.total_lines, expected,
+            "total_lines must be exact after a width change to {width}"
+        );
+    }
+}
+
+/// Coherence: toggling wrap mode off and back on (same width) must not
+/// leave the cache stale — nowrap renders leave `row_cache` untouched, and
+/// the next wrap-mode render must still be exact.
+#[test]
+fn test_row_cache_coherent_after_wrap_toggle() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let logs = row_cache_mixed_logs();
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 42, 14);
+    let width = area.width as usize - 2;
+
+    for wrap in [true, false, true] {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(wrap),
+            area,
+            &mut buf,
+            &mut state,
+        );
+        if wrap {
+            let expected = expected_total_lines(&row_cache_test_view(&logs), &logs, width);
+            assert_eq!(
+                state.total_lines, expected,
+                "total_lines must be exact in wrap mode after a wrap-toggle round trip"
+            );
+        }
+    }
+}
+
+/// Coherence: an expand/collapse toggle (`CollapseState`) changes the
+/// per-entry cache key (`expanded`), so the very next render — collapsed,
+/// then expanded, then collapsed again — must stay exact at every step.
+#[test]
+fn test_row_cache_coherent_after_expand_collapse_toggle() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let mut entry = make_entry(LogLevel::Error, LogSource::App, "boom");
+    entry.stack_trace = Some(wrap_invariant_trace());
+    let entry_id = entry.id;
+    let logs = logs_from(vec![entry]);
+
+    let mut collapse_state = CollapseState::new();
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 30, 14);
+    let width = area.width as usize - 2;
+
+    // default_collapsed(true): starts collapsed; toggle -> expanded -> collapsed.
+    for step in 0..3 {
+        {
+            let mut buf = Buffer::empty(area);
+            let view = LogView::new(&logs, test_icons())
+                .show_timestamps(false)
+                .show_source(false)
+                .default_collapsed(true)
+                .max_collapsed_frames(2)
+                .collapse_state(&collapse_state)
+                .wrap_mode(true);
+            StatefulWidget::render(view, area, &mut buf, &mut state);
+        }
+
+        let check_view = LogView::new(&logs, test_icons())
+            .show_timestamps(false)
+            .show_source(false)
+            .default_collapsed(true)
+            .max_collapsed_frames(2)
+            .collapse_state(&collapse_state);
+        let expected = expected_total_lines(&check_view, &logs, width);
+        assert_eq!(
+            state.total_lines, expected,
+            "total_lines must be exact immediately after collapse-toggle step {step}"
+        );
+
+        collapse_state.toggle(entry_id, true);
+    }
+}
+
+/// Coherence: entering link-highlight mode adds a bypassed (never-cached)
+/// linked entry alongside cached non-linked entries; exiting link mode must
+/// fall back to the (still-valid) non-linked cache without drift.
+#[test]
+fn test_row_cache_coherent_after_link_mode_enter_and_exit() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let logs = row_cache_mixed_logs(); // entry 0's message is "short"
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 40, 14);
+    let width = area.width as usize - 2;
+
+    // Render without link mode to populate the cache.
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    let expected_no_link = expected_total_lines(&row_cache_test_view(&logs), &logs, width);
+    assert_eq!(state.total_lines, expected_no_link);
+
+    // Enter link mode: entry 0 carries a message-level badge and must bypass
+    // the cache, while entries 1 and 2 keep using their existing cache hits.
+    let link_state = make_link_state(&[(0, None, '1', "short")]);
+    {
+        let mut buf = Buffer::empty(area);
+        let view = row_cache_test_view(&logs)
+            .wrap_mode(true)
+            .link_highlight_state(&link_state);
+        StatefulWidget::render(view, area, &mut buf, &mut state);
+    }
+    let expected_with_link = {
+        let check_view = row_cache_test_view(&logs).link_highlight_state(&link_state);
+        expected_total_lines(&check_view, &logs, width)
+    };
+    assert_eq!(
+        state.total_lines, expected_with_link,
+        "total_lines must be exact while link mode is active (badge bypass)"
+    );
+
+    // Exit link mode: the next render must be exact again.
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert_eq!(
+        state.total_lines, expected_no_link,
+        "total_lines must return to the no-link value after exiting link mode"
+    );
+}
+
+/// Coherence: entries evicted from the log buffer (`pop_front`, as a live
+/// session's ring buffer would do) leave stale ids behind in `row_cache`
+/// until the pruning pass runs; regardless, the render for the *remaining*
+/// entries must stay exact.
+#[test]
+fn test_row_cache_coherent_after_buffer_eviction() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let mut logs = make_logs_no_traces(8);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 40, 14);
+    let width = area.width as usize - 2;
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert_eq!(state.row_cache.len(), 8);
+
+    logs.pop_front();
+    logs.pop_front();
+    logs.pop_front();
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+
+    let expected = expected_total_lines(&row_cache_test_view(&logs), &logs, width);
+    assert_eq!(
+        state.total_lines, expected,
+        "total_lines must be exact for the remaining entries after eviction"
+    );
+}
+
+/// Acceptance criterion #2 (load-bearing): a message-level link whose badge
+/// pushes the message line across a wrap boundary — the deferred #73-class
+/// drift this cache's linked-entry bypass closes. This test MUST fail if
+/// the bypass in `entry_display_rows_cached` is removed (verified manually
+/// during implementation by disabling it and confirming the failure, then
+/// restoring it).
+#[test]
+fn test_row_cache_message_badge_exactness_at_wrap_boundary() {
+    // 38-char message fits in one row at width 40 without a badge; the
+    // 3-char "[c]" badge inserted mid-line pushes it to 41 chars -> 2 rows.
+    let entry = make_entry(LogLevel::Error, LogSource::App, &"a".repeat(38));
+    let logs = logs_from(vec![entry]);
+    let width = 40;
+
+    let link_state = make_link_state(&[(0, None, '1', "aaa")]);
+    let view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false)
+        .wrap_mode(true)
+        .link_highlight_state(&link_state);
+
+    // Sanity: without the badge, the message fits in exactly one row.
+    let plain_view = LogView::new(&logs, test_icons())
+        .show_timestamps(false)
+        .show_source(false);
+    let baseline = rendered_row_count(&plain_view, &logs[0], 0, width);
+    assert_eq!(
+        baseline, 1,
+        "sanity: message alone fits one row, got {baseline}"
+    );
+
+    // Ground truth: what the render loop actually produces with the badge.
+    let rendered = rendered_row_count(&view, &logs[0], 0, width);
+    assert_eq!(
+        rendered, 2,
+        "expected the badge to push the message to 2 rows, got {rendered}"
+    );
+
+    // The cached-lookup helper must equal the exact rendered count while
+    // link mode is active.
+    let mut state = LogViewState::new();
+    let estimate = view.entry_display_rows_cached(&mut state, &logs[0], 0, width);
+    assert_eq!(
+        estimate, rendered,
+        "estimate must include the message badge width while link mode is active, \
+         estimate={estimate} rendered={rendered}"
+    );
+    assert!(
+        state.row_cache.is_empty(),
+        "linked entries must never be written to the cache"
+    );
+}
+
+/// Acceptance criterion #3: pruning is bounded and correct. Grows the cache
+/// past the `2 * filtered_len + 64` threshold by shrinking the buffer via
+/// `pop_front` (simulating max-logs eviction) and asserts no stale id
+/// survives the next render's pruning pass, while every live id does.
+#[test]
+fn test_row_cache_pruning_drops_stale_ids_past_threshold() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let mut logs = make_logs_no_traces(100);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 40, 14);
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert_eq!(state.row_cache.len(), 100);
+
+    // Simulate a max_logs-style ring-buffer eviction: drop all but the last
+    // 5 entries. Eviction itself does not touch the cache — only the next
+    // render's pruning pass does.
+    while logs.len() > 5 {
+        logs.pop_front();
+    }
+    let live_ids: std::collections::HashSet<u64> = logs.iter().map(|e| e.id).collect();
+    let front_id = logs.front().unwrap().id;
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+
+    // Threshold = 2 * filtered_len(5) + 64 = 74; the pre-prune size (100)
+    // exceeds it, so pruning must have fired during this render.
+    assert_eq!(
+        state.row_cache.len(),
+        5,
+        "stale ids must be pruned once the cache outgrows the threshold"
+    );
+    assert!(
+        state.row_cache.keys().all(|id| *id >= front_id),
+        "no cached id may be older than the current front id"
+    );
+    for id in &live_ids {
+        assert!(
+            state.row_cache.contains_key(id),
+            "live id {id} must survive pruning"
+        );
+    }
+}
+
+/// #75 review round 0 (minor): after a full log clear the buffer is empty, so
+/// there is no front id to prune against — the old `unwrap_or(0)` fallback
+/// made the retain a no-op (all u64 ids are >= 0) and a large pre-clear cache
+/// lingered indefinitely. An empty buffer must clear the cache outright.
+#[test]
+fn test_row_cache_cleared_when_buffer_empties() {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let mut logs = make_logs_no_traces(100);
+    let mut state = LogViewState::new();
+    let area = Rect::new(0, 0, 40, 14);
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+    assert_eq!(state.row_cache.len(), 100);
+
+    // Clear-logs equivalent: the buffer empties entirely.
+    logs.clear();
+
+    {
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(
+            row_cache_test_view(&logs).wrap_mode(true),
+            area,
+            &mut buf,
+            &mut state,
+        );
+    }
+
+    // Threshold = 2 * 0 + 64 = 64; pre-clear size (100) exceeds it, so the
+    // pruning pass runs — and with no front entry it must drop everything.
+    assert!(
+        state.row_cache.is_empty(),
+        "an emptied buffer must clear the row cache, got {} stale entries",
+        state.row_cache.len()
+    );
+}
