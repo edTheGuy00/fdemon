@@ -651,7 +651,7 @@ impl SearchState {
         }
 
         // Try to compile regex (case-insensitive by default)
-        let pattern = format!("(?i){}", &self.query);
+        let pattern = format!("(?i){}", self.query);
         let regex = match regex::Regex::new(&pattern) {
             Ok(r) => {
                 self.is_valid = true;

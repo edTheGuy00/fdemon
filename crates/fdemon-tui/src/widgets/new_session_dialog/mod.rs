@@ -1499,7 +1499,7 @@ mod tests {
             content.contains("Launch Context"),
             "Short horizontal terminal (100x25) should render LaunchContext in compact mode \
              (with 'Launch Context' border title). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1519,7 +1519,7 @@ mod tests {
             !content.contains("Launch Context"),
             "Tall horizontal terminal (100x55) should NOT show 'Launch Context' border \
              (expanded mode uses no border). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
 
         // Expanded mode renders "CONFIGURATION" as the uppercase field label above the
@@ -1528,7 +1528,7 @@ mod tests {
             content.contains("CONFIGURATION"),
             "Tall horizontal terminal (100x55) should show 'CONFIGURATION' field label \
              in expanded mode. Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1551,14 +1551,14 @@ mod tests {
             content.contains("Launch Context"),
             "Short vertical terminal (50x25) should render LaunchContext in compact mode \
              (with 'Launch Context' border title). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
 
         assert!(
             content.contains("Target Selector"),
             "Short vertical terminal (50x25) should render TargetSelector in compact mode \
              (with 'Target Selector' border title). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1578,7 +1578,7 @@ mod tests {
             !content.contains("Target Selector"),
             "Medium-tall vertical terminal (50x40) should render TargetSelector in full mode \
              (no 'Target Selector' border title). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
 
         // Compact LaunchContext has the titled border
@@ -1586,7 +1586,7 @@ mod tests {
             content.contains("Launch Context"),
             "Medium-tall vertical terminal (50x40) should render LaunchContext in compact mode \
              (with 'Launch Context' border title). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1606,7 +1606,7 @@ mod tests {
             !content.contains("Launch Context"),
             "Tall vertical terminal (50x80) should render LaunchContext in expanded mode \
              (no 'Launch Context' border title). Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
 
         // Expanded mode shows uppercase field labels
@@ -1614,7 +1614,7 @@ mod tests {
             content.contains("CONFIGURATION") || content.contains("FLAVOR"),
             "Tall vertical terminal (50x80) should show expanded field labels such as \
              'CONFIGURATION'. Content: {:?}",
-            &content.chars().take(500).collect::<String>()
+            content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1790,7 +1790,7 @@ mod tests {
         assert!(
             any_spinner,
             "expected a spinner glyph from SPINNER_FRAMES in horizontal tab bar when refreshing, got: {:?}",
-            &rendered.chars().take(400).collect::<String>()
+            rendered.chars().take(400).collect::<String>()
         );
     }
 
@@ -1844,7 +1844,7 @@ mod tests {
         assert!(
             has_any_refresh_indicator,
             "expected a refresh indicator (spinner or icon) in vertical-layout tab bar, got: {:?}",
-            &rendered.chars().take(400).collect::<String>()
+            rendered.chars().take(400).collect::<String>()
         );
     }
 

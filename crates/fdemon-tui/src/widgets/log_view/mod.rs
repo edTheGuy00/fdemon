@@ -38,6 +38,43 @@ pub mod styles;
 /// Below this width, the bottom metadata bar switches to compact mode.
 const MIN_FULL_STATUS_WIDTH: u16 = 60;
 
+/// Number of base-10 digits in `n` (`0` counts as one digit).
+///
+/// Allocation-free alternative to `n.to_string().len()` — used to size
+/// numeric fields (frame number, line, column, hidden-frame count) in the
+/// scroll-bounds row-count estimate ([`LogView::frame_line_widths`],
+/// [`LogView::collapsed_indicator_widths`]) without formatting a `String`.
+fn digits(n: u64) -> usize {
+    if n == 0 {
+        1
+    } else {
+        (n.ilog10() + 1) as usize
+    }
+}
+
+/// Unifies the async-gap and normal-frame branches of
+/// [`LogView::frame_line_widths`] into a single iterator type without heap
+/// allocation (the allocation-free alternative to `Box<dyn Iterator>`).
+enum FrameLineWidths<A, B> {
+    AsyncGap(A),
+    Normal(B),
+}
+
+impl<A, B> Iterator for FrameLineWidths<A, B>
+where
+    A: Iterator<Item = usize>,
+    B: Iterator<Item = usize>,
+{
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            FrameLineWidths::AsyncGap(it) => it.next(),
+            FrameLineWidths::Normal(it) => it.next(),
+        }
+    }
+}
+
 /// Status information for the bottom metadata bar
 pub struct StatusInfo<'a> {
     pub phase: &'a AppPhase,
@@ -678,6 +715,79 @@ impl<'a> LogView<'a> {
         ])
     }
 
+    /// Per-cluster cell widths of one rendered stack-frame line, mirroring
+    /// [`Self::format_stack_frame_line_with_links`] (the production formatter
+    /// used by the render loop — NOT the test-only `format_stack_frame`)
+    /// exactly, without building the styled `Line`. Allocation-free: consumed
+    /// by [`Self::calculate_entry_display_rows`] via [`wrapped_row_count_widths`].
+    ///
+    /// Segment-chaining note: this chains independently-measured per-segment
+    /// grapheme widths (indent + frame-number prefix, function name, `" ("` +
+    /// optional badge, short path, `:line[:col])` suffix). That's only valid
+    /// because every segment join lands on an ASCII character (space, `(`,
+    /// `:`, a digit) — no grapheme cluster can span a join, so summing
+    /// per-segment cluster widths equals measuring the whole line's clusters.
+    fn frame_line_widths<'b>(
+        &self,
+        frame: &'b StackFrame,
+        entry_index: usize,
+        frame_index: usize,
+    ) -> impl Iterator<Item = usize> + 'b {
+        if frame.is_async_gap {
+            // INDENT(4) + "<asynchronous suspension>" (25 ASCII chars).
+            FrameLineWidths::AsyncGap(std::iter::repeat_n(1, 4 + 25))
+        } else {
+            // Same lookup the formatter uses (mod.rs `format_stack_frame_line_with_links`)
+            // to decide whether a link badge is inserted before the file path.
+            let has_badge = self.link_highlight_state.is_some_and(|state| {
+                state
+                    .links
+                    .iter()
+                    .any(|l| l.entry_index == entry_index && l.frame_index == Some(frame_index))
+            });
+
+            // INDENT(4) + "#" + left-padded (min width 3) frame number — `{:<3}` is a
+            // *minimum* width, so numbers >= 1000 widen the field instead of truncating.
+            let prefix_width = 4 + 1 + 3usize.max(digits(frame.frame_number as u64));
+            // " (" + optional 3-char link badge "[c]".
+            let paren_width = 2 + if has_badge { 3 } else { 0 };
+            // ":" + line digits + optional (":" + column digits) + ")".
+            let suffix_width = 1
+                + digits(frame.line as u64)
+                + if frame.column > 0 {
+                    1 + digits(frame.column as u64)
+                } else {
+                    0
+                }
+                + 1;
+
+            FrameLineWidths::Normal(
+                std::iter::repeat_n(1, prefix_width)
+                    .chain(grapheme_cell_widths(&frame.function_name).map(|(_, _, w)| w))
+                    .chain(std::iter::repeat_n(1, paren_width))
+                    .chain(grapheme_cell_widths(frame.short_path()).map(|(_, _, w)| w))
+                    .chain(std::iter::repeat_n(1, suffix_width)),
+            )
+        }
+    }
+
+    /// Per-cluster cell widths of the collapsed-indicator line, mirroring
+    /// [`Self::format_collapsed_indicator`] exactly: `INDENT(4)` + `"▶ "` (measured
+    /// via [`grapheme_cell_widths`], not assumed, since it is not pure ASCII) +
+    /// the exact rendered text (singular/plural, `digits(hidden_count)` matters).
+    fn collapsed_indicator_widths(hidden_count: usize) -> impl Iterator<Item = usize> {
+        // Text is always ASCII (digits + " more frame(s)..."), so char count ==
+        // cell width count — no grapheme measurement needed for this part.
+        let text_len = if hidden_count == 1 {
+            "1 more frame...".chars().count()
+        } else {
+            digits(hidden_count as u64) + " more frames...".chars().count()
+        };
+        std::iter::repeat_n(1, 4)
+            .chain(grapheme_cell_widths("▶ ").map(|(_, _, w)| w))
+            .chain(std::iter::repeat_n(1, text_len))
+    }
+
     /// Check if an entry's stack trace should be expanded
     fn is_entry_expanded(&self, entry: &LogEntry) -> bool {
         if let Some(collapse_state) = self.collapse_state {
@@ -748,8 +858,20 @@ impl<'a> LogView<'a> {
     }
 
     /// Calculate terminal rows for an entry in wrap mode.
-    /// Accounts for wrapped message lines; stack frame lines assumed to be 1 row each.
-    fn calculate_entry_display_rows(&self, entry: &LogEntry, visible_width: usize) -> usize {
+    ///
+    /// Measures every rendered line exactly — the message line and every
+    /// stack-frame/indicator line the render loop would actually produce for
+    /// this entry (respecting expand/collapse state) — via the same greedy
+    /// grapheme-cluster packing (`wrapped_row_count_widths`) the renderer uses
+    /// (`Self::line_wrapped_row_count`). `entry_index` is required to look up
+    /// link badges the same way [`Self::format_stack_frame_line_with_links`] does,
+    /// since a badge changes a frame line's wrap geometry.
+    fn calculate_entry_display_rows(
+        &self,
+        entry: &LogEntry,
+        entry_index: usize,
+        visible_width: usize,
+    ) -> usize {
         if visible_width == 0 {
             return self.calculate_entry_lines(entry);
         }
@@ -761,10 +883,48 @@ impl<'a> LogView<'a> {
                 .chain(grapheme_cell_widths(&entry.message).map(|(_, _, w)| w)),
             visible_width,
         );
-        // Stack frame lines rarely exceed terminal width, count as 1 row each
-        let logical_lines = self.calculate_entry_lines(entry);
-        let frame_lines = logical_lines.saturating_sub(1);
-        msg_rows + frame_lines
+
+        let Some(trace) = &entry.stack_trace else {
+            return msg_rows;
+        };
+        let frame_count = trace.frames.len();
+        if frame_count == 0 {
+            return msg_rows;
+        }
+
+        // Same collapse rules as `calculate_entry_lines` (mod.rs `calculate_entry_lines`):
+        // expanded -> all frames; collapsed -> first `max_collapsed_frames` (+ indicator
+        // if truncated).
+        let is_expanded = self.is_entry_expanded(entry);
+        let (visible_frames, has_indicator) = if is_expanded {
+            (frame_count, false)
+        } else {
+            let visible = self.max_collapsed_frames.min(frame_count);
+            (visible, frame_count > self.max_collapsed_frames)
+        };
+
+        let frame_rows: usize = trace.frames[..visible_frames]
+            .iter()
+            .enumerate()
+            .map(|(frame_idx, frame)| {
+                wrapped_row_count_widths(
+                    self.frame_line_widths(frame, entry_index, frame_idx),
+                    visible_width,
+                )
+            })
+            .sum();
+
+        let indicator_rows = if has_indicator {
+            let hidden_count = frame_count.saturating_sub(self.max_collapsed_frames);
+            wrapped_row_count_widths(
+                Self::collapsed_indicator_widths(hidden_count),
+                visible_width,
+            )
+        } else {
+            0
+        };
+
+        msg_rows + frame_rows + indicator_rows
     }
 
     /// Render empty state with centered message
@@ -1625,7 +1785,7 @@ impl<'a> LogView<'a> {
         let total_lines: usize = if self.wrap_mode {
             filtered_indices
                 .iter()
-                .map(|&idx| self.calculate_entry_display_rows(&self.logs[idx], visible_width))
+                .map(|&idx| self.calculate_entry_display_rows(&self.logs[idx], idx, visible_width))
                 .sum()
         } else {
             filtered_indices
@@ -1670,7 +1830,7 @@ impl<'a> LogView<'a> {
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
             let entry_units = if self.wrap_mode {
-                self.calculate_entry_display_rows(entry, visible_width)
+                self.calculate_entry_display_rows(entry, idx, visible_width)
             } else {
                 self.calculate_entry_lines(entry)
             };
@@ -1890,11 +2050,21 @@ impl<'a> LogView<'a> {
                     if hidden_count > 0 && units_added < target {
                         let indicator_position = 1 + visible_count;
                         if indicator_position > skip_in_entry {
-                            all_lines.push(Self::format_collapsed_indicator(hidden_count));
-                            units_added += 1; // collapsed indicator is always short
-                                              // Advance rel_y_cursor so subsequent rows are placed correctly.
+                            let line = Self::format_collapsed_indicator(hidden_count);
+                            // Measure like every other line: at narrow widths the
+                            // indicator wraps, and total_lines (via
+                            // calculate_entry_display_rows) already counts it
+                            // wrapped — the two accountings must agree.
+                            let row_h: u16 = if self.wrap_mode {
+                                Self::line_wrapped_row_count(&line, visible_width) as u16
+                            } else {
+                                1
+                            };
+                            all_lines.push(line);
+                            units_added += row_h as usize;
+                            // Advance rel_y_cursor so subsequent rows are placed correctly.
                             if has_mouse_ctx {
-                                rel_y_cursor = rel_y_cursor.saturating_add(1);
+                                rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                             }
                         }
                     }

@@ -1151,7 +1151,7 @@ mod tests {
         assert!(
             content.contains("Dev 1"),
             "Selected device 'Dev 1' (flat index 2) should be visible after scroll correction; content: {}",
-            &content.chars().take(200).collect::<String>()
+            content.chars().take(200).collect::<String>()
         );
     }
 
@@ -1389,7 +1389,7 @@ mod tests {
         assert!(
             content.contains("Resize"),
             "compact + enable_mouse=true should render mouse hint, got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
@@ -1416,7 +1416,7 @@ mod tests {
         assert!(
             !content.contains("Resize"),
             "compact + enable_mouse=false should NOT render mouse hint, got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
@@ -1446,7 +1446,7 @@ mod tests {
         assert!(
             !content.contains("Resize"),
             "wide (compact=false) mode should NOT render mouse hint even when enable_mouse=true, got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
         assert!(
             content.contains("Discovering devices"),
             "loading content must contain 'Discovering devices', got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
 
         // A spinner glyph from SPINNER_FRAMES must also be present.
@@ -1596,7 +1596,7 @@ mod tests {
         assert!(
             any_spinner,
             "loading content must contain a spinner glyph from SPINNER_FRAMES, got: {}",
-            &content.chars().take(300).collect::<String>()
+            content.chars().take(300).collect::<String>()
         );
     }
 
@@ -1642,12 +1642,12 @@ mod tests {
         assert!(
             content_frame0.contains(glyph_at_0),
             "at animation_frame=0 expected glyph '{glyph_at_0}', content: {}",
-            &content_frame0.chars().take(300).collect::<String>()
+            content_frame0.chars().take(300).collect::<String>()
         );
         assert!(
             content_frame1.contains(glyph_at_1),
             "at animation_frame={SPINNER_TICKS_PER_FRAME} expected glyph '{glyph_at_1}', content: {}",
-            &content_frame1.chars().take(300).collect::<String>()
+            content_frame1.chars().take(300).collect::<String>()
         );
     }
 }
