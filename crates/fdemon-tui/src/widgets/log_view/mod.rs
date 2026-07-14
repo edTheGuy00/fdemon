@@ -7,7 +7,7 @@ use fdemon_app::config::FlutterMode;
 use fdemon_app::hyperlinks::LinkHighlightState;
 use fdemon_app::log_view_state::{
     grapheme_cell_widths, wrap_row_starts, wrap_row_starts_cells, wrapped_row_count_widths,
-    FocusInfo, LogViewState, SelPoint, SelectionEdge, SelectionRow,
+    CachedRows, FocusInfo, LogViewState, SelPoint, SelectionEdge, SelectionRow,
 };
 use fdemon_core::{
     AppPhase, FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter,
@@ -37,6 +37,15 @@ pub mod styles;
 /// Minimum width (in columns) for full status display.
 /// Below this width, the bottom metadata bar switches to compact mode.
 const MIN_FULL_STATUS_WIDTH: u16 = 60;
+
+/// Cell width of the stack-frame indent used by [`LogView::frame_line_widths`].
+/// `styles::INDENT` is 4 ASCII spaces, so `len() == width` (no grapheme
+/// measurement needed for a pure-ASCII, single-width-per-char constant).
+const FRAME_INDENT_WIDTH: usize = styles::INDENT.len();
+
+/// Character length of the async-gap placeholder text, matching the literal
+/// used in [`LogView::format_stack_frame_line_with_links`]'s async-gap branch.
+const ASYNC_GAP_TEXT_LEN: usize = "<asynchronous suspension>".len();
 
 /// Number of base-10 digits in `n` (`0` counts as one digit).
 ///
@@ -734,8 +743,11 @@ impl<'a> LogView<'a> {
         frame_index: usize,
     ) -> impl Iterator<Item = usize> + 'b {
         if frame.is_async_gap {
-            // INDENT(4) + "<asynchronous suspension>" (25 ASCII chars).
-            FrameLineWidths::AsyncGap(std::iter::repeat_n(1, 4 + 25))
+            // INDENT + "<asynchronous suspension>".
+            FrameLineWidths::AsyncGap(std::iter::repeat_n(
+                1,
+                FRAME_INDENT_WIDTH + ASYNC_GAP_TEXT_LEN,
+            ))
         } else {
             // Same lookup the formatter uses (mod.rs `format_stack_frame_line_with_links`)
             // to decide whether a link badge is inserted before the file path.
@@ -746,9 +758,10 @@ impl<'a> LogView<'a> {
                     .any(|l| l.entry_index == entry_index && l.frame_index == Some(frame_index))
             });
 
-            // INDENT(4) + "#" + left-padded (min width 3) frame number — `{:<3}` is a
+            // INDENT + "#" + left-padded (min width 3) frame number — `{:<3}` is a
             // *minimum* width, so numbers >= 1000 widen the field instead of truncating.
-            let prefix_width = 4 + 1 + 3usize.max(digits(frame.frame_number as u64));
+            let prefix_width =
+                FRAME_INDENT_WIDTH + 1 + 3usize.max(digits(frame.frame_number as u64));
             // " (" + optional 3-char link badge "[c]".
             let paren_width = 2 + if has_badge { 3 } else { 0 };
             // ":" + line digits + optional (":" + column digits) + ")".
@@ -798,6 +811,29 @@ impl<'a> LogView<'a> {
         }
     }
 
+    /// Shared collapse-visibility computation: how many of an entry's stack
+    /// frames render given its expand/collapse state, and whether a
+    /// "N more frames..." indicator follows. Used by
+    /// [`Self::calculate_entry_lines`], [`Self::calculate_entry_display_rows`],
+    /// and [`Self::measure_entry_exact_rows`] so the collapse rule lives in
+    /// exactly one place. Returns
+    /// `(is_expanded, visible_frames, has_indicator, hidden_count)`.
+    fn collapse_visibility(
+        &self,
+        entry: &LogEntry,
+        frame_count: usize,
+    ) -> (bool, usize, bool, usize) {
+        let is_expanded = self.is_entry_expanded(entry);
+        if is_expanded {
+            (true, frame_count, false, 0)
+        } else {
+            let visible = self.max_collapsed_frames.min(frame_count);
+            let has_indicator = frame_count > self.max_collapsed_frames;
+            let hidden_count = frame_count.saturating_sub(self.max_collapsed_frames);
+            (false, visible, has_indicator, hidden_count)
+        }
+    }
+
     /// Calculate lines for a single entry accounting for collapse state
     fn calculate_entry_lines(&self, entry: &LogEntry) -> usize {
         let frame_count = entry.stack_trace_frame_count();
@@ -805,16 +841,9 @@ impl<'a> LogView<'a> {
             return 1; // Just the message line
         }
 
-        let is_expanded = self.is_entry_expanded(entry);
-        if is_expanded {
-            // Expanded: message + all frames
-            1 + frame_count
-        } else {
-            // Collapsed: message + visible frames + indicator (if more)
-            let visible = self.max_collapsed_frames.min(frame_count);
-            let has_more = frame_count > self.max_collapsed_frames;
-            1 + visible + if has_more { 1 } else { 0 }
-        }
+        let (_, visible, has_indicator, _) = self.collapse_visibility(entry, frame_count);
+        // message + visible frames + indicator (if truncated)
+        1 + visible + if has_indicator { 1 } else { 0 }
     }
 
     /// Terminal rows a rendered line occupies when wrapped, using the same
@@ -895,13 +924,8 @@ impl<'a> LogView<'a> {
         // Same collapse rules as `calculate_entry_lines` (mod.rs `calculate_entry_lines`):
         // expanded -> all frames; collapsed -> first `max_collapsed_frames` (+ indicator
         // if truncated).
-        let is_expanded = self.is_entry_expanded(entry);
-        let (visible_frames, has_indicator) = if is_expanded {
-            (frame_count, false)
-        } else {
-            let visible = self.max_collapsed_frames.min(frame_count);
-            (visible, frame_count > self.max_collapsed_frames)
-        };
+        let (_, visible_frames, has_indicator, hidden_count) =
+            self.collapse_visibility(entry, frame_count);
 
         let frame_rows: usize = trace.frames[..visible_frames]
             .iter()
@@ -915,7 +939,6 @@ impl<'a> LogView<'a> {
             .sum();
 
         let indicator_rows = if has_indicator {
-            let hidden_count = frame_count.saturating_sub(self.max_collapsed_frames);
             wrapped_row_count_widths(
                 Self::collapsed_indicator_widths(hidden_count),
                 visible_width,
@@ -925,6 +948,95 @@ impl<'a> LogView<'a> {
         };
 
         msg_rows + frame_rows + indicator_rows
+    }
+
+    /// Exact row measurement for a linked entry, bypassing the cache: formats
+    /// the entry's actual lines the same way the render loop would — message
+    /// via [`Self::format_entry`] (which inserts the message-level link
+    /// badge), frames via [`Self::format_stack_frame_line_with_links`],
+    /// indicator via [`Self::format_collapsed_indicator`], respecting
+    /// expand/collapse state — and sums [`Self::line_wrapped_row_count`].
+    /// Bounded by `MAX_LINK_SHORTCUTS` (≤35 links, all viewport-visible while
+    /// link mode is active), so the extra allocations here are acceptable.
+    /// Mirrors `rendered_row_count` in `tests.rs` (the #74 ground truth).
+    fn measure_entry_exact_rows(
+        &self,
+        entry: &LogEntry,
+        entry_index: usize,
+        visible_width: usize,
+    ) -> usize {
+        let msg_line = self.format_entry(entry, entry_index);
+        let mut rows = Self::line_wrapped_row_count(&msg_line, visible_width);
+
+        let Some(trace) = &entry.stack_trace else {
+            return rows;
+        };
+        let frame_count = trace.frames.len();
+        if frame_count == 0 {
+            return rows;
+        }
+
+        let (_, visible_frames, has_indicator, hidden_count) =
+            self.collapse_visibility(entry, frame_count);
+
+        for (frame_idx, frame) in trace.frames[..visible_frames].iter().enumerate() {
+            let line = self.format_stack_frame_line_with_links(frame, entry_index, frame_idx);
+            rows += Self::line_wrapped_row_count(&line, visible_width);
+        }
+
+        if has_indicator {
+            let line = Self::format_collapsed_indicator(hidden_count);
+            rows += Self::line_wrapped_row_count(&line, visible_width);
+        }
+
+        rows
+    }
+
+    /// Cached lookup/compute for one entry's wrap-mode display-row count
+    /// (issue #75). Shared by both call sites in [`Self::render_inner`] (the
+    /// `total_lines` loop and the render loop's per-entry `entry_units`) so
+    /// they can never drift from each other.
+    ///
+    /// - **Linked entry** (link-highlight mode active and this entry carries
+    ///   any badge, message- or frame-level): bypasses the cache — measured
+    ///   exactly via [`Self::measure_entry_exact_rows`]. Never written to the
+    ///   cache (link state can change on every scroll).
+    /// - **Otherwise**: hit iff a cached entry exists for this
+    ///   [`LogEntry::id`] with a matching `expanded` state; a miss recomputes
+    ///   via the exact iterator path ([`Self::calculate_entry_display_rows`])
+    ///   and inserts the result.
+    fn entry_display_rows_cached(
+        &self,
+        state: &mut LogViewState,
+        entry: &LogEntry,
+        idx: usize,
+        visible_width: usize,
+    ) -> usize {
+        let is_linked = self
+            .link_highlight_state
+            .is_some_and(|s| s.links.iter().any(|l| l.entry_index == idx));
+        if is_linked {
+            return self.measure_entry_exact_rows(entry, idx, visible_width);
+        }
+
+        let expanded = self.is_entry_expanded(entry);
+        if let Some(cached) = state.row_cache.get(&entry.id) {
+            if cached.expanded == expanded {
+                return cached.rows as usize;
+            }
+        }
+
+        let rows = self.calculate_entry_display_rows(entry, idx, visible_width);
+        state.row_cache.insert(
+            entry.id,
+            CachedRows {
+                expanded,
+                // Saturating: a single entry occupying more than 65535 wrap
+                // rows is not a realistic scenario (see CachedRows docs).
+                rows: u16::try_from(rows).unwrap_or(u16::MAX),
+            },
+        );
+        rows
     }
 
     /// Render empty state with centered message
@@ -1780,19 +1892,44 @@ impl<'a> LogView<'a> {
         let visible_width = content_area.width as usize;
         let visible_lines = content_area.height as usize;
 
+        // Row-count cache (issue #75): wrap mode only — nowrap uses
+        // `calculate_entry_lines`, which has no measured-width dependency, so
+        // the cache is left untouched there. A global-key mismatch (width or
+        // wrap-mode change) invalidates every cached row count at once.
+        if self.wrap_mode {
+            let key = (visible_width as u16, true);
+            if state.row_cache_key != Some(key) {
+                state.row_cache.clear();
+            }
+            state.row_cache_key = Some(key);
+        }
+
         // Calculate total lines including stack traces (accounting for collapse state).
         // In wrap mode, total_lines counts terminal rows (wrapped); in nowrap, logical lines.
         let total_lines: usize = if self.wrap_mode {
-            filtered_indices
-                .iter()
-                .map(|&idx| self.calculate_entry_display_rows(&self.logs[idx], idx, visible_width))
-                .sum()
+            let mut total = 0usize;
+            for &idx in &filtered_indices {
+                total += self.entry_display_rows_cached(state, &self.logs[idx], idx, visible_width);
+            }
+            total
         } else {
             filtered_indices
                 .iter()
                 .map(|&idx| self.calculate_entry_lines(&self.logs[idx]))
                 .sum()
         };
+
+        // Pruning (memory hygiene only — evicted ids are never queried): once
+        // the cache outgrows the current filtered view by a comfortable
+        // margin, drop entries for ids that have scrolled off the front of
+        // the buffer.
+        if self.wrap_mode {
+            let prune_threshold = 2 * filtered_indices.len() + 64;
+            if state.row_cache.len() > prune_threshold {
+                let front_id = self.logs.front().map(|e| e.id).unwrap_or(0);
+                state.row_cache.retain(|id, _| *id >= front_id);
+            }
+        }
 
         // Update state with content dimensions
         state.update_content_size(total_lines, visible_lines);
@@ -1830,7 +1967,7 @@ impl<'a> LogView<'a> {
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
             let entry_units = if self.wrap_mode {
-                self.calculate_entry_display_rows(entry, idx, visible_width)
+                self.entry_display_rows_cached(state, entry, idx, visible_width)
             } else {
                 self.calculate_entry_lines(entry)
             };

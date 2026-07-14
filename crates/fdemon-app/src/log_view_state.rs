@@ -3,7 +3,7 @@
 //! This module defines the state types used by both the app handler layer
 //! (for scroll commands) and the TUI layer (for rendering the log view).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use fdemon_core::LogEntry;
 
@@ -334,6 +334,26 @@ pub struct SelectionEdge {
 // LogViewState
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// One entry's cached wrap-mode display-row count (issue #75).
+///
+/// Render-written by the log-view renderer (`fdemon-tui`) whenever it
+/// computes an entry's row count the exact-but-slow way (a cache miss);
+/// consulted on every later frame while both the entry's identity
+/// (`LogViewState::row_cache` key) and its `expanded` flag stay the same.
+/// Lookup-time keyed — no handler-side invalidation wiring is needed: the
+/// renderer re-reads `expanded` fresh from `CollapseState` every frame and
+/// compares it against the cached value, so a toggle produces a guaranteed
+/// miss (recompute + overwrite) rather than a correctness hazard.
+/// REVIEW_FOCUS.md registry entry pending (task 02).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CachedRows {
+    /// The entry's collapse/expand state at the time `rows` was computed.
+    pub expanded: bool,
+    /// Terminal rows the entry occupies in wrap mode, at the render's
+    /// current global key — see [`LogViewState::row_cache_key`].
+    pub rows: u16,
+}
+
 /// State for log view scrolling with virtualization support
 #[derive(Debug)]
 pub struct LogViewState {
@@ -380,6 +400,20 @@ pub struct LogViewState {
     /// Cache key for `selection_text`: the selection it was computed for, so the
     /// renderer only rebuilds the string when the selection actually changes.
     pub selection_text_key: Option<LogSelection>,
+    /// Per-entry cached wrap-mode display-row count, keyed by [`LogEntry::id`]
+    /// (issue #75). Render-written: populated by the log-view renderer on a
+    /// cache miss, read on every subsequent frame. Safe default: empty (every
+    /// entry starts as a miss). Wrap mode only — nowrap uses
+    /// `calculate_entry_lines` (no measured widths) and leaves this untouched.
+    /// REVIEW_FOCUS.md registry entry pending (task 02).
+    pub row_cache: HashMap<u64, CachedRows>,
+    /// Global cache key for `row_cache`: `(content width, wrap_mode)` at the
+    /// last render that touched the cache. A mismatch at render start clears
+    /// `row_cache` wholesale (a resize or the first wrap-mode render
+    /// invalidates every cached row count). Safe default: `None` (a `None`
+    /// key never matches, so the first render always "clears" an already-
+    /// empty map). REVIEW_FOCUS.md registry entry pending (task 02).
+    pub row_cache_key: Option<(u16, bool)>,
 }
 
 impl Default for LogViewState {
@@ -410,6 +444,8 @@ impl LogViewState {
             drag_autoscroll: None,
             selection_text: None,
             selection_text_key: None,
+            row_cache: HashMap::new(),
+            row_cache_key: None,
         }
     }
 
